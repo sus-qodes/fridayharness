@@ -367,6 +367,16 @@ export class StateProjector implements Projector {
             .run(str(p.reason), e.occurred_at, str(p.message_id));
         }
         return;
+      case 'communication.resolved':
+        for (const id of (p.delivery_ids as string[]) ?? []) {
+          this.updateDelivery(e, id, {
+            state: 'resolved',
+            ended_at: e.occurred_at,
+            end_reason: `answered by ${str(p.by)}`,
+            reserved_until: null,
+          });
+        }
+        return;
       case 'communication.escalated':
         this.db
           .prepare('UPDATE messages SET escalated_at = ?, escalation_id = ? WHERE message_id = ?')

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /**
- * Portability gate (build plan E.3). Runs locally and in CI on tracked/staged files:
+ * Portability gate (build plan E.3). Runs locally and in CI on tracked/staged files; with
+ * `--working-tree` it also checks untracked files git does not ignore, so a new file is caught
+ * before it is staged (M3.1):
  *  - no shell scripts (*.sh) in the repository
  *  - no executable bits or symlinks in the index
  *  - every text file stored with LF (except *.cmd / *.bat)
@@ -8,7 +10,7 @@
  *  - no POSIX-only constructs in package.json scripts (rm -rf, VAR=value prefixes, $VAR, export)
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -16,10 +18,23 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
 const problems = [];
+const workingTree = process.argv.includes('--working-tree');
 // Files deleted in the working tree but not yet staged are skipped.
-const files = git('ls-files', '-z')
+const files = git('ls-files', '-z', ...(workingTree ? ['-c', '-o', '--exclude-standard'] : []))
   .split('\0')
-  .filter((f) => f && existsSync(path.join(root, f)));
+  .filter((f, i, all) => f && all.indexOf(f) === i && existsSync(path.join(root, f)));
+const untracked = new Set(
+  workingTree ? git('ls-files', '-z', '-o', '--exclude-standard').split('\0').filter(Boolean) : [],
+);
+
+// 0. untracked files: the index checks below cannot see them
+const TEXT = /\.(ts|tsx|mts|cts|js|mjs|cjs|json|md|yml|yaml|txt|html|css)$/i;
+for (const f of untracked) {
+  const abs = path.join(root, f);
+  if (!existsSync(abs)) continue;
+  if (lstatSync(abs).isSymbolicLink()) problems.push(`${f}: symlinks are not allowed (Windows)`);
+  else if (TEXT.test(f) && readFileSync(abs, 'utf8').includes('\r\n')) problems.push(`${f}: CRLF line endings`);
+}
 
 // 1. shell scripts
 for (const f of files)
@@ -77,4 +92,6 @@ if (problems.length > 0) {
   for (const p of problems) console.error(`  - ${p}`);
   process.exit(1);
 }
-console.log(`Portability check passed (${files.length} tracked files).`);
+console.log(
+  `Portability check passed (${files.length} files${workingTree ? `, ${untracked.size} untracked` : ', all tracked'}).`,
+);

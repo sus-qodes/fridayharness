@@ -14,7 +14,8 @@ The architecture is called **ContextOS** in the original specification.
   - planning sends only redacted, bounded project text, and only to an endpoint you chose, with your local approval;
   - costs are never under-reported, and the Master Brain survives restarts without losing work;
   - stale plan revisions are refused, your own requirements stay authoritative, and reservations expire.
-- **M3** makes Friday the communication authority: agents message each other, roles, the Master Brain and humans only through Friday, with per-recipient delivery and real acknowledgements. Events can be snapshotted, replayed into an isolated copy and backed up.
+- **M3** makes Friday the communication authority: agents message each other, roles, the Master Brain and humans through Friday, which authorizes, delivers and records every message, with per-recipient delivery and real acknowledgements. Channels a host offers outside Friday (Claude Code's own agent messaging, for example) are listed as limits in the security model. Events can be snapshotted, replayed into an isolated copy, backed up and restored.
+- **M3.1** closes the nine findings of the M3 review: one authorization rule for every way of addressing a message, only authorized replies settle a request, only the receiving session acknowledges, escalations and answers survive a crash, answered questions stop asking, and backups are relocatable, verified, credential-free and restorable with `friday restore`, without holding up the daemon.
 
 See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 

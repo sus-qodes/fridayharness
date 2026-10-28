@@ -114,7 +114,9 @@ export const DEFAULT_STATE_CONFIG: StateConfig = {
 export type MessageSender =
   | { kind: 'agent'; caller: Caller }
   | { kind: 'human'; actor: Actor }
-  | { kind: 'master_brain'; actor: Actor };
+  | { kind: 'master_brain'; actor: Actor }
+  /** Friday itself, for notices such as "this question was answered" (M3.1). */
+  | { kind: 'system'; actor: Actor };
 
 export interface SendMessageInput {
   to: string;
@@ -349,7 +351,14 @@ export class FridayState {
   readonly clock: Clock;
   readonly redactor: Redactor;
   readonly artifacts: ArtifactStore | undefined;
+  /** The project's artifacts folder (`.friday/artifacts`); snapshots live in its `snapshots/`. */
+  readonly artifactsDir: string | undefined;
   readonly config: StateConfig;
+  /**
+   * Per project: sessions that last reported at or before `since` are not judged until `until`
+   * (daemon start, after a pause), because they could not report in between.
+   */
+  private readonly leaseGrace = new Map<string, { since: string; until: string }>();
 
   constructor(deps: {
     db: SqlDatabase;
@@ -360,8 +369,16 @@ export class FridayState {
     artifactsDir?: string;
     config?: Partial<StateConfig>;
     migrate?: boolean;
+    /** Open an inspection copy made by replay (for analysis only; M3.1, R08). */
+    inspection?: boolean;
   }) {
     this.db = deps.db;
+    if (!deps.inspection && isInspectionCopy(this.db)) {
+      throw new FridayError(
+        'invalid_request',
+        `${this.db.path} is an inspection copy made by "friday events replay", not a backup; Friday does not run on it. Restore from "friday backup" instead`,
+      );
+    }
     this.ids = deps.ids ?? randomIds;
     this.clock = deps.clock ?? systemClock;
     this.redactor = deps.redactor ?? new Redactor();
@@ -380,6 +397,7 @@ export class FridayState {
       clock: this.clock,
       idempotencyTtlMs: this.config.idempotencyTtlMs,
     });
+    this.artifactsDir = deps.artifactsDir;
     this.artifacts = deps.artifactsDir
       ? new ArtifactStore(this.db, deps.artifactsDir, { ids: this.ids, clock: this.clock, redactor: this.redactor })
       : undefined;
@@ -1644,32 +1662,45 @@ export class FridayState {
   ): string {
     return this.exec(
       { name: 'escalation.raise', project_id: projectId, actor, params: { kind: esc.kind, goal_id: esc.goal_id } },
-      (ctx) => {
-        const escalation_id = this.ids.next('esc');
-        ctx.emit({
-          type: 'escalation.requested',
-          payload: {
-            escalation: {
-              escalation_id,
-              task_id: esc.task_id,
-              run_id: null,
-              question: esc.question,
-              options: esc.options.length ? esc.options : null,
-              context: null,
-              goal_id: esc.goal_id,
-              kind: esc.kind,
-              details: esc.details,
-            },
-          },
-          refs: [
-            { kind: 'escalation', id: escalation_id },
-            ...(esc.goal_id ? [{ kind: 'goal' as const, id: esc.goal_id }] : []),
-            ...(esc.task_id ? [{ kind: 'task' as const, id: esc.task_id }] : []),
-          ],
-        });
-        return escalation_id;
-      },
+      (ctx) => this.escalationWithin(ctx, esc),
     );
+  }
+
+  /** Records an escalation inside the caller's transaction, so it commits with what caused it. */
+  private escalationWithin(
+    ctx: CommandContext,
+    esc: {
+      kind: string;
+      goal_id: string | null;
+      task_id: string | null;
+      question: string;
+      options: string[];
+      details: Record<string, unknown>;
+    },
+  ): string {
+    const escalation_id = this.ids.next('esc');
+    ctx.emit({
+      type: 'escalation.requested',
+      payload: {
+        escalation: {
+          escalation_id,
+          task_id: esc.task_id,
+          run_id: null,
+          question: esc.question,
+          options: esc.options.length ? esc.options : null,
+          context: null,
+          goal_id: esc.goal_id,
+          kind: esc.kind,
+          details: esc.details,
+        },
+      },
+      refs: [
+        { kind: 'escalation', id: escalation_id },
+        ...(esc.goal_id ? [{ kind: 'goal' as const, id: esc.goal_id }] : []),
+        ...(esc.task_id ? [{ kind: 'task' as const, id: esc.task_id }] : []),
+      ],
+    });
+    return escalation_id;
   }
 
   /** HARNESS_LOST tasks of a harness that will not come back go back to READY for someone else. */
@@ -2212,8 +2243,22 @@ export class FridayState {
   }
 
   /**
+   * Holds lease judgement for one lease TTL (M3.1, R09). While the daemon was not running, or was
+   * paused (a long collection, a laptop asleep), sessions could not heartbeat, so a stale lease
+   * is no evidence that a session died. Sessions that last reported before now get one lease
+   * TTL to report again; anything that reports afterwards is judged as usual.
+   */
+  holdLeaseJudgement(projectId: string): { since: string; until: string } {
+    const since = this.clock.now();
+    const hold = { since, until: addMs(since, this.config.leaseTtlMs) };
+    this.leaseGrace.set(projectId, hold);
+    return hold;
+  }
+
+  /**
    * Lease manager tick (plan B13). Marks late harnesses DEGRADED, expired ones lost, ends the
    * reconnect window, and declines assignments whose `task.start` was never acknowledged.
+   * Lease and acknowledgement deadlines wait while judgement is held (`holdLeaseJudgement`).
    */
   tick(projectId: string): {
     degraded: string[];
@@ -2223,9 +2268,20 @@ export class FridayState {
     unreserved: string[];
     messages_expired: string[];
     messages_escalated: string[];
+    /** Replies recovered for answers recorded without one, and those that could not be sent. */
+    messages_replied: string[];
+    messages_reply_failed: { escalation_id: string; error: string }[];
   } {
     const now = this.clock.now();
     const nowMs = Date.parse(now);
+    let grace = this.leaseGrace.get(projectId);
+    if (grace && grace.until <= now) {
+      this.leaseGrace.delete(projectId);
+      grace = undefined;
+    }
+    /** Sessions that could not report while Friday was stopped or paused are not judged yet. */
+    const held = (lastReport: string | null) =>
+      grace !== undefined && (lastReport === null || lastReport <= grace.since);
     const out = {
       degraded: [] as string[],
       lost: [] as string[],
@@ -2234,6 +2290,8 @@ export class FridayState {
       unreserved: [] as string[],
       messages_expired: [] as string[],
       messages_escalated: [] as string[],
+      messages_replied: [] as string[],
+      messages_reply_failed: [] as { escalation_id: string; error: string }[],
     };
     const leases = this.db
       .prepare(
@@ -2251,6 +2309,7 @@ export class FridayState {
         heartbeat_interval_ms: number;
       }>(projectId);
     for (const l of leases) {
+      if (held(l.last_heartbeat_at)) continue;
       const expired = Date.parse(l.lease_expires_at) <= nowMs;
       const hasActive = this.q.activeRunsForHarness(l.harness_id).length > 0;
       if (expired && (l.status !== 'DISCONNECTED' || hasActive)) {
@@ -2298,6 +2357,7 @@ export class FridayState {
         expires_at: string;
       }>(projectId);
     for (const m of stale) {
+      if (held(m.delivered_at)) continue;
       const timedOut =
         Date.parse(m.expires_at) <= nowMs ||
         (m.attempts >= this.config.maxDeliveryAttempts &&
@@ -2312,6 +2372,8 @@ export class FridayState {
     const timeouts = this.expireMessages(projectId, this.clock.now());
     out.messages_expired.push(...timeouts.expired);
     out.messages_escalated.push(...timeouts.escalated);
+    out.messages_replied.push(...timeouts.replied);
+    out.messages_reply_failed.push(...timeouts.reply_failed);
     return out;
   }
 
@@ -2597,20 +2659,40 @@ export class FridayState {
 
   answerEscalation(projectId: string, actor: Actor, escalationId: string, answer: string): void {
     if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human can answer an escalation');
-    this.exec({ name: 'escalation.answer', project_id: projectId, actor, params: { escalationId, answer } }, (ctx) => {
-      ctx.emit({
-        type: 'escalation.answered',
-        payload: { escalation_id: escalationId, answer },
-        refs: [{ kind: 'escalation', id: escalationId }],
-      });
-    });
-    // A human answering for a silent recipient (M3b): the answer reaches the waiting agent as a reply.
+    // A human answering for a silent recipient: the answer reaches the waiting agent as the reply,
+    // in the same transaction as the answer, so neither exists without the other (M3.1, R04).
+    const request = this.requestOfEscalation(escalationId);
+    this.exec(
+      {
+        name: 'escalation.answer',
+        project_id: projectId,
+        actor,
+        params: { escalationId, answer },
+        correlation_id: request?.correlation_id,
+      },
+      (ctx) => {
+        ctx.emit({
+          type: 'escalation.answered',
+          payload: { escalation_id: escalationId, answer },
+          refs: [{ kind: 'escalation', id: escalationId }],
+        });
+        if (request) this.replyFor(ctx, projectId, actor, request, answer);
+      },
+    );
+  }
+
+  /** The still-open request behind an `unanswered_request` escalation, if any. */
+  private requestOfEscalation(escalationId: string): MessageRow | undefined {
     const row = this.q.escalation(escalationId);
-    if (row?.kind !== 'unanswered_request') return;
+    if (row?.kind !== 'unanswered_request') return undefined;
     const d = JSON.parse(String(row.details_json ?? '{}')) as { message_id?: string };
     const request = d.message_id ? this.q.findMessageRow(d.message_id) : undefined;
-    if (request?.status !== 'open') return;
-    this.sendMessage(
+    return request?.status === 'open' ? request : undefined;
+  }
+
+  private replyFor(ctx: CommandContext, projectId: string, actor: Actor, request: MessageRow, answer: string): void {
+    this.sendWithin(
+      ctx,
       projectId,
       { kind: 'human', actor },
       {
@@ -2619,7 +2701,6 @@ export class FridayState {
         response_to: request.message_id,
         content: answer,
       },
-      { idempotency_key: `escalation-answer:${escalationId}` },
     );
   }
 
@@ -2628,8 +2709,21 @@ export class FridayState {
    * recipient that has not acknowledged it; a blocking request past its reply deadline is
    * escalated to a human once, and stays open so a late answer still settles it.
    */
-  private expireMessages(projectId: string, nowIso: string): { expired: string[]; escalated: string[] } {
-    const out = { expired: [] as string[], escalated: [] as string[] };
+  private expireMessages(
+    projectId: string,
+    nowIso: string,
+  ): {
+    expired: string[];
+    escalated: string[];
+    replied: string[];
+    reply_failed: { escalation_id: string; error: string }[];
+  } {
+    const out = {
+      expired: [] as string[],
+      escalated: [] as string[],
+      replied: [] as string[],
+      reply_failed: [] as { escalation_id: string; error: string }[],
+    };
     const rows = this.db
       .prepare(
         `SELECT * FROM messages WHERE project_id = ? AND status = 'open'
@@ -2662,27 +2756,28 @@ export class FridayState {
         )
         .join(', ');
       const from = m.sender_key ?? m.sender_kind;
-      const escalation_id = this.raiseEscalation(projectId, LEASE_MANAGER, {
-        kind: 'unanswered_request',
-        goal_id: m.goal_id,
-        task_id: m.task_id,
-        question: `${from} is waiting for an answer from ${to} to "${m.subject ?? m.body.slice(0, 120)}" (asked ${m.created_at}, deadline ${m.reply_by}). Answer it yourself, or tell ${to} to reply?`,
-        options: [
-          'answer here: the answer is sent to the waiting agent',
-          `remind the recipient: friday say <agent> "…"`,
-          `tell ${from} not to wait: friday say ${from} "…"`,
-        ],
-        details: {
-          blocked: `${from}${m.task_id ? ` on ${m.task_id}` : ''}`,
-          why: `no reply by ${m.reply_by}`,
-          requested_by: from,
-          capability: 'human.decision',
-          proposed_action: 'answer for the recipient, or unblock the sender',
-          evidence: [m.body.slice(0, 500)],
-          message_id: m.message_id,
-        },
-      });
+      // The escalation and the request's marker commit together, so a retry cannot ask twice (R04).
       this.exec({ name: 'message.escalate', project_id: projectId, actor: LEASE_MANAGER }, (ctx) => {
+        const escalation_id = this.escalationWithin(ctx, {
+          kind: 'unanswered_request',
+          goal_id: m.goal_id,
+          task_id: m.task_id,
+          question: `${from} is waiting for an answer from ${to} to "${m.subject ?? m.body.slice(0, 120)}" (asked ${m.created_at}, deadline ${m.reply_by}). Answer it yourself, or tell ${to} to reply?`,
+          options: [
+            'answer here: the answer is sent to the waiting agent',
+            `remind the recipient: friday say <agent> "…"`,
+            `tell ${from} not to wait: friday say ${from} "…"`,
+          ],
+          details: {
+            blocked: `${from}${m.task_id ? ` on ${m.task_id}` : ''}`,
+            why: `no reply by ${m.reply_by}`,
+            requested_by: from,
+            capability: 'human.decision',
+            proposed_action: 'answer for the recipient, or unblock the sender',
+            evidence: [m.body.slice(0, 500)],
+            message_id: m.message_id,
+          },
+        });
         ctx.emit({
           type: 'communication.escalated',
           payload: { message_id: m.message_id, escalation_id },
@@ -2693,6 +2788,22 @@ export class FridayState {
         });
       });
       out.escalated.push(m.message_id);
+    }
+    // Recovery: an answer an older daemon recorded without sending the reply (R04). A reply that
+    // cannot be sent is reported, not thrown, so it never stops the rest of the tick.
+    for (const e of this.q.unrepliedAnswers(projectId)) {
+      const request = this.requestOfEscalation(e.escalation_id);
+      if (!request) continue;
+      const human: Actor = { kind: 'human', id: 'local-operator' };
+      try {
+        this.exec(
+          { name: 'escalation.reply', project_id: projectId, actor: human, correlation_id: request.correlation_id },
+          (ctx) => this.replyFor(ctx, projectId, human, request, e.answer),
+        );
+        out.replied.push(request.message_id);
+      } catch (err) {
+        out.reply_failed.push({ escalation_id: e.escalation_id, error: (err as Error).message });
+      }
     }
     return out;
   }
@@ -2750,6 +2861,20 @@ export class FridayState {
       if (task.goal_id && t.goal_id === task.goal_id) return { kind: 'same_goal', theirs: t };
     }
     return null;
+  }
+
+  /** Other tasks related to a task: the same goal, or a dependency in either direction. */
+  private relatedTasks(projectId: string, task: TaskView | null): TaskView[] {
+    if (!task) return [];
+    return this.q
+      .tasks(projectId, { limit: 2000 })
+      .filter(
+        (x) =>
+          x.task_id !== task.task_id &&
+          ((task.goal_id !== null && x.goal_id === task.goal_id) ||
+            task.dependencies.includes(x.task_id) ||
+            x.dependencies.includes(task.task_id)),
+      );
   }
 
   private recipientForTask(projectId: string, t: TaskView): Recipient {
@@ -2828,23 +2953,58 @@ export class FridayState {
       const role = t.slice(5).trim();
       if (!role) throw new FridayError('invalid_request', 'name the role: "role:frontend"');
       needTask(`the ${role} role`);
-      const candidates = this.q
+      const others = this.q
         .agents(projectId)
-        .filter((a) => a.role === role && a.agent_id !== senderAgent?.agent_id && a.status !== 'TERMINATED');
-      if (!candidates.length) {
+        .filter((a) => a.agent_id !== senderAgent?.agent_id && a.status !== 'TERMINATED');
+      const pick = (cands: AgentView[]) =>
+        [...cands].sort((a, b) => Number(live(b)) - Number(live(a)) || a.agent_key.localeCompare(b.agent_key))[0];
+      if (!byAgent) {
+        // Humans and Friday supervise: any agent of the role, else the first of that role to attach.
+        const best = pick(others.filter((a) => a.role === role));
+        return best
+          ? {
+              recipients: [{ kind: 'agent', id: best.agent_id, agent_id: best.agent_id }],
+              note: `role:${role} reached ${best.agent_key}`,
+            }
+          : {
+              recipients: [{ kind: 'role', id: role, agent_id: null }],
+              note: `no ${role} agent has attached yet; the first one to check its inbox gets it`,
+            };
+      }
+      // An agent reaches a role only within related work (ADR-0017 §4): authorize first, then rank.
+      const related = this.relatedTasks(projectId, senderTask);
+      const roleTasks = related.filter((x) => x.role === role);
+      const holders = new Set(
+        roleTasks.flatMap((x) => {
+          const r = this.recipientForTask(projectId, x);
+          return r.agent_id ? [r.agent_id] : [];
+        }),
+      );
+      const best = pick(
+        others.filter(
+          (a) => holders.has(a.agent_id) || (a.role === role && this.relation(projectId, senderTask, a) !== null),
+        ),
+      );
+      if (best) {
         return {
-          recipients: [{ kind: 'role', id: role, agent_id: null }],
-          note: `no ${role} agent has attached yet; the first one to check its inbox gets it`,
+          recipients: [{ kind: 'agent', id: best.agent_id, agent_id: best.agent_id }],
+          note: `role:${role} reached ${best.agent_key}`,
         };
       }
-      const rank = (a: AgentView) => (this.relation(projectId, senderTask, a) ? 0 : 2) + (live(a) ? 0 : 1);
-      const best = [...candidates].sort(
-        (a, b) => rank(a) - rank(b) || a.agent_key.localeCompare(b.agent_key),
-      )[0] as AgentView;
-      return {
-        recipients: [{ kind: 'agent', id: best.agent_id, agent_id: best.agent_id }],
-        note: `role:${role} reached ${best.agent_key}`,
-      };
+      const waiting = roleTasks.find(
+        (x) => !TERMINAL_TASK.has(x.status) && this.recipientForTask(projectId, x).kind === 'task',
+      );
+      if (waiting) {
+        return {
+          recipients: [{ kind: 'task', id: waiting.task_id, agent_id: null }],
+          note: `no ${role} agent works on related tasks yet; whoever takes ${waiting.task_id} gets it`,
+        };
+      }
+      throw new FridayError(
+        'permission_denied',
+        `no agent or task with the role ${role} is related to your task, so Friday does not route this; message "master" to reach other work`,
+        { rule: 'communication.unrelated_recipient' },
+      );
     }
     if (t.startsWith('task:')) {
       const target = this.q.task(projectId, t.slice(5).trim());
@@ -2883,7 +3043,7 @@ export class FridayState {
     if (byAgent && !this.relation(projectId, senderTask, agent)) {
       throw new FridayError(
         'permission_denied',
-        `${agent.agent_key} works on nothing related to your task, so Friday does not route this; address "role:${agent.role}" or "master"`,
+        `${agent.agent_key} works on nothing related to your task, so Friday does not route this; message "master" to reach other work`,
         { rule: 'communication.unrelated_recipient' },
       );
     }
@@ -2908,9 +3068,8 @@ export class FridayState {
     note: string | null;
   } {
     const actor: Actor = sender.kind === 'agent' ? { kind: 'agent', id: sender.caller.agent_id } : sender.actor;
-    let correlation = input.correlation_id ?? null;
-    let request = input.response_to ? this.q.findMessageRow(input.response_to) : undefined;
-    if (request) correlation = request.correlation_id;
+    const request =
+      input.mode === 'response' && input.response_to ? this.q.findMessageRow(input.response_to) : undefined;
     return this.exec(
       {
         name: 'communication.request',
@@ -2918,174 +3077,236 @@ export class FridayState {
         actor,
         idempotency_key: opts.idempotency_key,
         params: input,
-        correlation_id: correlation ?? undefined,
+        correlation_id: request?.correlation_id ?? input.correlation_id,
       },
-      (ctx) => {
-        let senderAgent: AgentView | undefined;
-        let senderTask: TaskView | null = null;
-        if (sender.kind === 'agent') {
-          const h = this.q.harness(sender.caller.harness_id);
-          if (h.shadow) {
-            throw new FridayError('harness_shadowed', 'a shadow session cannot send messages for its agent');
-          }
-          senderAgent = this.q.agent(sender.caller.agent_id);
-          senderTask = this.heldTask(projectId, senderAgent, input.task_id);
-        } else if (input.task_id) {
-          senderTask = this.q.task(projectId, input.task_id);
-        }
-
-        let recipients: Recipient[];
-        let note: string | null = null;
-        let target = input.to.trim();
-        let myDelivery: { delivery_id: string; state: string } | undefined;
-        if (input.mode === 'response') {
-          if (!input.response_to) {
-            throw new FridayError('invalid_request', 'a response names the message it answers (response_to)');
-          }
-          request = this.q.findMessageRow(input.response_to);
-          if (!request) throw new FridayError('message_not_found', `message ${input.response_to} not found`);
-          myDelivery = this.q
-            .deliveriesOf(request.message_id)
-            .find((d) =>
-              sender.kind === 'agent'
-                ? d.agent_id === senderAgent?.agent_id ||
-                  (d.recipient_kind === 'agent' && d.recipient_id === senderAgent?.agent_id)
-                : d.recipient_kind === sender.kind,
-            );
-          // Humans supervise: they may answer any message, for example for a recipient who stays silent.
-          if (!myDelivery && sender.kind !== 'human') {
-            throw new FridayError(
-              'permission_denied',
-              `you can only answer messages you received (${request.message_id})`,
-            );
-          }
-          // A response goes back to the sender of the request, whatever `to` says.
-          recipients = [
-            request.sender_kind === 'agent'
-              ? { kind: 'agent', id: request.sender_id, agent_id: request.sender_id }
-              : {
-                  kind: request.sender_kind === 'master_brain' ? 'master_brain' : 'human',
-                  id: request.sender_id,
-                  agent_id: null,
-                },
-          ];
-          target = request.sender_key ?? request.sender_kind;
-        } else {
-          ({ recipients, note } = this.resolveRecipients(
-            projectId,
-            sender,
-            senderAgent,
-            senderTask,
-            input.to,
-            input.mode,
-          ));
-        }
-
-        // Backpressure (Part 05 §15): a full inbox takes no more low-value notifications.
-        const notes: string[] = note ? [note] : [];
-        const priority = input.priority ?? 'normal';
-        for (const r of recipients) {
-          if (r.kind !== 'agent' || !r.agent_id) continue;
-          const a = this.q.agent(r.agent_id);
-          const open = this.q.inboxRows(projectId, a, this.heldTaskIds(projectId, a)).length;
-          if (
-            open >= this.config.maxOpenPerRecipient &&
-            input.mode === 'notification' &&
-            (priority === 'low' || priority === 'normal')
-          ) {
-            throw new FridayError(
-              'agent_unavailable',
-              `${a.agent_key} has ${open} unacknowledged messages; send this as high priority if it cannot wait, or later`,
-              { open },
-            );
-          }
-          if (!a.harness_id || !this.q.isHarnessLive(a.harness_id, ctx.now)) {
-            notes.push(`${a.agent_key} is not attached right now; the message waits until it expires`);
-          }
-        }
-        note = notes.length ? notes.join('; ') : null;
-        const message_id = this.ids.next('msg');
-        const correlation_id = request?.correlation_id ?? correlation ?? this.ids.next('corr');
-        let body = input.content;
-        let body_artifact_ref: string | null = null;
-        if (body.length > MAX_BODY) {
-          if (this.artifacts) body_artifact_ref = this.artifacts.storeText(projectId, 'message', body).artifact_id;
-          body = `${body.slice(0, MAX_BODY)}…[${body.length - MAX_BODY} more characters${body_artifact_ref ? ` in ${body_artifact_ref}` : ' dropped'}]`;
-        }
-        const blocking = input.mode === 'request' && (input.blocking ?? false);
-        const replyMs = input.reply_within_s
-          ? input.reply_within_s * 1000
-          : blocking
-            ? this.config.blockingReplyMs
-            : null;
-        const deliveries = recipients.map((r) => ({
-          delivery_id: this.ids.next('dlv'),
-          recipient_kind: r.kind,
-          recipient_id: r.id,
-          agent_id: r.agent_id,
-        }));
-        const refs: { kind: 'message' | 'task'; id: string }[] = [{ kind: 'message', id: message_id }];
-        if (senderTask) refs.push({ kind: 'task', id: senderTask.task_id });
-        ctx.emit({
-          type: 'communication.sent',
-          payload: {
-            message: {
-              message_id,
-              sender: { kind: sender.kind, id: actor.id, agent_key: senderAgent?.agent_key ?? null },
-              target,
-              mode: input.mode,
-              subject: input.subject ?? null,
-              body,
-              body_artifact_ref,
-              facts: input.facts ?? [],
-              priority: input.priority ?? 'normal',
-              blocking,
-              task_id: senderTask?.task_id ?? null,
-              goal_id: senderTask?.goal_id ?? null,
-              correlation_id,
-              response_to: request?.message_id ?? null,
-              reply_by: input.mode === 'request' && replyMs ? addMs(ctx.now, replyMs) : null,
-              expires_at: addMs(ctx.now, this.config.messageTtlMs),
-            },
-            deliveries,
-            note,
-          },
-          refs,
-        });
-        if (request) {
-          if (myDelivery && (myDelivery.state === 'queued' || myDelivery.state === 'delivered')) {
-            ctx.emit({
-              type: 'communication.acknowledged',
-              payload: { message_id: request.message_id, delivery_ids: [myDelivery.delivery_id], reason: 'replied' },
-              refs: [{ kind: 'message', id: request.message_id }],
-            });
-          }
-          if (request.mode === 'request' && request.status === 'open') {
-            ctx.emit({
-              type: 'communication.settled',
-              payload: { message_id: request.message_id, reason: 'replied', response_id: message_id },
-              refs: [{ kind: 'message', id: request.message_id }],
-            });
-          } else {
-            this.settleIfDone(ctx, request.message_id);
-          }
-        }
-        return {
-          message_id,
-          status: 'queued' as const,
-          correlation_id,
-          deliveries: deliveries.map((d) => ({
-            delivery_id: d.delivery_id,
-            recipient: {
-              kind: d.recipient_kind,
-              id: d.recipient_id,
-              agent_key: d.agent_id ? (this.q.findAgent(d.agent_id)?.agent_key ?? null) : null,
-            },
-          })),
-          note,
-        };
-      },
+      (ctx) => this.sendWithin(ctx, projectId, sender, input),
     );
+  }
+
+  /** The body of `sendMessage`, inside the caller's transaction. */
+  private sendWithin(
+    ctx: CommandContext,
+    projectId: string,
+    sender: MessageSender,
+    input: SendMessageInput,
+  ): {
+    message_id: string;
+    status: 'queued';
+    correlation_id: string;
+    deliveries: { delivery_id: string; recipient: { kind: Recipient['kind']; id: string; agent_key: string | null } }[];
+    note: string | null;
+  } {
+    const actor: Actor = sender.kind === 'agent' ? { kind: 'agent', id: sender.caller.agent_id } : sender.actor;
+    // Only a response may name a message it answers; nothing else may touch another message (R02).
+    if (input.response_to && input.mode !== 'response') {
+      throw new FridayError('invalid_request', 'response_to belongs only to a response (mode "response")');
+    }
+    let request: MessageRow | undefined;
+    let senderAgent: AgentView | undefined;
+    let senderTask: TaskView | null = null;
+    if (sender.kind === 'agent') {
+      const h = this.q.harness(sender.caller.harness_id);
+      if (h.shadow) {
+        throw new FridayError('harness_shadowed', 'a shadow session cannot send messages for its agent');
+      }
+      senderAgent = this.q.agent(sender.caller.agent_id);
+      senderTask = this.heldTask(projectId, senderAgent, input.task_id);
+    } else if (input.task_id) {
+      senderTask = this.q.task(projectId, input.task_id);
+    }
+
+    let recipients: Recipient[];
+    let note: string | null = null;
+    let target = input.to.trim();
+    let myDelivery: { delivery_id: string; state: string } | undefined;
+    if (input.mode === 'response') {
+      if (!input.response_to) {
+        throw new FridayError('invalid_request', 'a response names the message it answers (response_to)');
+      }
+      request = this.q.findMessageRow(input.response_to);
+      if (!request) throw new FridayError('message_not_found', `message ${input.response_to} not found`);
+      myDelivery = this.q
+        .deliveriesOf(request.message_id)
+        .find((d) =>
+          sender.kind === 'agent'
+            ? d.agent_id === senderAgent?.agent_id ||
+              (d.recipient_kind === 'agent' && d.recipient_id === senderAgent?.agent_id)
+            : d.recipient_kind === sender.kind,
+        );
+      // Humans supervise: they may answer any message, for example for a recipient who stays silent.
+      if (!myDelivery && sender.kind !== 'human') {
+        throw new FridayError('permission_denied', `you can only answer messages you received (${request.message_id})`);
+      }
+      // A response goes back to the sender of the request, whatever `to` says.
+      recipients = [
+        request.sender_kind === 'agent'
+          ? { kind: 'agent', id: request.sender_id, agent_id: request.sender_id }
+          : {
+              kind: request.sender_kind === 'master_brain' ? 'master_brain' : 'human',
+              id: request.sender_id,
+              agent_id: null,
+            },
+      ];
+      target = request.sender_key ?? request.sender_kind;
+    } else {
+      ({ recipients, note } = this.resolveRecipients(projectId, sender, senderAgent, senderTask, input.to, input.mode));
+    }
+
+    // Backpressure (Part 05 §15): a full inbox takes no more low-value notifications from agents
+    // or humans; Friday's own notices always get through.
+    const notes: string[] = note ? [note] : [];
+    const priority = input.priority ?? 'normal';
+    for (const r of recipients) {
+      if (r.kind !== 'agent' || !r.agent_id) continue;
+      const a = this.q.agent(r.agent_id);
+      const open = this.q.inboxRows(projectId, a, this.heldTaskIds(projectId, a)).length;
+      if (
+        sender.kind !== 'system' &&
+        open >= this.config.maxOpenPerRecipient &&
+        input.mode === 'notification' &&
+        (priority === 'low' || priority === 'normal')
+      ) {
+        throw new FridayError(
+          'agent_unavailable',
+          `${a.agent_key} has ${open} unacknowledged messages; send this as high priority if it cannot wait, or later`,
+          { open },
+        );
+      }
+      if (!a.harness_id || !this.q.isHarnessLive(a.harness_id, ctx.now)) {
+        notes.push(`${a.agent_key} is not attached right now; the message waits until it expires`);
+      }
+    }
+    note = notes.length ? notes.join('; ') : null;
+    const message_id = this.ids.next('msg');
+    const correlation_id = request?.correlation_id ?? input.correlation_id ?? this.ids.next('corr');
+    let body = input.content;
+    let body_artifact_ref: string | null = null;
+    if (body.length > MAX_BODY) {
+      if (this.artifacts) body_artifact_ref = this.artifacts.storeText(projectId, 'message', body).artifact_id;
+      body = `${body.slice(0, MAX_BODY)}…[${body.length - MAX_BODY} more characters${body_artifact_ref ? ` in ${body_artifact_ref}` : ' dropped'}]`;
+    }
+    const blocking = input.mode === 'request' && (input.blocking ?? false);
+    const replyMs = input.reply_within_s ? input.reply_within_s * 1000 : blocking ? this.config.blockingReplyMs : null;
+    const deliveries = recipients.map((r) => ({
+      delivery_id: this.ids.next('dlv'),
+      recipient_kind: r.kind,
+      recipient_id: r.id,
+      agent_id: r.agent_id,
+    }));
+    const refs: { kind: 'message' | 'task'; id: string }[] = [{ kind: 'message', id: message_id }];
+    if (senderTask) refs.push({ kind: 'task', id: senderTask.task_id });
+    ctx.emit({
+      type: 'communication.sent',
+      payload: {
+        message: {
+          message_id,
+          sender: { kind: sender.kind, id: actor.id, agent_key: senderAgent?.agent_key ?? null },
+          target,
+          mode: input.mode,
+          subject: input.subject ?? null,
+          body,
+          body_artifact_ref,
+          facts: input.facts ?? [],
+          priority: input.priority ?? 'normal',
+          blocking,
+          task_id: senderTask?.task_id ?? null,
+          goal_id: senderTask?.goal_id ?? null,
+          correlation_id,
+          response_to: request?.message_id ?? null,
+          reply_by: input.mode === 'request' && replyMs ? addMs(ctx.now, replyMs) : null,
+          expires_at: addMs(ctx.now, this.config.messageTtlMs),
+        },
+        deliveries,
+        note,
+      },
+      refs,
+    });
+    if (request) {
+      if (myDelivery && (myDelivery.state === 'queued' || myDelivery.state === 'delivered')) {
+        ctx.emit({
+          type: 'communication.acknowledged',
+          payload: { message_id: request.message_id, delivery_ids: [myDelivery.delivery_id], reason: 'replied' },
+          refs: [{ kind: 'message', id: request.message_id }],
+        });
+      }
+      if (request.mode === 'request' && request.status === 'open') {
+        ctx.emit({
+          type: 'communication.settled',
+          payload: { message_id: request.message_id, reason: 'replied', response_id: message_id },
+          refs: [{ kind: 'message', id: request.message_id }],
+        });
+        const by =
+          sender.kind === 'human'
+            ? 'a human'
+            : sender.kind === 'agent'
+              ? (senderAgent?.agent_key ?? 'another agent')
+              : 'the Master Brain';
+        this.resolveOtherDeliveries(ctx, projectId, request, message_id, by, myDelivery?.delivery_id);
+      } else {
+        this.settleIfDone(ctx, request.message_id);
+      }
+    }
+    return {
+      message_id,
+      status: 'queued' as const,
+      correlation_id,
+      deliveries: deliveries.map((d) => ({
+        delivery_id: d.delivery_id,
+        recipient: {
+          kind: d.recipient_kind,
+          id: d.recipient_id,
+          agent_key: d.agent_id ? (this.q.findAgent(d.agent_id)?.agent_key ?? null) : null,
+        },
+      })),
+      note,
+    };
+  }
+
+  /**
+   * A request answered by one party no longer asks the others (M3.1, R05): their deliveries end as
+   * `resolved`, and those who had already received the question get a short notice, so nobody
+   * keeps working on it or stays held by it. Those who never saw it are not disturbed.
+   */
+  private resolveOtherDeliveries(
+    ctx: CommandContext,
+    projectId: string,
+    request: MessageRow,
+    responseId: string,
+    by: string,
+    except: string | undefined,
+  ): void {
+    const open = this.q
+      .deliveriesOf(request.message_id)
+      .filter((d) => d.delivery_id !== except && (d.state === 'queued' || d.state === 'delivered'));
+    if (!open.length) return;
+    ctx.emit({
+      type: 'communication.resolved',
+      payload: {
+        message_id: request.message_id,
+        delivery_ids: open.map((d) => d.delivery_id),
+        by,
+        by_message_id: responseId,
+      },
+      refs: [{ kind: 'message', id: request.message_id }],
+    });
+    const about = request.subject ?? request.body.slice(0, 80);
+    for (const d of open) {
+      if (d.state !== 'delivered' || !d.agent_id) continue;
+      const agent = this.q.findAgent(d.agent_id);
+      if (!agent) continue;
+      this.sendWithin(
+        ctx,
+        projectId,
+        { kind: 'system', actor: SYSTEM },
+        {
+          to: agent.agent_key,
+          mode: 'notification',
+          priority: 'low',
+          subject: `Resolved: ${about}`,
+          content: `The request "${about}" from ${request.sender_key ?? request.sender_kind} (${request.message_id}) was answered by ${by}; you do not need to answer it. Acknowledge this note.`,
+        },
+      );
+    }
   }
 
   /** A notification or response settles once every delivery ended; a request settles on its reply. */
@@ -3093,7 +3314,12 @@ export class FridayState {
     const m = this.q.findMessageRow(messageId);
     if (m?.status !== 'open' || m.mode === 'request') return;
     const ds = this.q.deliveriesOf(messageId);
-    if (!ds.every((d) => d.state === 'acknowledged' || d.state === 'expired' || d.state === 'dead')) return;
+    if (
+      !ds.every(
+        (d) => d.state === 'acknowledged' || d.state === 'expired' || d.state === 'dead' || d.state === 'resolved',
+      )
+    )
+      return;
     ctx.emit({
       type: 'communication.settled',
       payload: {
@@ -3132,15 +3358,7 @@ export class FridayState {
     const now = this.clock.now();
     const usable = this.q
       .inboxRows(projectId, agent, held)
-      .filter(
-        (d) =>
-          !(
-            d.reserved_by_harness &&
-            d.reserved_by_harness !== caller.harness_id &&
-            d.reserved_until &&
-            d.reserved_until > now
-          ),
-      );
+      .filter((d) => !this.reservedElsewhere(d, caller.harness_id, now));
     const max = opts.max ?? 10;
     let pick = usable.slice(0, max);
     const more = Math.max(0, usable.length - pick.length);
@@ -3276,6 +3494,12 @@ export class FridayState {
     caller: Caller,
     ids: string[],
   ): { acknowledged: string[]; unknown: string[]; refused: string[] } {
+    // Only the session that received a delivery acknowledges it (M3.1, R03). A shadow session
+    // never does; a successor first receives the delivery, which records the takeover.
+    const harness = this.q.harness(caller.harness_id);
+    if (harness.shadow) {
+      throw new FridayError('harness_shadowed', "a shadow session cannot acknowledge its agent's messages");
+    }
     const agent = this.q.agent(caller.agent_id);
     const held = this.heldTaskIds(projectId, agent);
     const out = { acknowledged: [] as string[], unknown: [] as string[], refused: [] as string[] };
@@ -3299,33 +3523,21 @@ export class FridayState {
         continue;
       }
       if (d.state === 'acknowledged') out.acknowledged.push(d.delivery_id);
-      else if (d.state === 'queued' || d.state === 'delivered') todo.push(d);
+      else if (d.state === 'delivered' && d.reserved_by_harness === caller.harness_id) todo.push(d);
+      else if (d.state === 'queued' || d.state === 'delivered')
+        out.refused.push(id); // read it first
       else out.unknown.push(id);
     }
     if (todo.length) {
       this.exec({ name: 'message.ack', project_id: projectId, actor: { kind: 'agent', id: agent.agent_id } }, (ctx) => {
         for (const d of todo) {
-          if (!d.agent_id) {
-            // A role or task delivery acknowledged before it was read is taken by this agent first.
-            ctx.emit({
-              type: 'communication.delivered',
-              payload: {
-                message_id: d.message_id,
-                delivery_id: d.delivery_id,
-                agent_id: agent.agent_id,
-                harness_id: caller.harness_id,
-                attempt: d.attempts + 1,
-                reserved_until: null,
-              },
-              refs: [{ kind: 'message', id: d.message_id }],
-            });
-          }
           ctx.emit({
             type: 'communication.acknowledged',
             payload: {
               message_id: d.message_id,
               delivery_ids: [d.delivery_id],
               agent_id: agent.agent_id,
+              harness_id: caller.harness_id,
               reason: 'acknowledged',
             },
             refs: [{ kind: 'message', id: d.message_id }],
@@ -3336,6 +3548,13 @@ export class FridayState {
       });
     }
     return out;
+  }
+
+  /** Reserved by another session that is still live and still within its reservation. */
+  private reservedElsewhere(d: DeliveryRow, harnessId: string, now: string): boolean {
+    if (!d.reserved_by_harness || d.reserved_by_harness === harnessId) return false;
+    if (!d.reserved_until || d.reserved_until <= now) return false;
+    return this.q.isHarnessLive(d.reserved_by_harness, now);
   }
 
   /**
@@ -3480,4 +3699,14 @@ export class FridayState {
 /** Project-relative POSIX form for comparing paths reported by agents and hooks. */
 export function normalizePath(p: string): string {
   return p.replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/+$/, '');
+}
+
+/** A database made by replay carries this marker table (M3.1, R08). */
+export const INSPECTION_MARKER = 'friday_inspection';
+
+export function isInspectionCopy(db: SqlDatabase): boolean {
+  return (
+    db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ?").get(INSPECTION_MARKER) !==
+    undefined
+  );
 }

@@ -101,6 +101,8 @@ export const EVENT_TYPES = [
   'communication.settled',
   'communication.expired',
   'communication.dead_lettered',
+  'communication.escalated',
+  'communication.resolved',
   'escalation.requested',
   'command.rejected',
 ] as const;

@@ -90,3 +90,48 @@ describe('messaging from the CLI', () => {
     );
   });
 });
+
+describe('message authority over the protocol (M3.1, R02, R03)', () => {
+  it('refuses response_to outside a response, and an acknowledgement from a shadow session', async () => {
+    const td = await startTestDaemon(ws());
+    const be = await FakeHarness.connect(td, { agentKey: 'be-1', key: 'fake:be-1', role: 'backend' });
+    const fe = await FakeHarness.connect(td, { agentKey: 'fe-1', role: 'frontend' });
+    const create = (summary: string, write: string, agent: string, dependsOn: string[] = []) =>
+      td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+        summary,
+        scope: { write: [write], read: [] },
+        depends_on: dependsOn,
+        assign_agent_key: agent,
+      });
+    const api = await create('API', 'backend/**', 'be-1');
+    await create('Page', 'frontend/**', 'fe-1', [api.task_id]);
+    const req = await fe.client.call('communication.request', {
+      to: 'dependencies',
+      mode: 'request',
+      content: 'Does the API return the currency?',
+      blocking: true,
+    });
+
+    // R02: a notification naming the request is refused by the protocol schema; the request stays open.
+    await expect(
+      fe.client.call('communication.request', {
+        to: 'human',
+        mode: 'notification',
+        content: 'settled, trust me',
+        response_to: req.message_id,
+      }),
+    ).rejects.toMatchObject({ code: 'COS-1001' });
+    expect((await td.operator.get<MessageView>(td.operator.projectPath(`/messages/${req.message_id}`))).status).toBe(
+      'open',
+    );
+
+    // R03: the backend session reads it; a second live session of be-1 is a shadow and cannot acknowledge it.
+    const got = await be.client.call('message.inbox', { max: 5 });
+    const delivery = got.items[0]?.delivery_id as string;
+    const shadow = await FakeHarness.connect(td, { agentKey: 'be-1', key: 'fake:be-1:second', loop: false });
+    expect(shadow.client.registration.shadow).toBe(true);
+    await expect(shadow.client.call('message.ack', { ids: [delivery] })).rejects.toMatchObject({ code: 'COS-4006' });
+    expect(await be.client.call('message.ack', { ids: [delivery] })).toMatchObject({ acknowledged: [delivery] });
+    await shadow.close();
+  });
+});

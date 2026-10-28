@@ -236,26 +236,32 @@ export type MessageFact = z.infer<typeof MessageFact>;
  * `human` or `broadcast` (only when `communication.allow_broadcast`). Friday resolves it and
  * returns who it reached. Bodies over 8,000 characters are stored as an artifact.
  */
-export const CommunicationRequestParams = z.object({
-  ...Base,
-  to: z.string().min(1).max(100),
-  mode: MessageMode,
-  subject: z.string().min(1).max(200).optional(),
-  content: z.string().min(1).max(60_000),
-  facts: z.array(MessageFact).max(20).default([]),
-  priority: MessagePriority.default('normal'),
-  /** The sender waits for the answer; an unanswered blocking request is escalated at its deadline. */
-  blocking: z.boolean().default(false),
-  /** A deadline for the reply (requests only). */
-  reply_within_s: z
-    .number()
-    .int()
-    .min(10)
-    .max(7 * 24 * 3600)
-    .optional(),
-  response_to: z.string().optional(),
-  task_id: z.string().optional(),
-});
+export const CommunicationRequestParams = z
+  .object({
+    ...Base,
+    to: z.string().min(1).max(100),
+    mode: MessageMode,
+    subject: z.string().min(1).max(200).optional(),
+    content: z.string().min(1).max(60_000),
+    facts: z.array(MessageFact).max(20).default([]),
+    priority: MessagePriority.default('normal'),
+    /** The sender waits for the answer; an unanswered blocking request is escalated at its deadline. */
+    blocking: z.boolean().default(false),
+    /** A deadline for the reply (requests only). */
+    reply_within_s: z
+      .number()
+      .int()
+      .min(10)
+      .max(7 * 24 * 3600)
+      .optional(),
+    /** The message this one answers; only with mode `response`. */
+    response_to: z.string().optional(),
+    task_id: z.string().optional(),
+  })
+  .refine((p) => p.response_to === undefined || p.mode === 'response', {
+    message: 'response_to belongs only to a response (mode "response")',
+    path: ['response_to'],
+  });
 export const MessageRecipient = z.object({
   kind: z.enum(['agent', 'role', 'task', 'master_brain', 'human']),
   id: z.string(),
@@ -272,7 +278,8 @@ export const CommunicationRequestResult = z.object({
   note: z.string().nullable().default(null),
 });
 
-export const DeliveryState = z.enum(['queued', 'delivered', 'acknowledged', 'expired', 'dead']);
+/** `resolved`: someone else answered the request, so this recipient no longer needs to (M3.1). */
+export const DeliveryState = z.enum(['queued', 'delivered', 'acknowledged', 'expired', 'dead', 'resolved']);
 export type DeliveryState = z.infer<typeof DeliveryState>;
 
 /** One message in an inbox, with the minimal context its recipient needs (ADR-0017 §7). */

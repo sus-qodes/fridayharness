@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "friday": "tsx --conditions development apps/cli/src/bin.ts",
     "check:portability": "node scripts/check-portability.mjs",
+    "check:portability:local": "node scripts/check-portability.mjs --working-tree",
     "clean": "node scripts/clean.mjs"
   },
   "devDependencies": {

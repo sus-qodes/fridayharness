@@ -191,7 +191,8 @@
               "delivered",
               "acknowledged",
               "expired",
-              "dead"
+              "dead",
+              "resolved"
             ]
           },
           "attempt": {

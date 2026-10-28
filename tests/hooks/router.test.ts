@@ -502,6 +502,43 @@ describe('Claude Code hook routes', () => {
     expect(after?.reason ?? '').not.toContain('friday_check_inbox');
   });
 
+  it('Stop stops holding a session for a question someone else already answered (M3.1, R05)', async () => {
+    const r = await rig();
+    const pid = r.td.project.project_id;
+    // dev-1 builds the API; be-1 holds the task that waits for it and asks about it.
+    const mcp = await mcpSession(r.td);
+    const api = await createTask(r.td, ['src/**']);
+    await mcp.claim({ task_id: api.task_id });
+    const be = await mcpSession(r.td, { pid: 5151, sessionId: 'sess-be', agentKey: 'be-1' });
+    await r.td.operator.post<TaskView>(r.td.operator.projectPath('/tasks'), {
+      summary: 'Checkout that uses the API',
+      scope: { write: ['api/**'], read: [] },
+      depends_on: [api.task_id],
+      assign_agent_key: 'be-1',
+    });
+    const stop = () => r.hook('Stop', hookFixture('stop', r.vars, { stop_hook_active: false }));
+
+    const ask = (await be.call('communication.request', {
+      to: 'dependencies',
+      mode: 'request',
+      subject: 'currency field',
+      content: 'Do you need the currency on every line?',
+      blocking: true,
+    })) as { message_id: string };
+    const held = (await stop()).body.hook_output as { reason: string };
+    expect(held.reason).toContain('"currency field"');
+    // A human answers for dev-1 before it read the question.
+    await r.td.operator.post(r.td.operator.projectPath('/messages'), {
+      to: 'be-1',
+      content: 'Yes, on every line.',
+      reply_to: ask.message_id,
+    });
+    expect(r.td.daemon.state.q.message(ask.message_id).deliveries.map((d) => d.state)).toEqual(['resolved']);
+    const after = (await stop()).body.hook_output as { reason?: string } | null;
+    expect(after?.reason ?? '').not.toContain('currency field');
+    expect(r.td.daemon.state.peekInbox(pid, mcp.agentId).items).toEqual([]);
+  });
+
   it('SessionEnd disconnects the harness, except for /clear, /resume and compaction', async () => {
     const r = await rig();
     const pid = r.td.project.project_id;

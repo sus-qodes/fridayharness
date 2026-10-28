@@ -306,7 +306,7 @@ export const DeliveryView = z.object({
   recipient_id: z.string(),
   agent_id: z.string().nullable(),
   agent_key: z.string().nullable(),
-  state: z.enum(['queued', 'delivered', 'acknowledged', 'expired', 'dead']),
+  state: z.enum(['queued', 'delivered', 'acknowledged', 'expired', 'dead', 'resolved']),
   attempts: z.number().int(),
   delivered_at: z.string().nullable(),
   acknowledged_at: z.string().nullable(),

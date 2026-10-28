@@ -223,7 +223,7 @@ describe('communication authority', () => {
 });
 
 describe('recipient resolution', () => {
-  it('turns a role into the best-fit related agent, and waits for a role nobody has yet', () => {
+  it('turns a role into the best-fit related agent; only a human waits for a role nobody has yet', () => {
     const be = agent('be-1', 'backend');
     const fe1 = agent('fe-1', 'frontend');
     const fe2 = agent('fe-2', 'frontend');
@@ -234,7 +234,13 @@ describe('recipient resolution', () => {
       note: 'role:frontend reached fe-2',
     });
     expect(fe1).toBeTruthy();
-    const qaWait = send(be, 'role:qa');
+    // No related qa work: an agent is refused (M3.1, R01); a human's message waits for the role.
+    expect(code(() => send(be, 'role:qa'))).toBe('COS-3000');
+    const qaWait = state.sendMessage(
+      PROJECT,
+      { kind: 'human', actor: human },
+      { to: 'role:qa', mode: 'notification', content: 'hi' },
+    );
     expect(qaWait.deliveries).toMatchObject([{ recipient: { kind: 'role', id: 'qa', agent_key: null } }]);
     // The first qa agent to read its inbox takes it.
     const qa = agent('qa-1', 'qa');
@@ -304,14 +310,19 @@ describe('delivery under failure', () => {
     const shadow = session('fake:be-1:shadow');
     expect(shadow.shadow).toBe(true);
     expect(code(() => state.inbox(PROJECT, shadow.caller))).toBe('COS-4006');
-    // The real session ends and a new one starts: the old reservation still holds for a while.
+    // The real session ends and a new one starts: a reservation of a session that is gone does not
+    // hold the successor back, and the successor's read is recorded as a new attempt (M3.1, R03).
     state.disconnectHarness(PROJECT, be.harness_id, 'restart', true);
     state.disconnectHarness(PROJECT, shadow.caller.harness_id, 'restart', true);
     const next = session('fake:be-1:new');
     expect(next.shadow).toBe(false);
-    expect(state.inbox(PROJECT, next.caller).items).toEqual([]);
-    clock.advance(state.config.messageReservationMs + 1);
-    expect(state.inbox(PROJECT, next.caller).items[0]?.attempt).toBe(2);
+    const item = state.inbox(PROJECT, next.caller).items[0];
+    expect(item?.attempt).toBe(2);
+    // Only the session that now holds it can acknowledge it.
+    expect(state.acknowledgeMessages(PROJECT, be, [item?.delivery_id as string]).refused).toEqual([item?.delivery_id]);
+    expect(state.acknowledgeMessages(PROJECT, next.caller, [item?.delivery_id as string]).acknowledged).toEqual([
+      item?.delivery_id,
+    ]);
   });
 
   it('returns the first result for a retried send with the same idempotency key', () => {
@@ -392,7 +403,11 @@ describe('replay', () => {
     );
     const answer = state.inbox(PROJECT, fe).items[0]?.delivery_id as string;
     state.acknowledgeMessages(PROJECT, fe, [answer]);
-    send(fe, 'role:qa', { mode: 'notification' });
+    state.sendMessage(
+      PROJECT,
+      { kind: 'human', actor: human },
+      { to: 'role:qa', mode: 'notification', content: 'later' },
+    );
     const dump = () =>
       Object.fromEntries(DOMAIN_TABLES.map((t) => [t, db.prepare(`SELECT * FROM ${t} ORDER BY 1, 2`).all()]));
     const before = dump();

@@ -608,28 +608,35 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     }
     return body.into;
   };
-  app.post('/admin/snapshot', allow(...OPERATOR), (c) =>
-    c.json(createSnapshot(state, pid, path.join(fridayDir, 'artifacts', 'snapshots')), 201),
+  // Each runs off the event loop's critical path (M3.1, R09) and one at a time.
+  const artifactsDir = path.join(fridayDir, 'artifacts');
+  app.post('/admin/snapshot', allow(...OPERATOR), async (c) =>
+    c.json(await createSnapshot(state, pid, { artifactsDir }), 201),
   );
-  app.get('/admin/snapshots', allow(...OPERATOR), (c) => c.json({ snapshots: listSnapshots(state, pid) }));
+  app.get('/admin/snapshots', allow(...OPERATOR), (c) =>
+    c.json({ snapshots: listSnapshots(state, pid, { artifactsDir }) }),
+  );
   app.post('/admin/replay', allow(...OPERATOR), async (c) => {
     const body = await json(c);
     const into = target(body, 'a replay');
     let snapshotFile: string | undefined;
     if (typeof body.snapshot === 'string' && body.snapshot) {
-      const snap = listSnapshots(state, pid).find((s) => s.snapshot_id === body.snapshot);
+      const snap = listSnapshots(state, pid, { artifactsDir }).find((s) => s.snapshot_id === body.snapshot);
       if (!snap) throw new FridayError('invalid_request', `no snapshot ${body.snapshot}`);
+      if (!snap.file || !snap.present) {
+        throw new FridayError(
+          'invalid_request',
+          `the file of snapshot ${body.snapshot} (${snap.state_ref}) is missing`,
+        );
+      }
       snapshotFile = snap.file;
     }
-    return c.json(replayInto(state, pid, into, snapshotFile ? { snapshotFile } : {}));
+    return c.json(await replayInto(state, pid, into, snapshotFile ? { snapshotFile } : {}));
   });
   app.post('/admin/backup', allow(...OPERATOR), async (c) => {
     const body = await json(c);
     return c.json(
-      backupTo(state, pid, target(body, 'a backup'), {
-        artifactsDir: path.join(fridayDir, 'artifacts'),
-        fridayVersion: FRIDAY_VERSION,
-      }),
+      await backupTo(state, pid, target(body, 'a backup'), { artifactsDir, fridayVersion: FRIDAY_VERSION }),
       201,
     );
   });

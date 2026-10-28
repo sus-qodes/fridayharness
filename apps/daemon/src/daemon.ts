@@ -292,15 +292,49 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   });
   logger.info('daemon started', { url, project_id: project.project_id, instance_id: instanceId });
 
+  // Sessions from before this start could not heartbeat while Friday was down: each gets one
+  // lease to report again before its work counts as lost (M3.1, R09).
+  state.holdLeaseJudgement(project.project_id);
   const tick = () => state.tick(project.project_id);
   const tickMs = opts.tickMs ?? 1000;
+  // A tick far later than scheduled means the process was paused (a laptop asleep, a long
+  // collection): nobody could heartbeat meanwhile, so the same hold applies.
+  const pauseMs = Math.max(5_000, state.config.heartbeatIntervalMs / 2);
+  let lastTick = Date.now();
   const timer =
     tickMs > 0
       ? setInterval(() => {
+          const at = Date.now();
+          const late = at - lastTick - tickMs;
+          lastTick = at;
+          if (late > pauseMs) {
+            const hold = state.holdLeaseJudgement(project.project_id);
+            logger.warn('the daemon was paused; sessions get one lease to report again', {
+              paused_ms: late,
+              until: hold.until,
+            });
+            try {
+              state.recordObservation(project.project_id, { kind: 'system', id: 'daemon' }, 'daemon.paused', {
+                paused_ms: late,
+                judged_again_at: hold.until,
+              });
+            } catch {
+              // Recording is best effort; the hold is what matters.
+            }
+          }
           try {
             const r = tick();
-            if (r.lost.length || r.degraded.length || r.terminated.length || r.declined.length)
+            if (
+              r.lost.length ||
+              r.degraded.length ||
+              r.terminated.length ||
+              r.declined.length ||
+              r.messages_escalated.length ||
+              r.messages_replied.length
+            )
               logger.info('lease tick', r);
+            if (r.messages_reply_failed.length)
+              logger.warn('lease tick: replies not sent', { failed: r.messages_reply_failed });
           } catch (e) {
             logger.error('lease tick failed', { message: (e as Error).message });
           }

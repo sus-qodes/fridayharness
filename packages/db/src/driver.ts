@@ -31,8 +31,17 @@ export interface SqlDatabase {
   /** Runs a PRAGMA and returns its first row's first column, if any. */
   pragma(sql: string): unknown;
   readonly inTransaction: boolean;
+  /**
+   * A consistent copy of the database at `target`, made with SQLite's online backup in small
+   * steps, so the event loop keeps running while a large database is copied. Writes made through
+   * this connection meanwhile are carried into the copy.
+   */
+  backup(target: string): Promise<void>;
   close(): void;
 }
+
+/** Pages copied per backup step: about 2 MB with 4 KB pages, a few milliseconds each. */
+const BACKUP_PAGES_PER_STEP = 512;
 
 function bind(params: SqlValue[]): Bound[] {
   return params.map((p) => (p === undefined ? null : typeof p === 'boolean' ? (p ? 1 : 0) : p));
@@ -53,6 +62,10 @@ interface BetterDb {
   prepare(sql: string): BetterStatement;
   transaction<F extends (...a: never[]) => unknown>(fn: F): { immediate: F };
   pragma(sql: string, opts?: { simple?: boolean }): unknown;
+  backup(
+    target: string,
+    opts?: { progress?: (info: { totalPages: number; remainingPages: number }) => number },
+  ): Promise<unknown>;
   readonly inTransaction: boolean;
   close(): void;
 }
@@ -82,6 +95,9 @@ export function openBetterSqlite(path: string): SqlDatabase {
     get inTransaction() {
       return db.inTransaction;
     },
+    backup: async (target) => {
+      await db.backup(target, { progress: () => BACKUP_PAGES_PER_STEP });
+    },
     close: () => db.close(),
   };
 }
@@ -105,8 +121,12 @@ function plain<T>(row: unknown): T {
   return (row === undefined || row === null ? row : { ...(row as object) }) as T;
 }
 
+type NodeBackup = (db: NodeDb, target: string, opts?: { rate?: number }) => Promise<number>;
+
 export function openNodeSqlite(path: string): SqlDatabase {
-  const mod = process.getBuiltinModule('node:sqlite') as { DatabaseSync: new (file: string) => NodeDb } | undefined;
+  const mod = process.getBuiltinModule('node:sqlite') as unknown as
+    | { DatabaseSync: new (file: string) => NodeDb; backup?: NodeBackup }
+    | undefined;
   if (!mod) throw new Error('node:sqlite is not available in this Node.js build');
   const db = new mod.DatabaseSync(path);
   const cache = new Map<string, SqlStatement>();
@@ -148,6 +168,11 @@ export function openNodeSqlite(path: string): SqlDatabase {
     },
     get inTransaction() {
       return depth > 0;
+    },
+    async backup(target) {
+      // node:sqlite has an online backup from Node 22.16; older builds copy in one step.
+      if (mod.backup) await mod.backup(db, target, { rate: BACKUP_PAGES_PER_STEP });
+      else db.prepare('VACUUM INTO ?').run(target);
     },
     close: () => db.close(),
   };

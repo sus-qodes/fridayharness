@@ -2,10 +2,29 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M3.1 stabilization (M3 review 2026-10-14)
+
+An independent review of M3 found nine gaps (R01–R09). All were confirmed: R01–R06 by failing regressions written before the fixes, R07–R09 by source review and measurement ([disposition](docs/reviews/2026-10-14-m3-review-disposition.md), plan H.8).
+
+- **One rule for every address (R01):** an agent reaches a role only within related work, and a delayed delivery goes to a related task, not to any agent of that role. Humans still reach any agent of a role.
+- **Only an authorized reply settles a request (R02):** `response_to` is accepted only on responses, by the protocol and by the service.
+- **Only the receiving session acknowledges (R03):** shadow sessions are refused, and a delivery must be read before it is acknowledged. A restarted session receives what its predecessor left, at once.
+- **Crash-safe escalation (R04):** an escalation commits with its marker, and an answer with its reply. Answers recorded without a reply by older builds are sent.
+- **Answered questions stop asking (R05):** the other recipients' deliveries become `resolved`. Those who had read the question get a short "Resolved:" note from Friday, and the Stop hook no longer holds a session for it.
+- **Relocatable snapshots (R06):** snapshots are JSON Lines files recorded relative to the artifacts folder, so a moved or restored project still finds them.
+- **A verified backup (R07):**
+  - built in a staging folder and renamed when complete;
+  - credentials removed;
+  - a manifest read from the copy, with every artifact's sha256;
+  - links not followed, and missing artifacts reported.
+- **Restore and restart (R08):** `friday restore --from <dir>` checks the backup, sets the current state aside and puts the backup in. At the next start, sessions register again and get one lease to come back. An interrupted model call needs this clone's approval before it is retried. Replay output is an inspection copy Friday refuses to run on.
+- **Maintenance no longer holds the daemon (R09):** reads use a second connection, copies use SQLite's online backup in steps, and rebuilds run in batches. On 160,001 events the longest stall fell from 5.5 s to 187 ms. A paused or sleeping machine no longer marks every session lost.
+- **Portability:** `pnpm check:portability:local` also checks untracked files before they are staged.
+
 ## Unreleased — M3 communication authority, replay and backup
 
 - **M3a, messages through Friday:**
-  - Agents send with `friday_communicate`: to an agent, `role:<role>` (Friday picks the best-fit agent), `task:<id>`, `dependencies`, `dependents`, `master` or `human`.
+  - Agents send with `friday_communicate`: to an agent, `role:<role>` (Friday picks a related agent with that role), `task:<id>`, `dependencies`, `dependents`, `master` or `human`.
   - Friday routes only between related work and refuses the rest.
   - Every message has one delivery per recipient, read with `friday_check_inbox` (reserved for the session, delivered again if not acknowledged, dead-lettered after five tries) and acknowledged with `friday_acknowledge`, only by its own recipient.
   - A request settles when it is answered, and the answer shares its correlation id.

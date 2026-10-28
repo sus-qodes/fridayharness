@@ -10,6 +10,7 @@ import { doctor, renderDoctor } from './doctor.js';
 import { registerGoalCommands, renderEscalation } from './goals.js';
 import { registerMessageCommands } from './messages.js';
 import { clip, describeEvent, kv, shortTime, table } from './output.js';
+import { restoreProject } from './restore.js';
 import { runDaemon } from './run.js';
 import { FRIDAY_DIR_GITIGNORE } from './templates.js';
 
@@ -603,15 +604,37 @@ export function buildProgram(): Command {
     .requiredOption('--into <dir>', 'a new or empty directory')
     .action(async (o: { into: string }) => {
       const { client } = operator(g());
-      const r = await client.post<{ files: string[]; event_head: number; into: string }>(
-        '/admin/backup',
-        { into: path.resolve(o.into) },
-        { timeoutMs: 600_000 },
-      );
+      const r = await client.post<{
+        files: string[];
+        event_head: number;
+        into: string;
+        artifacts: { files: number; bytes: number };
+        skipped: { path: string; reason: string }[];
+        problems: { artifact_id: string; path: string; problem: string }[];
+      }>('/admin/backup', { into: path.resolve(o.into) }, { timeoutMs: 600_000 });
       out(g(), r, () =>
         [
-          `Backed up ${r.files.join(', ')} at event ${r.event_head} to ${r.into}.`,
-          'Tokens are not included (they are created again at start); back up provider keys per user if you want them.',
+          `Backed up ${r.files.join(', ')} at event ${r.event_head} to ${r.into} (${r.artifacts.files} artifact file(s)).`,
+          ...r.skipped.map((x) => `  skipped ${x.path}: ${x.reason}`),
+          ...r.problems.map(
+            (x) => `  warning: ${x.path} (${x.artifact_id}) is ${x.problem} in the project's artifacts`,
+          ),
+          'No credential is included: after a restore every session registers again. Provider keys stay per user.',
+        ].join('\n'),
+      );
+    });
+
+  program
+    .command('restore')
+    .description('put a backup back (Friday must be stopped); the current state is set aside, not deleted')
+    .requiredOption('--from <dir>', 'a folder made by "friday backup"')
+    .action(async (o: { from: string }) => {
+      const r = await restoreProject(project(g()), o.from);
+      out(g(), r, () =>
+        [
+          `Restored the backup of ${r.backup_created_at ?? 'unknown date'} (event ${r.event_head}, ${r.artifacts} artifact file(s)).`,
+          r.set_aside ? `The state it replaced is in ${r.set_aside}.` : 'There was no state to replace.',
+          'Start Friday with "friday run"; sessions register again, and work whose session does not come back is recovered as after a crash.',
         ].join('\n'),
       );
     });

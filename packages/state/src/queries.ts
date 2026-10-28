@@ -288,6 +288,18 @@ export class Queries {
     );
   }
 
+  /** Answered `unanswered_request` escalations whose request is still open: the reply was never sent. */
+  unrepliedAnswers(projectId: string): { escalation_id: string; answer: string }[] {
+    return this.db
+      .prepare(
+        `SELECT e.escalation_id, e.answer FROM escalations e
+           JOIN messages m ON m.message_id = json_extract(e.details_json, '$.message_id')
+          WHERE e.project_id = ? AND e.kind = 'unanswered_request' AND e.status = 'answered' AND m.status = 'open'
+          ORDER BY e.created_at`,
+      )
+      .all<{ escalation_id: string; answer: string }>(projectId);
+  }
+
   escalations(projectId: string, status?: string): Record<string, unknown>[] {
     return status
       ? this.db
