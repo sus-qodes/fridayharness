@@ -136,6 +136,8 @@ export const FridayConfig = z
           .int()
           .min(10_000)
           .default(30 * 60 * 1000),
+        /** Unacknowledged messages an agent may hold before low and normal notifications to it are refused. */
+        max_open_per_recipient: z.number().int().min(1).max(10_000).default(50),
       })
       .passthrough()
       .prefault({}),

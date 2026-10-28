@@ -367,6 +367,11 @@ export class StateProjector implements Projector {
             .run(str(p.reason), e.occurred_at, str(p.message_id));
         }
         return;
+      case 'communication.escalated':
+        this.db
+          .prepare('UPDATE messages SET escalated_at = ?, escalation_id = ? WHERE message_id = ?')
+          .run(e.occurred_at, str(p.escalation_id), str(p.message_id));
+        return;
       case 'communication.settled': {
         const res = this.db
           .prepare("UPDATE messages SET status = 'settled', settled_reason = ?, settled_at = ? WHERE message_id = ?")

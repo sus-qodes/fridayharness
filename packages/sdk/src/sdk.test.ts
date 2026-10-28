@@ -10,9 +10,11 @@ import {
   parseConfig,
   privateDirFor,
   projectKey,
+  providerEndpoint,
   renderContextMarkdown,
   renderInitialConfig,
   SseParser,
+  setProviderEndpoint,
   stateDir,
   writePrivateFile,
 } from './index.js';
@@ -140,5 +142,19 @@ describe('renderContextMarkdown', () => {
     expect(md).toContain('Claim before editing.');
     expect(md).toContain('1 section(s) omitted');
     expect(renderContextMarkdown(packet, 9000)).toContain('x'.repeat(5000));
+  });
+});
+
+describe('provider endpoints (review F03)', () => {
+  const ws = useTestWorkspace();
+  it('accept https anywhere and plain http only to a loopback address', () => {
+    const env = { FRIDAY_STATE_DIR: ws().stateDir };
+    setProviderEndpoint('anthropic', 'https://gateway.example.com', env);
+    expect(providerEndpoint('anthropic', env)).toBe('https://gateway.example.com/');
+    setProviderEndpoint('anthropic', 'http://127.0.0.1:8787', env);
+    expect(providerEndpoint('anthropic', env)).toBe('http://127.0.0.1:8787/');
+    expect(() => setProviderEndpoint('anthropic', 'http://gateway.example.com', env)).toThrow(/https/);
+    setProviderEndpoint('anthropic', null, env);
+    expect(providerEndpoint('anthropic', env)).toBeUndefined();
   });
 });

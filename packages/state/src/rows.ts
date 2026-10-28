@@ -421,6 +421,8 @@ export interface MessageRow {
   settled_reason: string | null;
   created_at: string;
   settled_at: string | null;
+  escalated_at?: string | null;
+  escalation_id?: string | null;
 }
 
 export interface DeliveryRow {

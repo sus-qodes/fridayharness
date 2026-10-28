@@ -488,6 +488,20 @@ CREATE TABLE event_consumers (
   },
 ];
 
+/** M3b: unanswered blocking requests, and the Master Brain's cursor as a durable event consumer. */
+export const CONSUMER_MIGRATIONS: Migration[] = [
+  {
+    version: 7,
+    name: 'consumers_and_timeouts',
+    up: `
+ALTER TABLE messages ADD COLUMN escalated_at TEXT;
+ALTER TABLE messages ADD COLUMN escalation_id TEXT;
+INSERT OR IGNORE INTO event_consumers (consumer_id, project_id, last_sequence, updated_at)
+  SELECT 'master-brain', project_id, last_sequence, updated_at FROM brain_cursor;
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -495,6 +509,7 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...MASTER_BRAIN_MIGRATIONS,
   ...STABILIZATION_MIGRATIONS,
   ...MESSAGING_MIGRATIONS,
+  ...CONSUMER_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */

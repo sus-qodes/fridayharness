@@ -7,6 +7,7 @@ export const PACKAGE_NAME = '@friday/state';
 export { CommandBus, type CommandContext, type CommandMeta, type CommandOutcome, stableStringify } from './bus.js';
 export {
   ALL_MIGRATIONS,
+  CONSUMER_MIGRATIONS,
   DOMAIN_TABLES,
   MASTER_BRAIN_MIGRATIONS,
   MESSAGING_MIGRATIONS,

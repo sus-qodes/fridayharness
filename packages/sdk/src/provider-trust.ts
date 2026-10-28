@@ -115,9 +115,13 @@ export function setProviderEndpoint(
   } catch {
     throw new FridayError('invalid_request', `"${baseUrl}" is not a URL`);
   }
-  const local = url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '[::1]';
+  // Loopback addresses only, written as addresses (E.3: names can resolve elsewhere).
+  const local = url.hostname === '127.0.0.1' || url.hostname === '[::1]';
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) {
-    throw new FridayError('invalid_request', 'a provider endpoint must use https (plain http only on this machine)');
+    throw new FridayError(
+      'invalid_request',
+      'a provider endpoint must use https (plain http only to 127.0.0.1 or [::1])',
+    );
   }
   writePrivateFile(
     credentialsDir(env),

@@ -13,6 +13,12 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - Humans use `friday say`, `friday inbox human|master|<agent>` and `friday messages`.
   - The Master Brain reads what is addressed to it and uses the reported facts when it revises a plan.
   - Decision: ADR-0017; guide: [docs/messaging.md](docs/messaging.md).
+- **M3b, delivery under failure:**
+  - Messages expire visibly after 24 hours.
+  - An unanswered blocking request reaches a human at its deadline, and the human's answer becomes the reply.
+  - A full inbox refuses low-value notifications (`COS-2005`) but never requests or urgent messages; senders learn when a recipient is not attached.
+  - Claude Code sessions are held at their next stop while urgent messages are unread.
+  - The Master Brain's place in the event log is a durable consumer (`event_consumers`).
 
 ## Unreleased — M2.5 stabilization (review 2026-10-14)
 

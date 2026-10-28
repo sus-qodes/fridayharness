@@ -475,6 +475,33 @@ describe('Claude Code hook routes', () => {
     expect(after.task.status).toBe('RUNNING');
   });
 
+  it('Stop surfaces urgent and blocking messages before the session stops (M3b)', async () => {
+    const r = await rig();
+    const mcp = await mcpSession(r.td);
+    await createTask(r.td, ['src/**']);
+    await mcp.claim({ next: true });
+    const stop = (active: boolean) => r.hook('Stop', hookFixture('stop', r.vars, { stop_hook_active: active }));
+    // A routine note does not hold the session.
+    await r.td.operator.post(r.td.operator.projectPath('/messages'), { to: 'dev-1', content: 'FYI', priority: 'low' });
+    const routine = (await stop(false)).body.hook_output as { reason?: string } | null;
+    expect(routine?.reason ?? '').not.toContain('friday_check_inbox');
+    await r.td.operator.post(r.td.operator.projectPath('/messages'), {
+      to: 'dev-1',
+      subject: 'stop editing pricing',
+      content: 'The pricing contract changed; wait.',
+      priority: 'urgent',
+    });
+    const held = (await stop(false)).body.hook_output as { decision: string; reason: string };
+    expect(held.decision).toBe('block');
+    expect(held.reason).toContain('urgent notification from human: "stop editing pricing"');
+    expect(held.reason).toContain('friday_check_inbox');
+    expect((await stop(true)).body.hook_output).toBeNull();
+    // Once read, it no longer holds the session (the progress nudge may still apply).
+    await mcp.call('message.inbox', { max: 10 });
+    const after = (await stop(false)).body.hook_output as { reason?: string } | null;
+    expect(after?.reason ?? '').not.toContain('friday_check_inbox');
+  });
+
   it('SessionEnd disconnects the harness, except for /clear, /resume and compaction', async () => {
     const r = await rig();
     const pid = r.td.project.project_id;

@@ -400,3 +400,77 @@ describe('replay', () => {
     expect(dump()).toEqual(before);
   });
 });
+
+describe('timeouts, backpressure and offline recipients (M3b)', () => {
+  it('expires what nobody acknowledged in time, visibly', () => {
+    boot({ messageTtlMs: 60 * 60 * 1000 });
+    const be = agent('be-1', 'backend');
+    const fe = agent('fe-1', 'frontend');
+    const api = work(be, 'backend');
+    work(fe, 'frontend', [api.task_id]);
+    const m = send(fe, 'be-1', { mode: 'notification' });
+    clock.advance(60 * 60 * 1000 + 1);
+    state.heartbeat(PROJECT, be.harness_id);
+    state.heartbeat(PROJECT, fe.harness_id);
+    expect(state.tick(PROJECT).messages_expired).toEqual([m.message_id]);
+    expect(state.q.message(m.message_id)).toMatchObject({ status: 'expired', deliveries: [{ state: 'expired' }] });
+    expect(state.inbox(PROJECT, be).items).toEqual([]);
+  });
+
+  it('escalates an unanswered blocking request once, and turns the human answer into the reply', () => {
+    const be = agent('be-1', 'backend');
+    const fe = agent('fe-1', 'frontend');
+    const api = work(be, 'backend');
+    work(fe, 'frontend', [api.task_id]);
+    const req = send(fe, 'be-1', { subject: 'currency', blocking: true, reply_within_s: 600 });
+    clock.advance(600_001);
+    state.heartbeat(PROJECT, be.harness_id);
+    state.heartbeat(PROJECT, fe.harness_id);
+    expect(state.tick(PROJECT).messages_escalated).toEqual([req.message_id]);
+    expect(state.tick(PROJECT).messages_escalated).toEqual([]);
+    const esc = state.q.escalations(PROJECT, 'pending').find((e) => e.kind === 'unanswered_request');
+    expect(esc?.question).toContain('fe-1 is waiting for an answer from be-1 to "currency"');
+    expect(state.q.message(req.message_id).status).toBe('open');
+    state.answerEscalation(PROJECT, human, String(esc?.escalation_id), 'Yes, with ISO-4217 codes.');
+    expect(state.q.message(req.message_id)).toMatchObject({ status: 'settled', settled_reason: 'replied' });
+    expect(state.inbox(PROJECT, fe).items[0]).toMatchObject({
+      trust: 'human',
+      mode: 'response',
+      in_reply_to: 'currency',
+    });
+  });
+
+  it('refuses low and normal notifications to a full inbox, but not what matters', () => {
+    boot({ maxOpenPerRecipient: 2 });
+    const be = agent('be-1', 'backend');
+    const fe = agent('fe-1', 'frontend');
+    const api = work(be, 'backend');
+    work(fe, 'frontend', [api.task_id]);
+    send(fe, 'be-1', { mode: 'notification' });
+    send(fe, 'be-1', { mode: 'notification' });
+    expect(code(() => send(fe, 'be-1', { mode: 'notification' }))).toBe('COS-2005');
+    expect(send(fe, 'be-1', { mode: 'notification', priority: 'high' }).deliveries).toHaveLength(1);
+    expect(send(fe, 'be-1', { mode: 'request' }).deliveries).toHaveLength(1);
+  });
+
+  it('says when a recipient is offline, and keeps the message for it', () => {
+    const be = agent('be-1', 'backend');
+    const fe = agent('fe-1', 'frontend');
+    const api = work(be, 'backend');
+    work(fe, 'frontend', [api.task_id]);
+    clock.advance(state.config.leaseTtlMs + 1);
+    state.heartbeat(PROJECT, fe.harness_id);
+    state.tick(PROJECT);
+    const m = send(fe, 'be-1', { mode: 'notification' });
+    expect(m.note).toContain('be-1 is not attached right now');
+    expect(state.q.message(m.message_id).deliveries[0]?.state).toBe('queued');
+  });
+
+  it('keeps durable consumer cursors in event_consumers', () => {
+    state.setBrainCursor(PROJECT, 7);
+    state.setConsumerCursor(PROJECT, 'audit-export', 3);
+    expect(state.q.brainCursor(PROJECT)).toBe(7);
+    expect(state.q.consumerCursor(PROJECT, 'audit-export')).toBe(3);
+    expect(state.q.consumerCursor(PROJECT, 'unknown')).toBe(0);
+  });
+});

@@ -166,6 +166,32 @@ describe('durable Master Brain work (review F05)', () => {
     expect(accept(be)).toHaveLength(1);
   });
 
+  it('runs a job that was saved with the cursor before a crash, exactly once (M3b durable consumer)', async () => {
+    const goal = state.createGoal(PROJECT, human, { request: GOAL });
+    // The previous process consumed goal.created (job and cursor in one transaction) and died.
+    state.enqueueBrainJobs(
+      PROJECT,
+      [
+        {
+          kind: 'plan',
+          goal_id: goal.goal_id,
+          task_id: null,
+          reason: 'first plan',
+          dedupe_key: `plan:${goal.goal_id}`,
+          source_sequence: 1,
+        },
+      ],
+      state.store.head(PROJECT),
+    );
+    expect(state.q.consumerCursor(PROJECT, 'master-brain')).toBe(state.store.head(PROJECT));
+    const model = new FakePlannerModel([fixture('01-plan.json'), fixture('01-plan.json')]);
+    await brain(model).runOnce();
+    expect(model.requests).toHaveLength(1);
+    expect(state.q.planVersion(planOf(goal.goal_id), 1)?.status).toBe('PROPOSED');
+    await brain(model).runOnce();
+    expect(model.requests).toHaveLength(1);
+  });
+
   it('retries an action that fails, then asks a human', async () => {
     let calls = 0;
     const b = brain(new FakePlannerModel([fixture('01-plan.json')]), {

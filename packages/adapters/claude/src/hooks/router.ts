@@ -273,8 +273,24 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
             { harness_id: harness?.harness_id ?? null, task_id: task?.task_id ?? null },
             refs(task),
           );
-          if (task?.status !== 'RUNNING' || hook.stop_hook_active || !agent)
-            return c.json({ ok: true, hook_output: null });
+          if (hook.stop_hook_active || !agent) return c.json({ ok: true, hook_output: null });
+          // Urgent and blocking messages surface before the session stops (Part 05 §15, M3b).
+          const waiting = state
+            .peekInbox(pid, agent.agent_id, 20)
+            .items.filter(
+              (m) => m.state === 'queued' && (m.blocking || m.priority === 'urgent' || m.priority === 'high'),
+            );
+          if (waiting.length) {
+            const first = waiting[0] as (typeof waiting)[number];
+            return c.json({
+              ok: true,
+              hook_output: {
+                decision: 'block',
+                reason: `Friday: ${waiting.length} ${waiting.length === 1 ? 'message needs' : 'messages need'} your attention (first: ${first.priority}${first.blocking ? ', blocking' : ''} ${first.mode} from ${first.from.agent_key ?? first.from.kind}: "${(first.subject ?? first.body).slice(0, 80)}"). Read them with friday_check_inbox, answer or acknowledge, then stop.`,
+              },
+            });
+          }
+          if (task?.status !== 'RUNNING') return c.json({ ok: true, hook_output: null });
           const since = previous?.sequence ?? 0;
           const reported = state.store
             .readByRef(pid, 'task', task.task_id, { limit: 2000 })

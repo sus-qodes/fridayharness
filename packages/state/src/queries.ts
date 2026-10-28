@@ -456,10 +456,15 @@ export class Queries {
 
   /** How far the Master Brain has read the event log (operational, not replayed). */
   brainCursor(projectId: string): number {
+    return this.consumerCursor(projectId, 'master-brain');
+  }
+
+  /** How far a durable consumer has read the event log (M3b). */
+  consumerCursor(projectId: string, consumerId: string): number {
     return (
       this.db
-        .prepare('SELECT last_sequence FROM brain_cursor WHERE project_id = ?')
-        .get<{ last_sequence: number }>(projectId)?.last_sequence ?? 0
+        .prepare('SELECT last_sequence FROM event_consumers WHERE consumer_id = ? AND project_id = ?')
+        .get<{ last_sequence: number }>(consumerId, projectId)?.last_sequence ?? 0
     );
   }
 

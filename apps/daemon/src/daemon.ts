@@ -144,6 +144,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     messageMaxAttempts: project.config.communication.max_delivery_attempts,
     messageTtlMs: project.config.communication.message_ttl_ms,
     blockingReplyMs: project.config.communication.blocking_reply_ms,
+    maxOpenPerRecipient: project.config.communication.max_open_per_recipient,
     ...opts.state,
   };
 

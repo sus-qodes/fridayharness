@@ -57,7 +57,7 @@ import { CommandBus, type CommandContext, type CommandMeta } from './bus.js';
 import { ALL_MIGRATIONS } from './migrations.js';
 import { StateProjector } from './projector.js';
 import { type HarnessRecord, Queries } from './queries.js';
-import type { DeliveryRow } from './rows.js';
+import type { DeliveryRow, MessageRow } from './rows.js';
 
 export interface StateConfig {
   heartbeatIntervalMs: number;
@@ -85,6 +85,8 @@ export interface StateConfig {
   messageTtlMs: number;
   /** The reply deadline of a blocking request that names none. */
   blockingReplyMs: number;
+  /** Unacknowledged deliveries an agent may hold before low and normal notifications are refused. */
+  maxOpenPerRecipient: number;
 }
 
 export const DEFAULT_STATE_CONFIG: StateConfig = {
@@ -105,6 +107,7 @@ export const DEFAULT_STATE_CONFIG: StateConfig = {
   messageMaxAttempts: 5,
   messageTtlMs: 24 * 60 * 60 * 1000,
   blockingReplyMs: 30 * 60 * 1000,
+  maxOpenPerRecipient: 50,
 };
 
 /** Who sends a message (ADR-0017 §4). Agents are identified by their harness token, never by the request. */
@@ -1744,12 +1747,21 @@ export class FridayState {
 
   /** Operational: how far the Master Brain has read the event log. */
   setBrainCursor(projectId: string, sequence: number): void {
+    this.setConsumerCursor(projectId, 'master-brain', sequence);
+  }
+
+  /**
+   * Operational (M3b): how far a durable consumer of the event log has read. A consumer moves its
+   * cursor only in the transaction that makes its work durable (the Master Brain writes its jobs
+   * with it), so a restart neither loses nor repeats a local effect.
+   */
+  setConsumerCursor(projectId: string, consumerId: string, sequence: number): void {
     this.db
       .prepare(
-        `INSERT INTO brain_cursor (project_id, last_sequence, updated_at) VALUES (?, ?, ?)
-         ON CONFLICT(project_id) DO UPDATE SET last_sequence = excluded.last_sequence, updated_at = excluded.updated_at`,
+        `INSERT INTO event_consumers (consumer_id, project_id, last_sequence, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(consumer_id, project_id) DO UPDATE SET last_sequence = excluded.last_sequence, updated_at = excluded.updated_at`,
       )
-      .run(projectId, sequence, this.clock.now());
+      .run(consumerId, projectId, sequence, this.clock.now());
   }
 
   // ================================================================ verification
@@ -2209,6 +2221,8 @@ export class FridayState {
     terminated: string[];
     declined: string[];
     unreserved: string[];
+    messages_expired: string[];
+    messages_escalated: string[];
   } {
     const now = this.clock.now();
     const nowMs = Date.parse(now);
@@ -2218,6 +2232,8 @@ export class FridayState {
       terminated: [] as string[],
       declined: [] as string[],
       unreserved: [] as string[],
+      messages_expired: [] as string[],
+      messages_escalated: [] as string[],
     };
     const leases = this.db
       .prepare(
@@ -2293,6 +2309,9 @@ export class FridayState {
       out.declined.push(m.run_id);
     }
     out.unreserved.push(...this.expireReservations(projectId, this.clock.now()));
+    const timeouts = this.expireMessages(projectId, this.clock.now());
+    out.messages_expired.push(...timeouts.expired);
+    out.messages_escalated.push(...timeouts.escalated);
     return out;
   }
 
@@ -2585,6 +2604,97 @@ export class FridayState {
         refs: [{ kind: 'escalation', id: escalationId }],
       });
     });
+    // A human answering for a silent recipient (M3b): the answer reaches the waiting agent as a reply.
+    const row = this.q.escalation(escalationId);
+    if (row?.kind !== 'unanswered_request') return;
+    const d = JSON.parse(String(row.details_json ?? '{}')) as { message_id?: string };
+    const request = d.message_id ? this.q.findMessageRow(d.message_id) : undefined;
+    if (request?.status !== 'open') return;
+    this.sendMessage(
+      projectId,
+      { kind: 'human', actor },
+      {
+        to: request.sender_key ?? request.sender_id,
+        mode: 'response',
+        response_to: request.message_id,
+        content: answer,
+      },
+      { idempotency_key: `escalation-answer:${escalationId}` },
+    );
+  }
+
+  /**
+   * Message timeouts, run by the lease manager (M3b): a message past its expiry ends for every
+   * recipient that has not acknowledged it; a blocking request past its reply deadline is
+   * escalated to a human once, and stays open so a late answer still settles it.
+   */
+  private expireMessages(projectId: string, nowIso: string): { expired: string[]; escalated: string[] } {
+    const out = { expired: [] as string[], escalated: [] as string[] };
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM messages WHERE project_id = ? AND status = 'open'
+           AND (expires_at <= ? OR (blocking = 1 AND reply_by IS NOT NULL AND reply_by <= ? AND escalated_at IS NULL))`,
+      )
+      .all<MessageRow>(projectId, nowIso, nowIso);
+    for (const m of rows) {
+      if (m.expires_at <= nowIso) {
+        const open = this.q.deliveriesOf(m.message_id).filter((d) => d.state === 'queued' || d.state === 'delivered');
+        this.exec({ name: 'message.expire', project_id: projectId, actor: LEASE_MANAGER }, (ctx) => {
+          ctx.emit({
+            type: 'communication.expired',
+            payload: {
+              message_id: m.message_id,
+              delivery_ids: open.map((d) => d.delivery_id),
+              reason: 'the message expired before it was answered or acknowledged',
+              message_expired: true,
+            },
+            refs: [{ kind: 'message', id: m.message_id }],
+          });
+        });
+        out.expired.push(m.message_id);
+        continue;
+      }
+      const to = this.q
+        .deliveriesOf(m.message_id)
+        .map(
+          (d) =>
+            d.agent_key ?? (d.recipient_kind === 'agent' ? d.recipient_id : `${d.recipient_kind}:${d.recipient_id}`),
+        )
+        .join(', ');
+      const from = m.sender_key ?? m.sender_kind;
+      const escalation_id = this.raiseEscalation(projectId, LEASE_MANAGER, {
+        kind: 'unanswered_request',
+        goal_id: m.goal_id,
+        task_id: m.task_id,
+        question: `${from} is waiting for an answer from ${to} to "${m.subject ?? m.body.slice(0, 120)}" (asked ${m.created_at}, deadline ${m.reply_by}). Answer it yourself, or tell ${to} to reply?`,
+        options: [
+          'answer here: the answer is sent to the waiting agent',
+          `remind the recipient: friday say <agent> "…"`,
+          `tell ${from} not to wait: friday say ${from} "…"`,
+        ],
+        details: {
+          blocked: `${from}${m.task_id ? ` on ${m.task_id}` : ''}`,
+          why: `no reply by ${m.reply_by}`,
+          requested_by: from,
+          capability: 'human.decision',
+          proposed_action: 'answer for the recipient, or unblock the sender',
+          evidence: [m.body.slice(0, 500)],
+          message_id: m.message_id,
+        },
+      });
+      this.exec({ name: 'message.escalate', project_id: projectId, actor: LEASE_MANAGER }, (ctx) => {
+        ctx.emit({
+          type: 'communication.escalated',
+          payload: { message_id: m.message_id, escalation_id },
+          refs: [
+            { kind: 'message', id: m.message_id },
+            { kind: 'escalation', id: escalation_id },
+          ],
+        });
+      });
+      out.escalated.push(m.message_id);
+    }
+    return out;
   }
 
   // ---------------------------------------------------------------- agent messaging (M3, ADR-0017)
@@ -2842,7 +2952,8 @@ export class FridayState {
                   (d.recipient_kind === 'agent' && d.recipient_id === senderAgent?.agent_id)
                 : d.recipient_kind === sender.kind,
             );
-          if (!myDelivery) {
+          // Humans supervise: they may answer any message, for example for a recipient who stays silent.
+          if (!myDelivery && sender.kind !== 'human') {
             throw new FridayError(
               'permission_denied',
               `you can only answer messages you received (${request.message_id})`,
@@ -2870,6 +2981,29 @@ export class FridayState {
           ));
         }
 
+        // Backpressure (Part 05 §15): a full inbox takes no more low-value notifications.
+        const notes: string[] = note ? [note] : [];
+        const priority = input.priority ?? 'normal';
+        for (const r of recipients) {
+          if (r.kind !== 'agent' || !r.agent_id) continue;
+          const a = this.q.agent(r.agent_id);
+          const open = this.q.inboxRows(projectId, a, this.heldTaskIds(projectId, a)).length;
+          if (
+            open >= this.config.maxOpenPerRecipient &&
+            input.mode === 'notification' &&
+            (priority === 'low' || priority === 'normal')
+          ) {
+            throw new FridayError(
+              'agent_unavailable',
+              `${a.agent_key} has ${open} unacknowledged messages; send this as high priority if it cannot wait, or later`,
+              { open },
+            );
+          }
+          if (!a.harness_id || !this.q.isHarnessLive(a.harness_id, ctx.now)) {
+            notes.push(`${a.agent_key} is not attached right now; the message waits until it expires`);
+          }
+        }
+        note = notes.length ? notes.join('; ') : null;
         const message_id = this.ids.next('msg');
         const correlation_id = request?.correlation_id ?? correlation ?? this.ids.next('corr');
         let body = input.content;
@@ -2918,8 +3052,8 @@ export class FridayState {
           },
           refs,
         });
-        if (request && myDelivery) {
-          if (myDelivery.state === 'queued' || myDelivery.state === 'delivered') {
+        if (request) {
+          if (myDelivery && (myDelivery.state === 'queued' || myDelivery.state === 'delivered')) {
             ctx.emit({
               type: 'communication.acknowledged',
               payload: { message_id: request.message_id, delivery_ids: [myDelivery.delivery_id], reason: 'replied' },
