@@ -7,6 +7,6 @@
     "noEmit": true,
     "rootDir": ".."
   },
-  "include": ["protocol", "integration", "failure", "security", "conformance", "mcp", "hooks", "scenarios"],
+  "include": ["helpers", "protocol", "integration", "failure", "security", "conformance", "mcp", "hooks", "scenarios"],
   "exclude": ["support", ".artifacts", ".reports", "fixtures"]
 }

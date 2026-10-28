@@ -12,7 +12,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "bin"
   ],
   "scripts": {
     "build": "tsc -b",
@@ -21,7 +22,13 @@
   },
   "dependencies": {
     "@friday/adapter-claude": "workspace:*",
+    "@friday/daemon": "workspace:*",
+    "@friday/db": "workspace:*",
     "@friday/protocol": "workspace:*",
-    "@friday/sdk": "workspace:*"
+    "@friday/sdk": "workspace:*",
+    "commander": "^15.0.0"
+  },
+  "bin": {
+    "friday": "./bin/friday.mjs"
   }
 }

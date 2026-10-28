@@ -20,7 +20,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@friday/protocol": "workspace:*"
+    "@friday/protocol": "workspace:*",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@friday/test-support": "workspace:*"

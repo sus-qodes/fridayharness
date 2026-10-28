@@ -9,7 +9,13 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
+    "@friday/adapter-generic": "workspace:*",
     "@friday/cli": "workspace:*",
+    "@friday/core": "workspace:*",
+    "@friday/daemon": "workspace:*",
+    "@friday/protocol": "workspace:*",
+    "@friday/sdk": "workspace:*",
+    "@friday/state": "workspace:*",
     "@friday/test-support": "workspace:*"
   }
 }

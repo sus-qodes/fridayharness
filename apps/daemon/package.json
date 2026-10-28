@@ -27,6 +27,13 @@
     "@friday/policy": "workspace:*",
     "@friday/protocol": "workspace:*",
     "@friday/state": "workspace:*",
-    "@friday/verification": "workspace:*"
+    "@friday/verification": "workspace:*",
+    "@friday/sdk": "workspace:*",
+    "hono": "^4.13.13",
+    "@hono/node-server": "^2.1.4",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@friday/test-support": "workspace:*"
   }
 }

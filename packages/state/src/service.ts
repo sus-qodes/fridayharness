@@ -1705,7 +1705,27 @@ export class FridayState {
     ).events[0] as StoredEvent;
   }
 
+  /** Replaces the capability declaration of a harness (spec Part 06 §4). */
+  setCapabilities(projectId: string, harnessId: string, capabilities: Record<string, unknown>): void {
+    this.exec(
+      { name: 'harness.capabilities', project_id: projectId, actor: { kind: 'harness', id: harnessId } },
+      (ctx) => {
+        const h = this.q.harness(harnessId);
+        this.moveHarness(ctx, h, h.status, 'capabilities', { capabilities });
+      },
+    );
+  }
+
   // ================================================================ tokens (ADR-0008)
+
+  /** Distinguishes a revoked token (COS-3005) from an unknown one (COS-3004). */
+  tokenStatus(raw: string): { status: 'valid'; info: TokenInfo } | { status: 'revoked' | 'unknown' } {
+    const info = this.resolveToken(raw);
+    if (info) return { status: 'valid', info };
+    if (!raw || raw.length < 16) return { status: 'unknown' };
+    const revoked = this.db.prepare('SELECT 1 AS r FROM credentials WHERE token_hash = ?').get(sha256(raw));
+    return { status: revoked ? 'revoked' : 'unknown' };
+  }
 
   /** Issues a token; only its sha256 is stored. Returns the raw token. */
   issueToken(projectId: string, tokenClass: TokenClass, harnessId: string | null = null): string {
