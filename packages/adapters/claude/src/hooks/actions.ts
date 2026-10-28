@@ -1,0 +1,92 @@
+import { createHash } from 'node:crypto';
+import type { PolicyAction } from '@friday/policy';
+import { COMMAND_TOOLS, NETWORK_TOOLS, WRITE_TOOLS } from './types.js';
+
+const str = (v: unknown): string | undefined => (typeof v === 'string' && v.length > 0 ? v : undefined);
+
+/** Maps a Claude Code tool call to the action Friday's policy evaluates. Unknown tools return null. */
+export function actionFromTool(toolName: string, input: Record<string, unknown>): PolicyAction | null {
+  if (toolName === 'Read') {
+    const p = str(input.file_path);
+    return p ? { tool: toolName, kind: 'read', paths: [p] } : null;
+  }
+  if (toolName === 'Glob') {
+    return {
+      tool: toolName,
+      kind: 'search',
+      patterns: [str(input.pattern)].filter((x): x is string => Boolean(x)),
+      paths: [str(input.path)].filter((x): x is string => Boolean(x)),
+    };
+  }
+  if (toolName === 'Grep') {
+    // `pattern` is a regex over file contents, not a path; `glob` and `path` select files.
+    return {
+      tool: toolName,
+      kind: 'search',
+      patterns: [str(input.glob)].filter((x): x is string => Boolean(x)),
+      paths: [str(input.path)].filter((x): x is string => Boolean(x)),
+    };
+  }
+  if (WRITE_TOOLS.has(toolName)) {
+    const p = str(input.file_path) ?? str(input.notebook_path);
+    return p ? { tool: toolName, kind: 'write', paths: [p] } : null;
+  }
+  if (COMMAND_TOOLS.has(toolName)) {
+    const c = str(input.command);
+    return c ? { tool: toolName, kind: 'command', command: c } : null;
+  }
+  if (NETWORK_TOOLS.has(toolName)) {
+    return { tool: toolName, kind: 'network', url: str(input.url) ?? `search: ${str(input.query) ?? ''}` };
+  }
+  return null;
+}
+
+const BODY_FIELDS = new Set(['content', 'new_string', 'old_string', 'new_source', 'old_source']);
+
+function digest(s: string): { bytes: number; sha256: string } {
+  return { bytes: Buffer.byteLength(s, 'utf8'), sha256: createHash('sha256').update(s).digest('hex') };
+}
+
+function trimText(v: unknown, max: number): unknown {
+  return typeof v === 'string' && v.length > max ? `${v.slice(0, max)}…[truncated ${v.length - max} chars]` : v;
+}
+
+/**
+ * Removes file bodies and large tool output before a hook payload leaves the launcher:
+ * the event log records what happened, never file contents (spec Part 01, Principle B).
+ */
+export function stripHookPayload<T extends Record<string, unknown>>(hook: T): T {
+  const out: Record<string, unknown> = { ...hook };
+  const ti = hook.tool_input as Record<string, unknown> | undefined;
+  if (ti && typeof ti === 'object') {
+    const cleaned: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(ti)) {
+      if (BODY_FIELDS.has(k) && typeof v === 'string') cleaned[k] = { redacted_body: true, ...digest(v) };
+      else if (k === 'edits' && Array.isArray(v)) cleaned[k] = { redacted_body: true, count: v.length };
+      else cleaned[k] = trimText(v, 4000);
+    }
+    out.tool_input = cleaned;
+  }
+  const tr = hook.tool_response as Record<string, unknown> | undefined;
+  if (tr !== undefined) {
+    const toolName = String(hook.tool_name ?? '');
+    if (tr && typeof tr === 'object' && (toolName === 'Bash' || toolName === 'PowerShell')) {
+      out.tool_response = {
+        stdout: trimText(tr.stdout, 2000),
+        stderr: trimText(tr.stderr, 2000),
+        interrupted: tr.interrupted ?? null,
+        exit_code: tr.exitCode ?? tr.exit_code ?? null,
+      };
+    } else if (tr && typeof tr === 'object' && (tr as { filePath?: unknown }).filePath) {
+      out.tool_response = {
+        filePath: (tr as { filePath: unknown }).filePath,
+        type: (tr as { type?: unknown }).type ?? null,
+      };
+    } else {
+      delete out.tool_response;
+    }
+  }
+  if (typeof hook.last_assistant_message === 'string')
+    out.last_assistant_message = trimText(hook.last_assistant_message, 2000);
+  return out as T;
+}

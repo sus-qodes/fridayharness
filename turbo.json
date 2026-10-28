@@ -38,6 +38,7 @@
       "outputs": []
     },
     "test": {
+      "dependsOn": ["^build"],
       "outputs": [],
       "env": ["FRIDAY_TEST_*"]
     },

@@ -251,6 +251,16 @@ export const HumanEscalationParams = z.object({
 });
 export const HumanEscalationResult = z.object({ escalation_id: z.string(), status: z.enum(['pending', 'answered']) });
 
+/** Friday extension: the agent hands its own task back (it becomes READY for someone else). */
+export const TaskReleaseParams = z.object({
+  ...Base,
+  task_id: z.string(),
+  run_id: z.string(),
+  reason: z.enum(['blocked', 'handoff', 'out_of_scope', 'other']),
+  note: z.string().max(1000).default(''),
+});
+export const TaskReleaseResult = z.object({ task_status: TaskStatus });
+
 // ---- registry --------------------------------------------------------------------------------
 
 /** Harness → daemon methods served at POST /protocol/v1/rpc. */
@@ -270,6 +280,7 @@ export const METHODS = {
   'communication.request': { params: CommunicationRequestParams, result: CommunicationRequestResult },
   'permission.request': { params: PermissionRequestParams, result: PermissionRequestResult },
   'human.escalation': { params: HumanEscalationParams, result: HumanEscalationResult },
+  'task.release': { params: TaskReleaseParams, result: TaskReleaseResult },
 } as const;
 
 export type MethodName = keyof typeof METHODS;

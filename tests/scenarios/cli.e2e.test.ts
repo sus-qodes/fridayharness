@@ -20,7 +20,8 @@ beforeEach(() => {
   process.env.FRIDAY_STATE_DIR = ws().stateDir;
 });
 afterEach(() => {
-  process.env.FRIDAY_STATE_DIR = savedStateDir;
+  if (savedStateDir === undefined) delete process.env.FRIDAY_STATE_DIR;
+  else process.env.FRIDAY_STATE_DIR = savedStateDir;
 });
 
 describe('friday CLI end to end', () => {

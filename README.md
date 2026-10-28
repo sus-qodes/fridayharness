@@ -4,7 +4,7 @@ Friday is a local orchestration and context control plane for AI software develo
 
 The architecture is called **ContextOS** in the original specification.
 
-**Status:** M0 (skeleton). Nothing runs yet beyond the toolchain and test helpers. See the [build plan](docs/BUILD_PLAN.md) for the full roadmap and current milestone status.
+**Status:** M1: the event spine, the daemon, the `friday` CLI, a read-only status page, and Claude Code attached through an MCP server, a skill and policy hooks. A task runs from creation through a Claude Code session to a verified completion, with Friday's policy enforced on the session's tools. The Master Brain (planning) arrives in M2. See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 
 ## Documentation
 
@@ -13,9 +13,36 @@ The architecture is called **ContextOS** in the original specification.
 | [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) | The complete build plan, from M0 to the MVP gate and beyond. The single document all work is checked against |
 | [docs/handoff/](docs/handoff/) | The original 16-part ContextOS specification, verbatim, plus [ERRATA](docs/handoff/ERRATA.md) |
 | [docs/decisions/](docs/decisions/) | Architecture decision records |
-| [docs/security/model.md](docs/security/model.md) | Enforcement levels, token scopes, what is and isn't intercepted |
+| [docs/security/model.md](docs/security/model.md) | Enforcement levels, token scopes, what is and isn't intercepted, known gaps, threat model |
+| [docs/integration/claude-code.md](docs/integration/claude-code.md) | Attaching Claude Code: setup, what is enforced, headless runs, troubleshooting |
+| [docs/protocol/README.md](docs/protocol/README.md) | The harness protocol: transport, tokens, methods, errors, versions |
 | [docs/integration/claude-code-spike.md](docs/integration/claude-code-spike.md) | Verified Claude Code hook and MCP behaviour on Windows |
 | [docs/reviews/](docs/reviews/) | External reviews of the plan |
+
+## Try it (Windows, PowerShell)
+
+```powershell
+# In the Friday repository
+pnpm install; pnpm build
+function friday { node C:\friday\apps\cli\bin\friday.mjs @args }   # adjust the path; define it in each terminal
+friday setup                                   # once per machine
+
+friday fixture init C:\demo\shop              # a small repository that is already a Friday project
+cd C:\demo\shop
+friday run                                     # terminal 1: the daemon and the status page URL
+
+# terminal 2
+friday harness config claude-code --agent dev-1
+friday harness doctor claude-code              # expect: Enforcement achieved: L1 enforcing
+friday task create "Add discount-code support to pricing" --criteria "node --test passes" `
+  --scope-write "frontend/src/pricing/**" --scope-write "frontend/test/**" --assign dev-1 --ready
+code .                                         # Claude Code panel: accept folder trust, then ask "/friday start"
+
+friday task inspect <task> --events            # after Claude submits its completion claim
+friday verify <task>                           # runs the configured checks: COMPLETED or FAILED
+```
+
+Details, headless use and troubleshooting: [docs/integration/claude-code.md](docs/integration/claude-code.md).
 
 ## Development
 
@@ -39,7 +66,7 @@ Set `FRIDAY_TEST_TMP` to a short directory (for example `C:\t`) if your temp pat
 ```
 apps/        daemon, cli
 packages/    protocol, core, db, events, state, sdk, policy, verification, mcp-server, adapters/{generic,claude}
-tests/       support (test helpers), cross-package suites, fixtures
+tests/       support and helpers, cross-package suites (integration, hooks, mcp, security, scenarios), fixtures
 docs/        plan, spec, decisions, security, integration notes
 ```
 

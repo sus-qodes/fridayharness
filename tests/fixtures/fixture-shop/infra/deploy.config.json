@@ -1,0 +1,6 @@
+{
+  "service": "shop",
+  "regions": ["eu-west-1"],
+  "replicas": 2,
+  "healthcheck": "/healthz"
+}

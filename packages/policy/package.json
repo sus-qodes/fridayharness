@@ -20,9 +20,11 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@friday/protocol": "workspace:*"
+    "@friday/protocol": "workspace:*",
+    "picomatch": "^4.0.7"
   },
   "devDependencies": {
-    "@friday/test-support": "workspace:*"
+    "@friday/test-support": "workspace:*",
+    "@types/picomatch": "^4.0.3"
   }
 }

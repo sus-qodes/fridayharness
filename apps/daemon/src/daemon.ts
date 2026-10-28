@@ -19,6 +19,7 @@ import { serve } from '@hono/node-server';
 import type { Hono } from 'hono';
 import { buildApp } from './app.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
+import { runVerification } from './verify.js';
 
 export interface DaemonOptions {
   /** Any directory inside the project; resolved to the main worktree root. */
@@ -206,12 +207,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     },
     rotateTokens,
     streams,
-    ...(opts.verify
-      ? {
-          verify: (taskId: string, actor: Actor) =>
-            (opts.verify as NonNullable<DaemonOptions['verify']>)(ctx, taskId, actor),
-        }
-      : {}),
+    verify: (taskId: string, actor: Actor) => (opts.verify ?? runVerification)(ctx, taskId, actor),
     ...(opts.pollIntervalMs ? { pollIntervalMs: opts.pollIntervalMs } : {}),
   });
   for (const ext of opts.extensions ?? []) ext(app as unknown as Hono, ctx);

@@ -145,7 +145,7 @@ describe('method schemas', () => {
   it('knows its method names', () => {
     expect(isMethodName('task.claim')).toBe(true);
     expect(isMethodName('verification.request')).toBe(false);
-    expect(Object.keys(METHODS)).toHaveLength(15);
+    expect(Object.keys(METHODS)).toHaveLength(16);
   });
 });
 

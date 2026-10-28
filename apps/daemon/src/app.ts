@@ -231,8 +231,63 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     return c.json(task, 201);
   });
 
-  app.get(`${P}/tasks/:tid`, allow(...OPERATOR), (c) => {
+  /** Everything an attached session needs about itself (harness tokens only). */
+  app.get(`${P}/me`, allow('harness'), (c) => {
+    const harnessId = c.get('auth').harness_id as string;
+    const harness = state.q.harness(harnessId);
+    const caller = callerFor(state, pid, harnessId);
+    const agent = state.q.agent(caller.agent_id);
+    const held = state.q
+      .tasks(pid, { statuses: ['ASSIGNED', 'RUNNING', 'WAITING', 'HARNESS_LOST', 'READY_FOR_VERIFICATION'] })
+      .filter((t) => t.assigned_agent_id === agent.agent_id);
+    const current =
+      held.find((t) => t.task_id === agent.current_task_id) ??
+      held.find((t) => t.status !== 'READY_FOR_VERIFICATION') ??
+      null;
+    const run = current?.current_run_id ? (state.q.findRun(current.current_run_id) ?? null) : null;
+    const inbox = state.store
+      .readSince(pid, 0, { types: ['communication.recorded'], limit: 5000 })
+      .filter((e) => {
+        const to = (e.payload as { to?: string }).to;
+        return to === agent.agent_key || to === agent.agent_id;
+      })
+      .slice(-20)
+      .map((e) => {
+        const p = e.payload as Record<string, unknown>;
+        return {
+          message_id: p.message_id,
+          from: e.actor.id,
+          mode: p.mode,
+          content: p.content,
+          response_to: p.response_to,
+          sent_at: e.occurred_at,
+          trust: 'peer-untrusted',
+        };
+      });
+    return c.json({
+      project: { project_id: pid, name: project.name },
+      harness: { ...harness, shadow: harness.shadow },
+      agent,
+      current_task: current,
+      current_run: run && run.harness_id === harnessId ? run : run,
+      run_is_mine: Boolean(run && run.harness_id === harnessId && run.status === 'ACTIVE'),
+      awaiting_verification: held.filter((t) => t.status === 'READY_FOR_VERIFICATION').map((t) => t.task_id),
+      claimable: state.claimableTasks(pid, agent.agent_key, 10).filter((t) => t.status === 'READY'),
+      inbox,
+    });
+  });
+
+  app.get(`${P}/tasks/:tid`, allow('operator', 'harness'), (c) => {
     const task = state.q.task(pid, c.req.param('tid'));
+    const auth = c.get('auth');
+    if (auth.token_class === 'harness' && auth.harness_id) {
+      const caller = callerFor(state, pid, auth.harness_id);
+      const agent = state.q.agent(caller.agent_id);
+      const visible =
+        task.assigned_agent_id === caller.agent_id ||
+        (task.status === 'READY' && (!task.reserved_for_agent_key || task.reserved_for_agent_key === agent.agent_key));
+      if (!visible) throw new FridayError('permission_denied', `task ${task.task_id} is not assigned to you`);
+    }
     return c.json({
       task,
       runs: state.q.runs(task.task_id),

@@ -21,6 +21,7 @@
     "skipLibCheck": true,
 
     "composite": true,
+    "tsBuildInfoFile": "${configDir}/dist/.tsbuildinfo",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true

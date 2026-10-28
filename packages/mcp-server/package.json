@@ -12,7 +12,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "bin"
   ],
   "scripts": {
     "build": "tsc -b",
@@ -20,11 +21,17 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@friday/adapter-generic": "workspace:*",
     "@friday/policy": "workspace:*",
     "@friday/protocol": "workspace:*",
-    "@friday/sdk": "workspace:*"
+    "@friday/sdk": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@friday/test-support": "workspace:*"
+  },
+  "bin": {
+    "friday-mcp": "./bin/friday-mcp.mjs"
   }
 }

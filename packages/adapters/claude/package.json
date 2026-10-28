@@ -11,18 +11,24 @@
       "default": "./dist/index.js"
     }
   },
-  "files": [
-    "dist"
-  ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node scripts/bundle-hook.mjs",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run"
   },
   "dependencies": {
+    "@friday/daemon": "workspace:*",
     "@friday/mcp-server": "workspace:*",
     "@friday/policy": "workspace:*",
     "@friday/protocol": "workspace:*",
-    "@friday/sdk": "workspace:*"
+    "@friday/sdk": "workspace:*",
+    "@friday/state": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "@friday/test-support": "workspace:*",
+    "esbuild": "~0.28.0",
+    "yaml": "^2.9.1"
   }
 }

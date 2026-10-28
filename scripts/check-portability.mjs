@@ -8,7 +8,7 @@
  *  - no POSIX-only constructs in package.json scripts (rm -rf, VAR=value prefixes, $VAR, export)
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -16,7 +16,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
 const problems = [];
-const files = git('ls-files', '-z').split('\0').filter(Boolean);
+// Files deleted in the working tree but not yet staged are skipped.
+const files = git('ls-files', '-z')
+  .split('\0')
+  .filter((f) => f && existsSync(path.join(root, f)));
 
 // 1. shell scripts
 for (const f of files)

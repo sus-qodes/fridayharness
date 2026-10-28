@@ -9,13 +9,17 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
+    "@friday/adapter-claude": "workspace:*",
     "@friday/adapter-generic": "workspace:*",
     "@friday/cli": "workspace:*",
     "@friday/core": "workspace:*",
     "@friday/daemon": "workspace:*",
+    "@friday/mcp-server": "workspace:*",
+    "@friday/policy": "workspace:*",
     "@friday/protocol": "workspace:*",
     "@friday/sdk": "workspace:*",
     "@friday/state": "workspace:*",
-    "@friday/test-support": "workspace:*"
+    "@friday/test-support": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.1"
   }
 }

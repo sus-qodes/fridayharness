@@ -207,6 +207,18 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
       const p = METHODS[method].params.parse(raw);
       return state.requestPermission(pid, caller(), p);
     }
+    case 'task.release': {
+      const p = METHODS[method].params.parse(raw);
+      const c = caller();
+      const task = state.releaseTask(
+        pid,
+        { kind: 'agent', id: c.agent_id },
+        p.task_id,
+        p.note ? `${p.reason}: ${p.note}` : p.reason,
+        c,
+      );
+      return { task_status: task.status };
+    }
     case 'human.escalation': {
       const p = METHODS[method].params.parse(raw);
       return state.requestEscalation(pid, caller(), p);

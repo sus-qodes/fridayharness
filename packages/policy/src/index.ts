@@ -1,6 +1,35 @@
 /**
  * @friday/policy
- * Scopes, sensitive paths, command classes, autonomy and policy evaluation.
- * Implemented in M1; this is the M0 skeleton.
+ * Sensitive paths, task scopes, command classes, autonomy and policy evaluation (spec Part 07).
+ * Pure functions: the daemon and the dependency-free hook launcher share them.
  */
 export const PACKAGE_NAME = '@friday/policy';
+
+export {
+  type Autonomy,
+  type CommandClass,
+  type CommandClassification,
+  classifyCommand,
+  classifySegment,
+  DEFAULT_AUTONOMY,
+  splitSegments,
+} from './commands.js';
+export {
+  type ActionKind,
+  type Decision,
+  evaluate,
+  evaluateSensitive,
+  type OtherWriter,
+  type PolicyAction,
+  type PolicyInput,
+  type PolicyResult,
+  type PolicyTask,
+} from './evaluate.js';
+export { type CanonicalPath, canonicalize, globsOverlap, isInside, matchesAny, type PathContext } from './paths.js';
+export {
+  type SensitiveClass,
+  type SensitiveHit,
+  sensitiveClassOf,
+  sensitiveInText,
+  sensitivePattern,
+} from './sensitive.js';

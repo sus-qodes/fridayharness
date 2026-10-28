@@ -1,0 +1,13 @@
+{
+  "name": "fixture-shop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Small shop used to exercise Friday: a shared API contract, a backend and a frontend.",
+  "scripts": {
+    "test": "node --test \"**/test/*.test.ts\""
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

@@ -1,0 +1,41 @@
+# Friday project configuration for fixture-shop. Tracked in git; never put secrets here.
+project:
+  id: proj_0000000000000000000000fx01
+  name: "fixture-shop"
+
+daemon:
+  port: 0
+  log_level: info
+
+scopes:
+  frontend:
+    write: ["frontend/**"]
+    read: ["frontend/**", "shared/**"]
+  backend:
+    write: ["backend/**"]
+    read: ["backend/**", "shared/**"]
+
+autonomy:
+  git.mutate: review
+  package.install: review
+  git.push: manual
+
+verification:
+  auto_on_completion: false
+  checks:
+    - name: tests
+      kind: test
+      command: node
+      args: ["--test", "**/test/*.test.ts"]
+      timeout_ms: 120000
+
+reservations:
+  mode: hybrid
+  required: ["pnpm-lock.yaml", "shared/src/api.ts", "infra/deploy.config.json"]
+
+context:
+  session_start_max_chars: 9000
+
+providers:
+  anthropic:
+    allow_remote: false

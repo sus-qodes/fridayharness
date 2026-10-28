@@ -18,6 +18,12 @@
     },
     {
       "path": "../../mcp-server"
+    },
+    {
+      "path": "../../../apps/daemon"
+    },
+    {
+      "path": "../../state"
     }
   ]
 }
