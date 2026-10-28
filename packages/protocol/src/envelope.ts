@@ -27,6 +27,8 @@ export const RefKind = z.enum([
   'goal',
   'plan',
   'call',
+  // M3: agent messages.
+  'message',
 ]);
 export type RefKind = z.infer<typeof RefKind>;
 
@@ -93,6 +95,12 @@ export const EVENT_TYPES = [
   'approval.requested',
   'approval.decided',
   'communication.recorded',
+  'communication.sent',
+  'communication.delivered',
+  'communication.acknowledged',
+  'communication.settled',
+  'communication.expired',
+  'communication.dead_lettered',
   'escalation.requested',
   'command.rejected',
 ] as const;

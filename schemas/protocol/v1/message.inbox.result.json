@@ -1,0 +1,248 @@
+{
+  "$id": "urn:friday:protocol:v1:message.inbox:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "delivery_id": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "agent",
+                  "human",
+                  "master_brain",
+                  "system"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "agent_key": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "agent_key",
+              "role"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "request",
+              "response",
+              "notification"
+            ]
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "body_artifact_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "facts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "fact": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                },
+                "area": {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                "impact": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "status": {
+                  "type": "string",
+                  "const": "unverified"
+                },
+                "source": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "fact",
+                "status",
+                "source"
+              ]
+            }
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ]
+          },
+          "blocking": {
+            "type": "boolean"
+          },
+          "reply_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response_to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "in_reply_to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sender_task": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "write": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "task_id",
+                  "summary",
+                  "write"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "relationship": {
+            "type": "string"
+          },
+          "trust": {
+            "type": "string",
+            "enum": [
+              "peer-untrusted",
+              "human",
+              "system"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "delivered",
+              "acknowledged",
+              "expired",
+              "dead"
+            ]
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "sent_at": {
+            "type": "string"
+          },
+          "reserved_until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "delivery_id",
+          "message_id",
+          "correlation_id",
+          "from",
+          "mode",
+          "subject",
+          "body",
+          "body_artifact_ref",
+          "facts",
+          "priority",
+          "blocking",
+          "reply_by",
+          "response_to",
+          "in_reply_to",
+          "task_id",
+          "sender_task",
+          "relationship",
+          "trust",
+          "state",
+          "attempt",
+          "sent_at",
+          "reserved_until"
+        ]
+      }
+    },
+    "more": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "items",
+    "more"
+  ]
+}

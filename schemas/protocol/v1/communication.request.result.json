@@ -12,6 +12,65 @@
         "recorded",
         "queued"
       ]
+    },
+    "correlation_id": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "deliveries": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "delivery_id": {
+            "type": "string"
+          },
+          "recipient": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "agent",
+                  "role",
+                  "task",
+                  "master_brain",
+                  "human"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "agent_key": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "agent_key"
+            ]
+          }
+        },
+        "required": [
+          "delivery_id",
+          "recipient"
+        ]
+      }
+    },
+    "note": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

@@ -3,6 +3,7 @@ import type { TaskView } from '@friday/protocol';
 import { useTestWorkspace, waitForPidGone } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
 import { startTestDaemon } from '../helpers/daemon.js';
+import { FakeHarness } from '../helpers/fake-harness.js';
 import { postHook } from '../helpers/hooks.js';
 import { startMcp } from '../helpers/mcp-rig.js';
 
@@ -152,12 +153,103 @@ describe('friday-mcp over stdio', () => {
     expect(h?.adapter_version).toMatch(/^\d+\.\d+\.\d+/);
   });
 
-  it('says honestly that acknowledging messages is not available yet (review F11)', async () => {
-    await startTestDaemon(ws());
+  it('asks another agent through Friday, receives the answer and acknowledges it (M3a)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()], brain: false });
+    // A goal with two parallel tasks: the session (dev-1) and a FakeHarness (be-1) work on the same goal.
+    const goal = await td.operator.post<{ goal_id: string }>(td.operator.projectPath('/goals'), {
+      request: 'Add currency to checkout',
+      plan: false,
+    });
+    const v = await td.operator.post<{ plan_id: string; version: number }>(
+      td.operator.projectPath(`/goals/${goal.goal_id}/plans`),
+      {
+        draft: {
+          objective: 'Checkout returns and shows its currency',
+          summary: 'Backend and frontend in parallel',
+          tasks: [
+            {
+              key: 'api',
+              summary: 'Return currency',
+              acceptance_criteria: ['ok'],
+              scope: { write: ['backend/**'] },
+              role: 'backend',
+            },
+            {
+              key: 'page',
+              summary: 'Show currency',
+              acceptance_criteria: ['ok'],
+              scope: { write: ['frontend/**'] },
+              role: 'frontend',
+            },
+          ],
+        },
+      },
+    );
+    const approved = await td.operator.post<{ created: TaskView[] }>(
+      td.operator.projectPath(`/plans/${v.plan_id}/versions/${v.version}/approve`),
+      {},
+    );
+    const [api, page] = approved.created as [TaskView, TaskView];
+    const be = await FakeHarness.connect(td, { agentKey: 'be-1', role: 'backend' });
+    await td.operator.post(td.operator.projectPath(`/tasks/${api.task_id}/assign`), { agent_key: 'be-1' });
+    await td.operator.post(td.operator.projectPath(`/tasks/${page.task_id}/assign`), { agent_key: 'dev-1' });
+
     const mcp = await startMcp(ws());
-    const ack = await mcp.call('friday_acknowledge', { message_ids: ['msg_1'] });
-    expect(ack.structured).toMatchObject({ acknowledged: [], supported: false });
-    expect(ack.text).toContain('Nothing was acknowledged');
+    await eventually(
+      () => mcp.call('friday_whoami'),
+      (r) => (r.structured.daemon as { reachable?: boolean } | undefined)?.reachable === true,
+    );
+    const daemon = { url: td.url, projectId: td.project.project_id, token: td.daemon.tokens.bootstrap };
+    await postHook(
+      daemon,
+      'SessionStart',
+      { session_id: 'sess-test-1', cwd: ws().projectDir, hook_event_name: 'SessionStart', source: 'startup' },
+      { claudePid: process.pid },
+    );
+    expect((await mcp.call('friday_task_claim', { next: true })).isError).toBe(false);
+
+    const ask = await mcp.call('friday_communicate', {
+      to: 'role:backend',
+      mode: 'request',
+      subject: 'checkout currency',
+      content: 'Will POST /checkout return { amount, currency }?',
+      facts: [{ fact: 'the page needs the ISO-4217 currency', area: 'checkout' }],
+    });
+    expect(ask.isError, ask.text).toBe(false);
+    expect(ask.text).toContain('queued for be-1');
+    const messageId = ask.structured.message_id as string;
+
+    // be-1 reads its inbox over the protocol and answers.
+    const got = await be.client.call('message.inbox', { max: 5 });
+    expect(got.items).toMatchObject([
+      {
+        message_id: messageId,
+        from: { agent_key: 'dev-1' },
+        trust: 'peer-untrusted',
+        relationship: expect.stringContaining('both work on goal'),
+      },
+    ]);
+    // dev-1 cannot acknowledge be-1's delivery.
+    const notMine = await mcp.call('friday_acknowledge', { message_ids: [got.items[0]?.delivery_id as string] });
+    expect(notMine.structured).toMatchObject({ acknowledged: [], refused: [got.items[0]?.delivery_id] });
+    await be.client.call('communication.request', {
+      to: 'dev-1',
+      mode: 'response',
+      response_to: messageId,
+      content: 'Yes, currency is added in this task.',
+    });
+
+    const inbox = await mcp.call('friday_check_inbox', { wait_ms: 2000 });
+    expect(inbox.text).toContain('In reply to: checkout currency');
+    expect(inbox.text).toContain('Yes, currency is added');
+    const delivery = (inbox.structured.items as { delivery_id: string }[])[0]?.delivery_id as string;
+    const ack = await mcp.call('friday_acknowledge', { message_ids: [delivery] });
+    expect(ack.structured).toMatchObject({ acknowledged: [delivery], refused: [], unknown: [] });
+
+    const request = await td.operator.get<{ status: string; settled_reason: string }>(
+      td.operator.projectPath(`/messages/${messageId}`),
+    );
+    expect(request).toMatchObject({ status: 'settled', settled_reason: 'replied' });
   });
 
   it('rejects invalid tool arguments without crashing', async () => {

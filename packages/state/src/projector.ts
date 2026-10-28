@@ -280,6 +280,101 @@ export class StateProjector implements Projector {
           );
         return;
       }
+      // ---- agent messaging (M3, ADR-0017)
+      case 'communication.sent': {
+        const m = p.message as Payload;
+        this.db
+          .prepare(
+            `INSERT INTO messages (message_id, project_id, sender_kind, sender_id, sender_key, target, mode, subject, body,
+               body_artifact_ref, facts_json, priority, blocking, task_id, goal_id, correlation_id, response_to, reply_by,
+               expires_at, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
+          )
+          .run(
+            str(m.message_id),
+            e.project_id,
+            str((m.sender as Payload).kind),
+            str((m.sender as Payload).id),
+            opt((m.sender as Payload).agent_key),
+            str(m.target),
+            str(m.mode),
+            opt(m.subject),
+            str(m.body),
+            opt(m.body_artifact_ref),
+            toJson(m.facts ?? []),
+            str(m.priority),
+            m.blocking ? 1 : 0,
+            opt(m.task_id),
+            opt(m.goal_id),
+            str(m.correlation_id),
+            opt(m.response_to),
+            opt(m.reply_by),
+            str(m.expires_at),
+            e.occurred_at,
+          );
+        const ins = this.db.prepare(
+          `INSERT INTO message_deliveries (delivery_id, project_id, message_id, recipient_kind, recipient_id, agent_id, state, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`,
+        );
+        for (const d of (p.deliveries as Payload[]) ?? []) {
+          ins.run(
+            str(d.delivery_id),
+            e.project_id,
+            str(m.message_id),
+            str(d.recipient_kind),
+            str(d.recipient_id),
+            opt(d.agent_id),
+            e.occurred_at,
+          );
+        }
+        return;
+      }
+      case 'communication.delivered':
+        this.updateDelivery(e, str(p.delivery_id), {
+          state: 'delivered',
+          attempts: Number(p.attempt),
+          agent_id: p.agent_id,
+          reserved_by_harness: p.harness_id ?? null,
+          reserved_until: p.reserved_until ?? null,
+          delivered_at: { keep: e.occurred_at },
+          received_at: { keep: e.occurred_at },
+        });
+        return;
+      case 'communication.acknowledged':
+        for (const id of (p.delivery_ids as string[]) ?? []) {
+          this.updateDelivery(e, id, {
+            state: 'acknowledged',
+            acknowledged_at: e.occurred_at,
+            ended_at: e.occurred_at,
+            end_reason: str(p.reason ?? 'acknowledged'),
+            reserved_until: null,
+          });
+        }
+        return;
+      case 'communication.expired':
+      case 'communication.dead_lettered':
+        for (const id of (p.delivery_ids as string[]) ?? []) {
+          this.updateDelivery(e, id, {
+            state: e.type === 'communication.expired' ? 'expired' : 'dead',
+            ended_at: e.occurred_at,
+            end_reason: str(p.reason),
+            reserved_until: null,
+          });
+        }
+        if (p.message_id && e.type === 'communication.expired' && p.message_expired) {
+          this.db
+            .prepare("UPDATE messages SET status = 'expired', settled_reason = ?, settled_at = ? WHERE message_id = ?")
+            .run(str(p.reason), e.occurred_at, str(p.message_id));
+        }
+        return;
+      case 'communication.settled': {
+        const res = this.db
+          .prepare("UPDATE messages SET status = 'settled', settled_reason = ?, settled_at = ? WHERE message_id = ?")
+          .run(str(p.reason), e.occurred_at, str(p.message_id));
+        if (res.changes !== 1)
+          throw new FridayError('internal_error', `event ${e.type}: message ${str(p.message_id)} not found`);
+        return;
+      }
       case 'context.compiled': {
         const packet = p.packet as Payload;
         this.db
@@ -414,6 +509,26 @@ export class StateProjector implements Projector {
         e.occurred_at,
         e.occurred_at,
       );
+  }
+
+  /** Sets delivery columns; `{ keep: v }` sets a column only while it is still empty. */
+  private updateDelivery(e: StoredEvent, deliveryId: string, changes: Record<string, unknown>): void {
+    const sets: string[] = [];
+    const params: SqlValue[] = [];
+    for (const [col, v] of Object.entries(changes)) {
+      if (v === undefined) continue;
+      if (v && typeof v === 'object' && 'keep' in (v as Payload)) {
+        sets.push(`${col} = COALESCE(${col}, ?)`);
+        params.push(opt((v as Payload).keep));
+      } else {
+        sets.push(`${col} = ?`);
+        params.push(opt(v));
+      }
+    }
+    const res = this.db
+      .prepare(`UPDATE message_deliveries SET ${sets.join(', ')} WHERE delivery_id = ?`)
+      .run(...params, deliveryId);
+    if (res.changes !== 1) throw new FridayError('internal_error', `event ${e.type}: delivery ${deliveryId} not found`);
   }
 
   private updateGoal(e: StoredEvent, goalId: string, changes: Payload, status: unknown): void {

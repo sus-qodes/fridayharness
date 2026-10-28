@@ -139,6 +139,11 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     enforcementRequired: project.config.security.enforcement_required,
     requireEnforcingHooks: project.config.security.require_enforcing_hooks,
     reservationTtlMs: project.config.master_brain.reservation_ttl_ms,
+    allowBroadcast: project.config.communication.allow_broadcast,
+    messageReservationMs: project.config.communication.delivery_reservation_ms,
+    messageMaxAttempts: project.config.communication.max_delivery_attempts,
+    messageTtlMs: project.config.communication.message_ttl_ms,
+    blockingReplyMs: project.config.communication.blocking_reply_ms,
     ...opts.state,
   };
 

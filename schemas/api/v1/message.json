@@ -1,0 +1,254 @@
+{
+  "$id": "urn:friday:api:v1:message",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "message_id": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string"
+    },
+    "sender": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "agent_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "agent_key"
+      ]
+    },
+    "target": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "request",
+        "response",
+        "notification"
+      ]
+    },
+    "subject": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "body": {
+      "type": "string"
+    },
+    "body_artifact_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "fact": {
+            "type": "string"
+          },
+          "area": {
+            "type": "string"
+          },
+          "impact": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fact"
+        ]
+      }
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ]
+    },
+    "blocking": {
+      "type": "boolean"
+    },
+    "task_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "goal_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "response_to": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reply_by": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expires_at": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "settled",
+        "expired"
+      ]
+    },
+    "settled_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "settled_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "deliveries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "delivery_id": {
+            "type": "string"
+          },
+          "recipient_kind": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "role",
+              "task",
+              "master_brain",
+              "human"
+            ]
+          },
+          "recipient_id": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agent_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "delivered",
+              "acknowledged",
+              "expired",
+              "dead"
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "delivered_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "acknowledged_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "end_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "delivery_id",
+          "recipient_kind",
+          "recipient_id",
+          "agent_id",
+          "agent_key",
+          "state",
+          "attempts",
+          "delivered_at",
+          "acknowledged_at",
+          "ended_at",
+          "end_reason"
+        ]
+      }
+    }
+  },
+  "required": [
+    "message_id",
+    "correlation_id",
+    "sender",
+    "target",
+    "mode",
+    "subject",
+    "body",
+    "body_artifact_ref",
+    "facts",
+    "priority",
+    "blocking",
+    "task_id",
+    "goal_id",
+    "response_to",
+    "reply_by",
+    "expires_at",
+    "status",
+    "settled_reason",
+    "created_at",
+    "settled_at",
+    "deliveries"
+  ]
+}

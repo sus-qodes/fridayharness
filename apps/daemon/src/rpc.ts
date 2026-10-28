@@ -201,7 +201,22 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
     }
     case 'communication.request': {
       const p = METHODS[method].params.parse(raw);
-      return state.recordCommunication(pid, caller(), p);
+      const { idempotency_key, protocol_version: _v, ...input } = p;
+      return state.sendMessage(pid, { kind: 'agent', caller: caller() }, input, { idempotency_key });
+    }
+    case 'message.inbox': {
+      const p = METHODS[method].params.parse(raw);
+      const c = caller();
+      const deadline = Date.now() + p.wait_ms;
+      for (;;) {
+        const r = state.inbox(pid, c, { max: p.max, peek: p.peek });
+        if (r.items.length > 0 || Date.now() >= deadline || deps.signal?.aborted) return r;
+        await sleep(Math.min(deps.pollIntervalMs ?? 200, Math.max(0, deadline - Date.now())));
+      }
+    }
+    case 'message.ack': {
+      const p = METHODS[method].params.parse(raw);
+      return state.acknowledgeMessages(pid, caller(), p.ids);
     }
     case 'permission.request': {
       const p = METHODS[method].params.parse(raw);

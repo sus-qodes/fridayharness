@@ -115,6 +115,30 @@ export const FridayConfig = z
       .object({ mode: z.enum(['hybrid', 'off']).default('hybrid'), required: z.array(z.string()).default([]) })
       .prefault({}),
     context: z.object({ session_start_max_chars: z.number().int().min(1000).max(10_000).default(9000) }).prefault({}),
+    /** Agent messaging (M3, ADR-0017). */
+    communication: z
+      .object({
+        /** `to: broadcast` reaches everyone on the sender's goal; off by default (spec Part 05 §8). */
+        allow_broadcast: z.boolean().default(false),
+        /** How long an inbox read reserves a message for the reading session. */
+        delivery_reservation_ms: z.number().int().min(5000).default(120_000),
+        /** Deliveries without an acknowledgement before a message is dead-lettered. */
+        max_delivery_attempts: z.number().int().min(1).max(50).default(5),
+        /** How long a message stays deliverable. */
+        message_ttl_ms: z
+          .number()
+          .int()
+          .min(60_000)
+          .default(24 * 60 * 60 * 1000),
+        /** The reply deadline of a blocking request that names none. */
+        blocking_reply_ms: z
+          .number()
+          .int()
+          .min(10_000)
+          .default(30 * 60 * 1000),
+      })
+      .passthrough()
+      .prefault({}),
     providers: z.record(z.string(), Provider).default({}),
     master_brain: MasterBrainConfig,
   })

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { GenericHarnessClient, type Registration } from '@friday/adapter-generic';
-import { FridayError, isFridayError, type TaskView } from '@friday/protocol';
+import { FridayError, type InboxItem, isFridayError, type TaskView } from '@friday/protocol';
 import {
   DaemonClient,
   DaemonUnreachableError,
@@ -40,15 +40,8 @@ export interface MeView {
   run_is_mine: boolean;
   awaiting_verification: string[];
   claimable: TaskView[];
-  inbox: {
-    message_id: string;
-    from: string;
-    mode: string;
-    content: string;
-    response_to: string | null;
-    sent_at: string;
-    trust: string;
-  }[];
+  /** A peek at the agent's inbox (ADR-0017): nothing reserved. */
+  inbox: InboxItem[];
 }
 
 /** Agent key: FRIDAY_AGENT, then the private agent.json written by `friday harness config`, then dev-1. */

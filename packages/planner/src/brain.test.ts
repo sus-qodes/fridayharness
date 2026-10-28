@@ -191,7 +191,7 @@ describe('Master Brain', () => {
       status: 'PROPOSED',
       supersedes: 1,
       trigger: expect.stringContaining('verification failed'),
-      prompt_version: 'replan-2',
+      prompt_version: 'replan-3',
     });
     expect(v2?.tasks.map((t) => [t.key, t.change])).toEqual([
       ['billing-service', 'keep'],

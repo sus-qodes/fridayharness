@@ -2,6 +2,18 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M3 communication authority (in progress)
+
+- **M3a, messages through Friday:**
+  - Agents send with `friday_communicate`: to an agent, `role:<role>` (Friday picks the best-fit agent), `task:<id>`, `dependencies`, `dependents`, `master` or `human`.
+  - Friday routes only between related work and refuses the rest.
+  - Every message has one delivery per recipient, read with `friday_check_inbox` (reserved for the session, delivered again if not acknowledged, dead-lettered after five tries) and acknowledged with `friday_acknowledge`, only by its own recipient.
+  - A request settles when it is answered, and the answer shares its correlation id.
+  - Inbox items say who sent them, how their work relates to yours and how far to trust them; no message ever grants authority.
+  - Humans use `friday say`, `friday inbox human|master|<agent>` and `friday messages`.
+  - The Master Brain reads what is addressed to it and uses the reported facts when it revises a plan.
+  - Decision: ADR-0017; guide: [docs/messaging.md](docs/messaging.md).
+
 ## Unreleased — M2.5 stabilization (review 2026-10-14)
 
 An independent review found twelve gaps in M1 and M2. All were confirmed in the source and handled ([disposition](docs/reviews/2026-10-14-review-disposition.md), plan H.6).

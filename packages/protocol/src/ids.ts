@@ -39,6 +39,9 @@ export const ID_PREFIXES = [
   'asg',
   // Stabilization: durable Master Brain jobs (operational).
   'job',
+  // M3: one delivery of a message to one recipient; correlation ids.
+  'dlv',
+  'corr',
 ] as const;
 export type IdPrefix = (typeof ID_PREFIXES)[number];
 export type Id<P extends IdPrefix = IdPrefix> = `${P}_${string}`;

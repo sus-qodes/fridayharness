@@ -8,6 +8,7 @@ import { Command, CommanderError, Option } from 'commander';
 import { type GlobalOptions, operator, out, project, UsageError } from './context.js';
 import { doctor, renderDoctor } from './doctor.js';
 import { registerGoalCommands, renderEscalation } from './goals.js';
+import { registerMessageCommands } from './messages.js';
 import { clip, describeEvent, kv, shortTime, table } from './output.js';
 import { runDaemon } from './run.js';
 import { FRIDAY_DIR_GITIGNORE } from './templates.js';
@@ -563,6 +564,7 @@ export function buildProgram(): Command {
     });
 
   registerGoalCommands(program, g);
+  registerMessageCommands(program, g);
   for (const plugin of commandPlugins) plugin(program);
   return program;
 }

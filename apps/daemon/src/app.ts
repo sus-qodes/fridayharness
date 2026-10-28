@@ -4,6 +4,7 @@ import {
   API_VERSION,
   type ErrorBody,
   FridayError,
+  HumanMessageRequest,
   isFridayError,
   PROTOCOL_VERSIONS,
   TaskActionRequest,
@@ -255,25 +256,8 @@ export function buildApp(deps: AppDeps): Hono<Env> {
       held.find((t) => t.status !== 'READY_FOR_VERIFICATION') ??
       null;
     const run = current?.current_run_id ? (state.q.findRun(current.current_run_id) ?? null) : null;
-    const inbox = state.store
-      .readSince(pid, 0, { types: ['communication.recorded'], limit: 5000 })
-      .filter((e) => {
-        const to = (e.payload as { to?: string }).to;
-        return to === agent.agent_key || to === agent.agent_id;
-      })
-      .slice(-20)
-      .map((e) => {
-        const p = e.payload as Record<string, unknown>;
-        return {
-          message_id: p.message_id,
-          from: e.actor.id,
-          mode: p.mode,
-          content: p.content,
-          response_to: p.response_to,
-          sent_at: e.occurred_at,
-          trust: 'peer-untrusted',
-        };
-      });
+    // A peek: nothing is reserved and no delivery attempt is counted (ADR-0017 §6).
+    const inbox = state.inbox(pid, caller, { max: 20, peek: true }).items;
     return c.json({
       project: { project_id: pid, name: project.name },
       harness: { ...harness, shadow: harness.shadow },
@@ -406,6 +390,62 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     if (typeof body.answer !== 'string' || !body.answer) throw new FridayError('invalid_request', 'answer is required');
     state.answerEscalation(pid, HUMAN, c.req.param('eid'), body.answer);
     return c.json({ ok: true });
+  });
+
+  // ---- messages (M3, ADR-0017) -----------------------------------------------------------------
+
+  app.get(`${P}/messages`, allow(...OPERATOR), (c) => {
+    const agentKey = c.req.query('agent');
+    const agent = agentKey ? state.q.agentByKey(pid, agentKey) : undefined;
+    if (agentKey && !agent) throw new FridayError('agent_not_found', `no agent "${agentKey}"`);
+    const to = c.req.query('to');
+    return c.json({
+      messages: state.q.messages(pid, {
+        ...(c.req.query('task') ? { taskId: c.req.query('task') as string } : {}),
+        ...(agent ? { agentId: agent.agent_id } : {}),
+        ...(c.req.query('status') ? { status: c.req.query('status') as string } : {}),
+        ...(to === 'human' || to === 'master_brain' ? { to } : {}),
+        limit: Math.min(500, Number(c.req.query('limit') ?? 100) || 100),
+      }),
+    });
+  });
+  app.get(`${P}/messages/:mid`, allow(...OPERATOR), (c) => c.json(state.q.message(c.req.param('mid'))));
+  /** A human sends a message (`friday say`); with `reply_to` it answers that message. */
+  app.post(`${P}/messages`, allow(...OPERATOR), async (c) => {
+    const body = HumanMessageRequest.parse(await json(c));
+    const key = c.req.header('idempotency-key');
+    const res = state.sendMessage(
+      pid,
+      { kind: 'human', actor: HUMAN },
+      {
+        to: body.to,
+        mode: body.reply_to ? 'response' : 'notification',
+        content: body.content,
+        ...(body.subject ? { subject: body.subject } : {}),
+        ...(body.reply_to ? { response_to: body.reply_to } : {}),
+        priority: body.priority,
+      },
+      key ? { idempotency_key: key } : {},
+    );
+    return c.json(res, 201);
+  });
+  /** What waits for humans or the Master Brain, or (peek) for one agent. */
+  app.get(`${P}/inbox/:who`, allow(...OPERATOR), (c) => {
+    const who = c.req.param('who');
+    if (who === 'human' || who === 'master') {
+      const kind = who === 'human' ? 'human' : 'master_brain';
+      return c.json({ items: state.q.openDeliveriesFor(pid, kind).map((d) => state.inboxItem(pid, d, null)) });
+    }
+    const agent = state.q.agentByKey(pid, who);
+    if (!agent) throw new FridayError('agent_not_found', `no agent "${who}"`);
+    return c.json({ items: state.peekInbox(pid, agent.agent_id, 50).items });
+  });
+  /** A human acknowledges messages addressed to humans. */
+  app.post(`${P}/inbox/human/ack`, allow(...OPERATOR), async (c) => {
+    const body = await json(c);
+    const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === 'string') : [];
+    if (!ids.length) throw new FridayError('invalid_request', 'ids is required');
+    return c.json({ acknowledged: state.acknowledgeAs(pid, HUMAN, 'human', ids) });
   });
 
   // ---- context -------------------------------------------------------------------------------

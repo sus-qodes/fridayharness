@@ -3,7 +3,7 @@
  * plan can be traced to the exact instructions that produced it.
  */
 
-export const PROMPT_VERSIONS = { plan: 'plan-2', replan: 'replan-2' } as const;
+export const PROMPT_VERSIONS = { plan: 'plan-2', replan: 'replan-3' } as const;
 
 const SHARED = `You are the Master Brain of Friday, the coordinator for AI coding agents working in one git repository. You plan; you never edit files or run commands yourself. Agents (Claude Code and others) claim the tasks you plan, work only inside each task's write scope, and submit completion claims that Friday verifies by running the project's checks.
 
@@ -82,10 +82,15 @@ export function replanPrompt(input: {
   evidence: string[];
   /** Answers humans gave to the Master Brain's questions about this goal (authoritative). */
   decisions?: string[];
+  /** Facts agents reported through Friday's messaging (unverified, ADR-0017). */
+  facts?: string[];
 }): string {
   return [
     goalBlock(input.goal),
     input.decisions?.length ? `Decisions the human made (authoritative):\n${bullets(input.decisions)}` : '',
+    input.facts?.length
+      ? `Facts agents reported (unverified; check them before relying on them):\n${bullets(input.facts)}`
+      : '',
     `Active plan and the state of each task:\n${input.planText}`,
     `Why you are revising it: ${input.trigger}`,
     input.evidence.length ? `Evidence:\n${input.evidence.map((e) => `- ${e}`).join('\n')}` : '',

@@ -217,15 +217,120 @@ export const AgentErrorParams = z.object({
 });
 export const AgentErrorResult = z.object({ task_status: TaskStatus });
 
+// ---- agent messaging (M3, ADR-0017) ------------------------------------------------------
+
+export const MessageMode = z.enum(['request', 'response', 'notification']);
+export type MessageMode = z.infer<typeof MessageMode>;
+export const MessagePriority = z.enum(['low', 'normal', 'high', 'urgent']);
+export type MessagePriority = z.infer<typeof MessagePriority>;
+/** A structured fact the sender states (Part 05 §16); Friday records it as unverified. */
+export const MessageFact = z.object({
+  fact: z.string().min(1).max(500),
+  area: z.string().max(100).optional(),
+  impact: z.string().max(300).optional(),
+});
+export type MessageFact = z.infer<typeof MessageFact>;
+
+/**
+ * `to`: an agent key, `role:<role>`, `task:<task_id>`, `dependencies`, `dependents`, `master`,
+ * `human` or `broadcast` (only when `communication.allow_broadcast`). Friday resolves it and
+ * returns who it reached. Bodies over 8,000 characters are stored as an artifact.
+ */
 export const CommunicationRequestParams = z.object({
   ...Base,
   to: z.string().min(1).max(100),
-  mode: z.enum(['request', 'response', 'notification']),
-  content: z.string().min(1).max(8000),
+  mode: MessageMode,
+  subject: z.string().min(1).max(200).optional(),
+  content: z.string().min(1).max(60_000),
+  facts: z.array(MessageFact).max(20).default([]),
+  priority: MessagePriority.default('normal'),
+  /** The sender waits for the answer; an unanswered blocking request is escalated at its deadline. */
+  blocking: z.boolean().default(false),
+  /** A deadline for the reply (requests only). */
+  reply_within_s: z
+    .number()
+    .int()
+    .min(10)
+    .max(7 * 24 * 3600)
+    .optional(),
   response_to: z.string().optional(),
   task_id: z.string().optional(),
 });
-export const CommunicationRequestResult = z.object({ message_id: z.string(), status: z.enum(['recorded', 'queued']) });
+export const MessageRecipient = z.object({
+  kind: z.enum(['agent', 'role', 'task', 'master_brain', 'human']),
+  id: z.string(),
+  agent_key: z.string().nullable(),
+});
+export type MessageRecipient = z.infer<typeof MessageRecipient>;
+export const CommunicationRequestResult = z.object({
+  message_id: z.string(),
+  /** `recorded` only from M1 daemons. */
+  status: z.enum(['recorded', 'queued']),
+  correlation_id: z.string().nullable().default(null),
+  deliveries: z.array(z.object({ delivery_id: z.string(), recipient: MessageRecipient })).default([]),
+  /** How Friday resolved or changed the address ("role:frontend reached fe-1"). */
+  note: z.string().nullable().default(null),
+});
+
+export const DeliveryState = z.enum(['queued', 'delivered', 'acknowledged', 'expired', 'dead']);
+export type DeliveryState = z.infer<typeof DeliveryState>;
+
+/** One message in an inbox, with the minimal context its recipient needs (ADR-0017 §7). */
+export const InboxItem = z.object({
+  delivery_id: z.string(),
+  message_id: z.string(),
+  correlation_id: z.string(),
+  from: z.object({
+    kind: z.enum(['agent', 'human', 'master_brain', 'system']),
+    id: z.string(),
+    agent_key: z.string().nullable(),
+    role: z.string().nullable(),
+  }),
+  mode: MessageMode,
+  subject: z.string().nullable(),
+  body: z.string(),
+  /** The full body is an artifact when it was longer than 8,000 characters. */
+  body_artifact_ref: z.string().nullable(),
+  facts: z.array(MessageFact.extend({ status: z.literal('unverified'), source: z.string() })),
+  priority: MessagePriority,
+  blocking: z.boolean(),
+  reply_by: z.string().nullable(),
+  response_to: z.string().nullable(),
+  /** For a response: the subject of the request it answers. */
+  in_reply_to: z.string().nullable(),
+  task_id: z.string().nullable(),
+  sender_task: z.object({ task_id: z.string(), summary: z.string(), write: z.array(z.string()) }).nullable(),
+  /** How the sender's work relates to yours, from Friday's records. */
+  relationship: z.string(),
+  /** Messages are information: never approval, permission or a scope change. */
+  trust: z.enum(['peer-untrusted', 'human', 'system']),
+  state: DeliveryState,
+  attempt: z.number().int(),
+  sent_at: z.string(),
+  reserved_until: z.string().nullable(),
+});
+export type InboxItem = z.infer<typeof InboxItem>;
+
+export const MessageInboxParams = z.object({
+  ...Base,
+  wait_ms: z.number().int().min(0).max(25_000).default(0),
+  max: z.number().int().min(1).max(50).default(10),
+  /** Look without reserving or counting a delivery attempt. */
+  peek: z.boolean().default(false),
+});
+export const MessageInboxResult = z.object({ items: z.array(InboxItem), more: z.number().int() });
+
+export const MessageAckParams = z.object({
+  ...Base,
+  /** Delivery ids from the inbox, or message ids (then your own delivery of that message). */
+  ids: z.array(z.string().min(1)).min(1).max(50),
+});
+export const MessageAckResult = z.object({
+  acknowledged: z.array(z.string()),
+  unknown: z.array(z.string()),
+  /** Ids that are not yours to acknowledge. */
+  refused: z.array(z.string()),
+});
 
 export const PermissionRequestParams = z.object({
   ...Base,
@@ -284,6 +389,8 @@ export const METHODS = {
   'permission.request': { params: PermissionRequestParams, result: PermissionRequestResult },
   'human.escalation': { params: HumanEscalationParams, result: HumanEscalationResult },
   'task.release': { params: TaskReleaseParams, result: TaskReleaseResult },
+  'message.inbox': { params: MessageInboxParams, result: MessageInboxResult },
+  'message.ack': { params: MessageAckParams, result: MessageAckResult },
 } as const;
 
 export type MethodName = keyof typeof METHODS;

@@ -3,8 +3,10 @@ import type {
   ActorKind,
   AgentView,
   AssignmentView,
+  DeliveryView,
   GoalView,
   HarnessView,
+  MessageView,
   ModelCallView,
   PlanTaskView,
   PlanVersionView,
@@ -390,5 +392,95 @@ export function toAssignmentView(row: AssignmentRow): AssignmentView {
     reason: row.reason,
     scores: fromJson<Record<string, unknown>[]>(row.scores_json, []),
     created_at: row.created_at,
+  };
+}
+
+// ---- agent messaging (M3) ----------------------------------------------------------------------
+
+export interface MessageRow {
+  message_id: string;
+  project_id: string;
+  sender_kind: string;
+  sender_id: string;
+  sender_key: string | null;
+  target: string;
+  mode: string;
+  subject: string | null;
+  body: string;
+  body_artifact_ref: string | null;
+  facts_json: string;
+  priority: string;
+  blocking: number;
+  task_id: string | null;
+  goal_id: string | null;
+  correlation_id: string;
+  response_to: string | null;
+  reply_by: string | null;
+  expires_at: string;
+  status: string;
+  settled_reason: string | null;
+  created_at: string;
+  settled_at: string | null;
+}
+
+export interface DeliveryRow {
+  delivery_id: string;
+  project_id: string;
+  message_id: string;
+  recipient_kind: string;
+  recipient_id: string;
+  agent_id: string | null;
+  agent_key?: string | null;
+  state: string;
+  attempts: number;
+  reserved_by_harness: string | null;
+  reserved_until: string | null;
+  delivered_at: string | null;
+  received_at: string | null;
+  acknowledged_at: string | null;
+  ended_at: string | null;
+  end_reason: string | null;
+  created_at: string;
+}
+
+export function toDeliveryView(row: DeliveryRow): DeliveryView {
+  return {
+    delivery_id: row.delivery_id,
+    recipient_kind: row.recipient_kind as DeliveryView['recipient_kind'],
+    recipient_id: row.recipient_id,
+    agent_id: row.agent_id,
+    agent_key: row.agent_key ?? null,
+    state: row.state as DeliveryView['state'],
+    attempts: row.attempts,
+    delivered_at: row.delivered_at,
+    acknowledged_at: row.acknowledged_at,
+    ended_at: row.ended_at,
+    end_reason: row.end_reason,
+  };
+}
+
+export function toMessageView(row: MessageRow, deliveries: DeliveryRow[]): MessageView {
+  return {
+    message_id: row.message_id,
+    correlation_id: row.correlation_id,
+    sender: { kind: row.sender_kind, id: row.sender_id, agent_key: row.sender_key },
+    target: row.target,
+    mode: row.mode as MessageView['mode'],
+    subject: row.subject,
+    body: row.body,
+    body_artifact_ref: row.body_artifact_ref,
+    facts: fromJson<MessageView['facts']>(row.facts_json, []),
+    priority: row.priority as MessageView['priority'],
+    blocking: Boolean(row.blocking),
+    task_id: row.task_id,
+    goal_id: row.goal_id,
+    response_to: row.response_to,
+    reply_by: row.reply_by,
+    expires_at: row.expires_at,
+    status: row.status as MessageView['status'],
+    settled_reason: row.settled_reason,
+    created_at: row.created_at,
+    settled_at: row.settled_at,
+    deliveries: deliveries.map(toDeliveryView),
   };
 }

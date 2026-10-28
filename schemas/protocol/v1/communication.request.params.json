@@ -28,10 +28,60 @@
         "notification"
       ]
     },
+    "subject": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
     "content": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 8000
+      "maxLength": 60000
+    },
+    "facts": {
+      "default": [],
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "fact": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "area": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "impact": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "fact"
+        ]
+      }
+    },
+    "priority": {
+      "default": "normal",
+      "type": "string",
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ]
+    },
+    "blocking": {
+      "default": false,
+      "type": "boolean"
+    },
+    "reply_within_s": {
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 604800
     },
     "response_to": {
       "type": "string"

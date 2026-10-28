@@ -479,6 +479,9 @@ export class MasterBrain {
           steps.push({ action: 'check_goal', result: `${g.goal_id} completed` });
       }
       for (const r of this.#delegate()) steps.push({ action: 'delegate', result: r });
+      // Messages addressed to the Master Brain: their facts reach later planning calls (ADR-0017 §9).
+      const read = state.acknowledgeAs(projectId, MASTER_BRAIN, 'master_brain', 'all');
+      if (read.length) steps.push({ action: 'messages', result: `read ${read.length} message(s)` });
     } catch (e) {
       // State changed under a step (a human acted meanwhile); the next pass sees the new state.
       this.#deps.log?.('warn', 'master brain coordination', { message: (e as Error).message });
@@ -783,6 +786,12 @@ export class MasterBrain {
         prompt: replanPrompt({
           goal: promptGoal(goal),
           decisions: this.#decisions(goalId),
+          facts: state.q
+            .goalFacts(projectId, goalId)
+            .map(
+              (x) =>
+                `${x.fact}${x.area ? ` [${x.area}]` : ''}${x.impact ? ` (impact: ${x.impact})` : ''}, reported by ${x.source}`,
+            ),
           planText: this.#planText(active, existing),
           trigger: taskId ? `${job.reason} (${taskId})` : job.reason,
           evidence: this.#evidence(taskId, answer),

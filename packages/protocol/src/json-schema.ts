@@ -5,6 +5,8 @@ import {
   GoalCreateRequest,
   GoalView,
   HarnessView,
+  HumanMessageRequest,
+  MessageView,
   ModelCallView,
   PlanVersionView,
   RunView,
@@ -50,6 +52,8 @@ export function buildSchemas(): Record<string, JsonObject> {
     'plan-version': PlanVersionView,
     'model-call': ModelCallView,
     assignment: AssignmentView,
+    message: MessageView,
+    'human-message-request': HumanMessageRequest,
   };
   for (const [name, schema] of Object.entries(api)) {
     out[`api/v1/${name}.json`] = toSchema(schema, `urn:friday:api:v1:${name}`);

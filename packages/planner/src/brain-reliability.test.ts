@@ -296,6 +296,34 @@ describe('durable Master Brain work (review F05)', () => {
   });
 });
 
+describe('messages to the Master Brain (M3a, ADR-0017 §9)', () => {
+  it('reads them, and carries their facts into the next revision as unverified evidence', async () => {
+    const model = new FakePlannerModel([fixture('01-plan.json'), fixture('02-replan.json')]);
+    const b = brain(model);
+    const { fe, goal } = await startStripe(b);
+    const sent = state.sendMessage(
+      PROJECT,
+      { kind: 'agent', caller: fe },
+      {
+        to: 'master',
+        mode: 'notification',
+        content: 'The VAT rule is unclear.',
+        facts: [{ fact: 'the price test expects VAT-inclusive prices', area: 'pricing' }],
+      },
+    );
+    await b.runOnce();
+    expect(state.q.message(sent.message_id)).toMatchObject({
+      status: 'settled',
+      deliveries: [{ recipient_kind: 'master_brain', state: 'acknowledged' }],
+    });
+    finish(fe, byKey(goal.goal_id)['subscribe-page'] as TaskView, false);
+    await b.runOnce();
+    const prompt = model.requests.find((r) => r.purpose === 'replan')?.prompt ?? '';
+    expect(prompt).toContain('Facts agents reported (unverified');
+    expect(prompt).toContain('the price test expects VAT-inclusive prices [pricing], reported by fe-1');
+  });
+});
+
 describe('stale proposals (review F06)', () => {
   it('refuses a revision that would drop a task an agent started after it was proposed', async () => {
     const b = brain(new FakePlannerModel([fixture('01-plan.json')]));

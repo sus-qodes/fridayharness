@@ -6,6 +6,7 @@ import {
   FridayError,
   type GoalView,
   type HarnessView,
+  type MessageView,
   type ModelCallView,
   type PlanVersionView,
   type RunView,
@@ -17,8 +18,10 @@ import {
   type AgentRow,
   type AssignmentRow,
   type CheckRow,
+  type DeliveryRow,
   type GoalRow,
   type HarnessRow,
+  type MessageRow,
   type ModelCallRow,
   type PlanRow,
   type PlanTaskRow,
@@ -28,6 +31,7 @@ import {
   toAssignmentView,
   toGoalView,
   toHarnessView,
+  toMessageView,
   toModelCallView,
   toPlanVersionView,
   toRunView,
@@ -457,5 +461,115 @@ export class Queries {
         .prepare('SELECT last_sequence FROM brain_cursor WHERE project_id = ?')
         .get<{ last_sequence: number }>(projectId)?.last_sequence ?? 0
     );
+  }
+
+  // ---- agent messaging (M3, ADR-0017)
+
+  findMessageRow(messageId: string): MessageRow | undefined {
+    return this.db.prepare('SELECT * FROM messages WHERE message_id = ?').get<MessageRow>(messageId);
+  }
+
+  deliveriesOf(messageId: string): DeliveryRow[] {
+    return this.db
+      .prepare(
+        `SELECT d.*, a.agent_key FROM message_deliveries d LEFT JOIN agents a ON a.agent_id = d.agent_id
+         WHERE d.message_id = ? ORDER BY d.created_at, d.rowid`,
+      )
+      .all<DeliveryRow>(messageId);
+  }
+
+  findDelivery(deliveryId: string): DeliveryRow | undefined {
+    return this.db.prepare('SELECT * FROM message_deliveries WHERE delivery_id = ?').get<DeliveryRow>(deliveryId);
+  }
+
+  message(messageId: string): MessageView {
+    const row = this.findMessageRow(messageId);
+    if (!row) throw new FridayError('message_not_found', `message ${messageId} not found`);
+    return toMessageView(row, this.deliveriesOf(messageId));
+  }
+
+  /** Messages, newest first; `agentId` matches what the agent sent or received. */
+  messages(
+    projectId: string,
+    opts: { taskId?: string; agentId?: string; status?: string; to?: string; limit?: number } = {},
+  ): MessageView[] {
+    const where = ['m.project_id = ?'];
+    const args: (string | number)[] = [projectId];
+    if (opts.taskId) {
+      where.push('m.task_id = ?');
+      args.push(opts.taskId);
+    }
+    if (opts.status) {
+      where.push('m.status = ?');
+      args.push(opts.status);
+    }
+    if (opts.agentId) {
+      where.push(
+        `(m.sender_id = ? OR EXISTS (SELECT 1 FROM message_deliveries d WHERE d.message_id = m.message_id
+           AND (d.agent_id = ? OR (d.recipient_kind = 'agent' AND d.recipient_id = ?))))`,
+      );
+      args.push(opts.agentId, opts.agentId, opts.agentId);
+    }
+    if (opts.to) {
+      where.push(
+        'EXISTS (SELECT 1 FROM message_deliveries d WHERE d.message_id = m.message_id AND d.recipient_kind = ?)',
+      );
+      args.push(opts.to);
+    }
+    return this.db
+      .prepare(
+        `SELECT m.* FROM messages m WHERE ${where.join(' AND ')} ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
+      )
+      .all<MessageRow>(...args, opts.limit ?? 100)
+      .map((row) => toMessageView(row, this.deliveriesOf(row.message_id)));
+  }
+
+  /**
+   * Open deliveries an agent may receive: addressed to it, taken by it, or waiting for its role
+   * or for a task it holds. Urgent first, then oldest first.
+   */
+  inboxRows(projectId: string, agent: { agent_id: string; role: string }, heldTaskIds: string[]): DeliveryRow[] {
+    const tasks = heldTaskIds.length ? heldTaskIds : [''];
+    const marks = tasks.map(() => '?').join(', ');
+    return this.db
+      .prepare(
+        `SELECT d.* FROM message_deliveries d JOIN messages m ON m.message_id = d.message_id
+         WHERE d.project_id = ? AND d.state IN ('queued', 'delivered') AND (
+           d.agent_id = ?
+           OR (d.agent_id IS NULL AND d.recipient_kind = 'agent' AND d.recipient_id = ?)
+           OR (d.agent_id IS NULL AND d.recipient_kind = 'role' AND d.recipient_id = ?)
+           OR (d.agent_id IS NULL AND d.recipient_kind = 'task' AND d.recipient_id IN (${marks})))
+         ORDER BY CASE m.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
+           d.created_at, d.rowid`,
+      )
+      .all<DeliveryRow>(projectId, agent.agent_id, agent.agent_id, agent.role, ...tasks);
+  }
+
+  /** Open deliveries for the Master Brain or humans. */
+  openDeliveriesFor(projectId: string, kind: 'master_brain' | 'human'): DeliveryRow[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM message_deliveries WHERE project_id = ? AND recipient_kind = ? AND state IN ('queued', 'delivered')
+         ORDER BY created_at, rowid`,
+      )
+      .all<DeliveryRow>(projectId, kind);
+  }
+
+  /** Facts agents reported about a goal's work (unverified), oldest first. */
+  goalFacts(
+    projectId: string,
+    goalId: string,
+    limit = 20,
+  ): { fact: string; area?: string; impact?: string; source: string }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT facts_json, COALESCE(sender_key, sender_id) AS source FROM messages
+         WHERE project_id = ? AND goal_id = ? AND facts_json <> '[]' ORDER BY created_at, rowid`,
+      )
+      .all<{ facts_json: string; source: string }>(projectId, goalId);
+    const out: { fact: string; area?: string; impact?: string; source: string }[] = [];
+    for (const r of rows)
+      for (const fct of JSON.parse(r.facts_json) as { fact: string }[]) out.push({ ...fct, source: r.source });
+    return out.slice(-limit);
   }
 }

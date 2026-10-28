@@ -422,16 +422,85 @@ CREATE INDEX ix_brain_jobs_status ON brain_jobs(project_id, status, created_at);
   },
 ];
 
+/** M3: agent messaging (ADR-0017) and durable event consumers. */
+export const MESSAGING_MIGRATIONS: Migration[] = [
+  {
+    version: 6,
+    name: 'messages',
+    up: `
+CREATE TABLE messages (
+  message_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  sender_kind TEXT NOT NULL,
+  sender_id TEXT NOT NULL,
+  sender_key TEXT,
+  target TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  subject TEXT,
+  body TEXT NOT NULL,
+  body_artifact_ref TEXT,
+  facts_json TEXT NOT NULL DEFAULT '[]',
+  priority TEXT NOT NULL,
+  blocking INTEGER NOT NULL DEFAULT 0,
+  task_id TEXT,
+  goal_id TEXT,
+  correlation_id TEXT NOT NULL,
+  response_to TEXT,
+  reply_by TEXT,
+  expires_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  settled_reason TEXT,
+  created_at TEXT NOT NULL,
+  settled_at TEXT
+);
+CREATE INDEX ix_messages_project ON messages(project_id, created_at);
+CREATE INDEX ix_messages_corr ON messages(project_id, correlation_id);
+CREATE TABLE message_deliveries (
+  delivery_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  message_id TEXT NOT NULL REFERENCES messages(message_id),
+  recipient_kind TEXT NOT NULL,
+  recipient_id TEXT NOT NULL,
+  agent_id TEXT,
+  state TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  reserved_by_harness TEXT,
+  reserved_until TEXT,
+  delivered_at TEXT,
+  received_at TEXT,
+  acknowledged_at TEXT,
+  ended_at TEXT,
+  end_reason TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (message_id, recipient_kind, recipient_id)
+);
+CREATE INDEX ix_deliveries_recipient ON message_deliveries(project_id, recipient_kind, recipient_id, state);
+CREATE INDEX ix_deliveries_agent ON message_deliveries(project_id, agent_id, state);
+-- Operational: durable consumers of the event log and how far each has read (M3b; excluded from replay).
+CREATE TABLE event_consumers (
+  consumer_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  last_sequence INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (consumer_id, project_id)
+);
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
   ...STATE_MIGRATIONS,
   ...MASTER_BRAIN_MIGRATIONS,
   ...STABILIZATION_MIGRATIONS,
+  ...MESSAGING_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */
 export const DOMAIN_TABLES = [
+  'message_deliveries',
+  'messages',
   'model_calls',
   'agent_assignments',
   'plan_tasks',

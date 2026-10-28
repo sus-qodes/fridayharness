@@ -294,3 +294,58 @@ export const AssignmentView = z.object({
   created_at: z.string(),
 });
 export type AssignmentView = z.infer<typeof AssignmentView>;
+
+// ---- agent messaging (M3, ADR-0017) ------------------------------------------------------------
+
+export const MessageStatus = z.enum(['open', 'settled', 'expired']);
+export type MessageStatus = z.infer<typeof MessageStatus>;
+
+export const DeliveryView = z.object({
+  delivery_id: z.string(),
+  recipient_kind: z.enum(['agent', 'role', 'task', 'master_brain', 'human']),
+  recipient_id: z.string(),
+  agent_id: z.string().nullable(),
+  agent_key: z.string().nullable(),
+  state: z.enum(['queued', 'delivered', 'acknowledged', 'expired', 'dead']),
+  attempts: z.number().int(),
+  delivered_at: z.string().nullable(),
+  acknowledged_at: z.string().nullable(),
+  ended_at: z.string().nullable(),
+  end_reason: z.string().nullable(),
+});
+export type DeliveryView = z.infer<typeof DeliveryView>;
+
+export const MessageView = z.object({
+  message_id: z.string(),
+  correlation_id: z.string(),
+  sender: z.object({ kind: z.string(), id: z.string(), agent_key: z.string().nullable() }),
+  target: z.string(),
+  mode: z.enum(['request', 'response', 'notification']),
+  subject: z.string().nullable(),
+  body: z.string(),
+  body_artifact_ref: z.string().nullable(),
+  facts: z.array(z.object({ fact: z.string(), area: z.string().optional(), impact: z.string().optional() })),
+  priority: z.enum(['low', 'normal', 'high', 'urgent']),
+  blocking: z.boolean(),
+  task_id: z.string().nullable(),
+  goal_id: z.string().nullable(),
+  response_to: z.string().nullable(),
+  reply_by: z.string().nullable(),
+  expires_at: z.string(),
+  status: MessageStatus,
+  settled_reason: z.string().nullable(),
+  created_at: z.string(),
+  settled_at: z.string().nullable(),
+  deliveries: z.array(DeliveryView),
+});
+export type MessageView = z.infer<typeof MessageView>;
+
+/** A human sends a message (`friday say`). */
+export const HumanMessageRequest = z.object({
+  to: z.string().min(1).max(100),
+  content: z.string().min(1).max(60_000),
+  subject: z.string().min(1).max(200).optional(),
+  reply_to: z.string().optional(),
+  priority: z.enum(['low', 'normal', 'high', 'urgent']).default('normal'),
+});
+export type HumanMessageRequest = z.input<typeof HumanMessageRequest>;
