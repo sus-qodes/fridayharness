@@ -12,7 +12,9 @@ export interface CompileInput {
 
 function git(root: string, args: string[]): string | null {
   try {
-    return execFileSync('git', ['-C', root, ...args], {
+    // Never take git's optional index lock: an agent may be committing in the same checkout (M4a).
+    return execFileSync('git', ['--no-optional-locks', '-C', root, ...args], {
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       windowsHide: true,

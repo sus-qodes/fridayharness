@@ -2,6 +2,7 @@
  * Claude Code hook contract through the daemon (plan M1.12, Appendix 5): recorded fixtures and
  * synthetic payloads POSTed exactly as the launcher sends them, against a real daemon.
  */
+import { readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { claudeCodeHooks, HOOK_INPUT_KEYS, type HookEventName } from '@friday/adapter-claude';
 import { GenericHarnessClient } from '@friday/adapter-generic';
@@ -187,6 +188,21 @@ describe('Claude Code hook routes', () => {
         else expect((out as { decision?: string }).decision, name).toBe('block');
       }
     }
+  });
+
+  it('SessionStart reads git without rewriting the index an agent may be committing with (M4a)', async () => {
+    const r = await rig();
+    const readme = path.join(ws().projectDir, 'README.md');
+    // Same content, new modification time: plain `git status` would refresh and rewrite the index.
+    writeFileSync(readme, readFileSync(readme));
+    const later = new Date('2031-01-01T00:00:00Z');
+    utimesSync(readme, later, later);
+    const index = path.join(ws().projectDir, '.git', 'index');
+    const before = readFileSync(index);
+    await mcpSession(r.td);
+    const compiled = eventsOf(r.td, 'context.compiled').at(-1)?.payload as { packet: { sections: { kind: string }[] } };
+    expect(compiled.packet.sections.map((s) => s.kind)).toContain('repo.head');
+    expect(readFileSync(index).equals(before)).toBe(true);
   });
 
   it('SessionStart links the session to the MCP registration and injects the context packet', async () => {

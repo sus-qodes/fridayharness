@@ -339,6 +339,16 @@ importers:
         specifier: workspace:*
         version: link:../../tests/support
 
+  packages/git:
+    dependencies:
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../tests/support
+
   packages/mcp-server:
     dependencies:
       '@friday/adapter-generic':
