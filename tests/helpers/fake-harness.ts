@@ -1,5 +1,6 @@
 import { GenericHarnessClient, type HarnessDescriptor, type TaskHandler } from '@friday/adapter-generic';
 import { CURRENT_PROTOCOL_VERSION, type OutboundMessage } from '@friday/protocol';
+import type { ConformanceHarness } from '../conformance/harness-conformance.js';
 import type { TestDaemon } from './daemon.js';
 
 export interface FakeHarnessOptions {
@@ -15,6 +16,8 @@ export interface FakeHarnessOptions {
   onMessage?: TaskHandler;
   /** Run the outbox delivery loop in the background (default: true for spawn mode). */
   loop?: boolean;
+  /** Keep simulated work running after `task.cancel` (a host that ignores cancellation). */
+  ignoreCancel?: boolean;
   /**
    * The level this simulated adapter reports (default L1, like Friday's own spawn adapters; null
    * reports nothing). The daemon records it as "reported", never as observed evidence.
@@ -28,8 +31,10 @@ let counter = 0;
  * A scriptable harness that speaks the real protocol over HTTP (plan M1.7). It never touches
  * files; tests use it to drive the daemon the way an actual harness adapter would.
  */
-export class FakeHarness {
+export class FakeHarness implements ConformanceHarness {
   readonly received: OutboundMessage[] = [];
+  /** Simulated host work per task: a counter that grows every 20 ms while the task runs. */
+  readonly #work = new Map<string, { count: number; timer: ReturnType<typeof setInterval> }>();
   client: GenericHarnessClient;
   #loop: AbortController | undefined;
   #loopDone: Promise<void> | undefined;
@@ -85,9 +90,14 @@ export class FakeHarness {
     this.#loop = ctrl;
     const handler: TaskHandler = async (m) => {
       this.received.push(m);
-      return this.opts.onMessage
-        ? this.opts.onMessage(m)
+      const taskId = (m.params as { task_id?: string }).task_id;
+      if (m.method === 'task.cancel' && taskId && !this.opts.ignoreCancel) this.#stopWork(taskId);
+      const answer = this.opts.onMessage
+        ? await this.opts.onMessage(m)
         : { accepted: true, session_ref: `fake-session-${this.harnessId}` };
+      if ((m.method === 'task.start' || m.method === 'task.resume') && taskId && answer.accepted)
+        this.#startWork(taskId);
+      return answer;
     };
     this.#loopDone = this.client.run(handler, { signal: ctrl.signal, waitMs: 500 }).catch(() => undefined);
   }
@@ -110,8 +120,28 @@ export class FakeHarness {
     }
   }
 
-  /** Simulates a crash: stops polling and heartbeats without telling the daemon. */
+  workDone(taskId: string): number {
+    return this.#work.get(taskId)?.count ?? 0;
+  }
+
+  #startWork(taskId: string): void {
+    if (this.#work.get(taskId)?.timer) return;
+    const entry = { count: this.#work.get(taskId)?.count ?? 0, timer: setInterval(() => (entry.count += 1), 20) };
+    entry.timer.unref?.();
+    this.#work.set(taskId, entry);
+  }
+
+  #stopWork(taskId?: string): void {
+    for (const [id, w] of this.#work) {
+      if (taskId && id !== taskId) continue;
+      clearInterval(w.timer);
+      this.#work.set(id, { count: w.count, timer: undefined as unknown as ReturnType<typeof setInterval> });
+    }
+  }
+
+  /** Simulates a crash: stops polling and heartbeats without telling the daemon; its work dies with it. */
   async crash(): Promise<void> {
+    this.#stopWork();
     this.client.stopHeartbeat();
     await this.stopLoop();
   }
@@ -139,6 +169,7 @@ export class FakeHarness {
   }
 
   async close(): Promise<void> {
+    this.#stopWork();
     await this.stopLoop();
     await this.client.disconnect('test done').catch(() => undefined);
   }

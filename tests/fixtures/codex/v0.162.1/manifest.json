@@ -1,0 +1,11 @@
+{
+  "host": "codex-cli",
+  "version": "0.162.1",
+  "surface": "codex app-server (stdio, JSON-RPC 2.0, protocol v2)",
+  "os": "Windows 11 Pro 10.0.26200",
+  "recorded": "2026-10-14",
+  "model": "gpt-5.6-luna, effort low",
+  "turns": 8,
+  "account": "ChatGPT plan login (no API key); account notifications removed",
+  "regenerate": "codex app-server generate-json-schema --out <dir>; the spike scripts in scripts/spikes/codex/"
+}

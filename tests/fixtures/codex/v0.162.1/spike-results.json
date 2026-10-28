@@ -1,0 +1,224 @@
+[
+  {
+    "model": "gpt-5.6-luna",
+    "effort": "low",
+    "turnsUsed": 5,
+    "results": [
+      {
+        "id": "C1",
+        "name": "register (initialize)",
+        "pass": true,
+        "evidence": {
+          "userAgent": "friday_spike/0.162.1 (Windows 10.0.26200; x86_64) xterm-256color (friday_spike; 0.0.1)"
+        }
+      },
+      {
+        "id": "C0",
+        "name": "thread started without a model call",
+        "pass": true,
+        "evidence": {
+          "model": "gpt-5.6-luna",
+          "provider": "openai",
+          "sandbox": {
+            "type": "readOnly",
+            "networkAccess": false
+          },
+          "approvalPolicy": "untrusted"
+        }
+      },
+      {
+        "id": "C2",
+        "name": "accept a task and deliver context",
+        "pass": true,
+        "evidence": {
+          "turnId": "01a139bd-e0c0-73e1-8d74-3bb37944fbba",
+          "status": "completed",
+          "error": null,
+          "agentText": "task_SPIKE01 FRIDAY-CTX-7731",
+          "reroutes": [],
+          "verifications": [],
+          "tokenUsage": {
+            "total": {
+              "totalTokens": 14578,
+              "inputTokens": 14563,
+              "cachedInputTokens": 11008,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 15,
+              "reasoningOutputTokens": 0
+            },
+            "last": {
+              "totalTokens": 14578,
+              "inputTokens": 14563,
+              "cachedInputTokens": 11008,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 15,
+              "reasoningOutputTokens": 0
+            },
+            "modelContextWindow": 258400
+          },
+          "itemTypes": [
+            "userMessage",
+            "agentMessage"
+          ]
+        }
+      },
+      {
+        "id": "C3",
+        "name": "deny a file write through the approval callback",
+        "pass": false,
+        "evidence": {
+          "approvalsAsked": [],
+          "fileExists": false,
+          "status": "completed",
+          "agentText": "I’m not allowed to write files in the current folder."
+        }
+      },
+      {
+        "id": "C4",
+        "name": "deny a shell command through the approval callback",
+        "pass": false,
+        "evidence": {
+          "approvalsAsked": [],
+          "fileExists": false,
+          "status": "completed",
+          "agentText": "I’m not allowed to run commands that write files."
+        }
+      },
+      {
+        "id": "C5",
+        "name": "cancel stops the work",
+        "pass": false,
+        "evidence": {
+          "status": "completed",
+          "sizes": {
+            "atInterrupt": 0,
+            "after1s": 0,
+            "after3s": 0,
+            "interruptError": {
+              "code": -32600,
+              "message": "no active turn to interrupt"
+            }
+          },
+          "processExited": false
+        }
+      },
+      {
+        "id": "C6",
+        "name": "resume after the host process died",
+        "pass": true,
+        "evidence": {
+          "resumeError": null,
+          "resumedModel": "gpt-5.6-luna",
+          "status": "completed",
+          "agentText": "FRIDAY-CTX-7731"
+        }
+      },
+      {
+        "id": "C7",
+        "name": "observe the model that ran",
+        "pass": true,
+        "evidence": {
+          "configured": "gpt-5.6-luna",
+          "resumed": "gpt-5.6-luna",
+          "reroutes": [],
+          "tokenUsage": [
+            {
+              "totalTokens": 14578,
+              "inputTokens": 14563,
+              "cachedInputTokens": 11008,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 15,
+              "reasoningOutputTokens": 0
+            },
+            {
+              "totalTokens": 14677,
+              "inputTokens": 14616,
+              "cachedInputTokens": 14080,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 61,
+              "reasoningOutputTokens": 43
+            },
+            {
+              "totalTokens": 14751,
+              "inputTokens": 14719,
+              "cachedInputTokens": 11008,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 32,
+              "reasoningOutputTokens": 15
+            },
+            {
+              "totalTokens": 15581,
+              "inputTokens": 15560,
+              "cachedInputTokens": 15104,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 21,
+              "reasoningOutputTokens": 0
+            },
+            {
+              "totalTokens": 16625,
+              "inputTokens": 16604,
+              "cachedInputTokens": 14080,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 21,
+              "reasoningOutputTokens": 8
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "model": "gpt-5.6-luna",
+    "effort": "low",
+    "turnsUsed": 3,
+    "results": [
+      {
+        "id": "C4",
+        "name": "deny a shell command through the approval callback",
+        "pass": true,
+        "evidence": {
+          "approvals": [
+            {
+              "method": "item/commandExecution/requestApproval",
+              "command": "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"node -e \\\"require('fs').writeFileSync('cmd.txt','x')\\\"\""
+            }
+          ],
+          "fileExists": false,
+          "status": "completed",
+          "agentText": "Running the exact command once.\nThe command was not run because execution approval was rejected."
+        }
+      },
+      {
+        "id": "C5",
+        "name": "cancel stops the work",
+        "pass": false,
+        "evidence": {
+          "status": "interrupted",
+          "sizes": {
+            "atInterrupt": 5,
+            "after1s": 10,
+            "after4s": 25,
+            "interruptError": null
+          }
+        }
+      },
+      {
+        "id": "C3",
+        "name": "deny a file write through the approval callback",
+        "pass": true,
+        "evidence": {
+          "approvals": [
+            {
+              "method": "item/fileChange/requestApproval",
+              "reason": null,
+              "command": null
+            }
+          ],
+          "fileExists": false,
+          "status": "completed",
+          "agentText": "I’ll create `denied.txt` in the current folder with `hello`.\nI couldn’t create `denied.txt` because this workspace is read-only."
+        }
+      }
+    ]
+  }
+]

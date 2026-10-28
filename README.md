@@ -16,6 +16,7 @@ The architecture is called **ContextOS** in the original specification.
   - stale plan revisions are refused, your own requirements stay authoritative, and reservations expire.
 - **M3** makes Friday the communication authority: agents message each other, roles, the Master Brain and humans through Friday, which authorizes, delivers and records every message, with per-recipient delivery and real acknowledgements. Channels a host offers outside Friday (Claude Code's own agent messaging, for example) are listed as limits in the security model. Events can be snapshotted, replayed into an isolated copy, backed up and restored.
 - **M3.1** closes the nine findings of the M3 review: one authorization rule for every way of addressing a message, only authorized replies settle a request, only the receiving session acknowledges, escalations and answers survive a crash, answered questions stop asking, and backups are relocatable, verified, credential-free and restorable with `friday restore`, without holding up the daemon.
+- **M3.5** tried a second host before building for it: Codex app-server takes Friday's context and tasks, asks Friday before commands and file writes, and resumes after a crash, but does not stop a running command when a turn is cancelled, so Friday will own that ([spike report](docs/integration/codex-spike.md)).
 
 See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 
@@ -33,6 +34,7 @@ See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 | [docs/master-brain.md](docs/master-brain.md) | Goals, plans and the Master Brain: turning planning on, approving, revisions, questions, costs |
 | [docs/protocol/README.md](docs/protocol/README.md) | The harness protocol: transport, tokens, methods, errors, versions |
 | [docs/integration/claude-code-spike.md](docs/integration/claude-code-spike.md) | Verified Claude Code hook and MCP behaviour on Windows |
+| [docs/integration/codex-spike.md](docs/integration/codex-spike.md) | The M3.5 Codex app-server spike: what works, what does not, and the contract changes before M8 |
 | [docs/reviews/](docs/reviews/) | External reviews of the plan and the project, and how each finding was handled |
 
 ## Try it (Windows, PowerShell)
