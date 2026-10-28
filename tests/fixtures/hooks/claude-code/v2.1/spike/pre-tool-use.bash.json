@@ -1,0 +1,23 @@
+{
+  "claude_code_version": "2.1.296",
+  "recorded_at": "2026-10-12",
+  "os": "win32",
+  "source": "M0 spike (docs/integration/claude-code-spike.md)",
+  "input": {
+    "session_id": "sess_fixture",
+    "transcript_path": "${HOME}/.claude/projects/fixture/transcript.jsonl",
+    "cwd": "${PROJECT_DIR}",
+    "prompt_id": "prompt_fixture_1",
+    "permission_mode": "acceptEdits",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "node -e \"console.log(123)\"",
+      "description": "Print 123 via node"
+    },
+    "tool_use_id": "toolu_fixture_8"
+  }
+}

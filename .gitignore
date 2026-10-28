@@ -1,0 +1,22 @@
+# Dependencies and build output
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+coverage/
+
+# Test output
+tests/.artifacts/
+tests/.reports/
+
+# Local development project (materialized from the fixture)
+/.dev-project/
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Note: there is deliberately no `.friday` rule here.
+# Each `.friday/` directory carries its own `.gitignore` listing runtime files,
+# so `config.yaml`, `policies/` and `harness/` stay trackable (ADR-0012).

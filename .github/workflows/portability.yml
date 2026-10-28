@@ -1,0 +1,22 @@
+name: portability
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  portability:
+    name: portability checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Line endings, file modes, shell scripts, localhost literals, POSIX-only package scripts
+        run: node scripts/check-portability.mjs

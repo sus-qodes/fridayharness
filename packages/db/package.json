@@ -1,0 +1,22 @@
+{
+  "name": "@friday/db",
+  "version": "0.0.0",
+  "private": true,
+  "description": "SQLite access: pragmas, migrator, transactions and the SqliteDriver seam.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "vitest run"
+  }
+}

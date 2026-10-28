@@ -1,0 +1,89 @@
+{
+  "claude_code_version": "2.1.296",
+  "recorded_at": "2026-10-12",
+  "os": "win32",
+  "source": "M0 spike (docs/integration/claude-code-spike.md)",
+  "input": {
+    "session_id": "sess_fixture",
+    "transcript_path": "${HOME}/.claude/projects/fixture/transcript.jsonl",
+    "cwd": "${PROJECT_DIR}",
+    "prompt_id": "prompt_fixture_1",
+    "permission_mode": "acceptEdits",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+      "description": "Read a.txt contents",
+      "prompt": "Use the Read tool to read the file a.txt in the directory ${PROJECT_DIR} . Report its contents exactly. Do nothing else.",
+      "subagent_type": "general-purpose",
+      "run_in_background": false
+    },
+    "tool_response": {
+      "status": "completed",
+      "prompt": "Use the Read tool to read the file a.txt in the directory ${PROJECT_DIR} . Report its contents exactly. Do nothing else.",
+      "agentId": "ad589984023635e7e",
+      "agentType": "general-purpose",
+      "harnessNoteCount": 0,
+      "harnessTailCount": 0,
+      "harnessSectionHash": "4756a7fa3671a5b0",
+      "content": [
+        {
+          "type": "text",
+          "text": "The file contents are:\n\n```\nalpha\n```\n\nThe file is `${PROJECT_DIR}\\a.txt`. It contains the single line `alpha`, and the Read tool's output shows a trailing empty line 2, so the file may end with a newline."
+        }
+      ],
+      "resolvedModel": "claude-haiku-5-5",
+      "totalDurationMs": 3170,
+      "totalTokens": 22744,
+      "totalToolUseCount": 1,
+      "usage": {
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 1920,
+        "cache_read_input_tokens": 20685,
+        "output_tokens": 137,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 1920
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 137,
+            "cache_read_input_tokens": 20685,
+            "cache_creation_input_tokens": 1920,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 1920,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "toolStats": {
+        "readCount": 1,
+        "searchCount": 0,
+        "bashCount": 0,
+        "editFileCount": 0,
+        "linesAdded": 0,
+        "linesRemoved": 0,
+        "otherToolCount": 0
+      },
+      "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_fixture_9",
+    "duration_ms": 3170
+  }
+}

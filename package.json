@@ -1,0 +1,31 @@
+{
+  "name": "friday-monorepo",
+  "private": true,
+  "type": "module",
+  "description": "Friday: a local orchestration and context control plane above AI coding harnesses (architecture: ContextOS).",
+  "packageManager": "pnpm@12.11.2",
+  "engines": {
+    "node": ">=22.18 <27"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "turbo run test",
+    "test:all": "vitest run",
+    "test:watch": "vitest",
+    "friday": "tsx --conditions development apps/cli/src/bin.ts",
+    "check:portability": "node scripts/check-portability.mjs",
+    "clean": "node scripts/clean.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "@types/node": "^24",
+    "@vitest/coverage-v8": "^5.0.3",
+    "tsx": "^4.23.15",
+    "turbo": "^2.11.7",
+    "typescript": "5.9.3",
+    "vitest": "^5.0.3"
+  }
+}

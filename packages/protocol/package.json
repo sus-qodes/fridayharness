@@ -1,0 +1,22 @@
+{
+  "name": "@friday/protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Wire envelopes, harness protocol methods, event schemas, error codes and version negotiation. No orchestration logic.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "vitest run"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@friday/adapter-generic",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Generic harness protocol client and HarnessTransport seam (FakeHarness base).",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "vitest run"
+  }
+}

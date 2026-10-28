@@ -1,0 +1,17 @@
+# Normalize every text file to LF in the repository and the working tree.
+* text=auto eol=lf
+
+# Windows-only launchers keep CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary files.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.wasm binary
+*.db binary
+*.sqlite binary
+*.node binary
+*.zip binary

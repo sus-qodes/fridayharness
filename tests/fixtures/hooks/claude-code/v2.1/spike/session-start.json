@@ -1,0 +1,13 @@
+{
+  "claude_code_version": "2.1.296",
+  "recorded_at": "2026-10-12",
+  "os": "win32",
+  "source": "M0 spike (docs/integration/claude-code-spike.md)",
+  "input": {
+    "session_id": "sess_fixture",
+    "transcript_path": "${HOME}/.claude/projects/fixture/transcript.jsonl",
+    "cwd": "${PROJECT_DIR}",
+    "hook_event_name": "SessionStart",
+    "source": "startup"
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "ui": "stream",
+  "agentGuidance": false,
+  "envMode": "strict",
+  "globalDependencies": ["tsconfig.base.json", "vitest.shared.ts", "biome.json"],
+  "globalPassThroughEnv": [
+    "SYSTEMROOT",
+    "SystemRoot",
+    "WINDIR",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "COMSPEC",
+    "PATHEXT",
+    "PROGRAMFILES",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "NUMBER_OF_PROCESSORS",
+    "CI",
+    "GITHUB_ACTIONS",
+    "RUNNER_TEMP",
+    "FRIDAY_TEST_*",
+    "FRIDAY_STATE_DIR",
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "TZ"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "!src/**/*.test.ts"],
+      "outputs": ["dist/**"]
+    },
+    "typecheck": {
+      "outputs": []
+    },
+    "test": {
+      "outputs": [],
+      "env": ["FRIDAY_TEST_*"]
+    },
+    "test:e2e": {
+      "dependsOn": ["build", "^build"],
+      "cache": false
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

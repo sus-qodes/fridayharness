@@ -1,0 +1,18 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/protocol" },
+    { "path": "packages/core" },
+    { "path": "packages/db" },
+    { "path": "packages/events" },
+    { "path": "packages/state" },
+    { "path": "packages/sdk" },
+    { "path": "packages/policy" },
+    { "path": "packages/verification" },
+    { "path": "packages/mcp-server" },
+    { "path": "packages/adapters/generic" },
+    { "path": "packages/adapters/claude" },
+    { "path": "apps/daemon" },
+    { "path": "apps/cli" }
+  ]
+}

@@ -1,0 +1,14 @@
+packages:
+  - apps/*
+  - packages/*
+  - packages/adapters/*
+  - tests
+  - tests/support
+
+# Fail installation when a dependency wants to run a build script that has not been reviewed.
+strictDepBuilds: true
+
+# Reviewed build scripts (justified in docs/decisions/ADR-0006-toolchain.md).
+allowBuilds:
+  # esbuild's postinstall validates and links its platform binary; used by tsx.
+  esbuild: true

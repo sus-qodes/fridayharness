@@ -1,0 +1,21 @@
+{
+  "claude_code_version": "2.1.296",
+  "recorded_at": "2026-10-12",
+  "os": "win32",
+  "source": "M0 spike (docs/integration/claude-code-spike.md)",
+  "input": {
+    "session_id": "sess_fixture",
+    "transcript_path": "${HOME}/.claude/projects/fixture/transcript.jsonl",
+    "cwd": "${PROJECT_DIR}",
+    "prompt_id": "prompt_fixture_1",
+    "permission_mode": "acceptEdits",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "1. succeeded (spike_ping returned pong, server_pid 24312)\n2. succeeded (a.txt read, contains \"alpha\")\n3. blocked (timeout-me.txt: PreToolUse hook timed out, and the hook's onFailure is \"block\")\n4. blocked (exit-me.txt: PreToolUse hook failed with \"spike: deliberate hook failure\")\n5. blocked (deny-me.txt: PreToolUse hook denied it as \"outside the task scope\")\n6. succeeded (Glob found a.txt, exit-me.txt, timeout-me.txt, deny-me.txt, stderr.txt)\n7. succeeded (Grep for \"alpha\" matched spike-log.jsonl, stream.jsonl, and a.txt)\n8. succeeded (`node -e \"console.log(123)\"` printed 123)\n9. succeeded (subagent read a.txt and reported \"alpha\")\n\nPINEAPPLE-42",
+    "background_tasks": [],
+    "session_crons": []
+  }
+}
