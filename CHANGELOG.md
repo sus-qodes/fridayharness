@@ -9,6 +9,12 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - The **dirty-content identity** names "the code as it is here": the HEAD commit plus a hash of the content of every uncommitted change. An edit changes it, a timestamp alone does not, and undoing the edit restores it. Context caching (M4d) and verification (M5) build on it.
   - Friday never takes git's index lock while reading. **Fix:** the context Friday gives a session at start used plain `git status`, which could rewrite the index while an agent was committing.
   - Decision: ADR-0019.
+- **M4b, the code graph:**
+  - `@friday/code-graph` parses TypeScript and JavaScript with tree-sitter (WebAssembly, no native build), and links every file to what it imports. Each link is labelled **exact** (a relative path that exists), **inferred** (a workspace package's entry), or **unsupported**: aliases, package subpaths, computed `import()`/`require()` and missing files are reported, never guessed.
+  - It knows each file's consumers, its tests, its area (the nearest package), and the **shared contracts** that other areas depend on.
+  - Parse results are cached by file content in `.friday/graph/`, so an edit re-parses one file, and worktrees share the cache. Friday's own repository (218 files) builds in under a second.
+  - `friday graph` (summary, contracts, what is not resolved), `friday graph query <file> [--depth n]`, `friday graph reindex`.
+  - Decision: ADR-0020.
 
 ## Unreleased — M3.5 second-harness spike (Codex app-server)
 

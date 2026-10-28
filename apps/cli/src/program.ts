@@ -8,6 +8,7 @@ import { Command, CommanderError, Option } from 'commander';
 import { type GlobalOptions, operator, out, project, UsageError } from './context.js';
 import { doctor, renderDoctor } from './doctor.js';
 import { registerGoalCommands, renderEscalation } from './goals.js';
+import { registerGraphCommands } from './graph.js';
 import { registerMessageCommands } from './messages.js';
 import { clip, describeEvent, kv, shortTime, table } from './output.js';
 import { restoreProject } from './restore.js';
@@ -677,6 +678,7 @@ export function buildProgram(): Command {
 
   registerGoalCommands(program, g);
   registerMessageCommands(program, g);
+  registerGraphCommands(program, g);
   for (const plugin of commandPlugins) plugin(program);
   return program;
 }

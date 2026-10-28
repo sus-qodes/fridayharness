@@ -214,6 +214,9 @@ importers:
 
   apps/daemon:
     dependencies:
+      '@friday/code-graph':
+        specifier: workspace:*
+        version: link:../../packages/code-graph
       '@friday/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -223,6 +226,9 @@ importers:
       '@friday/events':
         specifier: workspace:*
         version: link:../../packages/events
+      '@friday/git':
+        specifier: workspace:*
+        version: link:../../packages/git
       '@friday/planner':
         specifier: workspace:*
         version: link:../../packages/planner
@@ -300,6 +306,25 @@ importers:
       '@friday/sdk':
         specifier: workspace:*
         version: link:../../sdk
+
+  packages/code-graph:
+    dependencies:
+      '@friday/db':
+        specifier: workspace:*
+        version: link:../db
+      '@friday/git':
+        specifier: workspace:*
+        version: link:../git
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@vscode/tree-sitter-wasm':
+        specifier: 0.3.1
+        version: 0.3.1
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../tests/support
 
   packages/core:
     dependencies:
@@ -984,6 +1009,9 @@ packages:
 
   '@vitest/spy@5.0.3':
     resolution: {integrity: sha512-XhFysQTB8AZ+P4gMi+Lpo99vg2AZi0qKpaB9yXQl37+CaMEAPO3iH/wGVnSyL5MPERiLezpqTVtrR6UZH5GCXg==}
+
+  '@vscode/tree-sitter-wasm@0.3.1':
+    resolution: {integrity: sha512-RJFoomET6FajjG511fmQxeBQfU6M24a0aFZPqpid+ttIxanWf1VGytBG0UmsGjt07qmIPJS8U31D+aecuCucsQ==}
 
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
@@ -1935,6 +1963,8 @@ snapshots:
       vite: 8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1)
 
   '@vitest/spy@5.0.3': {}
+
+  '@vscode/tree-sitter-wasm@0.3.1': {}
 
   accepts@2.0.0:
     dependencies:

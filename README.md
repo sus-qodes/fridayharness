@@ -25,6 +25,7 @@ See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 | Document | What it is |
 |---|---|
 | [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) | The complete build plan, from M0 to the MVP gate and beyond. The single document all work is checked against |
+| [docs/LESSONS_LEARNED.md](docs/LESSONS_LEARNED.md) | Every problem met while building Friday and the rule to follow instead; read it before building Friday again from the handoff |
 | [docs/handoff/](docs/handoff/) | The original 16-part ContextOS specification, verbatim, plus [ERRATA](docs/handoff/ERRATA.md) |
 | [docs/decisions/](docs/decisions/) | Architecture decision records |
 | [docs/security/model.md](docs/security/model.md) | Enforcement levels, token scopes, what is and isn't intercepted, known gaps, threat model |

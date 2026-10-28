@@ -20,6 +20,7 @@ import { serve } from '@hono/node-server';
 import type { Hono } from 'hono';
 import { buildApp } from './app.js';
 import { type BrainHandle, createMasterBrain } from './brain.js';
+import { GraphService } from './graph-service.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
 import { runVerification } from './verify.js';
 
@@ -223,6 +224,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
         });
 
   let closing: Promise<void> | undefined;
+  const graph = new GraphService({ root: project.root, cacheDir: path.join(fridayDir, 'graph') });
   const app = buildApp({
     state,
     project,
@@ -240,6 +242,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     verify: (taskId: string, actor: Actor) => (opts.verify ?? runVerification)(ctx, taskId, actor),
     ...(opts.pollIntervalMs ? { pollIntervalMs: opts.pollIntervalMs } : {}),
     ...(brain ? { brain } : {}),
+    graph,
   });
   for (const ext of opts.extensions ?? []) ext(app as unknown as Hono, ctx);
 
@@ -352,6 +355,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       if (brain) await brain.brain.stop().catch(() => undefined);
       if (timer) clearInterval(timer);
       clearInterval(sweep);
+      graph.close();
       for (const s of streams) s.abort();
       await new Promise((r) => setTimeout(r, 30));
       await new Promise<void>((resolve) => {

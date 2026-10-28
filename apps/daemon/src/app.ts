@@ -24,6 +24,7 @@ import { ZodError } from 'zod';
 import type { BrainHandle } from './brain.js';
 import { escalationView, mountBrainRoutes } from './brain-routes.js';
 import { type CompileInput, compileContext, withStaleness } from './context.js';
+import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
 import type { Logger } from './log.js';
 import { type AuthInfo, callerFor, dispatchRpc } from './rpc.js';
 import { statusPageHtml } from './ui.js';
@@ -47,6 +48,8 @@ export interface AppDeps {
   pollIntervalMs?: number;
   /** The Master Brain (M2); goals and plans are served even without one. */
   brain?: BrainHandle;
+  /** The code graph of the execution root (M4b). */
+  graph?: GraphService;
 }
 
 type Env = { Variables: { auth: AuthInfo; requestId: string } };
@@ -640,6 +643,20 @@ export function buildApp(deps: AppDeps): Hono<Env> {
       201,
     );
   });
+
+  // Code graph (M4b, ADR-0020).
+  const graphService = (): GraphService => {
+    if (!deps.graph) throw new FridayError('capability_unsupported', 'this daemon has no code graph');
+    return deps.graph;
+  };
+  app.get(`${P}/graph`, allow(...OPERATOR), async (c) => c.json(graphSummary(await graphService().graph())));
+  app.get(`${P}/graph/query`, allow(...OPERATOR), async (c) => {
+    const file = c.req.query('path');
+    if (!file) throw new FridayError('invalid_request', 'graph/query needs ?path=<file>');
+    const depth = Math.min(Math.max(Number(c.req.query('depth') ?? 1) || 1, 1), 5);
+    return c.json(graphQuery(await graphService().graph(), file, depth));
+  });
+  app.post(`${P}/graph/reindex`, allow(...OPERATOR), async (c) => c.json(graphSummary(await graphService().reindex())));
 
   // ---- errors --------------------------------------------------------------------------------
 

@@ -20,9 +20,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@friday/code-graph": "workspace:*",
     "@friday/core": "workspace:*",
     "@friday/db": "workspace:*",
     "@friday/events": "workspace:*",
+    "@friday/git": "workspace:*",
     "@friday/planner": "workspace:*",
     "@friday/policy": "workspace:*",
     "@friday/protocol": "workspace:*",

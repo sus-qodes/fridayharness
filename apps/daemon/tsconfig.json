@@ -29,6 +29,12 @@
       "path": "../../packages/verification"
     },
     {
+      "path": "../../packages/git"
+    },
+    {
+      "path": "../../packages/code-graph"
+    },
+    {
       "path": "../../packages/sdk"
     },
     {
