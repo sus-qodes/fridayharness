@@ -25,7 +25,15 @@ export {
   type PolicyResult,
   type PolicyTask,
 } from './evaluate.js';
-export { type CanonicalPath, canonicalize, globsOverlap, isInside, matchesAny, type PathContext } from './paths.js';
+export {
+  type CanonicalPath,
+  canonicalize,
+  globsOverlap,
+  isInside,
+  matchesAny,
+  type PathContext,
+  realDirectory,
+} from './paths.js';
 export {
   type SensitiveClass,
   type SensitiveHit,

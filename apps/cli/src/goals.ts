@@ -1,9 +1,20 @@
 import { readFileSync } from 'node:fs';
 import type { GoalView, PlanTaskView, PlanVersionView } from '@friday/protocol';
-import { credentialsDir, type DaemonClient, listSecrets, removeSecret, writeSecret } from '@friday/sdk';
+import {
+  approveProvider,
+  credentialsDir,
+  type DaemonClient,
+  listSecrets,
+  providerApproval,
+  providerEndpoint,
+  removeSecret,
+  revokeProvider,
+  setProviderEndpoint,
+  writeSecret,
+} from '@friday/sdk';
 import { type Command, Option } from 'commander';
 import { parse as parseYaml } from 'yaml';
-import { type GlobalOptions, operator, out, UsageError } from './context.js';
+import { type GlobalOptions, operator, out, project, UsageError } from './context.js';
 import { clip, shortTime, table } from './output.js';
 
 /** Goals, plans, the Master Brain and secrets (plan M2, ADR-0013). */
@@ -397,13 +408,55 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
       out(g(), s, () =>
         [
           `Master Brain: ${s.provider} / ${s.model}  ${s.planner_available ? 'ready to plan' : `cannot plan: ${s.reason}`}`,
-          `Remote calls: ${s.remote ? (s.allow_remote ? 'allowed' : 'off (set providers.anthropic.allow_remote: true)') : 'not needed'}`,
+          `Remote calls: ${
+            !s.remote
+              ? 'not needed'
+              : !s.allow_remote
+                ? 'off for this project (set providers.anthropic.allow_remote: true)'
+                : s.approved_here
+                  ? 'allowed (the project asks for them and you allowed them here)'
+                  : 'the project asks for them; allow them on this machine with "friday brain allow-remote"'
+          }`,
+          s.remote ? `Endpoint: ${s.endpoint}` : '',
+          s.ignored_base_url ? `Ignored: providers.anthropic.base_url (${s.ignored_base_url}) in config.yaml` : '',
           `API key: ${s.key}`,
           `Plans need your approval: ${s.auto_approve ? 'no (auto_approve)' : 'yes'}`,
           `Escalates after ${s.escalate_after_failures} verification failures; at most ${s.max_replans} revisions per goal`,
           `Spent today: ${usd(Number(s.spent_today_usd))} of ${usd(Number(s.daily_budget_usd))}`,
           `Events read: ${s.cursor} of ${s.head}`,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      );
+    });
+  brain
+    .command('allow-remote')
+    .description("let this clone use your provider key (the project's config must ask for it too)")
+    .option('--provider <name>', 'provider', 'anthropic')
+    .option('--budget <usd>', "a daily budget below the project's", Number.parseFloat)
+    .action((o: { provider: string; budget?: number }) => {
+      const ref = project(g());
+      if (o.budget !== undefined && !(o.budget >= 0)) throw new UsageError('--budget must be a number of dollars');
+      const a = approveProvider(ref, o.provider, { daily_budget_usd: o.budget ?? null });
+      const asked = ref.config.providers[o.provider]?.allow_remote ?? false;
+      out(g(), { provider: o.provider, project: ref.project_id, ...a, project_allows: asked }, () =>
+        [
+          `This clone of ${ref.name} may now use your ${o.provider} key${o.budget !== undefined ? ` (at most ${usd(o.budget)} a day)` : ''}.`,
+          asked
+            ? 'The project allows remote calls too, so the Master Brain can plan.'
+            : `The project does not ask for remote calls yet: set providers.${o.provider}.allow_remote: true in .friday/config.yaml.`,
         ].join('\n'),
+      );
+    });
+  brain
+    .command('deny-remote')
+    .description('stop this clone from using your provider key')
+    .option('--provider <name>', 'provider', 'anthropic')
+    .action((o: { provider: string }) => {
+      const ref = project(g());
+      const removed = revokeProvider(ref, o.provider);
+      out(g(), { provider: o.provider, removed }, () =>
+        removed ? `This clone no longer uses your ${o.provider} key.` : `This clone was not allowed to use it.`,
       );
     });
   brain
@@ -440,9 +493,12 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
           output_tokens: number;
           cache_creation_input_tokens: number;
           cache_read_input_tokens: number;
-          cost_usd: number;
+          cost_usd: number | null;
+          cost_estimate_usd: number | null;
         }[];
         cost_usd: number;
+        unknown_cost_calls?: number;
+        estimated_usd?: number;
       }>(client.projectPath('/model-calls'), {
         query: { limit: String(o.limit), ...(o.goal ? { goal: o.goal } : {}) },
       });
@@ -460,10 +516,12 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
                   c.input_tokens,
                   c.output_tokens,
                   `${c.cache_creation_input_tokens}/${c.cache_read_input_tokens}`,
-                  usd(c.cost_usd),
+                  c.cost_usd === null
+                    ? `unknown${c.cost_estimate_usd !== null ? ` (<= ${usd(c.cost_estimate_usd)})` : ''}`
+                    : usd(c.cost_usd),
                 ]),
               ),
-              `Total: ${usd(r.cost_usd)}`,
+              `Total: ${usd(r.cost_usd)}${r.unknown_cost_calls ? `, plus ${r.unknown_cost_calls} call(s) of unknown cost (counted at up to ${usd(r.estimated_usd ?? 0)})` : ''}`,
             ].join('\n')
           : 'No model calls yet.',
       );
@@ -475,23 +533,49 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
     .description('provider keys, stored for this user outside every repository');
   secrets
     .command('set <name>')
-    .description('store a key (hidden prompt, piped stdin, or --from-env)')
+    .description('store a key (hidden prompt, piped stdin, or --from-env); --base-url alone changes only the endpoint')
     .option('--from-env <variable>', 'read the key from this environment variable')
-    .action(async (name: string, o: { fromEnv?: string }) => {
-      const value = await readSecretInput(o.fromEnv, name);
-      writeSecret(name, value);
-      const chars = value.trim().length;
-      out(g(), { name, stored: true, chars, dir: credentialsDir() }, () =>
-        [
-          `Stored the ${name} key (${chars} characters) for this user in ${credentialsDir()}.`,
-          name === 'anthropic'
-            ? 'Model calls also need providers.anthropic.allow_remote: true in .friday/config.yaml.'
-            : '',
-        ]
-          .filter(Boolean)
-          .join('\n'),
-      );
-    });
+    .option(
+      '--base-url <url>',
+      "send this key to another endpoint (a proxy or gateway you trust) instead of the provider's",
+    )
+    .option('--default-endpoint', "send this key to the provider's own endpoint again")
+    .option('--endpoint-only', 'change the endpoint without storing a new key')
+    .action(
+      async (
+        name: string,
+        o: { fromEnv?: string; baseUrl?: string; defaultEndpoint?: boolean; endpointOnly?: boolean },
+      ) => {
+        // The endpoint is a per-user choice: a tracked config file must not pick where the key goes (review F03).
+        if (o.baseUrl && o.defaultEndpoint) throw new UsageError('use --base-url or --default-endpoint, not both');
+        if (o.baseUrl) setProviderEndpoint(name, o.baseUrl);
+        if (o.defaultEndpoint) setProviderEndpoint(name, null);
+        const endpoint = providerEndpoint(name) ?? 'the provider default';
+        if (o.endpointOnly) {
+          out(g(), { name, endpoint }, () => `The ${name} key is sent to ${endpoint}.`);
+          return;
+        }
+        const value = await readSecretInput(o.fromEnv, name);
+        writeSecret(name, value);
+        const chars = value.trim().length;
+        let approved = false;
+        try {
+          approved = Boolean(providerApproval(project(g()), name));
+        } catch {
+          // not inside a Friday project
+        }
+        out(g(), { name, stored: true, chars, dir: credentialsDir(), endpoint }, () =>
+          [
+            `Stored the ${name} key (${chars} characters) for this user in ${credentialsDir()}; it is sent to ${endpoint}.`,
+            name === 'anthropic' && !approved
+              ? 'To plan with it, the project needs providers.anthropic.allow_remote: true, and you allow each clone with "friday brain allow-remote".'
+              : '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        );
+      },
+    );
   secrets
     .command('list')
     .description('names of stored keys (never their values)')

@@ -33,7 +33,10 @@ export interface HarnessDescriptor {
   harness_key: string;
   vendor: Vendor;
   name: string;
+  /** The host's own version (Claude Code 2.1.296). */
   version?: string;
+  /** Friday's adapter version. */
+  adapter_version?: string;
   attach_mode: AttachMode;
   project_id: string;
   capabilities?: Record<string, unknown>;
@@ -87,6 +90,7 @@ export class GenericHarnessClient {
       vendor: d.vendor,
       name: d.name,
       ...(d.version ? { version: d.version } : {}),
+      ...(d.adapter_version ? { adapter_version: d.adapter_version } : {}),
       attach_mode: d.attach_mode,
       project_id: d.project_id,
       capabilities: d.capabilities ?? {},

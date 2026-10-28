@@ -9,6 +9,8 @@ type Encoder = string | { column: string; encode: (v: unknown) => SqlValue };
 const TASK_CHANGES: Record<string, Encoder> = {
   waiting_reason: 'waiting_reason',
   reserved_for_agent_key: 'reserved_for_agent_key',
+  reserved_by: 'reserved_by',
+  reserved_until: 'reserved_until',
   assigned_agent_id: 'assigned_agent_id',
   assigned_harness_id: 'assigned_harness_id',
   current_run_id: 'current_run_id',
@@ -33,6 +35,10 @@ const HARNESS_CHANGES: Record<string, Encoder> = {
   version: 'version',
   protocol_version: 'protocol_version',
   enforcement_level: 'enforcement_level',
+  enforcement_status: 'enforcement_status',
+  enforcement_basis: 'enforcement_basis',
+  adapter_version: 'adapter_version',
+  hooks_seen_at: 'hooks_seen_at',
   capabilities: { column: 'capabilities_json', encode: (v) => toJson(v ?? {}) },
   disconnected_at: 'disconnected_at',
   terminated_at: 'terminated_at',
@@ -73,6 +79,7 @@ export class StateProjector implements Projector {
         this.insertTask(e, p.task as Payload);
         return;
       case 'task.updated':
+      case 'task.reservation_released':
         this.update('tasks', 'task_id', str(p.task_id), p.changes as Payload, TASK_CHANGES, e, {});
         return;
       case 'run.created':
@@ -351,9 +358,9 @@ export class StateProjector implements Projector {
     this.db
       .prepare(
         `INSERT INTO tasks (task_id, project_id, goal_id, plan_id, plan_version, plan_key, role, kind, summary, description,
-           acceptance_criteria_json, status, priority, risk_level, scope_json, reserved_for_agent_key, created_by_kind,
-           created_by_id, created_at, updated_at, last_event_sequence, revision)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROPOSED', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+           acceptance_criteria_json, status, priority, risk_level, scope_json, reserved_for_agent_key, reserved_by, reserved_until,
+           created_by_kind, created_by_id, created_at, updated_at, last_event_sequence, revision)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROPOSED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       )
       .run(
         str(t.task_id),
@@ -371,6 +378,9 @@ export class StateProjector implements Projector {
         str(t.risk_level),
         t.scope ? toJson(t.scope) : null,
         opt(t.reserved_for_agent_key),
+        // M1/M2 events carry no reserved_by: a reservation made at creation came from a human's --assign.
+        t.reserved_for_agent_key ? str(t.reserved_by ?? 'human') : null,
+        opt(t.reserved_until),
         str(createdBy.kind),
         str(createdBy.id),
         e.occurred_at,
@@ -411,6 +421,8 @@ export class StateProjector implements Projector {
       objective: 'objective',
       constraints: { column: 'constraints_json', encode: (v) => toJson(v ?? []) },
       outcomes: { column: 'outcomes_json', encode: (v) => toJson(v ?? []) },
+      inferred_constraints: { column: 'inferred_constraints_json', encode: (v) => toJson(v ?? []) },
+      inferred_outcomes: { column: 'inferred_outcomes_json', encode: (v) => toJson(v ?? []) },
       plan_id: 'plan_id',
       completed_at: 'completed_at',
     };
@@ -486,9 +498,9 @@ export class StateProjector implements Projector {
     this.db
       .prepare(
         `INSERT INTO model_calls (call_id, project_id, goal_id, plan_id, purpose, prompt_version, provider, model, remote, status,
-           error_code, error, attempt, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd,
-           latency_ms, request_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           error_code, error, attempt, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
+           cache_write_1h_input_tokens, cost_usd, cost_known, cost_estimate_usd, latency_ms, request_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         str(c.call_id),
@@ -508,7 +520,11 @@ export class StateProjector implements Projector {
         Number(u.output_tokens ?? 0),
         Number(u.cache_creation_input_tokens ?? 0),
         Number(u.cache_read_input_tokens ?? 0),
+        Number(u.cache_write_1h_input_tokens ?? 0),
+        // A null cost is unknown, not free (review F04); M2 events always carried a number.
         Number(c.cost_usd ?? 0),
+        c.cost_usd === null ? 0 : 1,
+        c.cost_estimate_usd === undefined || c.cost_estimate_usd === null ? null : Number(c.cost_estimate_usd),
         Number(c.latency_ms ?? 0),
         opt(c.request_id),
         e.occurred_at,
@@ -536,8 +552,9 @@ export class StateProjector implements Projector {
     this.db
       .prepare(
         `INSERT INTO harnesses (harness_id, project_id, harness_key, vendor, name, version, attach_mode, protocol_version,
-           capabilities_json, status, enforcement_level, shadow, requested_agent_key, host_pid, host_session_id, host_cwd, registered_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'REGISTERED', ?, ?, ?, ?, ?, ?, ?, ?)`,
+           capabilities_json, status, enforcement_level, enforcement_status, enforcement_basis, adapter_version, hooks_seen_at, shadow,
+           requested_agent_key, host_pid, host_session_id, host_cwd, registered_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'REGISTERED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         str(h.harness_id),
@@ -550,6 +567,10 @@ export class StateProjector implements Projector {
         str(h.protocol_version),
         toJson(h.capabilities ?? {}),
         opt(h.enforcement_level),
+        opt(h.enforcement_status),
+        opt(h.enforcement_basis),
+        opt(h.adapter_version),
+        opt(h.hooks_seen_at),
         h.shadow ? 1 : 0,
         opt(h.requested_agent_key),
         opt(h.host_pid),

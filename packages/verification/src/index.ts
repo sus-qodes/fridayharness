@@ -36,6 +36,23 @@ export interface CheckOutcome {
   spawn_error: string | null;
 }
 
+/**
+ * Environment variables a project's checks never inherit from the daemon (review, M5 note):
+ * provider keys, tokens and passwords. Checks run project code, which an agent may have written.
+ */
+const SECRET_ENV = /(?:^|_)(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE_?KEY|ACCESS_?KEY)(?:$|_)/i;
+const SECRET_ENV_NAMES = new Set(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'NPM_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN']);
+
+/** The daemon's environment without secrets, plus the check's own variables (those are kept as given). */
+export function checkEnvironment(base: NodeJS.ProcessEnv, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(base)) {
+    if (SECRET_ENV_NAMES.has(k.toUpperCase()) || SECRET_ENV.test(k)) continue;
+    env[k] = v;
+  }
+  return { ...env, ...extra, FRIDAY_VERIFICATION: '1' };
+}
+
 function killTree(pid: number | undefined): void {
   if (!pid) return;
   if (process.platform === 'win32') {
@@ -90,7 +107,7 @@ export function runCheck(spec: CheckSpec): Promise<CheckOutcome> {
     try {
       child = spawn(spec.command, spec.args ?? [], {
         cwd: spec.cwd,
-        env: { ...process.env, ...spec.env, FRIDAY_VERIFICATION: '1' },
+        env: checkEnvironment(process.env, spec.env),
         shell: spec.shell ?? false,
         windowsHide: true,
         detached: process.platform !== 'win32',

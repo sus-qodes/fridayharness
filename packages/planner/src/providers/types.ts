@@ -21,10 +21,16 @@ export const ZERO_USAGE: ModelUsage = {
 export interface ModelRequest {
   purpose: 'plan' | 'replan';
   model: string;
+  /** Friday's rules, the same for every call (trusted). */
   system: string;
-  /** Large, stable project context; providers that support it cache this part. */
+  /**
+   * Large, stable project context from the repository (review F03): source material, not
+   * instructions. Redacted and bounded before it gets here; providers that can cache it do.
+   */
   context: string;
-  /** The per-call instruction. */
+  /** What this call is for: first plan or revision (trusted, after the context). */
+  instructions: string;
+  /** The per-call request: goal, requirements, plan state and evidence. */
   prompt: string;
   /** JSON Schema of the object to return. */
   schema: Record<string, unknown>;
@@ -55,15 +61,34 @@ export type ModelErrorCode =
   | 'no_output'
   | 'unavailable';
 
+/**
+ * Whether a failed request was billed (review F04): `yes` the provider answered (a refusal or a
+ * cut-off answer still costs its tokens), `no` it rejected the request before processing it,
+ * `unknown` the outcome is not known (a timeout or a dropped connection after sending).
+ */
+export type Billed = 'yes' | 'no' | 'unknown';
+
 export class ModelError extends Error {
+  /** Usage the provider reported with an unusable answer. */
+  usage?: ModelUsage;
+  /** The model that answered, when known. */
+  model?: string;
+  requestId?: string | null;
+  billed: Billed;
+
   constructor(
     readonly code: ModelErrorCode,
     message: string,
     readonly retryable = false,
     readonly status?: number,
+    extra: { usage?: ModelUsage; model?: string; requestId?: string | null; billed?: Billed } = {},
   ) {
     super(message);
     this.name = 'ModelError';
+    if (extra.usage) this.usage = extra.usage;
+    if (extra.model) this.model = extra.model;
+    this.requestId = extra.requestId ?? null;
+    this.billed = extra.billed ?? (extra.usage ? 'yes' : 'no');
   }
 }
 

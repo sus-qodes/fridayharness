@@ -13,6 +13,8 @@ export {
   type BrainStep,
   MASTER_BRAIN,
   MasterBrain,
+  type RemotePolicy,
+  redactRequest,
 } from './brain.js';
 export {
   DELEGATION_WEIGHTS,
@@ -25,21 +27,25 @@ export {
 export { diffPlanVersions, type PlanDiff, type PlanVersionTask } from './diff.js';
 export { buildEscalation, type Escalation, type EscalationDetails, type EscalationReason } from './escalate.js';
 export {
+  budgetedCost,
   formatIssues,
   type ParseResult,
   type PlannerCall,
   type PlannerOutcome,
   type PlannerPolicy,
+  requestEstimate,
   runPlanner,
 } from './model.js';
 export { parsePlanDraft, parseReplanDraft } from './parse.js';
-export { costOf, DEFAULT_PRICES, type ModelPrice, type PriceTable } from './pricing.js';
+export { costOf, DEFAULT_PRICES, type ModelPrice, type PriceTable, priceEntry, worstCaseCost } from './pricing.js';
 export {
   type GoalForPrompt,
-  PLAN_SYSTEM,
+  goalBlock,
+  PLAN_INSTRUCTIONS,
+  PLANNER_SYSTEM,
   PROMPT_VERSIONS,
   planPrompt,
-  REPLAN_SYSTEM,
+  REPLAN_INSTRUCTIONS,
   repairPrompt,
   replanPrompt,
 } from './prompts.js';
@@ -50,9 +56,11 @@ export {
   DEFAULT_PLANNER_MODEL,
   type Effort,
   structuredOutputSchema,
+  wrapProjectContext,
 } from './providers/anthropic.js';
 export { FakePlannerModel, type FakeResponse } from './providers/fake.js';
 export {
+  type Billed,
   ModelError,
   type ModelErrorCode,
   type ModelRequest,
@@ -73,7 +81,7 @@ export {
   type ReplanDraftInput,
   ScopeGlob,
 } from './schemas.js';
-export { type BrainAction, type TriggerEvent, type TriggerFacts, triggersFor } from './triggers.js';
+export { type BrainAction, failureAction, type TriggerEvent, type TriggerFacts, triggersFor } from './triggers.js';
 export {
   type ExistingTask,
   isReadOnly,

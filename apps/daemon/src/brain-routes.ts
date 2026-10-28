@@ -11,6 +11,7 @@ import {
   type Actor,
   FridayError,
   GoalCreateRequest,
+  type ModelCallView,
   PlanDecisionRequest,
   type PlanTaskView,
   type PlanVersionView,
@@ -113,7 +114,18 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
         .escalations(pid, 'pending')
         .filter((e) => e.goal_id === goalId)
         .map(escalationView),
-      model_calls: { count: calls.length, cost_usd: Math.round(calls.reduce((s, c) => s + c.cost_usd, 0) * 1e6) / 1e6 },
+      model_calls: { count: calls.length, ...spend(calls) },
+    };
+  };
+
+  /** Known spend, plus how many calls have an unknown cost and what the budget counts for them (review F04). */
+  const spend = (calls: ModelCallView[]) => {
+    const round = (n: number) => Math.round(n * 1e6) / 1e6;
+    const unknown = calls.filter((c) => c.cost_usd === null);
+    return {
+      cost_usd: round(calls.reduce((sum, c) => sum + (c.cost_usd ?? 0), 0)),
+      unknown_cost_calls: unknown.length,
+      estimated_usd: round(unknown.reduce((sum, c) => sum + (c.cost_estimate_usd ?? 0), 0)),
     };
   };
 
@@ -221,6 +233,6 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
     const goalId = c.req.query('goal');
     const limit = Math.min(500, Number(c.req.query('limit') ?? 50) || 50);
     const calls = state.q.modelCalls(pid, { ...(goalId ? { goalId } : {}), limit });
-    return c.json({ calls, cost_usd: Math.round(calls.reduce((s, x) => s + x.cost_usd, 0) * 1e6) / 1e6 });
+    return c.json({ calls, ...spend(calls) });
   });
 }

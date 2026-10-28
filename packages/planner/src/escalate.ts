@@ -9,7 +9,11 @@ export type EscalationReason =
   | 'replan_limit'
   | 'planner_unavailable'
   | 'invalid_plan'
-  | 'budget_exceeded';
+  | 'budget_exceeded'
+  /** A human rejected a revision while failed tasks still wait for a decision (review F05). */
+  | 'plan_rejected'
+  /** A Master Brain action kept failing after its retries (review F05). */
+  | 'action_failed';
 
 export interface EscalationDetails {
   blocked: string;
@@ -36,6 +40,8 @@ const CAPABILITY: Record<EscalationReason, string> = {
   planner_unavailable: 'model.remote_call',
   invalid_plan: 'human.decision',
   budget_exceeded: 'model.budget',
+  plan_rejected: 'human.decision',
+  action_failed: 'human.decision',
 };
 
 export function buildEscalation(input: {

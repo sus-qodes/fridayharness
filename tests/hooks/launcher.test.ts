@@ -3,7 +3,16 @@
  * <Event>` with the hook input on stdin. Covers a live daemon, no daemon, a daemon that hangs or
  * fails, what leaves the launcher, and discovery from a linked git worktree.
  */
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { isBuiltin } from 'node:module';
 import os from 'node:os';
@@ -188,6 +197,29 @@ describe('hook launcher with no daemon', () => {
     for (const event of ['PostToolUse', 'Stop', 'SessionEnd']) {
       const run = await launch(w, event, { session_id: 's', cwd: w.projectDir, hook_event_name: event });
       expect([run.code, run.stdout], event).toEqual([0, '']);
+    }
+  });
+
+  it('denies protected files reached through a junction or symlink, with no daemon (review F01)', async () => {
+    initTestProject(ws());
+    const w = ws();
+    const kind = process.platform === 'win32' ? 'junction' : 'dir';
+    mkdirSync(path.join(w.projectDir, '.friday', 'run'), { recursive: true });
+    writeFileSync(path.join(w.projectDir, '.friday', 'run', 'daemon.json'), '{}');
+    mkdirSync(path.join(w.projectDir, 'src'), { recursive: true });
+    mkdirSync(w.stateDir, { recursive: true });
+    symlinkSync(path.join(w.projectDir, '.friday', 'run'), path.join(w.projectDir, 'src', 'rt'), kind);
+    symlinkSync(w.stateDir, path.join(w.projectDir, 'src', 'st'), kind);
+    for (const [tool, input, cls] of [
+      ['Read', { file_path: path.join(w.projectDir, 'src', 'rt', 'daemon.json') }, 'friday.runtime'],
+      ['Grep', { pattern: 'port', path: path.join(w.projectDir, 'src', 'rt') }, 'friday.runtime'],
+      ['Glob', { pattern: '**/*.token', path: path.join(w.projectDir, 'src', 'st') }, 'friday.private'],
+      ['Write', { file_path: path.join(w.projectDir, 'src', 'rt', 'daemon.json'), content: '{}' }, 'friday.runtime'],
+    ] as const) {
+      const run = await launch(w, 'PreToolUse', pre(w, tool, input));
+      const d = decisionOf(run.json);
+      expect(d?.decision, `${tool} ${run.stdout}`).toBe('deny');
+      expect(d?.reason).toContain(cls);
     }
   });
 

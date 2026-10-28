@@ -277,6 +277,8 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     return c.json({
       project: { project_id: pid, name: project.name },
       harness: { ...harness, shadow: harness.shadow },
+      // Why this session may not take work under the project's security settings (review F09).
+      enforcement_gap: state.enforcementGap(harness),
       agent,
       current_task: current,
       current_run: run && run.harness_id === harnessId ? run : run,
@@ -313,7 +315,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     return c.json({ events: state.store.readByRef(pid, 'task', tid, { limit }) });
   });
 
-  const action = (name: 'ready' | 'release' | 'cancel' | 'rework' | 'assign') =>
+  const action = (name: 'ready' | 'release' | 'cancel' | 'rework' | 'assign' | 'unreserve') =>
     app.post(`${P}/tasks/:tid/${name}`, allow(...OPERATOR), async (c) => {
       const tid = c.req.param('tid');
       const body = TaskActionRequest.parse(await json(c));
@@ -327,13 +329,15 @@ export function buildApp(deps: AppDeps): Hono<Env> {
           return c.json({ task: state.cancelTask(pid, HUMAN, tid, reason) });
         case 'rework':
           return c.json({ task: state.reworkTask(pid, HUMAN, tid, reason) });
+        case 'unreserve':
+          return c.json({ task: state.unreserveTask(pid, HUMAN, tid, reason) });
         case 'assign': {
           if (!body.agent_key) throw new FridayError('invalid_request', 'agent_key is required');
           return c.json(state.assignTask(pid, HUMAN, tid, body.agent_key));
         }
       }
     });
-  for (const a of ['ready', 'release', 'cancel', 'rework', 'assign'] as const) action(a);
+  for (const a of ['ready', 'release', 'cancel', 'rework', 'assign', 'unreserve'] as const) action(a);
 
   app.post(`${P}/tasks/:tid/verify`, allow(...OPERATOR), async (c) => {
     const tid = c.req.param('tid');

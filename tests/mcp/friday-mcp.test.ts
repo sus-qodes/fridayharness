@@ -1,7 +1,9 @@
+import { claudeCodeHooks } from '@friday/adapter-claude';
 import type { TaskView } from '@friday/protocol';
 import { useTestWorkspace, waitForPidGone } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
 import { startTestDaemon } from '../helpers/daemon.js';
+import { postHook } from '../helpers/hooks.js';
 import { startMcp } from '../helpers/mcp-rig.js';
 
 const ws = useTestWorkspace();
@@ -60,7 +62,7 @@ describe('friday-mcp over stdio', () => {
   });
 
   it('runs a task from claim to completion claim, and never shows a token', async () => {
-    const td = await startTestDaemon(ws(), { git: true });
+    const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
     const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
       summary: 'Add discount codes',
       acceptance_criteria: ['tests pass'],
@@ -74,12 +76,28 @@ describe('friday-mcp over stdio', () => {
     );
     expect(who.text).toContain('You hold no task.');
     expect(who.text).toContain(task.task_id);
-    expect(who.structured).toMatchObject({
-      agent_key: 'dev-1',
+    // MCP alone proves no interception: L0 until the session's Friday hooks reach the daemon (review F09).
+    expect(who.structured).toMatchObject({ agent_key: 'dev-1', enforcement_level: 'L0', shadow: false });
+    expect(who.text).toContain('Enforcement: L0');
+    expect(who.text).toContain('You cannot take work in this session');
+    const daemon = { url: td.url, projectId: td.project.project_id, token: td.daemon.tokens.bootstrap };
+    const start = await postHook(
+      daemon,
+      'SessionStart',
+      { session_id: 'sess-test-1', cwd: ws().projectDir, hook_event_name: 'SessionStart', source: 'startup' },
+      { claudePid: process.pid },
+    );
+    expect(start.status, JSON.stringify(start.body)).toBe(200);
+    const linked = await mcp.call('friday_whoami');
+    expect(linked.structured).toMatchObject({
       enforcement_level: 'L1',
+      enforcement_status: 'enforcing',
+      enforcement_gap: null,
       secrets_location: 'private',
-      shadow: false,
     });
+    expect(linked.text).toContain(
+      'Enforcement: L1, enforcing (Friday hooks from this session; Claude Code 2.1.296 blocks when a hook fails)',
+    );
 
     const claim = await mcp.call('friday_task_claim', { next: true });
     expect(claim.isError, claim.text).toBe(false);
@@ -118,6 +136,28 @@ describe('friday-mcp over stdio', () => {
     const outputs = JSON.stringify([who, claim, current, ctx, progress, done, again, resource]);
     for (const secret of [td.daemon.tokens.operator, td.daemon.tokens.bootstrap]) expect(outputs).not.toContain(secret);
     expect(mcp.stderr()).not.toContain(td.daemon.tokens.bootstrap);
+  });
+
+  it('reports a generic MCP client as L0 and says so to the agent (review F09)', async () => {
+    const td = await startTestDaemon(ws());
+    const mcp = await startMcp(ws(), { FRIDAY_HARNESS: 'generic' }, { name: 'some-editor', version: '1.0.0' });
+    const who = await eventually(
+      () => mcp.call('friday_whoami'),
+      (r) => (r.structured.daemon as { reachable?: boolean } | undefined)?.reachable === true,
+    );
+    expect(who.structured, who.text).toMatchObject({ enforcement_level: 'L0', enforcement_status: 'observed' });
+    expect(who.text).toContain('Friday cannot check your tool calls in this session');
+    const h = td.daemon.state.q.harnesses(td.project.project_id).find((x) => x.vendor === 'generic');
+    expect(h).toMatchObject({ version: '1.0.0', enforcement_level: 'L0' });
+    expect(h?.adapter_version).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
+  it('says honestly that acknowledging messages is not available yet (review F11)', async () => {
+    await startTestDaemon(ws());
+    const mcp = await startMcp(ws());
+    const ack = await mcp.call('friday_acknowledge', { message_ids: ['msg_1'] });
+    expect(ack.structured).toMatchObject({ acknowledged: [], supported: false });
+    expect(ack.text).toContain('Nothing was acknowledged');
   });
 
   it('rejects invalid tool arguments without crashing', async () => {

@@ -39,6 +39,10 @@
       "type": "string",
       "maxLength": 100
     },
+    "adapter_version": {
+      "type": "string",
+      "maxLength": 100
+    },
     "attach_mode": {
       "type": "string",
       "enum": [

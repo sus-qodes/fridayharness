@@ -127,14 +127,16 @@ describe('Master Brain', () => {
     await b.runOnce();
     const g = state.q.goal(PROJECT, goal.goal_id);
     expect(g).toMatchObject({ status: 'OPEN', objective: expect.stringContaining('Stripe subscription billing') });
-    expect(g.constraints).toHaveLength(3);
+    // The goal had no human constraints; the planner's are kept apart (review F07).
+    expect(g.constraints).toEqual([]);
+    expect(g.inferred_constraints).toHaveLength(3);
     const planId = g.plan_id as string;
     const v1 = state.q.planVersion(planId, 1);
     expect(v1).toMatchObject({
       status: 'PROPOSED',
       trigger: 'first plan',
       proposed_by: { kind: 'master_brain' },
-      prompt_version: 'plan-1',
+      prompt_version: 'plan-2',
     });
     expect(v1?.tasks.map((t) => [t.key, t.change])).toEqual([
       ['billing-service', 'new'],
@@ -189,7 +191,7 @@ describe('Master Brain', () => {
       status: 'PROPOSED',
       supersedes: 1,
       trigger: expect.stringContaining('verification failed'),
-      prompt_version: 'replan-1',
+      prompt_version: 'replan-2',
     });
     expect(v2?.tasks.map((t) => [t.key, t.change])).toEqual([
       ['billing-service', 'keep'],
@@ -327,7 +329,7 @@ describe('Master Brain', () => {
       goal_id: null,
       plan_id: null,
       purpose: 'plan',
-      prompt_version: 'plan-1',
+      prompt_version: 'plan-2',
       provider: 'anthropic',
       model: 'claude-opus-5-5',
       remote: true,

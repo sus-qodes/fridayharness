@@ -66,6 +66,38 @@
         }
       ]
     },
+    "enforcement_status": {
+      "default": null,
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "enforcing",
+            "degraded",
+            "unverified",
+            "observed",
+            "reported"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "enforcement_basis": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "adapter_version": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "host_pid": {
       "anyOf": [
         {

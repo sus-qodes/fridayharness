@@ -1,4 +1,4 @@
-import { type CanonicalPath, canonicalize, isInside, matchesAny, type PathContext } from './paths.js';
+import { type CanonicalPath, canonicalize, isInside, matchesAny, type PathContext, realDirectory } from './paths.js';
 
 /** Paths no agent tool may touch (plan M1.8, docs/security/model.md §6). */
 export type SensitiveClass = 'friday.private' | 'friday.runtime' | 'host.config' | 'secrets' | 'git.internal';
@@ -41,23 +41,43 @@ export interface SensitiveHit {
   path: string;
 }
 
-/** Classifies one path for a read (also search/list) or write. */
+/** One location (as given, or the real target behind links) against the protected classes. */
+function classify(
+  absolute: string,
+  rel: string | null,
+  op: 'read' | 'write',
+  windows: boolean,
+  stateDirs: string[],
+): SensitiveHit | null {
+  if (stateDirs.some((d) => isInside(absolute, d, windows))) return { class: 'friday.private', path: absolute };
+  if (rel === null) {
+    // Outside the project: only secrets are judged here; Claude Code itself prompts for outside reads.
+    const base = absolute.replaceAll('\\', '/');
+    return matchesAny(base, SECRETS, windows) ? { class: 'secrets', path: absolute } : null;
+  }
+  // A directory is protected when anything inside it is (`.friday/run` as well as `.friday/run/x`).
+  const forms = rel === '.' ? [rel] : [rel, `${rel}/x`];
+  const any = (globs: readonly string[]) => forms.some((f) => matchesAny(f, globs, windows));
+  if (any(RUNTIME)) return { class: 'friday.runtime', path: rel };
+  if (matchesAny(rel, SECRETS, windows)) return { class: 'secrets', path: rel };
+  if (any(GIT_INTERNAL)) return { class: 'git.internal', path: rel };
+  if (op === 'write' && any(HOST_CONFIG)) return { class: 'host.config', path: rel };
+  return null;
+}
+
+/**
+ * Classifies one path for a read (also search/list) or write. Both the path as given and its
+ * real target are checked (plan B19), so a symlink or junction cannot reach protected files.
+ */
 export function sensitiveClassOf(p: string, ctx: PathContext, op: 'read' | 'write'): SensitiveHit | null {
   const windows = ctx.windows ?? process.platform === 'win32';
   if (PRIVATE_TEXT.some((re) => re.test(p))) return { class: 'friday.private', path: p };
   const c: CanonicalPath = canonicalize(p, ctx);
-  if (ctx.stateDir && isInside(c.absolute, ctx.stateDir, windows)) return { class: 'friday.private', path: c.absolute };
-  const rel = c.relative;
-  if (rel === null) {
-    // Outside the project: only secrets are judged here; Claude Code itself prompts for outside reads.
-    const base = c.absolute.replaceAll('\\', '/');
-    return matchesAny(base, SECRETS, windows) ? { class: 'secrets', path: c.absolute } : null;
-  }
-  if (matchesAny(rel, RUNTIME, windows)) return { class: 'friday.runtime', path: rel };
-  if (matchesAny(rel, SECRETS, windows)) return { class: 'secrets', path: rel };
-  if (matchesAny(rel, GIT_INTERNAL, windows)) return { class: 'git.internal', path: rel };
-  if (op === 'write' && matchesAny(rel, HOST_CONFIG, windows)) return { class: 'host.config', path: rel };
-  return null;
+  const stateDirs = ctx.stateDir ? [...new Set([ctx.stateDir, realDirectory(ctx.stateDir, windows)])] : [];
+  const given = classify(c.absolute, c.relative, op, windows, stateDirs);
+  if (given || !c.linked) return given;
+  const hit = classify(c.real, c.realRelative, op, windows, stateDirs);
+  return hit ? { class: hit.class, path: `${c.relative ?? c.absolute} (links to ${hit.path})` } : null;
 }
 
 /** Glob and Grep: a pattern is sensitive when it explicitly names a protected area. */

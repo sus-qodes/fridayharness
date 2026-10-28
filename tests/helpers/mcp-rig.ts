@@ -18,8 +18,15 @@ export interface McpRig {
   close(): Promise<void>;
 }
 
-/** Starts `friday-mcp` from source the way Claude Code starts it: stdio, CLAUDE_PROJECT_DIR, no token. */
-export async function startMcp(ws: TestWorkspace, env: Record<string, string> = {}): Promise<McpRig> {
+/**
+ * Starts `friday-mcp` from source the way Claude Code starts it: stdio, CLAUDE_PROJECT_DIR, no token.
+ * The client introduces itself as Claude Code 2.1.296, so the server reports that host version.
+ */
+export async function startMcp(
+  ws: TestWorkspace,
+  env: Record<string, string> = {},
+  clientInfo: { name: string; version: string } = { name: 'claude-code', version: '2.1.296' },
+): Promise<McpRig> {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ['--conditions', 'development', '--import', 'tsx', MCP_SOURCE],
@@ -38,7 +45,7 @@ export async function startMcp(ws: TestWorkspace, env: Record<string, string> = 
   transport.stderr?.on('data', (c: Buffer) => {
     errText += c.toString('utf8');
   });
-  const client = new Client({ name: 'friday-test-rig', version: '0.0.0' });
+  const client = new Client(clientInfo);
   await client.connect(transport);
   const rig: McpRig = {
     client,

@@ -39,7 +39,8 @@
         "ok",
         "invalid",
         "error",
-        "refused"
+        "refused",
+        "interrupted"
       ]
     },
     "error_code": {
@@ -79,8 +80,24 @@
       "minimum": -9007199254740991,
       "maximum": 9007199254740991
     },
+    "cache_write_1h_input_tokens": {
+      "default": 0,
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
     "cost_usd": {
-      "type": "number"
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "cost_estimate_usd": {
+      "default": null,
+      "type": [
+        "number",
+        "null"
+      ]
     },
     "latency_ms": {
       "type": "integer",

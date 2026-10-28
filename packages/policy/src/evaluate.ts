@@ -168,6 +168,8 @@ export function evaluate(input: PolicyInput): PolicyResult {
 
   // Writes: scope, approvals and the single-live-writer rule.
   const targets: string[] = [];
+  /** Every project-relative location a write lands on: the path as given and, behind a link, its target. */
+  const locations: string[] = [];
   for (const p of action.paths ?? []) {
     const c = canonicalize(p, ctx);
     if (c.relative === null) {
@@ -175,7 +177,17 @@ export function evaluate(input: PolicyInput): PolicyResult {
         targets: [c.absolute],
       });
     }
+    if (c.linked && c.realRelative === null) {
+      return r(
+        'deny',
+        'write.outside_project',
+        `${c.relative} is a link to ${c.real}, which is outside the project. ${HOW_TO_ASK}`,
+        { targets: [c.relative] },
+      );
+    }
     targets.push(c.relative);
+    locations.push(c.relative);
+    if (c.linked && c.realRelative && c.realRelative !== c.relative) locations.push(c.realRelative);
   }
   if (!task) {
     return r(
@@ -202,7 +214,7 @@ export function evaluate(input: PolicyInput): PolicyResult {
     );
   }
   const windows = ctx.windows ?? process.platform === 'win32';
-  for (const rel of targets) {
+  for (const rel of locations) {
     for (const other of input.otherWriters ?? []) {
       const otherWrites = other.scope?.write ?? [];
       const conflict =

@@ -304,10 +304,17 @@ export function buildProgram(): Command {
       });
     });
 
-  for (const action of ['ready', 'release', 'cancel', 'rework'] as const) {
+  const ACTION_HELP = {
+    ready: 'make a PROPOSED task READY',
+    release: 'give an assigned or running task back (it becomes READY)',
+    cancel: 'cancel a task',
+    rework: 'send a FAILED task back for rework (READY, offered first to the agent that did it)',
+    unreserve: 'let any agent take a READY task that is reserved for one agent',
+  } as const;
+  for (const action of ['ready', 'release', 'cancel', 'rework', 'unreserve'] as const) {
     task
       .command(`${action} <task>`)
-      .description(`${action} a task`)
+      .description(ACTION_HELP[action])
       .option('--reason <text>')
       .action(async (id: string, o: { reason?: string }) => {
         const { client } = operator(g());

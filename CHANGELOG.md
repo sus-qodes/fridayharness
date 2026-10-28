@@ -2,6 +2,41 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M2.5 stabilization (review 2026-10-14)
+
+An independent review found twelve gaps in M1 and M2. All were confirmed in the source and handled ([disposition](docs/reviews/2026-10-14-review-disposition.md), plan H.6).
+
+- **Links and junctions:** policy checks the path a tool names and its real target, so a junction inside a scope no longer reaches other scopes, Friday's runtime files or private state. This holds with the daemon down too.
+- **Private folders are verified:**
+  - Windows ACLs are read and repaired so only you, SYSTEM and Administrators can open Friday's tokens and keys; POSIX folders need the owner and modes 0700/0600.
+  - Friday refuses to write secrets elsewhere.
+  - `friday doctor` reports verified access.
+- **Planning sends less, and only where you chose:**
+  - Context comes from real paths inside the project, skips protected files, is bounded and redacted, and is marked as untrusted source material.
+  - Remote planning needs your approval per clone (`friday brain allow-remote [--budget]`, `deny-remote`).
+  - The key's endpoint is yours to set (`friday secrets set <name> --base-url`); `base_url` in `config.yaml` is ignored.
+- **Honest costs:**
+  - Refused or cut-off answers are recorded with their cost; unknown costs are null with a worst-case estimate.
+  - Models without a price are not called.
+  - The budget is checked before every attempt, including the repair.
+- **A Master Brain that survives restarts:**
+  - Work is a durable job written with the cursor, and coordination is derived from state.
+  - Model calls run in their own lane, so a slow model never stalls delegation.
+  - Interrupted calls are recorded and retried, and failing actions are retried, then escalated.
+  - A second failure while a revision waits is kept, and a rejected revision with failed tasks asks you how to continue.
+- **Fresh approvals:** approving a revision re-checks it against the live plan and tasks; a stale one is refused with `COS-2008` and nothing changes.
+- **Your requirements stay yours:** the planner's additions are stored apart. Your constraints and outcomes go into every planning call and every agent's context.
+- **Reservations end:** reservations made by delegation or rework expire (15 minutes) or end with their agent's session; `friday task unreserve` releases any reservation.
+- **Enforcement from evidence:**
+  - A Claude Code session is L1 only after its hooks reach Friday, and is `enforcing`, `degraded` or `unverified` by host version.
+  - `security.enforcement_required` and `require_enforcing_hooks` are enforced (`COS-3007`).
+  - `friday_whoami` says what the session really has.
+- **Smaller fixes:**
+  - verification checks no longer inherit API keys or tokens;
+  - `friday_acknowledge` says honestly that messaging arrives in M3.
+- **Decisions:** ADR-0014 (execution root and worktree location, for M4 and M5), ADR-0015 and ADR-0016. The plan's M3–M8 sections are rewritten with checkpoints, a snapshot contract, revision-bound verification, a second-harness spike (M3.5) and an M8 split.
+- **Tests:** 378 across 16 packages.
+
 ## Unreleased — M2 Master Brain
 
 - **Goals and plans:** `friday goal create` turns a request into a goal and the Master Brain proposes plan v1. Each task has acceptance criteria, a write scope, a role and dependencies. You approve or reject each version (`friday plan approve|reject`), compare versions (`friday plan diff`), or write the plan yourself (`friday plan propose --file`).

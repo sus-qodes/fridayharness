@@ -17,6 +17,7 @@ export const ERROR_CODES = {
   agent_unavailable: { code: 'COS-2005', http: 409, retryable: true },
   goal_not_found: { code: 'COS-2006', http: 404, retryable: false },
   plan_not_found: { code: 'COS-2007', http: 404, retryable: false },
+  plan_outdated: { code: 'COS-2008', http: 409, retryable: false },
 
   permission_denied: { code: 'COS-3000', http: 403, retryable: false },
   capability_not_granted: { code: 'COS-3001', http: 403, retryable: false },
@@ -25,6 +26,7 @@ export const ERROR_CODES = {
   authentication_failed: { code: 'COS-3004', http: 401, retryable: false },
   token_revoked: { code: 'COS-3005', http: 401, retryable: false },
   token_scope_insufficient: { code: 'COS-3006', http: 403, retryable: false },
+  enforcement_insufficient: { code: 'COS-3007', http: 403, retryable: false },
 
   harness_unavailable: { code: 'COS-4000', http: 503, retryable: true },
   harness_disconnected: { code: 'COS-4001', http: 409, retryable: true },

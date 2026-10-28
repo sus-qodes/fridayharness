@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
+  type Billed,
   ModelError,
   type ModelErrorCode,
   type ModelRequest,
@@ -19,8 +20,11 @@ export interface FakeResponse {
   /** Only used when this text appears in the context or prompt. */
   match?: string;
   output?: unknown;
-  error?: { code: ModelErrorCode; message: string; retryable?: boolean };
+  /** `billed: 'yes'` reports `usage` with the error, like a refusal or a cut-off answer. */
+  error?: { code: ModelErrorCode; message: string; retryable?: boolean; billed?: Billed };
   usage?: Partial<ModelUsage>;
+  /** Answer after this many milliseconds (a slow provider). */
+  delay_ms?: number;
 }
 
 /**
@@ -71,7 +75,17 @@ export class FakePlannerModel implements PlannerModel {
     if (i < 0)
       throw new ModelError('unavailable', `fake model has no scripted ${request.purpose} response for this request`);
     const [r] = this.#queue.splice(i, 1) as [FakeResponse];
-    if (r.error) throw new ModelError(r.error.code, r.error.message, r.error.retryable ?? false);
+    if (r.delay_ms) await new Promise((res) => setTimeout(res, r.delay_ms));
+    if (r.error) {
+      const billed = r.error.billed ?? 'no';
+      throw new ModelError(r.error.code, r.error.message, r.error.retryable ?? false, undefined, {
+        billed,
+        ...(billed === 'yes'
+          ? { usage: { ...ZERO_USAGE, input_tokens: 1200, output_tokens: 400, ...r.usage }, model: request.model }
+          : {}),
+        requestId: `fake-${this.requests.length}`,
+      });
+    }
     return {
       output: resolveTaskRefs(r.output, request.prompt),
       model: request.model,

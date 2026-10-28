@@ -30,6 +30,20 @@
         "type": "string"
       }
     },
+    "inferred_constraints": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "inferred_outcomes": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "priority": {
       "type": "string",
       "enum": [

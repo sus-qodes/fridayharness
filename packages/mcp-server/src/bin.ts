@@ -32,8 +32,18 @@ transport.onclose = () => void shutdown('stdio_closed');
 process.stdin.on('end', () => void shutdown('stdio_closed'));
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => void shutdown(`signal ${sig}`));
 
+// Register after the MCP handshake, so a slow or absent daemon never delays Claude Code's startup
+// and the registration carries the host's own version from `initialize` (review F09).
+let started = false;
+const begin = () => {
+  if (started) return;
+  started = true;
+  session.hostVersion = server.server.getClientVersion()?.version;
+  void session.start().then((ok) => {
+    if (!ok) log(`not attached yet: ${session.problem}`);
+  });
+};
+server.server.oninitialized = begin;
 await server.connect(transport);
-// Register after the MCP handshake so a slow or absent daemon never delays Claude Code's startup.
-void session.start().then((ok) => {
-  if (!ok) log(`not attached yet: ${session.problem}`);
-});
+// A client that never completes the handshake still gets a session.
+setTimeout(begin, 3000).unref();

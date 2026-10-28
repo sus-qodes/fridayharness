@@ -180,7 +180,8 @@ describe('fixture-shop M1 demo', () => {
       env: hostEnv({ ...entry.env, ...hookEnv, FRIDAY_MCP_ENTRY: MCP_ENTRY, CLAUDE_CODE_SESSION_ID: SESSION }),
       stderr: 'pipe',
     });
-    const client = new Client({ name: 'claude-code-stand-in', version: '0.0.0' });
+    // Introduces itself the way Claude Code does, so friday-mcp reports the host version (review F09).
+    const client = new Client({ name: 'claude-code', version: '2.1.296' });
     await client.connect(transport);
     ws().track({ close: () => client.close() });
     const mcp = async (name: string, args: Record<string, unknown> = {}) => {
@@ -207,7 +208,9 @@ describe('fixture-shop M1 demo', () => {
     expect(who.structured).toMatchObject({
       agent_key: 'dev-1',
       link_status: 'linked',
+      // Earned: the session's hooks reached the daemon from a host that blocks on hook failure.
       enforcement_level: 'L1',
+      enforcement_status: 'enforcing',
       shadow: false,
     });
 
@@ -347,6 +350,8 @@ describe('fixture-shop M1 demo', () => {
       attach_mode: 'attach',
       project_id: shop.daemon.project.project_id,
       agent_key: 'dev-1',
+      // Stands in for an adapter with policy hooks; the project requires L1 (review F09).
+      enforcement_level: 'L1',
     });
     await agent.register();
 

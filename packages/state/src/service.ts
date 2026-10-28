@@ -27,6 +27,8 @@ import {
   type AgentStatus,
   type AgentView,
   type ContextPacket,
+  type EnforcementLevel,
+  type EnforcementStatus,
   FridayError,
   GoalCreateRequest,
   type GoalView,
@@ -64,6 +66,12 @@ export interface StateConfig {
   idempotencyTtlMs: number;
   /** Agent key used when a harness registers without one. */
   defaultAgentKey: string;
+  /** How long an automatic reservation (delegation, rework) waits for its agent (review F08). */
+  reservationTtlMs: number;
+  /** `security.enforcement_required`: the level a session must reach before it may take work (review F09). */
+  enforcementRequired: EnforcementLevel;
+  /** `security.require_enforcing_hooks`: Claude Code sessions must run on a host that blocks when a hook fails. */
+  requireEnforcingHooks: boolean;
 }
 
 export const DEFAULT_STATE_CONFIG: StateConfig = {
@@ -75,7 +83,69 @@ export const DEFAULT_STATE_CONFIG: StateConfig = {
   maxDeliveryAttempts: 5,
   idempotencyTtlMs: 24 * 60 * 60 * 1000,
   defaultAgentKey: 'dev-1',
+  reservationTtlMs: 15 * 60 * 1000,
+  // The library default asks for nothing; the daemon passes the project's `security` settings.
+  enforcementRequired: 'L0',
+  requireEnforcingHooks: false,
 };
+
+const LEVEL_RANK: Record<EnforcementLevel, number> = { L0: 0, L1: 1, L2: 2 };
+/** Claude Code versions that block an action when a hook fails (`onFailure: block`), and that run hooks at all. */
+const CLAUDE_ENFORCING = [2, 1, 295] as const;
+const CLAUDE_HOOKS = [2, 1, 232] as const;
+
+function versionAtLeast(v: string | null | undefined, min: readonly number[]): boolean | null {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(v ?? '');
+  if (!m) return null;
+  const parts = [Number(m[1]), Number(m[2]), Number(m[3])];
+  for (let i = 0; i < 3; i += 1) {
+    if ((parts[i] ?? 0) !== (min[i] ?? 0)) return (parts[i] ?? 0) > (min[i] ?? 0);
+  }
+  return true;
+}
+
+/**
+ * The enforcement a session actually reached (ADR-0010, review F09), from evidence rather than
+ * from what the client says: for a Claude Code session in attach mode, Friday hooks must have
+ * reached the daemon from that session, and the host version decides whether a failing hook
+ * blocks. Adapters that run the host themselves (spawn mode, FakeHarness) report their level.
+ */
+export function achievedEnforcement(h: {
+  vendor: string;
+  attach_mode: string;
+  claimed: EnforcementLevel | null;
+  hooks_seen: boolean;
+  host_version: string | null;
+}): { level: EnforcementLevel; status: EnforcementStatus; basis: string } {
+  if (h.vendor === 'claude-code' && h.attach_mode === 'attach') {
+    if (!h.hooks_seen) {
+      return { level: 'L0', status: 'observed', basis: 'no Friday hook has reached the daemon from this session' };
+    }
+    const host = h.host_version ? `Claude Code ${h.host_version}` : 'Claude Code (version unknown)';
+    const enforcing = versionAtLeast(h.host_version, CLAUDE_ENFORCING);
+    if (enforcing === null)
+      return { level: 'L1', status: 'unverified', basis: `Friday hooks from this session; ${host}` };
+    if (enforcing) {
+      return {
+        level: 'L1',
+        status: 'enforcing',
+        basis: `Friday hooks from this session; ${host} blocks when a hook fails`,
+      };
+    }
+    if (versionAtLeast(h.host_version, CLAUDE_HOOKS)) {
+      return {
+        level: 'L1',
+        status: 'degraded',
+        basis: `Friday hooks from this session; ${host} lets an action through when a hook fails (2.1.295 blocks)`,
+      };
+    }
+    return { level: 'L0', status: 'observed', basis: `${host} is too old for Friday hooks` };
+  }
+  if (h.claimed && h.claimed !== 'L0') {
+    return { level: h.claimed, status: 'reported', basis: `reported by the ${h.vendor} adapter` };
+  }
+  return { level: 'L0', status: 'observed', basis: `the ${h.vendor} client has no Friday policy hooks` };
+}
 
 /** Identity of a protocol caller, derived from its harness token (never from request fields). */
 export interface Caller {
@@ -95,8 +165,16 @@ export interface PlanProposal {
   tasks: PlanTaskInput[];
   model_call_id?: string | null;
   prompt_version?: string | null;
-  /** The normalized intent from a first plan (spec Part 03 §5). */
-  intent?: { objective: string; constraints: string[]; outcomes: string[] } | null;
+  /**
+   * The normalized intent from a first plan (spec Part 03 §5). Only the objective and what the
+   * planner inferred: the human's own constraints and outcomes are never replaced (review F07).
+   */
+  intent?: { objective: string; inferred_constraints: string[]; inferred_outcomes: string[] } | null;
+  /**
+   * The ACTIVE version this proposal was made against (null: there was none). Checked when it is
+   * proposed and again when it is approved, so a stale proposal cannot apply (review F06).
+   */
+  base_version?: number | null;
 }
 
 export interface PlanApproval {
@@ -116,7 +194,7 @@ export interface ModelCallInput {
   provider: string;
   model: string;
   remote: boolean;
-  status: 'ok' | 'invalid' | 'error' | 'refused';
+  status: 'ok' | 'invalid' | 'error' | 'refused' | 'interrupted';
   error_code: string | null;
   error: string | null;
   attempt: number;
@@ -125,10 +203,42 @@ export interface ModelCallInput {
     output_tokens: number;
     cache_creation_input_tokens: number;
     cache_read_input_tokens: number;
+    cache_write_1h_input_tokens?: number;
   };
-  cost_usd: number;
+  /** Null when unknown (review F04); never 0 for "unknown". */
+  cost_usd: number | null;
+  /** Worst-case estimate the budget counts while the cost is unknown. */
+  cost_estimate_usd?: number | null;
   latency_ms: number;
   request_id: string | null;
+}
+
+/** One unit of Master Brain work (operational, ADR-0013 amendment, review F05). */
+export interface BrainJob {
+  job_id: string;
+  kind: string;
+  goal_id: string | null;
+  task_id: string | null;
+  reason: string;
+  payload: Record<string, unknown>;
+  dedupe_key: string;
+  status: 'pending' | 'waiting' | 'calling' | 'done' | 'failed';
+  attempts: number;
+  result: string | null;
+  source_sequence: number | null;
+  not_before: string | null;
+  call_estimate_usd: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BrainJobInput {
+  kind: string;
+  goal_id: string | null;
+  task_id: string | null;
+  reason: string;
+  payload?: Record<string, unknown>;
+  dedupe_key: string;
 }
 
 export interface TokenInfo {
@@ -438,6 +548,8 @@ export class FridayState {
               scope,
               dependencies: req.depends_on,
               reserved_for_agent_key: req.assign_agent_key ?? null,
+              reserved_by: req.assign_agent_key ? 'human' : null,
+              reserved_until: null,
               created_by: actor,
             },
           },
@@ -491,11 +603,18 @@ export class FridayState {
         harness.attach_mode === 'spawn' &&
         !harness.shadow &&
         agent.status === 'AVAILABLE' &&
-        this.q.isHarnessLive(harness.harness_id, ctx.now);
+        this.q.isHarnessLive(harness.harness_id, ctx.now) &&
+        this.enforcementGap(harness) === null;
       if (!canPush || !agent || !harness) {
+        // A human's choice stays until a human changes it; the Master Brain's expires (review F08).
+        const byHuman = ctx.actor.kind === 'human';
         return {
           mode: 'reserved' as const,
-          task: this.updateTaskFields(ctx, taskId, { reserved_for_agent_key: agentKey }),
+          task: this.updateTaskFields(ctx, taskId, {
+            reserved_for_agent_key: agentKey,
+            reserved_by: byHuman ? 'human' : 'master_brain',
+            reserved_until: byHuman ? null : addMs(ctx.now, this.config.reservationTtlMs),
+          }),
         };
       }
       const run = this.createRun(ctx, task, harness.harness_id, agent.agent_id);
@@ -505,6 +624,8 @@ export class FridayState {
           assigned_harness_id: harness.harness_id,
           current_run_id: run.run_id,
           reserved_for_agent_key: null,
+          reserved_by: null,
+          reserved_until: null,
         },
       });
       this.moveAgent(ctx, agent, 'ASSIGNED', { current_task_id: task.task_id, current_run_id: run.run_id });
@@ -541,6 +662,8 @@ export class FridayState {
             `agent ${agent.agent_key} is already attached to another live session; use a different agent key`,
           );
         }
+        const gap = this.enforcementGap(harness);
+        if (gap) throw new FridayError('enforcement_insufficient', gap);
         const task = p.task_id ? this.q.task(projectId, p.task_id) : this.pickNext(projectId, agent);
         if (!task) throw new FridayError('task_not_found', 'no task is ready for this agent');
         const active = this.q.activeRunForAgent(agent.agent_id);
@@ -572,6 +695,8 @@ export class FridayState {
               assigned_harness_id: harness.harness_id,
               current_run_id: run.run_id,
               reserved_for_agent_key: null,
+              reserved_by: null,
+              reserved_until: null,
             },
           });
           this.moveRun(ctx, run, 'ACTIVE', 'claimed', { accepted_at: ctx.now, session_ref: harness.host_session_id });
@@ -921,13 +1046,71 @@ export class FridayState {
     let task = this.q.task(projectId, taskId);
     const prevAgent = task.assigned_agent_id ? this.q.findAgent(task.assigned_agent_id) : undefined;
     task = this.moveTask(ctx, task, 'task.rework', { reason });
-    return this.moveTask(ctx, task, 'task.ready', {
-      changes: {
-        assigned_agent_id: null,
-        assigned_harness_id: null,
-        reserved_for_agent_key: prevAgent?.agent_key ?? task.reserved_for_agent_key,
+    // The agent that did the work gets the first chance, for a while (review F08).
+    const changes: Record<string, unknown> = { assigned_agent_id: null, assigned_harness_id: null };
+    if (prevAgent) {
+      changes.reserved_for_agent_key = prevAgent.agent_key;
+      changes.reserved_by = 'rework';
+      changes.reserved_until = addMs(ctx.now, this.config.reservationTtlMs);
+    }
+    return this.moveTask(ctx, task, 'task.ready', { changes });
+  }
+
+  /**
+   * Clears the reservation of a READY task so any agent may take it (`friday task unreserve`,
+   * review F08). Also how the lease manager ends automatic reservations that ran out.
+   */
+  unreserveTask(projectId: string, actor: Actor, taskId: string, reason: string): TaskView {
+    return this.exec({ name: 'task.unreserve', project_id: projectId, actor, params: { taskId, reason } }, (ctx) =>
+      this.unreserveWithin(ctx, projectId, taskId, reason),
+    );
+  }
+
+  private unreserveWithin(ctx: CommandContext, projectId: string, taskId: string, reason: string): TaskView {
+    const task = this.q.task(projectId, taskId);
+    if (task.status !== 'READY' || !task.reserved_for_agent_key) {
+      throw new FridayError(
+        'invalid_state_transition',
+        `task ${taskId} is ${task.status}${task.reserved_for_agent_key ? '' : ' and not reserved'}; only a reserved READY task can be released to everyone`,
+      );
+    }
+    ctx.emit({
+      type: 'task.reservation_released',
+      payload: {
+        task_id: taskId,
+        agent_key: task.reserved_for_agent_key,
+        reserved_by: task.reserved_by,
+        reason,
+        changes: { reserved_for_agent_key: null, reserved_by: null, reserved_until: null },
       },
+      refs: [{ kind: 'task', id: taskId }],
     });
+    return this.q.task(projectId, taskId);
+  }
+
+  /**
+   * Automatic reservations end when they run out or when their agent's session is gone for good
+   * (review F08). A human's reservation is never released here.
+   */
+  private expireReservations(projectId: string, nowIso: string): string[] {
+    const out: string[] = [];
+    for (const t of this.q.tasks(projectId, { statuses: ['READY'] })) {
+      if (!t.reserved_for_agent_key || t.reserved_by === 'human' || t.reserved_by === null) continue;
+      const agent = this.q.agentByKey(projectId, t.reserved_for_agent_key);
+      const harness = agent?.harness_id ? this.q.findHarness(agent.harness_id) : undefined;
+      let reason: string | null = null;
+      if (t.reserved_until && Date.parse(t.reserved_until) <= Date.parse(nowIso)) {
+        reason = `${t.reserved_for_agent_key} did not take it before ${t.reserved_until}`;
+      } else if (!agent || !harness || harness.status === 'TERMINATED' || agent.status === 'TERMINATED') {
+        reason = `${t.reserved_for_agent_key} has no session any more`;
+      }
+      if (!reason) continue;
+      this.exec({ name: 'task.unreserve', project_id: projectId, actor: LEASE_MANAGER }, (ctx) =>
+        this.unreserveWithin(ctx, projectId, t.task_id, reason as string),
+      );
+      out.push(t.task_id);
+    }
+    return out;
   }
 
   // ================================================================ goals and plans (M2, ADR-0013)
@@ -1017,6 +1200,7 @@ export class FridayState {
       type,
       payload: {
         plan_id: v.plan_id,
+        goal_id: v.goal_id,
         version: v.version,
         transition: { from: v.status, to, trigger },
         note: note ?? null,
@@ -1044,6 +1228,12 @@ export class FridayState {
         const versions = this.q.planVersions(plan_id);
         const version = (versions.at(-1)?.version ?? 0) + 1;
         const active = versions.find((v) => v.status === 'ACTIVE');
+        if (proposal.base_version !== undefined && proposal.base_version !== (active?.version ?? null)) {
+          throw new FridayError(
+            'plan_outdated',
+            `this proposal was made against ${proposal.base_version === null ? 'no plan' : `version ${proposal.base_version}`}, but the active plan is now ${active ? `version ${active.version}` : 'none'}`,
+          );
+        }
         const goalTasks = new Set(this.q.goalTasks(projectId, goalId).map((t) => t.task_id));
         const keys = new Set<string>();
         for (const t of proposal.tasks) {
@@ -1084,7 +1274,19 @@ export class FridayState {
         });
         const changes: Record<string, unknown> = {};
         if (!goal.plan_id) changes.plan_id = plan_id;
-        if (proposal.intent && !goal.objective) Object.assign(changes, proposal.intent);
+        if (proposal.intent && !goal.objective) {
+          // The human's constraints and outcomes stay as they are; additions are kept apart (review F07).
+          const fold = (xs: string[]) => new Set(xs.map((x) => x.trim().toLowerCase()));
+          const ownC = fold(goal.constraints);
+          const ownO = fold(goal.outcomes);
+          changes.objective = proposal.intent.objective;
+          changes.inferred_constraints = proposal.intent.inferred_constraints.filter(
+            (c) => !ownC.has(c.trim().toLowerCase()),
+          );
+          changes.inferred_outcomes = proposal.intent.inferred_outcomes.filter(
+            (o) => !ownO.has(o.trim().toLowerCase()),
+          );
+        }
         if (Object.keys(changes).length > 0) {
           ctx.emit({
             type: 'goal.updated',
@@ -1117,6 +1319,7 @@ export class FridayState {
         throw new FridayError('invalid_state_transition', `goal ${goal.goal_id} is ${goal.status}`);
       }
       const active = this.q.latestPlanVersion(planId, ['ACTIVE']);
+      this.assertPlanFresh(projectId, v, active?.version ?? null);
       if (active) this.movePlan(ctx, active, 'SUPERSEDED', `superseded by version ${version}`);
       this.movePlan(ctx, v, 'ACTIVE', 'approved', note);
 
@@ -1196,6 +1399,50 @@ export class FridayState {
         readied,
       };
     });
+  }
+
+  /**
+   * A proposal is checked against the live state when it is approved (review F06): it must have
+   * been made against the plan that is active now, reworked tasks must still be FAILED, dropped
+   * tasks must not have started, and new tasks may not wait on a task that can never complete.
+   * Nothing changes when it fails, so the active plan stays as it was.
+   */
+  private assertPlanFresh(projectId: string, v: PlanVersionView, activeVersion: number | null): void {
+    const stale: string[] = [];
+    if ((v.supersedes ?? null) !== activeVersion) {
+      stale.push(
+        `it revises ${v.supersedes === null ? 'no plan' : `version ${v.supersedes}`}, but the active plan is ${activeVersion === null ? 'none' : `version ${activeVersion}`}`,
+      );
+    }
+    for (const t of v.tasks) {
+      if (!t.task_id) {
+        for (const dep of t.depends_on) {
+          const d = this.q.findTask(projectId, dep);
+          if (d && (d.status === 'CANCELLED' || d.status === 'ABANDONED')) {
+            stale.push(`new task ${t.key} would wait on ${dep}, which is ${d.status}`);
+          }
+        }
+        continue;
+      }
+      const live = this.q.findTask(projectId, t.task_id);
+      if (!live) {
+        stale.push(`${t.task_id} no longer exists`);
+        continue;
+      }
+      if (t.change === 'rework' && live.status !== 'FAILED') {
+        stale.push(`${t.task_id} was to be reworked, but it is ${live.status} now`);
+      }
+      if (t.change === 'drop' && live.status !== 'PROPOSED' && live.status !== 'READY') {
+        stale.push(`${t.task_id} was to be dropped, but it is ${live.status} now (work has started)`);
+      }
+    }
+    if (stale.length) {
+      throw new FridayError(
+        'plan_outdated',
+        `plan ${v.plan_id} v${v.version} is out of date: ${stale.join('; ')}. Reject it ("friday plan reject") and ask for a new one ("friday goal replan").`,
+        { stale },
+      );
+    }
   }
 
   /** New tasks of a version, dependencies first (the planner already rejected cycles). */
@@ -1373,6 +1620,71 @@ export class FridayState {
       .map((t) => this.releaseTask(projectId, actor, t.task_id, `harness ${harnessId} did not come back`));
   }
 
+  /**
+   * Operational (review F05): turns triggers into durable jobs and moves the cursor past their
+   * events in one transaction, so a crash can neither lose a trigger nor act on it twice. An
+   * equal job that is still pending or waiting absorbs a new one (its id is then null).
+   */
+  enqueueBrainJobs(
+    projectId: string,
+    jobs: (BrainJobInput & { source_sequence: number })[],
+    cursor: number,
+  ): (string | null)[] {
+    const now = this.clock.now();
+    const ids: (string | null)[] = [];
+    const insert = this.db.prepare(
+      `INSERT INTO brain_jobs (job_id, project_id, kind, goal_id, task_id, reason, payload_json, dedupe_key, status,
+         attempts, source_sequence, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+       ON CONFLICT DO NOTHING`,
+    );
+    this.db.transaction(() => {
+      for (const j of jobs) {
+        const id = this.ids.next('job');
+        const added = insert.run(
+          id,
+          projectId,
+          j.kind,
+          j.goal_id,
+          j.task_id,
+          j.reason,
+          toJson(j.payload ?? {}),
+          j.dedupe_key,
+          j.source_sequence,
+          now,
+          now,
+        ).changes;
+        ids.push(added ? id : null);
+      }
+      this.setBrainCursor(projectId, cursor);
+    });
+    return ids;
+  }
+
+  /** Open jobs, oldest first. */
+  brainJobs(projectId: string, statuses: BrainJob['status'][] = ['pending', 'waiting', 'calling']): BrainJob[] {
+    const marks = statuses.map(() => '?').join(', ');
+    return this.db
+      .prepare(`SELECT * FROM brain_jobs WHERE project_id = ? AND status IN (${marks}) ORDER BY created_at, rowid`)
+      .all<Omit<BrainJob, 'payload'> & { payload_json: string }>(projectId, ...statuses)
+      .map(({ payload_json, ...j }) => ({ ...j, payload: JSON.parse(payload_json) as Record<string, unknown> }));
+  }
+
+  updateBrainJob(
+    jobId: string,
+    changes: Partial<Pick<BrainJob, 'status' | 'attempts' | 'result' | 'not_before' | 'call_estimate_usd'>>,
+  ): void {
+    const cols = Object.keys(changes);
+    if (cols.length === 0) return;
+    this.db
+      .prepare(`UPDATE brain_jobs SET ${cols.map((c) => `${c} = ?`).join(', ')}, updated_at = ? WHERE job_id = ?`)
+      .run(
+        ...cols.map((c) => (changes as Record<string, unknown>)[c] as string | number | null),
+        this.clock.now(),
+        jobId,
+      );
+  }
+
   /** Operational: how far the Master Brain has read the event log. */
   setBrainCursor(projectId: string, sequence: number): void {
     this.db
@@ -1494,14 +1806,26 @@ export class FridayState {
     // No idempotency record: the response contains a fresh token, which must never be stored.
     return this.exec({ name: 'harness.register', project_id: projectId, actor }, (ctx) => {
       const host = params.host ?? {};
+      const previous = this.q.harnessByKey(projectId, params.harness_key);
+      const enforcement = achievedEnforcement({
+        vendor: params.vendor,
+        attach_mode: params.attach_mode,
+        claimed: params.enforcement_level ?? null,
+        hooks_seen: Boolean(previous?.hooks_seen_at),
+        // A client that cannot tell (a hook arriving first) keeps the version already known.
+        host_version: params.version ?? previous?.version ?? null,
+      });
       const hostChanges = {
         host_pid: host.pid ?? null,
         host_session_id: host.session_id ?? null,
         host_cwd: host.cwd ?? null,
-        version: params.version ?? null,
+        version: params.version ?? previous?.version ?? null,
+        adapter_version: params.adapter_version ?? previous?.adapter_version ?? null,
         protocol_version,
         capabilities: params.capabilities,
-        enforcement_level: params.enforcement_level ?? null,
+        enforcement_level: enforcement.level,
+        enforcement_status: enforcement.status,
+        enforcement_basis: enforcement.basis,
         requested_agent_key: params.agent?.agent_key ?? this.config.defaultAgentKey,
       };
       const existing = this.q.harnessByKey(projectId, params.harness_key);
@@ -1527,10 +1851,13 @@ export class FridayState {
               vendor: params.vendor,
               name: params.name,
               version: params.version ?? null,
+              adapter_version: params.adapter_version ?? null,
               attach_mode: params.attach_mode,
               protocol_version,
               capabilities: params.capabilities,
-              enforcement_level: params.enforcement_level ?? null,
+              enforcement_level: enforcement.level,
+              enforcement_status: enforcement.status,
+              enforcement_basis: enforcement.basis,
               requested_agent_key: params.agent?.agent_key ?? this.config.defaultAgentKey,
               host_pid: host.pid ?? null,
               host_session_id: host.session_id ?? null,
@@ -1605,6 +1932,53 @@ export class FridayState {
         pending_messages: this.q.pendingOutboxCount(harness_id),
       };
     });
+  }
+
+  /**
+   * A Friday hook reached the daemon from this harness's session: evidence that its tool calls
+   * pass the policy hook (review F09). Recomputes the achieved enforcement once.
+   */
+  noteHookEvidence(projectId: string, harnessId: string): HarnessRecord {
+    const h = this.q.harness(harnessId);
+    if (h.hooks_seen_at) return h;
+    this.exec({ name: 'harness.hooks_seen', project_id: projectId, actor: SYSTEM }, (ctx) => {
+      const e = achievedEnforcement({
+        vendor: h.vendor,
+        attach_mode: h.attach_mode,
+        claimed: h.enforcement_level,
+        hooks_seen: true,
+        host_version: h.version,
+      });
+      this.moveHarness(ctx, h, h.status, 'hooks seen', {
+        hooks_seen_at: ctx.now,
+        enforcement_level: e.level,
+        enforcement_status: e.status,
+        enforcement_basis: e.basis,
+      });
+    });
+    return this.q.harness(harnessId);
+  }
+
+  /**
+   * Why this harness may not take work under the project's `security` settings, or null when it
+   * may (review F09). Its level comes from evidence, never from the client's claim alone.
+   */
+  enforcementGap(h: HarnessRecord): string | null {
+    const level = h.enforcement_level ?? 'L0';
+    const need = this.config.enforcementRequired;
+    if (LEVEL_RANK[level] < LEVEL_RANK[need]) {
+      const hint =
+        need === 'L2'
+          ? 'No adapter in this version of Friday provides L2 (isolated execution); lower security.enforcement_required or wait for M6.'
+          : h.vendor === 'claude-code'
+            ? 'Run "friday harness config claude-code" in the project and start a new Claude Code session, so its tool calls pass Friday\'s policy hook.'
+            : 'Use a harness with Friday policy hooks, or lower security.enforcement_required in .friday/config.yaml.';
+      return `this project requires ${need} enforcement (security.enforcement_required), but this session has ${level}: ${h.enforcement_basis ?? 'no evidence'}. ${hint}`;
+    }
+    if (this.config.requireEnforcingHooks && h.vendor === 'claude-code' && h.enforcement_status !== 'enforcing') {
+      return `this project requires hooks that block when they fail (security.require_enforcing_hooks), but this session is ${h.enforcement_status ?? 'unknown'}: ${h.enforcement_basis ?? 'no evidence'}. Update Claude Code to 2.1.295 or later.`;
+    }
+    return null;
   }
 
   private reattachAgent(ctx: CommandContext, agent: AgentView, harnessId: string): AgentView {
@@ -1772,7 +2146,13 @@ export class FridayState {
    * Lease manager tick (plan B13). Marks late harnesses DEGRADED, expired ones lost, ends the
    * reconnect window, and declines assignments whose `task.start` was never acknowledged.
    */
-  tick(projectId: string): { degraded: string[]; lost: string[]; terminated: string[]; declined: string[] } {
+  tick(projectId: string): {
+    degraded: string[];
+    lost: string[];
+    terminated: string[];
+    declined: string[];
+    unreserved: string[];
+  } {
     const now = this.clock.now();
     const nowMs = Date.parse(now);
     const out = {
@@ -1780,6 +2160,7 @@ export class FridayState {
       lost: [] as string[],
       terminated: [] as string[],
       declined: [] as string[],
+      unreserved: [] as string[],
     };
     const leases = this.db
       .prepare(
@@ -1854,6 +2235,7 @@ export class FridayState {
       this.db.prepare("UPDATE outbox_messages SET status = 'expired' WHERE message_id = ?").run(m.message_id);
       out.declined.push(m.run_id);
     }
+    out.unreserved.push(...this.expireReservations(projectId, this.clock.now()));
     return out;
   }
 

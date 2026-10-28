@@ -1,6 +1,6 @@
 import { useTestWorkspace, waitForPidGone } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
-import { runCheck, summarizeOutcome } from './index.js';
+import { checkEnvironment, runCheck, summarizeOutcome } from './index.js';
 
 describe('runCheck', () => {
   const ws = useTestWorkspace();
@@ -12,6 +12,29 @@ describe('runCheck', () => {
     expect(o).toMatchObject({ passed: true, exit_code: 0, timed_out: false, spawn_error: null });
     expect(o.output).toContain('3 tests passed');
     expect(summarizeOutcome(o)).toMatch(/^passed in \d+ ms: 3 tests passed$/);
+  });
+
+  it('never hands provider keys or tokens to the project checks', async () => {
+    const env = checkEnvironment(
+      {
+        PATH: 'p',
+        ANTHROPIC_API_KEY: 'sk-ant-x',
+        GITHUB_TOKEN: 'g',
+        AWS_SECRET_ACCESS_KEY: 'a',
+        DB_PASSWORD: 'd',
+        HOME: 'h',
+      },
+      { CHECK_ONLY: '1' },
+    );
+    expect(env).toEqual({ PATH: 'p', HOME: 'h', CHECK_ONLY: '1', FRIDAY_VERIFICATION: '1' });
+    process.env.FRIDAY_TEST_API_KEY = 'sk-should-not-leak';
+    try {
+      const o = await node('console.log(JSON.stringify(Object.keys(process.env)))');
+      expect(o.output).not.toContain('FRIDAY_TEST_API_KEY');
+      expect(o.output).toContain('FRIDAY_VERIFICATION');
+    } finally {
+      delete process.env.FRIDAY_TEST_API_KEY;
+    }
   });
 
   it('fails on a non-zero exit', async () => {

@@ -88,7 +88,7 @@ function acquireLock(dir: string, instanceId: string): string {
   const lock = path.join(dir, 'daemon.lock');
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const fd = openSync(lock, 'wx');
+      const fd = openSync(lock, 'wx', 0o600);
       writeFileSync(fd, JSON.stringify({ pid: process.pid, instance_id: instanceId, at: new Date().toISOString() }));
       closeSync(fd);
       return lock;
@@ -135,6 +135,10 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     ...(leases.clean_exit_grace_ms !== undefined ? { cleanExitGraceMs: leases.clean_exit_grace_ms } : {}),
     ...(leases.ack_timeout_ms ? { ackTimeoutMs: leases.ack_timeout_ms } : {}),
     ...(leases.max_delivery_attempts ? { maxDeliveryAttempts: leases.max_delivery_attempts } : {}),
+    // Sessions below the project's enforcement requirement cannot take work (review F09).
+    enforcementRequired: project.config.security.enforcement_required,
+    requireEnforcingHooks: project.config.security.require_enforcing_hooks,
+    reservationTtlMs: project.config.master_brain.reservation_ttl_ms,
     ...opts.state,
   };
 

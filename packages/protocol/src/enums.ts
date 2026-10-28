@@ -94,6 +94,16 @@ export type AttachMode = z.infer<typeof AttachMode>;
 export const EnforcementLevel = z.enum(['L0', 'L1', 'L2']);
 export type EnforcementLevel = z.infer<typeof EnforcementLevel>;
 
+/**
+ * How the achieved level is known (ADR-0010, review F09): `enforcing`, Friday hooks reached the
+ * daemon from this session on a host that blocks an action when a hook fails; `degraded`, hooks
+ * reached it, but the host lets an action through when a hook fails; `unverified`, hooks reached it
+ * from a host whose version is unknown; `observed`, no interception evidence (L0); `reported`,
+ * stated by a Friday adapter that runs the host itself.
+ */
+export const EnforcementStatus = z.enum(['enforcing', 'degraded', 'unverified', 'observed', 'reported']);
+export type EnforcementStatus = z.infer<typeof EnforcementStatus>;
+
 /** ADR-0008. */
 export const TokenClass = z.enum(['operator', 'bootstrap', 'harness']);
 export type TokenClass = z.infer<typeof TokenClass>;

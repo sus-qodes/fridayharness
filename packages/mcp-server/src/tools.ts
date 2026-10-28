@@ -30,6 +30,16 @@ function taskLine(t: TaskView): string {
   return `${t.task_id} [${t.status}${t.waiting_reason ? `: ${t.waiting_reason}` : ''}] ${t.summary}`;
 }
 
+/** The enforcement this session actually reached, from the daemon's evidence (review F09). */
+function enforcementLine(me: MeView): string {
+  const level = me.harness.enforcement_level ?? 'L0';
+  const basis = me.harness.enforcement_basis ?? 'no evidence yet';
+  if (level === 'L0') {
+    return `Enforcement: L0 (${basis}). Friday cannot check your tool calls in this session; it only records what you report.`;
+  }
+  return `Enforcement: ${level}, ${me.harness.enforcement_status ?? 'unverified'} (${basis}). Intercepted tools are policy-checked; this is not a sandbox.`;
+}
+
 function scopeText(t: TaskView): string {
   if (!t.scope) return 'no write scope declared (protected paths are still blocked)';
   return `write: ${t.scope.write.join(', ') || '(none)'}; read: ${t.scope.read.join(', ') || '(any)'}`;
@@ -73,7 +83,8 @@ export function createFridayTools(session: FridaySession): FridayTool[] {
         }
         const lines = [
           `You are agent "${me.agent.agent_key}" in project "${me.project.name}" (session ${me.harness.harness_id}${me.harness.shadow ? ', SHADOW: another live session already uses this agent key, so you cannot claim work' : ''}).`,
-          'Enforcement: L1 (intercepted tools are policy-checked; this is not a sandbox).',
+          enforcementLine(me),
+          me.enforcement_gap ? `You cannot take work in this session: ${me.enforcement_gap}` : '',
           me.current_task
             ? `Current task: ${taskLine(me.current_task)}\nScope: ${scopeText(me.current_task)}`
             : 'You hold no task.',
@@ -93,7 +104,10 @@ export function createFridayTools(session: FridaySession): FridayTool[] {
             agent_key: me.agent.agent_key,
             shadow: me.harness.shadow,
             link_status: me.harness.shadow ? 'shadow' : 'linked',
-            enforcement_level: 'L1',
+            enforcement_level: me.harness.enforcement_level ?? 'L0',
+            enforcement_status: me.harness.enforcement_status ?? null,
+            enforcement_basis: me.harness.enforcement_basis ?? null,
+            enforcement_gap: me.enforcement_gap ?? null,
             secrets_location: 'private',
             current_task: me.current_task,
             run_id: me.current_run?.run_id ?? null,
@@ -325,13 +339,14 @@ export function createFridayTools(session: FridaySession): FridayTool[] {
     {
       name: 'friday_acknowledge',
       title: 'Acknowledge messages',
-      description: 'Mark inbox messages as processed.',
+      description: 'Mark inbox messages as processed (durable acknowledgement arrives with messaging in M3).',
       shape: { message_ids: z.array(z.string()).min(1).max(50) },
       alwaysLoad: false,
       readOnly: false,
+      // Honest until M3 (review F11): messages are only recorded, so there is nothing to acknowledge yet.
       handler: async (a) => ({
-        text: `Acknowledged ${(a.message_ids as string[]).length} message(s).`,
-        structured: { acknowledged: a.message_ids },
+        text: `Nothing was acknowledged: this version of Friday records messages but does not deliver them yet, so there is no delivery to settle (${(a.message_ids as string[]).length} id(s) ignored). Treat inbox items as information only.`,
+        structured: { acknowledged: [], ignored: a.message_ids, supported: false },
       }),
     },
     {

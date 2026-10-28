@@ -58,7 +58,6 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
             attach_mode: 'attach',
             project_id: pid,
             capabilities: { hooks: true },
-            enforcement_level: 'L1',
             host: { pid: body.claude_pid, ...(sid ? { session_id: sid } : {}) },
             agent: { ...(body.agent_key ? { agent_key: body.agent_key } : {}) },
           }),
@@ -116,7 +115,9 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
       if (hook.hook_event_name && hook.hook_event_name !== event) {
         throw new FridayError('invalid_request', `hook event mismatch (${String(hook.hook_event_name)} vs ${event})`);
       }
-      const harness = event === 'SessionStart' ? ensureHarness(hook, body) : harnessFor(hook, body);
+      const found = event === 'SessionStart' ? ensureHarness(hook, body) : harnessFor(hook, body);
+      // A Friday hook from this session reached the daemon: the evidence behind L1 (review F09).
+      const harness = found ? state.noteHookEvidence(pid, found.harness_id) : undefined;
       const agent = agentOf(harness);
       const actor: Actor = agent
         ? { kind: 'agent', id: agent.agent_id }
@@ -196,7 +197,8 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
               sensitive_class: result.sensitive_class ?? null,
               task_id: task?.task_id ?? null,
               decided_locally: body.local_decision === 'deny',
-              enforcement_level: 'L1',
+              enforcement_level: harness?.enforcement_level ?? 'L0',
+              enforcement_status: harness?.enforcement_status ?? 'observed',
             },
             refs(task),
           );

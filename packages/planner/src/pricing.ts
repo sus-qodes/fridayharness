@@ -33,14 +33,28 @@ export const DEFAULT_PRICES: PriceTable = {
   },
 };
 
-/** Cost of one call; unknown models cost 0 and are reported as such by the caller. */
-export function costOf(model: string, usage: ModelUsage, prices: PriceTable = DEFAULT_PRICES): number {
-  const entry = prices[model] ?? DEFAULT_PRICES[model];
-  if (!entry) return 0;
+/** The price entry for a model id, also for dated snapshot ids such as `claude-opus-5-5-20261001`. */
+export function priceEntry(model: string, prices: PriceTable = DEFAULT_PRICES): PriceTable[string] | undefined {
+  const base = model.replace(/-\d{8}$/, '');
+  return prices[model] ?? prices[base] ?? DEFAULT_PRICES[model] ?? DEFAULT_PRICES[base];
+}
+
+function priceFor(entry: PriceTable[string], promptTokens: number): ModelPrice | undefined {
+  return 'tiers' in entry
+    ? (entry.tiers.find((t) => promptTokens <= t.up_to_prompt_tokens) ?? entry.tiers.at(-1))?.price
+    : entry;
+}
+
+/**
+ * Cost of one call in USD, or null when no price is known for the model (review F04): an
+ * unknown price is never reported as free.
+ */
+export function costOf(model: string, usage: ModelUsage, prices: PriceTable = DEFAULT_PRICES): number | null {
+  const entry = priceEntry(model, prices);
+  if (!entry) return null;
   const prompt = usage.input_tokens + usage.cache_creation_input_tokens + usage.cache_read_input_tokens;
-  const price =
-    'tiers' in entry ? (entry.tiers.find((t) => prompt <= t.up_to_prompt_tokens) ?? entry.tiers.at(-1))?.price : entry;
-  if (!price) return 0;
+  const price = priceFor(entry, prompt);
+  if (!price) return null;
   const write1h = usage.cache_write_1h_input_tokens ?? 0;
   const write5m = Math.max(0, usage.cache_creation_input_tokens - write1h);
   const usd =
@@ -51,4 +65,28 @@ export function costOf(model: string, usage: ModelUsage, prices: PriceTable = DE
       usage.output_tokens * price.output) /
     1_000_000;
   return Math.round(usd * 1_000_000) / 1_000_000;
+}
+
+/** Characters per token used for estimates; real text averages more, so estimates run high. */
+const CHARS_PER_TOKEN = 2.5;
+
+/**
+ * The most one request can cost (review F04): every prompt character as a token at the highest
+ * input price (a 1-hour cache write), and the whole `max_tokens` as output. Null when no price is
+ * known. The daily budget lets a call start only when this still fits.
+ */
+export function worstCaseCost(
+  model: string,
+  promptChars: number,
+  maxTokens: number,
+  prices: PriceTable = DEFAULT_PRICES,
+): number | null {
+  const entry = priceEntry(model, prices);
+  if (!entry) return null;
+  const promptTokens = Math.ceil(promptChars / CHARS_PER_TOKEN);
+  const price = priceFor(entry, promptTokens);
+  if (!price) return null;
+  const inputPrice = Math.max(price.input, price.cache_write_5m, price.cache_write_1h);
+  const usd = (promptTokens * inputPrice + maxTokens * price.output) / 1_000_000;
+  return Math.ceil(usd * 1_000_000) / 1_000_000;
 }

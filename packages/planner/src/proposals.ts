@@ -29,7 +29,10 @@ export function taskInput(t: PlanTaskDraft): PlanTaskInput {
   };
 }
 
-/** A first plan (also carries the normalized intent, spec Part 03 §5). */
+/**
+ * A first plan (also carries the normalized intent, spec Part 03 §5). The planner's constraints
+ * and outcomes are recorded as inferred: the human's own stay authoritative (review F07).
+ */
 export function proposalFromDraft(draft: PlanDraft, meta: ProposalMeta): PlanProposal {
   return {
     summary: draft.summary,
@@ -39,7 +42,8 @@ export function proposalFromDraft(draft: PlanDraft, meta: ProposalMeta): PlanPro
     tasks: draft.tasks.map(taskInput),
     model_call_id: meta.model_call_id ?? null,
     prompt_version: meta.prompt_version ?? null,
-    intent: { objective: draft.objective, constraints: draft.constraints, outcomes: draft.outcomes },
+    intent: { objective: draft.objective, inferred_constraints: draft.constraints, inferred_outcomes: draft.outcomes },
+    base_version: null,
   };
 }
 
@@ -95,5 +99,6 @@ export function proposalFromReplan(
     tasks,
     model_call_id: meta.model_call_id ?? null,
     prompt_version: meta.prompt_version ?? null,
+    base_version: active.version,
   };
 }

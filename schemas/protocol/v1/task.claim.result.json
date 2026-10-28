@@ -169,6 +169,29 @@
             "null"
           ]
         },
+        "reserved_by": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "human",
+                "master_brain",
+                "rework"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reserved_until": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "assigned_agent_id": {
           "type": [
             "string",

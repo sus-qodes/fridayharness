@@ -376,8 +376,59 @@ CREATE TABLE brain_cursor (
   },
 ];
 
+/**
+ * M1/M2 stabilization (review 2026-10-14, plan H.6): authoritative human requirements, expiring
+ * reservations, evidence-based enforcement, unknown model costs, and durable Master Brain jobs.
+ */
+export const STABILIZATION_MIGRATIONS: Migration[] = [
+  {
+    version: 5,
+    name: 'review_fixes',
+    up: `
+ALTER TABLE goals ADD COLUMN inferred_constraints_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE goals ADD COLUMN inferred_outcomes_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE tasks ADD COLUMN reserved_by TEXT;
+ALTER TABLE tasks ADD COLUMN reserved_until TEXT;
+ALTER TABLE harnesses ADD COLUMN adapter_version TEXT;
+ALTER TABLE harnesses ADD COLUMN enforcement_status TEXT;
+ALTER TABLE harnesses ADD COLUMN enforcement_basis TEXT;
+ALTER TABLE harnesses ADD COLUMN hooks_seen_at TEXT;
+ALTER TABLE model_calls ADD COLUMN cache_write_1h_input_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE model_calls ADD COLUMN cost_known INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE model_calls ADD COLUMN cost_estimate_usd REAL;
+-- Operational: what the Master Brain still has to do (excluded from replay). A trigger becomes a
+-- job in the same transaction that moves the cursor past its event, so nothing is lost on a crash.
+CREATE TABLE brain_jobs (
+  job_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  goal_id TEXT,
+  task_id TEXT,
+  reason TEXT NOT NULL,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  dedupe_key TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'waiting', 'calling', 'done', 'failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  result TEXT,
+  source_sequence INTEGER,
+  not_before TEXT,
+  call_estimate_usd REAL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX ux_brain_jobs_open ON brain_jobs(project_id, dedupe_key) WHERE status IN ('pending', 'waiting');
+CREATE INDEX ix_brain_jobs_status ON brain_jobs(project_id, status, created_at);
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
-export const ALL_MIGRATIONS: Migration[] = [...EVENT_MIGRATIONS, ...STATE_MIGRATIONS, ...MASTER_BRAIN_MIGRATIONS];
+export const ALL_MIGRATIONS: Migration[] = [
+  ...EVENT_MIGRATIONS,
+  ...STATE_MIGRATIONS,
+  ...MASTER_BRAIN_MIGRATIONS,
+  ...STABILIZATION_MIGRATIONS,
+];
 
 /** Domain tables cleared by a replay, children first. */
 export const DOMAIN_TABLES = [

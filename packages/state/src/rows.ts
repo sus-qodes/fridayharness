@@ -32,6 +32,8 @@ export interface TaskRow {
   risk_level: string;
   scope_json: string | null;
   reserved_for_agent_key: string | null;
+  reserved_by?: string | null;
+  reserved_until?: string | null;
   assigned_agent_id: string | null;
   assigned_harness_id: string | null;
   current_run_id: string | null;
@@ -76,6 +78,10 @@ export interface HarnessRow {
   capabilities_json: string;
   status: string;
   enforcement_level: string | null;
+  enforcement_status?: string | null;
+  enforcement_basis?: string | null;
+  adapter_version?: string | null;
+  hooks_seen_at?: string | null;
   shadow: number;
   requested_agent_key: string | null;
   host_pid: number | null;
@@ -124,6 +130,8 @@ export function toTaskView(row: TaskRow, dependencies: string[]): TaskView {
     scope: fromJson<TaskScope | null>(row.scope_json, null),
     dependencies,
     reserved_for_agent_key: row.reserved_for_agent_key,
+    reserved_by: (row.reserved_by ?? null) as TaskView['reserved_by'],
+    reserved_until: row.reserved_until ?? null,
     assigned_agent_id: row.assigned_agent_id,
     assigned_harness_id: row.assigned_harness_id,
     current_run_id: row.current_run_id,
@@ -166,6 +174,9 @@ export function toHarnessView(row: HarnessRow): HarnessView {
     protocol_version: row.protocol_version,
     status: row.status as HarnessView['status'],
     enforcement_level: row.enforcement_level as HarnessView['enforcement_level'],
+    enforcement_status: (row.enforcement_status ?? null) as HarnessView['enforcement_status'],
+    enforcement_basis: row.enforcement_basis ?? null,
+    adapter_version: row.adapter_version ?? null,
     host_pid: row.host_pid,
     host_session_id: row.host_session_id,
     capabilities: fromJson<Record<string, unknown>>(row.capabilities_json, {}),
@@ -231,6 +242,8 @@ export interface GoalRow {
   objective: string | null;
   constraints_json: string;
   outcomes_json: string;
+  inferred_constraints_json?: string;
+  inferred_outcomes_json?: string;
   priority: string;
   status: string;
   plan_id: string | null;
@@ -249,6 +262,8 @@ export function toGoalView(row: GoalRow): GoalView {
     objective: row.objective,
     constraints: fromJson<string[]>(row.constraints_json, []),
     outcomes: fromJson<string[]>(row.outcomes_json, []),
+    inferred_constraints: fromJson<string[]>(row.inferred_constraints_json ?? '[]', []),
+    inferred_outcomes: fromJson<string[]>(row.inferred_outcomes_json ?? '[]', []),
     priority: row.priority as GoalView['priority'],
     status: row.status as GoalView['status'],
     plan_id: row.plan_id,
@@ -337,12 +352,23 @@ export function toPlanVersionView(row: PlanRow, tasks: PlanTaskRow[]): PlanVersi
   };
 }
 
-export interface ModelCallRow extends Omit<ModelCallView, 'remote'> {
+export interface ModelCallRow extends Omit<ModelCallView, 'remote' | 'cost_usd'> {
   remote: number;
+  cost_usd: number;
+  /** 0 when the cost is unknown; `cost_usd` then holds 0 and the view shows null. */
+  cost_known: number;
+  project_id?: string;
 }
 
 export function toModelCallView(row: ModelCallRow): ModelCallView {
-  return { ...row, remote: Boolean(row.remote) };
+  const { cost_known, project_id: _project, ...rest } = row;
+  return {
+    ...rest,
+    remote: Boolean(row.remote),
+    cost_usd: cost_known ? row.cost_usd : null,
+    cost_estimate_usd: row.cost_estimate_usd ?? null,
+    cache_write_1h_input_tokens: row.cache_write_1h_input_tokens ?? 0,
+  };
 }
 
 export interface AssignmentRow {

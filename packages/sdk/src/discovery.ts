@@ -13,6 +13,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { FridayError } from '@friday/protocol';
+import { protectPrivateDir } from './access.js';
 import { type FridayConfig, loadConfig } from './config.js';
 
 export const FRIDAY_DIR = '.friday';
@@ -117,13 +118,17 @@ export function privateDirFor(ref: Pick<ProjectRef, 'project_key'>, env: NodeJS.
   return path.join(stateDir(env), 'projects', ref.project_key);
 }
 
+/**
+ * Creates a private directory and makes sure only the current user can open it (review F02):
+ * an explicit user-only ACL on Windows, mode 0700 elsewhere. Throws when that cannot be done.
+ */
 export function ensurePrivateDir(dir: string): string {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (process.platform !== 'win32') chmodSync(dir, 0o700);
+  protectPrivateDir(dir);
   return dir;
 }
 
-/** Writes a file readable only by the current user (POSIX mode 0600; on Windows the per-user profile ACL applies). */
+/** Writes a file readable only by the current user (mode 0600; on Windows the directory's user-only ACL is inherited). */
 export function writePrivateFile(dir: string, name: string, content: string): string {
   ensurePrivateDir(dir);
   const file = path.join(dir, name);

@@ -37,11 +37,17 @@ import {
 } from './rows.js';
 
 /** Harness view plus internal fields the service needs. */
-export type HarnessRecord = HarnessView & { shadow: boolean; requested_agent_key: string | null };
+export type HarnessRecord = HarnessView & {
+  shadow: boolean;
+  requested_agent_key: string | null;
+  /** When a Friday hook first reached the daemon from this harness (review F09). */
+  hooks_seen_at: string | null;
+};
 const toRecord = (row: HarnessRow): HarnessRecord => ({
   ...toHarnessView(row),
   shadow: Boolean(row.shadow),
   requested_agent_key: row.requested_agent_key,
+  hooks_seen_at: row.hooks_seen_at ?? null,
 });
 
 const LIVE_HARNESS = "('REGISTERED','READY','BUSY','DEGRADED','RECONNECTING')";
@@ -379,12 +385,17 @@ export class Queries {
       .map(toModelCallView);
   }
 
-  /** USD spent on a provider since an ISO time (the daily budget, ADR-0013). */
+  /**
+   * USD spent on a provider since an ISO time (the daily budget, ADR-0013). A call whose cost is
+   * unknown counts at its worst-case estimate (review F04). Per project: projects that share a key
+   * each have their own budget.
+   */
   modelSpend(projectId: string, provider: string, sinceIso: string): number {
     return (
       this.db
         .prepare(
-          'SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM model_calls WHERE project_id = ? AND provider = ? AND created_at >= ?',
+          `SELECT COALESCE(SUM(CASE WHEN cost_known = 1 THEN cost_usd ELSE COALESCE(cost_estimate_usd, 0) END), 0) AS usd
+           FROM model_calls WHERE project_id = ? AND provider = ? AND created_at >= ?`,
         )
         .get<{ usd: number }>(projectId, provider, sinceIso)?.usd ?? 0
     );

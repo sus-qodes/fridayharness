@@ -24,7 +24,16 @@ export interface SessionOptions {
 
 export interface MeView {
   project: { project_id: string; name: string };
-  harness: { harness_id: string; status: string; shadow: boolean; enforcement_level: string | null };
+  harness: {
+    harness_id: string;
+    status: string;
+    shadow: boolean;
+    enforcement_level: string | null;
+    enforcement_status?: string | null;
+    enforcement_basis?: string | null;
+  };
+  /** Why this session may not take work under the project's security settings, or null. */
+  enforcement_gap?: string | null;
   agent: { agent_id: string; agent_key: string; status: string; current_task_id: string | null };
   current_task: TaskView | null;
   current_run: { run_id: string; attempt: number; status: string; harness_id: string } | null;
@@ -70,6 +79,8 @@ export class FridaySession {
   registration: Registration | undefined;
   agentKey = 'dev-1';
   problem: string | undefined = 'starting';
+  /** The MCP client's own version from `initialize` (Claude Code 2.1.296), reported as the host version. */
+  hostVersion: string | undefined;
   #retry: NodeJS.Timeout | undefined;
   #starting: Promise<boolean> | undefined;
   #stopped = false;
@@ -114,11 +125,14 @@ export class FridaySession {
       harness_key: `${this.opts.vendor ?? 'claude-code'}:${this.project.project_id}:pid:${pid}`,
       vendor: this.opts.vendor ?? 'claude-code',
       name: this.opts.vendor === 'generic' ? 'MCP client' : 'Claude Code',
-      version: FRIDAY_VERSION,
+      ...(this.hostVersion ? { version: this.hostVersion } : {}),
+      adapter_version: FRIDAY_VERSION,
       attach_mode: 'attach',
       project_id: this.project.project_id,
       agent_key: this.agentKey,
-      enforcement_level: 'L1',
+      // MCP alone intercepts nothing: a generic client is L0. For Claude Code the daemon decides
+      // from evidence, once the session's Friday hooks reach it (review F09).
+      ...(this.opts.vendor === 'generic' ? { enforcement_level: 'L0' as const } : {}),
       capabilities: { mcp_tools: true, hooks: this.opts.vendor !== 'generic', context_request: true },
       host: {
         pid,

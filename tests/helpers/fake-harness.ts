@@ -15,6 +15,11 @@ export interface FakeHarnessOptions {
   onMessage?: TaskHandler;
   /** Run the outbox delivery loop in the background (default: true for spawn mode). */
   loop?: boolean;
+  /**
+   * The level this simulated adapter reports (default L1, like Friday's own spawn adapters; null
+   * reports nothing). The daemon records it as "reported", never as observed evidence.
+   */
+  enforcement?: 'L0' | 'L1' | 'L2' | null;
 }
 
 let counter = 0;
@@ -55,6 +60,7 @@ export class FakeHarness {
       ...(opts.agentKey ? { agent_key: opts.agentKey } : {}),
       ...(opts.role ? { role: opts.role } : {}),
       ...(opts.sessionId ? { host: { session_id: opts.sessionId, pid: process.pid } } : {}),
+      ...(opts.enforcement === null ? {} : { enforcement_level: opts.enforcement ?? 'L1' }),
       protocol_version: opts.protocolVersion ?? CURRENT_PROTOCOL_VERSION,
     };
     const h = new FakeHarness(td, descriptor, opts);

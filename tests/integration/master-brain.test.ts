@@ -2,14 +2,14 @@
  * The Master Brain through the daemon (plan M2b): the operator API, the CLI, and the real
  * Anthropic provider wiring against a local stand-in for the Messages API (no network).
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import path from 'node:path';
 import { createDaemon } from '@friday/daemon';
 import { FakePlannerModel } from '@friday/planner';
 import type { GoalView, PlanTaskView, PlanVersionView, TaskView } from '@friday/protocol';
 import { renderInitialConfig } from '@friday/sdk';
-import { type TestWorkspace, useTestWorkspace } from '@friday/test-support';
+import { deterministicGit, type TestWorkspace, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli, REPO_ROOT } from '../helpers/cli.js';
 import { initTestProject, rawRequest, startTestDaemon, TEST_PROJECT_ID } from '../helpers/daemon.js';
@@ -17,6 +17,7 @@ import { FakeHarness } from '../helpers/fake-harness.js';
 
 const ws = useTestWorkspace();
 const FIXTURES = path.join(REPO_ROOT, 'tests', 'fixtures', 'planner', 'stripe-subscriptions');
+const GOAL_WITH_SECRET = (goal: string) => `${goal} (the old key was ${SEEDED.inGoal})`;
 const GOAL = 'Add Stripe subscriptions, keep one-time checkout working, add tests';
 
 type LiveTask = PlanTaskView & { status: string | null; agent_key: string | null };
@@ -320,9 +321,28 @@ async function fakeAnthropic(w: TestWorkspace, plan: unknown): Promise<{ url: st
   return { url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, seen };
 }
 
+/** Credentials planted where planning reads (review F03); none may be sent. */
+const SEEDED = {
+  anthropic: `sk-ant-api03-${'Qx7'.repeat(12)}`,
+  aws: 'AKIAABCDEFGHIJKLMNOP',
+  password: 'hunter2-is-not-a-password',
+  github: `ghp_${'a1B2'.repeat(9)}`,
+  inGoal: `sk-ant-api03-${'Gx5'.repeat(12)}`,
+  outside: 'TEXT-FROM-OUTSIDE-THE-PROJECT',
+};
+
 function writeConfig(w: TestWorkspace, anthropic: string): void {
   initTestProject(w);
-  writeFileSync(path.join(w.projectDir, 'README.md'), '# shop\nA small shop with one-time checkout.\n');
+  writeFileSync(
+    path.join(w.projectDir, 'README.md'),
+    `# shop\nA small shop with one-time checkout.\nOld notes: ANTHROPIC_API_KEY=${SEEDED.anthropic} aws ${SEEDED.aws}\npassword=${SEEDED.password}\n`,
+  );
+  // docs/ is a junction (Windows) or symlink to a folder outside the project: never read from there.
+  const outside = path.join(w.root, 'outside-docs');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(path.join(outside, 'DECISIONS.md'), `${SEEDED.outside}\n`);
+  const link = path.join(w.projectDir, 'docs');
+  if (!existsSync(link)) symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
   const base = renderInitialConfig(TEST_PROJECT_ID, 'test-project');
   const text = base.replace(
     /\n# The Master Brain[\s\S]*$/,
@@ -345,15 +365,20 @@ async function startWithConfig(w: TestWorkspace) {
 }
 
 describe('Anthropic provider through the daemon', () => {
-  it('plans only with consent and a stored key, sends the documented request, and never records the key', async () => {
+  it('plans only with consent here and a stored key, sends the key only where you chose, and never leaks it', async () => {
     const plan = (JSON.parse(readFileSync(path.join(FIXTURES, '01-plan.json'), 'utf8')) as { output: unknown }).output;
     const api = await fakeAnthropic(ws(), plan);
+    // A tracked config that names this endpoint must not receive the user's key (review F03).
+    const untrusted = await fakeAnthropic(ws(), plan);
     const dir = ws().projectDir;
 
     // 1. Remote calls are off: the request is refused before any network call, and a human is asked.
-    writeConfig(ws(), `    allow_remote: false\n    base_url: "${api.url}"`);
+    writeConfig(ws(), `    allow_remote: false\n    base_url: "${untrusted.url}"`);
+    const repo = deterministicGit(dir);
+    await repo.init();
+    await repo.commitAll(`chore: rotate the deploy token ${SEEDED.github}`);
     let daemon = await startWithConfig(ws());
-    const created = await cli(['--project', dir, '--json', 'goal', 'create', GOAL, '--no-wait']);
+    const created = await cli(['--project', dir, '--json', 'goal', 'create', GOAL_WITH_SECRET(GOAL), '--no-wait']);
     const goalId = (JSON.parse(created.stdout) as GoalDetail).goal.goal_id;
     await cli(['--project', dir, 'brain', 'run-once']);
     expect(api.seen).toHaveLength(0);
@@ -362,24 +387,47 @@ describe('Anthropic provider through the daemon', () => {
     expect(off.stdout).toContain('allow_remote: true');
     await daemon.close();
 
-    // 2. Allowed, but no key yet: the status says what is missing.
-    writeConfig(ws(), `    allow_remote: true\n    base_url: "${api.url}"`);
+    // 2. The project asks for remote planning, but this clone was not allowed on this machine.
+    writeConfig(ws(), `    allow_remote: true\n    base_url: "${untrusted.url}"`);
     daemon = await startWithConfig(ws());
-    const noKey = JSON.parse((await cli(['--project', dir, '--json', 'brain', 'status'])).stdout) as {
-      key: string;
-      planner_available: boolean;
-      reason: string;
-    };
-    expect(noKey).toMatchObject({
-      key: 'missing',
+    const status = async () =>
+      JSON.parse((await cli(['--project', dir, '--json', 'brain', 'status'])).stdout) as {
+        key: string;
+        planner_available: boolean;
+        reason: string;
+        approved_here: boolean;
+        endpoint: string;
+        ignored_base_url: string | null;
+        daily_budget_usd: number;
+      };
+    expect(await status()).toMatchObject({
       planner_available: false,
+      approved_here: false,
+      reason: expect.stringContaining('friday brain allow-remote'),
+      ignored_base_url: untrusted.url,
+      endpoint: 'https://api.anthropic.com',
+    });
+    const allowed = await cli(['--project', dir, 'brain', 'allow-remote', '--budget', '3']);
+    expect(allowed.code, allowed.stderr).toBe(0);
+    expect(await status()).toMatchObject({
+      approved_here: true,
+      key: 'missing',
+      daily_budget_usd: 3,
       reason: expect.stringContaining('friday secrets set anthropic'),
     });
 
-    // 3. The key is stored for this user; asking again plans through the provider.
+    // 3. The key is stored for this user with an endpoint chosen here; asking again plans through it.
     const key = `sk-ant-api03-${'Zq9'.repeat(30)}`;
     process.env.FRIDAY_TEST_ANTHROPIC_KEY = key;
-    const stored = await cli(['secrets', 'set', 'anthropic', '--from-env', 'FRIDAY_TEST_ANTHROPIC_KEY']);
+    const stored = await cli([
+      'secrets',
+      'set',
+      'anthropic',
+      '--from-env',
+      'FRIDAY_TEST_ANTHROPIC_KEY',
+      '--base-url',
+      api.url,
+    ]);
     expect(stored.code, stored.stderr).toBe(0);
     expect(stored.stdout).not.toContain(key);
     expect((await cli(['secrets', 'list'])).stdout.trim()).toBe('anthropic');
@@ -387,22 +435,46 @@ describe('Anthropic provider through the daemon', () => {
     expect(replanned.code, replanned.stderr).toBe(0);
     expect(replanned.stdout).toMatch(/proposed plan_\w+ v1 with 4 task/);
 
+    expect(untrusted.seen).toHaveLength(0);
     expect(api.seen).toHaveLength(1);
     const req = api.seen[0] as Captured;
     expect(req.url).toBe('/v1/messages');
     expect(req.headers['x-api-key']).toBe(key);
     expect(req.headers['anthropic-version']).toBeTruthy();
+    // Friday's rules first, the repository's text marked as untrusted source material (cached), then the job.
     expect(req.body).toMatchObject({
       model: 'claude-opus-5-5',
       max_tokens: 16_000,
       output_config: { format: { type: 'json_schema' } },
-      system: [{ type: 'text', cache_control: { type: 'ephemeral' } }, { type: 'text' }],
+      system: [{ type: 'text' }, { type: 'text', cache_control: { type: 'ephemeral' } }, { type: 'text' }],
     });
     expect(req.body.temperature).toBeUndefined();
     expect(req.body.tools).toBeUndefined();
-    const context = (req.body.system as { text: string }[])[0]?.text ?? '';
+    const system = req.body.system as { text: string }[];
+    expect(system[0]?.text).toContain('You are the Master Brain of Friday');
+    const context = system[1]?.text ?? '';
+    expect(context).toContain('<project_context source="repository" trust="untrusted">');
     expect(context).toContain('## README.md');
     expect(context).toContain('one-time checkout');
+    expect(system[2]?.text).toContain('Your job now: turn a new goal into the first plan');
+
+    // Outbound boundary (review F03): seeded secrets are masked, a document linked outside the
+    // project is not read, and the key itself never appears in the body.
+    const body = JSON.stringify(req.body);
+    for (const seeded of [
+      SEEDED.anthropic,
+      SEEDED.aws,
+      SEEDED.password,
+      SEEDED.github,
+      SEEDED.inGoal,
+      SEEDED.outside,
+    ]) {
+      expect(body.includes(seeded), `${seeded} was sent`).toBe(false);
+    }
+    expect(body).toContain('[REDACTED:');
+    expect(context).not.toContain('## docs/DECISIONS.md');
+    expect(body.includes(key)).toBe(false);
+
     const calls = await daemon.state.q.modelCalls(daemon.project.project_id);
     expect(calls[0]).toMatchObject({
       provider: 'anthropic',
@@ -433,6 +505,8 @@ describe('Anthropic provider through the daemon', () => {
     })) {
       expect(text.includes(key), `key found in ${where}`).toBe(false);
     }
+    expect((await cli(['--project', dir, 'brain', 'deny-remote'])).stdout).toContain('no longer uses');
+    expect((await status()).planner_available).toBe(false);
     expect((await cli(['secrets', 'remove', 'anthropic'])).stdout).toContain('Removed');
   });
 });

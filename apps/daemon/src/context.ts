@@ -115,6 +115,27 @@ export function compileContext(
             content: lines[0] as string,
           }),
         );
+        // The human's own requirements bind every task of the goal (review F07).
+        const reqs = [
+          ...goal.constraints.map((c) => `Constraint (from the human): ${c}`),
+          ...goal.outcomes.map((o) => `Expected outcome (from the human): ${o}`),
+        ];
+        if (reqs.length) {
+          lines.push(...reqs);
+          src.push(
+            source({
+              source_id: `${goal.goal_id}:requirements`,
+              source_type: 'task_record',
+              authority: 'human',
+              recency: goal.created_at,
+              relevance: 1,
+              relationship_distance: 1,
+              verification_status: 'verified',
+              selection_reason: "the human's constraints and expected outcomes for the goal",
+              content: reqs.join('\n'),
+            }),
+          );
+        }
       }
       const rework = state.store.readByRef(pid, 'task', task.task_id, { types: ['task.rework'] }).at(-1);
       const why = (rework?.payload as { transition?: { reason?: string } } | undefined)?.transition?.reason;

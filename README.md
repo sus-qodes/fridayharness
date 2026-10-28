@@ -4,9 +4,16 @@ Friday is a local orchestration and context control plane for AI software develo
 
 The architecture is called **ContextOS** in the original specification.
 
-**Status:** M2.
+**Status:** M2, plus the M2.5 stabilization from an independent review (see [the disposition](docs/reviews/2026-10-14-review-disposition.md)).
 - **M1** gives you the event spine, the daemon, the `friday` CLI, a read-only status page, and Claude Code attached through an MCP server, a skill and policy hooks. A task runs from creation through a Claude Code session to a verified completion, with Friday's policy enforced on the session's tools.
 - **M2** adds the Master Brain. A goal becomes a versioned plan that you approve; its tasks are delegated to agents, revised when verification fails, and escalated to you when only a human can decide.
+- **M2.5** closes the twelve findings of the 2026-10-14 review:
+  - policy follows links and junctions;
+  - private folders are verified to be user-only;
+  - a session counts as L1 only when its hooks really reach Friday;
+  - planning sends only redacted, bounded project text, and only to an endpoint you chose, with your local approval;
+  - costs are never under-reported, and the Master Brain survives restarts without losing work;
+  - stale plan revisions are refused, your own requirements stay authoritative, and reservations expire.
 
 See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 
@@ -22,7 +29,7 @@ See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 | [docs/master-brain.md](docs/master-brain.md) | Goals, plans and the Master Brain: turning planning on, approving, revisions, questions, costs |
 | [docs/protocol/README.md](docs/protocol/README.md) | The harness protocol: transport, tokens, methods, errors, versions |
 | [docs/integration/claude-code-spike.md](docs/integration/claude-code-spike.md) | Verified Claude Code hook and MCP behaviour on Windows |
-| [docs/reviews/](docs/reviews/) | External reviews of the plan |
+| [docs/reviews/](docs/reviews/) | External reviews of the plan and the project, and how each finding was handled |
 
 ## Try it (Windows, PowerShell)
 
@@ -54,6 +61,7 @@ Details, headless use and troubleshooting: [docs/integration/claude-code.md](doc
 ```powershell
 friday secrets set anthropic                   # paste your Anthropic API key (hidden; stored for your user only)
 # in .friday/config.yaml: providers.anthropic.allow_remote: true, then restart "friday run"
+friday brain allow-remote --budget 5           # this clone may use your key, at most $5 a day
 friday goal create "Add Stripe subscriptions, keep one-time checkout working, add tests"
 friday plan approve                            # tasks are created and handed to agents
 friday goal show                               # live plan; revisions and questions appear here
@@ -83,9 +91,9 @@ Set `FRIDAY_TEST_TMP` to a short directory (for example `C:\t`) if your temp pat
 
 ```
 apps/        daemon, cli
-packages/    protocol, core, db, events, state, sdk, policy, verification, mcp-server, adapters/{generic,claude}
+packages/    protocol, core, db, events, state, sdk, policy, verification, planner, mcp-server, adapters/{generic,claude}
 tests/       support and helpers, cross-package suites (integration, hooks, mcp, security, scenarios), fixtures
 docs/        plan, spec, decisions, security, integration notes
 ```
 
-More packages (planner, communication, git, code-graph, memory, context, execution, routing, more adapters, UI) arrive in later milestones as listed in the build plan.
+More packages (communication, git, code-graph, memory, context, execution, routing, more adapters, UI) arrive in later milestones as listed in the build plan.

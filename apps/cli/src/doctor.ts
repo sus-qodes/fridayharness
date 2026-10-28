@@ -3,11 +3,15 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { openDatabase } from '@friday/db';
 import {
+  checkPrivateAccess,
+  credentialsDir,
   DaemonClient,
   FRIDAY_DIR,
   loadProject,
   type ProjectRef,
   privateDirFor,
+  providerApproval,
+  providerEndpoint,
   readDiscovery,
   readSecret,
   readToken,
@@ -122,11 +126,27 @@ export async function doctor(projectDir?: string): Promise<CheckResult[]> {
     }
 
     const priv = privateDirFor(ref);
-    out.push({
-      id: 'private-dir',
-      status: existsSync(priv) ? 'ok' : 'info',
-      message: `private state: ${priv}${existsSync(priv) ? '' : ' (created on first "friday run")'}`,
-    });
+    for (const [id, dir, missing] of [
+      ['private-dir', priv, 'created on first "friday run"'],
+      ['credentials', credentialsDir(), 'created by "friday secrets set"'],
+    ] as const) {
+      if (!existsSync(dir)) {
+        out.push({ id, status: 'info', message: `${dir} (${missing})` });
+        continue;
+      }
+      // Existing is not enough (review F02): only the user may be able to open it.
+      const access = checkPrivateAccess(dir);
+      out.push(
+        access.ok
+          ? { id, status: 'ok', message: `${dir} (only you can open it; checked by ${access.method})` }
+          : {
+              id,
+              status: 'fail',
+              message: `${dir} can be opened by others: ${access.problems.join('; ')}`,
+              fix: '"friday run" (or "friday secrets set") repairs the access list of Friday\'s own directories; then rotate tokens with "friday token rotate"',
+            },
+      );
+    }
 
     const discovery = readDiscovery(ref);
     if (!discovery) {
@@ -186,24 +206,46 @@ export async function doctor(projectDir?: string): Promise<CheckResult[]> {
         status: 'warn',
         message: `remote model providers enabled: ${remote.map(([n]) => n).join(', ')}`,
       });
+    for (const [name, p] of Object.entries(ref.config.providers)) {
+      if (p.base_url) {
+        out.push({
+          id: 'endpoint',
+          status: 'warn',
+          message: `providers.${name}.base_url in config.yaml is ignored: a tracked file cannot choose where your key is sent`,
+          fix: `friday secrets set ${name} --base-url <url> --endpoint-only (per user, on this machine)`,
+        });
+      }
+    }
     const mb = ref.config.master_brain;
     if (mb.provider === 'anthropic') {
       const allowed = ref.config.providers.anthropic?.allow_remote ?? false;
+      const approved = Boolean(providerApproval(ref, 'anthropic'));
       const key = readSecret('anthropic') !== undefined || Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+      const missing = !key
+        ? { why: 'no Anthropic API key is stored', fix: 'friday secrets set anthropic' }
+        : !allowed
+          ? {
+              why: 'remote calls are off for this project',
+              fix: 'set providers.anthropic.allow_remote: true in .friday/config.yaml',
+            }
+          : !approved
+            ? {
+                why: 'you have not allowed this clone to use your key',
+                fix: 'friday brain allow-remote [--budget <usd>]',
+              }
+            : null;
       out.push(
-        allowed && key
+        !missing
           ? {
               id: 'master-brain',
               status: 'ok',
-              message: `the Master Brain plans with ${mb.model === 'auto' ? 'claude-opus-5-5' : mb.model}`,
+              message: `the Master Brain plans with ${mb.model === 'auto' ? 'claude-opus-5-5' : mb.model} via ${providerEndpoint('anthropic') ?? 'https://api.anthropic.com'}`,
             }
           : {
               id: 'master-brain',
               status: 'info',
-              message: `the Master Brain cannot plan yet: ${key ? 'remote calls are off' : 'no Anthropic API key is stored'}`,
-              fix: key
-                ? 'set providers.anthropic.allow_remote: true in .friday/config.yaml'
-                : 'friday secrets set anthropic',
+              message: `the Master Brain cannot plan yet: ${missing.why}`,
+              fix: missing.fix,
             },
       );
     } else {

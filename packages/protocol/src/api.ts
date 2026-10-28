@@ -3,6 +3,7 @@ import {
   AgentStatus,
   AttachMode,
   EnforcementLevel,
+  EnforcementStatus,
   HarnessStatus,
   Priority,
   RiskLevel,
@@ -59,8 +60,15 @@ export const TaskView = z.object({
   risk_level: RiskLevel,
   scope: TaskScope.nullable(),
   dependencies: z.array(z.string()),
-  /** Only this agent may claim the task while it is READY (set by `--assign` before a session exists). */
+  /** Only this agent may claim the task while it is READY. */
   reserved_for_agent_key: z.string().nullable(),
+  /**
+   * Who reserved it (review F08): a human (`task assign`; kept until a human changes it), the
+   * Master Brain's delegation, or a rework for the agent that did the work. The last two expire
+   * at `reserved_until`, or earlier when that agent's session ends.
+   */
+  reserved_by: z.enum(['human', 'master_brain', 'rework']).nullable().default(null),
+  reserved_until: z.string().nullable().default(null),
   assigned_agent_id: z.string().nullable(),
   assigned_harness_id: z.string().nullable(),
   current_run_id: z.string().nullable(),
@@ -101,6 +109,11 @@ export const HarnessView = z.object({
   protocol_version: z.string(),
   status: HarnessStatus,
   enforcement_level: EnforcementLevel.nullable(),
+  enforcement_status: EnforcementStatus.nullable().default(null),
+  /** What the level rests on, for humans ("Friday hooks from this session; Claude Code 2.1.296"). */
+  enforcement_basis: z.string().nullable().default(null),
+  /** Friday's adapter version; `version` is the host's own. */
+  adapter_version: z.string().nullable().default(null),
   host_pid: z.number().int().nullable(),
   host_session_id: z.string().nullable(),
   capabilities: z.record(z.string(), z.unknown()),
@@ -182,8 +195,12 @@ export const GoalView = z.object({
   project_id: z.string(),
   request: z.string(),
   objective: z.string().nullable(),
+  /** The human's own constraints and outcomes: authoritative, never replaced by a model (review F07). */
   constraints: z.array(z.string()),
   outcomes: z.array(z.string()),
+  /** What the planner added while normalizing the request; kept apart from the human's own. */
+  inferred_constraints: z.array(z.string()).default([]),
+  inferred_outcomes: z.array(z.string()).default([]),
   priority: Priority,
   status: GoalStatus,
   plan_id: z.string().nullable(),
@@ -247,7 +264,8 @@ export const ModelCallView = z.object({
   provider: z.string(),
   model: z.string(),
   remote: z.boolean(),
-  status: z.enum(['ok', 'invalid', 'error', 'refused']),
+  /** `interrupted`: the daemon stopped while the request was in flight, so its outcome is unknown. */
+  status: z.enum(['ok', 'invalid', 'error', 'refused', 'interrupted']),
   error_code: z.string().nullable(),
   error: z.string().nullable(),
   attempt: z.number().int(),
@@ -255,7 +273,11 @@ export const ModelCallView = z.object({
   output_tokens: z.number().int(),
   cache_creation_input_tokens: z.number().int(),
   cache_read_input_tokens: z.number().int(),
-  cost_usd: z.number(),
+  cache_write_1h_input_tokens: z.number().int().default(0),
+  /** Null when the cost is unknown (no price for the model, or a request whose outcome is uncertain). */
+  cost_usd: z.number().nullable(),
+  /** Worst-case estimate counted against the budget while the real cost is unknown (review F04). */
+  cost_estimate_usd: z.number().nullable().default(null),
   latency_ms: z.number().int(),
   request_id: z.string().nullable(),
   created_at: z.string(),

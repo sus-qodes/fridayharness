@@ -28,7 +28,10 @@ export const HarnessRegisterParams = z.object({
   harness_key: z.string().min(1).max(300),
   vendor: Vendor,
   name: z.string().min(1).max(100),
+  /** The host's own version (Claude Code 2.1.296), not Friday's. */
   version: z.string().max(100).optional(),
+  /** Version of the Friday adapter that registers the host. */
+  adapter_version: z.string().max(100).optional(),
   attach_mode: AttachMode,
   project_id: z.string(),
   capabilities: HarnessCapabilities.default({}),

@@ -25,12 +25,19 @@ const Price = z.object({
 /** One model provider (plan B28, ADR-0013). Keys never live here: `friday secrets set <provider>`. */
 const Provider = z
   .object({
-    /** Model calls leave this machine only when true. */
+    /**
+     * The project asks for remote model calls. They happen only when this is true and the user
+     * also approved it on this machine (`friday brain allow-remote`, review F03).
+     */
     allow_remote: z.boolean().default(false),
     /** Spend per UTC day before Friday stops calling the provider and asks a human. */
     daily_budget_usd: z.number().min(0).default(5),
     /** Prompt-cache lifetime of the project context. */
     cache_ttl: z.enum(['5m', '1h']).default('5m'),
+    /**
+     * Ignored: a tracked file must not choose where the user's key is sent (review F03). Set a
+     * custom endpoint per user with `friday secrets set <provider> --base-url <url>`.
+     */
     base_url: z.string().url().optional(),
     /** USD per million tokens, per model id, overriding Friday's defaults. */
     prices: z.record(z.string(), Price).optional(),
@@ -51,6 +58,15 @@ const MasterBrainConfig = z
     auto_approve: z.boolean().default(false),
     escalate_after_failures: z.number().int().min(1).max(10).default(2),
     max_replans: z.number().int().min(0).max(20).default(3),
+    /**
+     * How long a task the Master Brain reserved for an attach-mode agent (or a rework kept for its
+     * agent) waits to be claimed before anyone may take it (review F08). A human's reservation stays.
+     */
+    reservation_ttl_ms: z
+      .number()
+      .int()
+      .min(10_000)
+      .default(15 * 60 * 1000),
     /** For provider `fake`: a directory of scripted answers, relative to the project root. */
     fake_responses: z.string().optional(),
   })
@@ -150,7 +166,8 @@ verification:
   checks: []
 
 # The Master Brain turns goals into plans ("friday goal create"). It calls a model only when the
-# provider allows remote calls; store the key with "friday secrets set anthropic".
+# project allows remote calls here AND you allowed it on your machine ("friday brain allow-remote");
+# store the key with "friday secrets set anthropic".
 master_brain:
   provider: anthropic   # anthropic | fake | none (none: you write plans with "friday plan propose")
   model: auto           # claude-opus-5-5

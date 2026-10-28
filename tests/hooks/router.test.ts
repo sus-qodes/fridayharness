@@ -5,7 +5,7 @@
 import path from 'node:path';
 import { claudeCodeHooks, HOOK_INPUT_KEYS, type HookEventName } from '@friday/adapter-claude';
 import { GenericHarnessClient } from '@friday/adapter-generic';
-import type { TaskView } from '@friday/protocol';
+import type { FridayError, TaskView } from '@friday/protocol';
 import { useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
 import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
@@ -57,22 +57,40 @@ async function rig(): Promise<Rig> {
   return r;
 }
 
-/** Registers the way friday-mcp does inside Claude Code: same harness key and session id as the hooks. */
-async function mcpSession(td: TestDaemon, opts: { pid?: number; sessionId?: string; agentKey?: string } = {}) {
+/**
+ * Registers the way friday-mcp does inside Claude Code (same harness key and session id as the
+ * hooks), then sends the SessionStart hook Claude Code runs at the start of every session: the
+ * evidence that makes the session L1 (review F09). `hooks: false` leaves the hook out.
+ */
+async function mcpSession(
+  td: TestDaemon,
+  opts: { pid?: number; sessionId?: string; agentKey?: string; hooks?: boolean; version?: string } = {},
+) {
   const pid = opts.pid ?? CLAUDE_PID;
+  const sessionId = opts.sessionId ?? SESSION;
   const client = new GenericHarnessClient(td.bootstrap, {
     harness_key: `claude-code:${td.project.project_id}:pid:${pid}`,
     vendor: 'claude-code',
     name: 'Claude Code',
-    version: '2.1.296',
+    version: opts.version ?? '2.1.296',
+    adapter_version: '0.1.0',
     attach_mode: 'attach',
     project_id: td.project.project_id,
     capabilities: { hooks: true },
     agent_key: opts.agentKey ?? 'dev-1',
-    host: { pid, session_id: opts.sessionId ?? SESSION },
-    enforcement_level: 'L1',
+    host: { pid, session_id: sessionId },
   });
   await client.register();
+  if (opts.hooks !== false) {
+    const daemon = { url: td.url, projectId: td.project.project_id, token: td.daemon.tokens.bootstrap };
+    const start = await postHook(
+      daemon,
+      'SessionStart',
+      { session_id: sessionId, cwd: td.project.root, hook_event_name: 'SessionStart', source: 'startup' },
+      { claudePid: pid },
+    );
+    expect(start.status).toBe(200);
+  }
   return client;
 }
 
@@ -88,6 +106,63 @@ async function createTask(td: TestDaemon, write: string[], agentKey = 'dev-1'): 
 function eventsOf(td: TestDaemon, type: string) {
   return td.daemon.state.store.readSince(td.project.project_id, 0, { types: [type], limit: 1000 });
 }
+
+describe('enforcement from evidence (review F09)', () => {
+  const harnessOf = (td: TestDaemon, pid: number) =>
+    td.daemon.state.q.harnessByKey(td.project.project_id, `claude-code:${td.project.project_id}:pid:${pid}`);
+
+  it('a Claude Code session is L0 until its Friday hooks reach the daemon, and cannot take work before', async () => {
+    const r = await rig();
+    const mcp = await mcpSession(r.td, { pid: 3001, sessionId: 'sess-nohooks', hooks: false });
+    expect(harnessOf(r.td, 3001)).toMatchObject({
+      enforcement_level: 'L0',
+      enforcement_status: 'observed',
+      version: '2.1.296',
+      adapter_version: '0.1.0',
+    });
+    await createTask(r.td, ['src/**']);
+    const refused = await mcp.claim({ next: true }).catch((e: unknown) => e as FridayError);
+    expect(refused).toMatchObject({ code: 'COS-3007' });
+    expect((refused as FridayError).message).toContain('friday harness config claude-code');
+    // The session's first hook arrives: now it is L1, enforcing on 2.1.296, and may claim.
+    const pre = toolHook(
+      'PreToolUse',
+      'Read',
+      { file_path: path.join(r.vars.projectDir, 'README.md') },
+      { ...r.vars, sessionId: 'sess-nohooks' },
+    );
+    expect((await r.hook('PreToolUse', pre, { claudePid: 3001 })).status).toBe(200);
+    expect(harnessOf(r.td, 3001)).toMatchObject({ enforcement_level: 'L1', enforcement_status: 'enforcing' });
+    expect((await mcp.claim({ next: true })).task.status).toBe('RUNNING');
+  });
+
+  it('reports a host that lets actions through on hook failure as degraded, and require_enforcing_hooks refuses it', async () => {
+    const td = await startTestDaemon(ws(), {
+      git: true,
+      extensions: [claudeCodeHooks()],
+      extraConfig: 'security:\n  enforcement_required: L1\n  require_enforcing_hooks: true\n',
+    });
+    const mcp = await mcpSession(td, { pid: 3002, sessionId: 'sess-old', version: '2.1.250' });
+    expect(harnessOf(td, 3002)).toMatchObject({ enforcement_level: 'L1', enforcement_status: 'degraded' });
+    await createTask(td, ['src/**']);
+    const refused = await mcp.claim({ next: true }).catch((e: unknown) => e as FridayError);
+    expect(refused).toMatchObject({ code: 'COS-3007' });
+    expect((refused as FridayError).message).toContain('2.1.295');
+  });
+
+  it('refuses work everywhere when the project requires L2, which no adapter provides yet', async () => {
+    const td = await startTestDaemon(ws(), {
+      git: true,
+      extensions: [claudeCodeHooks()],
+      extraConfig: 'security:\n  enforcement_required: L2\n',
+    });
+    const mcp = await mcpSession(td, { pid: 3003, sessionId: 'sess-l2' });
+    await createTask(td, ['src/**']);
+    const refused = await mcp.claim({ next: true }).catch((e: unknown) => e as FridayError);
+    expect(refused).toMatchObject({ code: 'COS-3007' });
+    expect((refused as FridayError).message).toContain('No adapter in this version of Friday provides L2');
+  });
+});
 
 describe('Claude Code hook routes', () => {
   it('accepts every recorded 2.1.296 fixture, and every recorded key is known to the router', async () => {
@@ -116,7 +191,7 @@ describe('Claude Code hook routes', () => {
 
   it('SessionStart links the session to the MCP registration and injects the context packet', async () => {
     const r = await rig();
-    const mcp = await mcpSession(r.td);
+    const mcp = await mcpSession(r.td, { hooks: false });
     const task = await createTask(r.td, ['src/**']);
     const res = await r.hook('SessionStart', hookFixture('session-start', r.vars), {
       claudePid: CLAUDE_PID,

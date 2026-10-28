@@ -75,6 +75,8 @@ describe('friday CLI end to end', () => {
       attach_mode: 'attach',
       project_id: ref.project_id,
       agent_key: 'dev-1',
+      // Stands in for an adapter with policy hooks; the project requires L1 (review F09).
+      enforcement_level: 'L1',
     });
     await h.register();
     const claim = await h.claim({ next: true });

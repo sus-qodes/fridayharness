@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { type DelegationCandidate, delegate, scoreCandidate } from './delegate.js';
 import { diffPlanVersions, type PlanVersionTask } from './diff.js';
 import { buildEscalation } from './escalate.js';
-import { runPlanner } from './model.js';
+import { budgetedCost, type PlannerCall, runPlanner } from './model.js';
 import { parsePlanDraft, parseReplanDraft } from './parse.js';
-import { costOf } from './pricing.js';
+import { costOf, worstCaseCost } from './pricing.js';
 import { PROMPT_VERSIONS } from './prompts.js';
-import { AnthropicPlannerModel, structuredOutputSchema } from './providers/anthropic.js';
+import { AnthropicPlannerModel, structuredOutputSchema, wrapProjectContext } from './providers/anthropic.js';
 import { FakePlannerModel } from './providers/fake.js';
-import { ModelError, type ModelRequest } from './providers/types.js';
+import { ModelError, type ModelRequest, type ModelResponse } from './providers/types.js';
 import { draftJsonSchema, type PlanDraftInput, type ReplanDraftInput } from './schemas.js';
 import { type TriggerEvent, type TriggerFacts, triggersFor } from './triggers.js';
 import type { ExistingTask } from './validate.js';
@@ -326,12 +326,15 @@ describe('Master Brain trigger table', () => {
     goalOf: (id) => (id.startsWith('task_g') ? 'goal_1' : null),
     failuresOf: () => 1,
     replansOf: () => 0,
+    goalOfPlan: () => 'goal_1',
     brainEscalation: (id) =>
       id === 'esc_brain'
-        ? { goal_id: 'goal_1', replan: true }
-        : id === 'esc_decided'
-          ? { goal_id: 'goal_1', replan: false }
-          : null,
+        ? { goal_id: 'goal_1', replan: true, force: false }
+        : id === 'esc_question'
+          ? { goal_id: 'goal_1', replan: true, force: true }
+          : id === 'esc_decided'
+            ? { goal_id: 'goal_1', replan: false, force: false }
+            : null,
     planner: { available: true, reason: '' },
     limits: { escalateAfterFailures: 2, maxReplans: 3, autoApprove: false },
     ...over,
@@ -446,8 +449,38 @@ describe('Master Brain trigger table', () => {
       'human answers the brain',
       ev('escalation.answered', { escalation_id: 'esc_brain' }),
       facts(),
-      [{ kind: 'replan', goal_id: 'goal_1', task_id: null, reason: 'a human answered the Master Brain' }],
+      [
+        {
+          kind: 'replan',
+          goal_id: 'goal_1',
+          task_id: null,
+          reason: 'a human answered the Master Brain',
+          escalation_id: 'esc_brain',
+        },
+      ],
     ],
+    [
+      'human answers the question a pending proposal asked',
+      ev('escalation.answered', { escalation_id: 'esc_question' }),
+      facts(),
+      [
+        {
+          kind: 'replan',
+          goal_id: 'goal_1',
+          task_id: null,
+          reason: 'a human answered the Master Brain',
+          escalation_id: 'esc_question',
+          force: true,
+        },
+      ],
+    ],
+    [
+      'human rejects a proposal',
+      ev('plan.rejected', { plan_id: 'plan_1', version: 2, note: 'too broad' }),
+      facts(),
+      [{ kind: 'after_rejection', goal_id: 'goal_1', plan_id: 'plan_1', version: 2, note: 'too broad' }],
+    ],
+    ['a reservation ends', ev('task.reservation_released', { task_id: 'task_g1' }), facts(), [{ kind: 'delegate' }]],
     ['human answers an agent', ev('escalation.answered', { escalation_id: 'esc_agent' }), facts(), []],
     [
       'human answers after deciding the proposal',
@@ -506,7 +539,9 @@ describe('cost accounting', () => {
         cache_read_input_tokens: 0,
       }),
     ).toBe(0.04);
-    expect(costOf('unknown-model', usage)).toBe(0);
+    // Unknown is not free (review F04); a dated snapshot id uses its model's price.
+    expect(costOf('unknown-model', usage)).toBeNull();
+    expect(costOf('claude-opus-5-5-20261001', usage)).toBe(4 + 20 + 5 + 0.2);
     expect(
       costOf('custom', usage, { custom: { input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, output: 1 } }),
     ).toBe(4);
@@ -524,12 +559,21 @@ describe('cost accounting', () => {
   });
 });
 
+describe('worst-case estimates (review F04)', () => {
+  it('counts every character as a token at the highest input price, plus all of max_tokens', () => {
+    // 25,000 chars -> 10,000 tokens at $8/M (1h cache write) + 16,000 output tokens at $20/M.
+    expect(worstCaseCost('claude-opus-5-5', 25_000, 16_000)).toBe(0.08 + 0.32);
+    expect(worstCaseCost('unknown-model', 25_000, 16_000)).toBeNull();
+  });
+});
+
 describe('runPlanner', () => {
   const request = (over: Partial<ModelRequest> = {}): ModelRequest => ({
     purpose: 'plan',
     model: 'claude-opus-5-5',
     system: 'plan it',
     context: 'project context',
+    instructions: 'first plan',
     prompt: 'Goal goal_1: add subscriptions',
     schema: draftJsonSchema('plan'),
     schemaName: 'plan',
@@ -549,7 +593,7 @@ describe('runPlanner', () => {
       provider: 'fake',
       remote: false,
       attempt: 1,
-      prompt_version: 'plan-1',
+      prompt_version: PROMPT_VERSIONS.plan,
     });
     expect(out.calls[0]?.cost_usd).toBeGreaterThan(0);
   });
@@ -611,6 +655,116 @@ describe('runPlanner', () => {
     expect(broke).toMatchObject({ ok: false, reason: 'budget' });
     expect(called).toBe(0);
     expect(broke.calls).toMatchObject([{ status: 'refused', error_code: 'budget', cost_usd: 0 }]);
+    // Not enough left for the worst case of this call: refused before sending.
+    const tight = await runPlanner(
+      remote,
+      request(),
+      parsePlanDraft,
+      { ...policy, allowRemote: true, spentTodayUsd: 4.9 },
+      { promptVersion: 'plan-1' },
+    );
+    expect(tight).toMatchObject({ ok: false, reason: 'budget' });
+    // A model without a known price cannot be budgeted.
+    const unpriced = await runPlanner(
+      remote,
+      request({ model: 'claude-future-9' }),
+      parsePlanDraft,
+      { ...policy, allowRemote: true },
+      { promptVersion: 'plan-1' },
+    );
+    expect(unpriced).toMatchObject({ ok: false, reason: 'budget' });
+    if (!unpriced.ok) expect(unpriced.message).toMatch(/no price is known for model claude-future-9/);
+    expect(called).toBe(0);
+  });
+
+  /** A remote stand-in model whose answers the test scripts. */
+  const remoteModel = (answers: Array<() => Promise<ModelResponse>>) => {
+    const seen: ModelRequest[] = [];
+    return {
+      seen,
+      model: {
+        provider: 'anthropic',
+        remote: true,
+        complete: async (r: ModelRequest) => {
+          seen.push(r);
+          const next = answers.shift();
+          if (!next) throw new Error('no more answers');
+          return next();
+        },
+      },
+    };
+  };
+  const usage = { input_tokens: 2000, output_tokens: 1000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+  const allowed = { allowRemote: true, spentTodayUsd: 0, dailyBudgetUsd: 5 };
+
+  it('records a paid refusal or truncation with its usage, cost and request id (review F04)', async () => {
+    for (const code of ['refused', 'truncated'] as const) {
+      const { model } = remoteModel([
+        async () => {
+          throw new ModelError(code, code, false, undefined, {
+            usage,
+            model: 'claude-opus-5-5',
+            requestId: 'req_paid',
+            billed: 'yes',
+          });
+        },
+      ]);
+      const out = await runPlanner(model, request(), parsePlanDraft, allowed, { promptVersion: 'plan-2' });
+      expect(out).toMatchObject({ ok: false, reason: 'provider' });
+      expect(out.calls[0]).toMatchObject({ status: 'error', error_code: code, usage, request_id: 'req_paid' });
+      expect(out.calls[0]?.cost_usd).toBe(0.028);
+    }
+  });
+
+  it('keeps the cost of a cancelled request unknown, counted at its estimate', async () => {
+    const { model } = remoteModel([
+      async () => {
+        throw new ModelError('timeout', 'the request was cancelled', false, undefined, { billed: 'unknown' });
+      },
+    ]);
+    const out = await runPlanner(model, request(), parsePlanDraft, allowed, { promptVersion: 'plan-2' });
+    expect(out.calls[0]?.cost_usd).toBeNull();
+    expect(out.calls[0]?.cost_estimate_usd).toBeGreaterThan(0.3);
+    expect(budgetedCost(out.calls[0] as PlannerCall)).toBe(out.calls[0]?.cost_estimate_usd);
+  });
+
+  it('prices an unknown snapshot id by the requested model', async () => {
+    const { model } = remoteModel([
+      async () => ({
+        output: STRIPE_PLAN,
+        model: 'claude-opus-5-5-x-preview',
+        usage,
+        stop_reason: 'end_turn',
+        request_id: 'r',
+      }),
+    ]);
+    const out = await runPlanner(model, request(), parsePlanDraft, allowed, { promptVersion: 'plan-2' });
+    expect(out.ok).toBe(true);
+    expect(out.calls[0]).toMatchObject({ model: 'claude-opus-5-5-x-preview', cost_usd: 0.028 });
+  });
+
+  it('checks the budget again before the repair attempt', async () => {
+    const { model, seen } = remoteModel([
+      async () => ({
+        output: { ...STRIPE_PLAN, tasks: [task('a', [])] },
+        model: 'claude-opus-5-5',
+        // An expensive first answer leaves too little for a second attempt.
+        usage: { ...usage, output_tokens: 220_000 },
+        stop_reason: 'end_turn',
+        request_id: 'r1',
+      }),
+    ]);
+    const out = await runPlanner(
+      model,
+      request(),
+      parsePlanDraft,
+      { ...allowed, dailyBudgetUsd: 4.5 },
+      { promptVersion: 'plan-2' },
+    );
+    expect(out).toMatchObject({ ok: false, reason: 'budget' });
+    expect(seen).toHaveLength(1);
+    expect(out.calls.map((c) => c.status)).toEqual(['invalid', 'refused']);
+    if (!out.ok) expect(out.message).toMatch(/second attempt/);
   });
 });
 
@@ -662,6 +816,7 @@ describe('Anthropic provider', () => {
     model: 'claude-opus-5-5',
     system: 'You are the Master Brain.',
     context: 'Repository layout: backend/, frontend/, shared/',
+    instructions: 'Your job now: the first plan.',
     prompt: 'Goal goal_1: add subscriptions',
     schema: draftJsonSchema('plan'),
     schemaName: 'plan',
@@ -678,9 +833,11 @@ describe('Anthropic provider', () => {
     expect(body).toMatchObject({
       model: 'claude-opus-5-5',
       max_tokens: 16_000,
+      // Friday's rules first, the repository's text marked as source material (cached), then the job.
       system: [
-        { type: 'text', text: req.context, cache_control: { type: 'ephemeral', ttl: '1h' } },
         { type: 'text', text: req.system },
+        { type: 'text', text: wrapProjectContext(req.context), cache_control: { type: 'ephemeral', ttl: '1h' } },
+        { type: 'text', text: req.instructions },
       ],
       messages: [{ role: 'user', content: req.prompt }],
       output_config: { effort: 'high', format: { type: 'json_schema' } },
@@ -746,6 +903,11 @@ describe('Anthropic provider', () => {
       expect(err, `${status} ${code}`).toBeInstanceOf(ModelError);
       expect((err as ModelError).code).toBe(code);
       expect((err as ModelError).message).not.toContain(KEY);
+      // A refusal or a cut-off answer is billed and keeps its usage; an HTTP error is not billed (review F04).
+      const e = err as ModelError;
+      expect(e.billed, code).toBe(status === 200 ? 'yes' : 'no');
+      expect(e.requestId, code).toBe('req_123');
+      if (status === 200) expect(e.usage?.output_tokens).toBe(900);
     }
   });
 
