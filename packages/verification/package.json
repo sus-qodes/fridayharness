@@ -6,8 +6,8 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
       "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
   },
@@ -18,5 +18,12 @@
     "build": "tsc -b",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "@friday/core": "workspace:*",
+    "@friday/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@friday/test-support": "workspace:*"
   }
 }

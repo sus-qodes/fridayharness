@@ -1,0 +1,116 @@
+{
+  "$id": "urn:friday:events:v1:envelope",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "pattern": "^evt_[0123456789abcdefghjkmnpqrstvwxyz]{26}$"
+    },
+    "sequence": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "schema_version": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_id": {
+      "type": "string",
+      "pattern": "^proj_[0123456789abcdefghjkmnpqrstvwxyz]{26}$"
+    },
+    "actor": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "human",
+            "system",
+            "agent",
+            "harness",
+            "master_brain"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ]
+    },
+    "caused_by": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "correlation_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "occurred_at": {
+      "type": "string"
+    },
+    "recorded_at": {
+      "type": "string"
+    },
+    "payload": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "sensitivity": {
+      "type": "string",
+      "enum": [
+        "public",
+        "internal",
+        "sensitive",
+        "secret"
+      ]
+    },
+    "redaction_status": {
+      "type": "string",
+      "enum": [
+        "none",
+        "redacted"
+      ]
+    },
+    "artifact_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "event_id",
+    "sequence",
+    "schema_version",
+    "type",
+    "project_id",
+    "actor",
+    "caused_by",
+    "correlation_id",
+    "occurred_at",
+    "recorded_at",
+    "payload",
+    "sensitivity",
+    "redaction_status",
+    "artifact_refs"
+  ]
+}

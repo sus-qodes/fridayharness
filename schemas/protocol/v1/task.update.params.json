@@ -1,0 +1,62 @@
+{
+  "$id": "urn:friday:protocol:v1:task.update:params",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocol_version": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "running",
+        "waiting"
+      ]
+    },
+    "waiting_reason": {
+      "type": "string",
+      "enum": [
+        "blocked",
+        "context_required",
+        "human_approval",
+        "dependency_wait",
+        "agent_error"
+      ]
+    },
+    "note": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "percent": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "changed_paths": {
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "task_id",
+    "run_id"
+  ]
+}

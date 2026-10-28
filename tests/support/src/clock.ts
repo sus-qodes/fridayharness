@@ -2,6 +2,8 @@
 export interface Clock {
   /** ISO-8601 UTC timestamp. */
   now(): string;
+  /** Milliseconds since the Unix epoch. */
+  nowMs(): number;
   /** Monotonic milliseconds, for durations and leases. */
   monotonicMs(): number;
 }
@@ -18,6 +20,10 @@ export class FakeClock implements Clock {
 
   now(): string {
     return new Date(this.#epochMs).toISOString();
+  }
+
+  nowMs(): number {
+    return this.#epochMs;
   }
 
   monotonicMs(): number {

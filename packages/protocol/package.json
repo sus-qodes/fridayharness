@@ -6,8 +6,8 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
       "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
   },
@@ -17,6 +17,10 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -p tsconfig.test.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "gen:schemas": "tsx scripts/gen-schemas.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
   }
 }

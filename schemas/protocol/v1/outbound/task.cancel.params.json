@@ -1,0 +1,20 @@
+{
+  "$id": "urn:friday:protocol:v1:outbound:task.cancel",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "run_id"
+  ]
+}

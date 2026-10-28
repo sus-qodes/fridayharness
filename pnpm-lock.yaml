@@ -188,31 +188,183 @@ importers:
         specifier: ^5.0.3
         version: 5.0.3(@types/node@24.19.2)(@vitest/coverage-v8@5.0.3)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(tsx@4.23.15))
 
-  apps/cli: {}
+  apps/cli:
+    dependencies:
+      '@friday/adapter-claude':
+        specifier: workspace:*
+        version: link:../../packages/adapters/claude
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@friday/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
 
-  apps/daemon: {}
+  apps/daemon:
+    dependencies:
+      '@friday/adapter-claude':
+        specifier: workspace:*
+        version: link:../../packages/adapters/claude
+      '@friday/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@friday/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@friday/events':
+        specifier: workspace:*
+        version: link:../../packages/events
+      '@friday/policy':
+        specifier: workspace:*
+        version: link:../../packages/policy
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@friday/state':
+        specifier: workspace:*
+        version: link:../../packages/state
+      '@friday/verification':
+        specifier: workspace:*
+        version: link:../../packages/verification
 
-  packages/adapters/claude: {}
+  packages/adapters/claude:
+    dependencies:
+      '@friday/mcp-server':
+        specifier: workspace:*
+        version: link:../../mcp-server
+      '@friday/policy':
+        specifier: workspace:*
+        version: link:../../policy
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+      '@friday/sdk':
+        specifier: workspace:*
+        version: link:../../sdk
 
-  packages/adapters/generic: {}
+  packages/adapters/generic:
+    dependencies:
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+      '@friday/sdk':
+        specifier: workspace:*
+        version: link:../../sdk
 
-  packages/core: {}
+  packages/core:
+    dependencies:
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
-  packages/db: {}
+  packages/db:
+    dependencies:
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      better-sqlite3:
+        specifier: ^13.0.3
+        version: 13.0.3
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../tests/support
+      '@types/better-sqlite3':
+        specifier: ^9.6.0
+        version: 9.6.0
 
-  packages/events: {}
+  packages/events:
+    dependencies:
+      '@friday/core':
+        specifier: workspace:*
+        version: link:../core
+      '@friday/db':
+        specifier: workspace:*
+        version: link:../db
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../tests/support
 
-  packages/mcp-server: {}
+  packages/mcp-server:
+    dependencies:
+      '@friday/policy':
+        specifier: workspace:*
+        version: link:../policy
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@friday/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../tests/support
 
-  packages/policy: {}
+  packages/policy:
+    dependencies:
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../tests/support
 
-  packages/protocol: {}
+  packages/protocol:
+    dependencies:
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.6
 
-  packages/sdk: {}
+  packages/sdk:
+    dependencies:
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../tests/support
 
-  packages/state: {}
+  packages/state:
+    dependencies:
+      '@friday/core':
+        specifier: workspace:*
+        version: link:../core
+      '@friday/db':
+        specifier: workspace:*
+        version: link:../db
+      '@friday/events':
+        specifier: workspace:*
+        version: link:../events
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.6
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../tests/support
 
-  packages/verification: {}
+  packages/verification:
+    dependencies:
+      '@friday/core':
+        specifier: workspace:*
+        version: link:../core
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../tests/support
 
   tests:
     devDependencies:
@@ -607,6 +759,9 @@ packages:
     cpu: [arm64]
     os: [win32]
 
+  '@types/better-sqlite3@9.6.0':
+    resolution: {integrity: sha512-ZEEwBSgMu7GYJOynoagg5X9JbxfL6dTJDsgViJIqh67jV44kyOr9RXfmFjLK5rzC4MWssP06t9hu/JwGDnUbCg==}
+
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
@@ -656,6 +811,10 @@ packages:
 
   ast-v8-to-istanbul@1.0.7:
     resolution: {integrity: sha512-kFL68AG6ajd8fg248zwM9GQrUWEp79gsmjum34OEXjs4yHuUMZfYKwOLW9GMmB4oNvVrj+EAGxsP7ye2UR9UlA==}
+
+  better-sqlite3@13.0.3:
+    resolution: {integrity: sha512-RbOBxmLBG8uvFUc15X9+9SFemKcQ0WBuISBVkpuiaUB2qblC8UWlHEjdWVoZ8AdhSwmoEgsiXKfopX0CQxaACQ==}
+    engines: {node: '>=22'}
 
   chai@6.3.0:
     resolution: {integrity: sha512-XWAtwJ6OHO+tj0EKCs0Y2UamnyOxseZWltU4x2U2wh8g4AigdjwvtUjvLP2tqkA/avxHEtzxNaqGq/YGNwckKg==}
@@ -781,6 +940,10 @@ packages:
     resolution: {integrity: sha512-uKdg2G3GNCKQn9byYOpxbGqrT2fGO5KRt5J/8b3pok8rT6qxGWF6hxMyJiEYtAf+FVyYuD9hRaDqX5uPFYJ4ZQ==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
+
+  node-addon-api@8.9.2:
+    resolution: {integrity: sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg==}
+    engines: {node: ^18 || ^20 || >= 21}
 
   obug@2.2.1:
     resolution: {integrity: sha512-XrsrhT5sybtKI6wakr2SPOlGZWWYbUXZ7a0jT8/QOeAPau+1X/bSegNe5YR75oJmEZQbKningirmGOEJCIk61Q==}
@@ -930,6 +1093,9 @@ packages:
     resolution: {integrity: sha512-Tb2FUhB4vUsGQlfSquQLYkApkuPAFQXGFzxWKHHumVz2dK+X1RUm/HnID4+TfIGYJ1kTcwOaCk/buYCEJr6YjQ==}
     engines: {node: '>=20.11'}
     hasBin: true
+
+  zod@4.6.6:
+    resolution: {integrity: sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==}
 
 snapshots:
 
@@ -1137,6 +1303,10 @@ snapshots:
   '@turbo/windows-arm64@2.11.7':
     optional: true
 
+  '@types/better-sqlite3@9.6.0':
+    dependencies:
+      '@types/node': 24.19.2
+
   '@types/chai@5.2.3':
     dependencies:
       '@types/deep-eql': 4.0.2
@@ -1186,6 +1356,10 @@ snapshots:
       '@jridgewell/trace-mapping': 0.3.31
       estree-walker: 3.0.3
       js-tokens: 10.0.0
+
+  better-sqlite3@13.0.3:
+    dependencies:
+      node-addon-api: 8.9.2
 
   chai@6.3.0: {}
 
@@ -1298,6 +1472,8 @@ snapshots:
 
   nanoid@3.3.20: {}
 
+  node-addon-api@8.9.2: {}
+
   obug@2.2.1: {}
 
   picocolors@1.1.1: {}
@@ -1401,3 +1577,5 @@ snapshots:
       - msw
 
   why-is-node-running@3.2.1: {}
+
+  zod@4.6.6: {}

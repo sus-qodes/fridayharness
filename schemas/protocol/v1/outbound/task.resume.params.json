@@ -1,0 +1,63 @@
+{
+  "$id": "urn:friday:protocol:v1:outbound:task.resume",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "role": {
+      "type": "string"
+    },
+    "instruction": {
+      "type": "string"
+    },
+    "context_packet_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "working_directory": {
+      "type": "string"
+    },
+    "git_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "policy_profile": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "task_id",
+    "run_id",
+    "attempt",
+    "role",
+    "instruction",
+    "context_packet_ref",
+    "working_directory",
+    "git_ref",
+    "acceptance_criteria",
+    "policy_profile"
+  ]
+}

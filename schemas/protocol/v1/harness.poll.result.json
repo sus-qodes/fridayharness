@@ -1,0 +1,56 @@
+{
+  "$id": "urn:friday:protocol:v1:harness.poll:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "message_id": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "task.start",
+              "task.resume",
+              "task.cancel",
+              "context.deliver"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "sent_at": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "message_id",
+          "method",
+          "params",
+          "sent_at",
+          "expires_at",
+          "attempt"
+        ]
+      }
+    }
+  },
+  "required": [
+    "messages"
+  ]
+}

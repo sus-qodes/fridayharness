@@ -1,0 +1,50 @@
+{
+  "$id": "urn:friday:protocol:v1:harness.ack:params",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocol_version": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "acks": {
+      "minItems": 1,
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "message_id": {
+            "type": "string"
+          },
+          "accepted": {
+            "type": "boolean"
+          },
+          "session_ref": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "message_id",
+          "accepted"
+        ]
+      }
+    }
+  },
+  "required": [
+    "acks"
+  ]
+}

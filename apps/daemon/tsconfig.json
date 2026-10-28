@@ -6,5 +6,30 @@
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"],
-  "references": []
+  "references": [
+    {
+      "path": "../../packages/protocol"
+    },
+    {
+      "path": "../../packages/core"
+    },
+    {
+      "path": "../../packages/db"
+    },
+    {
+      "path": "../../packages/events"
+    },
+    {
+      "path": "../../packages/state"
+    },
+    {
+      "path": "../../packages/policy"
+    },
+    {
+      "path": "../../packages/verification"
+    },
+    {
+      "path": "../../packages/adapters/claude"
+    }
+  ]
 }

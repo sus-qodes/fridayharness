@@ -1,0 +1,31 @@
+{
+  "$id": "urn:friday:protocol:v1:harness.poll:params",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocol_version": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "wait_ms": {
+      "default": 0,
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 25000
+    },
+    "max": {
+      "default": 10,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
+    }
+  }
+}

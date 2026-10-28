@@ -1,0 +1,67 @@
+{
+  "$id": "urn:friday:protocol:v1:harness.register:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocol_version": {
+      "type": "string"
+    },
+    "harness_id": {
+      "type": "string"
+    },
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_key": {
+      "type": "string"
+    },
+    "harness_token": {
+      "type": "string"
+    },
+    "reconnected": {
+      "type": "boolean"
+    },
+    "shadow": {
+      "type": "boolean"
+    },
+    "lease": {
+      "type": "object",
+      "properties": {
+        "ttl_ms": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "heartbeat_interval_ms": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ttl_ms",
+        "heartbeat_interval_ms",
+        "expires_at"
+      ]
+    },
+    "pending_messages": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "protocol_version",
+    "harness_id",
+    "agent_id",
+    "agent_key",
+    "harness_token",
+    "reconnected",
+    "shadow",
+    "lease",
+    "pending_messages"
+  ]
+}

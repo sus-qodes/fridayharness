@@ -1,0 +1,118 @@
+{
+  "$id": "urn:friday:protocol:v1:harness.register:params",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocol_version": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "harness_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "vendor": {
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "cursor",
+        "october",
+        "generic"
+      ]
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "version": {
+      "type": "string",
+      "maxLength": 100
+    },
+    "attach_mode": {
+      "type": "string",
+      "enum": [
+        "attach",
+        "spawn"
+      ]
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "capabilities": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "host": {
+      "type": "object",
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "session_id": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "cwd": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "properties": {
+        "agent_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$"
+        },
+        "role": {
+          "default": "developer",
+          "type": "string",
+          "maxLength": 64
+        },
+        "display_name": {
+          "type": "string",
+          "maxLength": 100
+        }
+      }
+    },
+    "enforcement_level": {
+      "type": "string",
+      "enum": [
+        "L0",
+        "L1",
+        "L2"
+      ]
+    },
+    "heartbeat_interval_ms": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 60000
+    }
+  },
+  "required": [
+    "protocol_version",
+    "harness_key",
+    "vendor",
+    "name",
+    "attach_mode",
+    "project_id"
+  ]
+}

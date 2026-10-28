@@ -1,0 +1,46 @@
+{
+  "$id": "urn:friday:protocol:v1:human.escalation:params",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocol_version": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "options": {
+      "minItems": 2,
+      "maxItems": 4,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 200
+      }
+    },
+    "context": {
+      "type": "string",
+      "maxLength": 2000
+    }
+  },
+  "required": [
+    "question"
+  ]
+}

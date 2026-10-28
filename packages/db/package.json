@@ -6,8 +6,8 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
       "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
   },
@@ -18,5 +18,13 @@
     "build": "tsc -b",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "@friday/protocol": "workspace:*",
+    "better-sqlite3": "^13.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@friday/test-support": "workspace:*"
   }
 }

@@ -1,0 +1,23 @@
+{
+  "$id": "urn:friday:protocol:v1:harness.ack:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "acked": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unknown": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "acked",
+    "unknown"
+  ]
+}

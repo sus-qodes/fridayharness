@@ -1,0 +1,14 @@
+{
+  "$id": "urn:friday:protocol:v1:harness.capabilities:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "const": true
+    }
+  },
+  "required": [
+    "ok"
+  ]
+}

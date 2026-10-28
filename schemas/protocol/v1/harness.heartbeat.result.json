@@ -1,0 +1,37 @@
+{
+  "$id": "urn:friday:protocol:v1:harness.heartbeat:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "DISCOVERING",
+        "REGISTERED",
+        "READY",
+        "BUSY",
+        "DEGRADED",
+        "DISCONNECTED",
+        "RECONNECTING",
+        "TERMINATED"
+      ]
+    },
+    "lease_expires_at": {
+      "type": "string"
+    },
+    "pending_messages": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "shadow": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "status",
+    "lease_expires_at",
+    "pending_messages",
+    "shadow"
+  ]
+}

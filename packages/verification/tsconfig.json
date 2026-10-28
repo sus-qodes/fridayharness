@@ -6,5 +6,12 @@
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"],
-  "references": []
+  "references": [
+    {
+      "path": "../protocol"
+    },
+    {
+      "path": "../core"
+    }
+  ]
 }

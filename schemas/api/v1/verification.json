@@ -1,0 +1,117 @@
+{
+  "$id": "urn:friday:api:v1:verification",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "verification_id": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "NOT_REQUESTED",
+        "QUEUED",
+        "RUNNING",
+        "PASSED",
+        "FAILED",
+        "BLOCKED",
+        "CANCELLED"
+      ]
+    },
+    "started_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ended_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "summary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "NOT_REQUESTED",
+              "QUEUED",
+              "RUNNING",
+              "PASSED",
+              "FAILED",
+              "BLOCKED",
+              "CANCELLED"
+            ]
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "artifact_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "status",
+          "exit_code",
+          "artifact_ref",
+          "summary"
+        ]
+      }
+    }
+  },
+  "required": [
+    "verification_id",
+    "task_id",
+    "run_id",
+    "status",
+    "started_at",
+    "ended_at",
+    "summary",
+    "checks"
+  ]
+}

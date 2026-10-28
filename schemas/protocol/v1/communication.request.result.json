@@ -1,0 +1,21 @@
+{
+  "$id": "urn:friday:protocol:v1:communication.request:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "message_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "recorded",
+        "queued"
+      ]
+    }
+  },
+  "required": [
+    "message_id",
+    "status"
+  ]
+}

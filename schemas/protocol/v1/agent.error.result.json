@@ -1,0 +1,28 @@
+{
+  "$id": "urn:friday:protocol:v1:agent.error:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "task_status": {
+      "type": "string",
+      "enum": [
+        "PROPOSED",
+        "READY",
+        "ASSIGNED",
+        "RUNNING",
+        "WAITING",
+        "READY_FOR_VERIFICATION",
+        "VERIFYING",
+        "COMPLETED",
+        "FAILED",
+        "REWORK",
+        "HARNESS_LOST",
+        "CANCELLED",
+        "ABANDONED"
+      ]
+    }
+  },
+  "required": [
+    "task_status"
+  ]
+}

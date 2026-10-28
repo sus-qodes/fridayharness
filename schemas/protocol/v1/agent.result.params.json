@@ -1,0 +1,121 @@
+{
+  "$id": "urn:friday:protocol:v1:agent.result:params",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocol_version": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "completed_claim",
+        "blocked"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "changed_paths": {
+      "default": [],
+      "maxItems": 200,
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "checks": {
+      "default": [],
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "kind": {
+            "default": "other",
+            "type": "string",
+            "enum": [
+              "test",
+              "lint",
+              "build",
+              "typecheck",
+              "manual",
+              "other"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "skipped"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "name",
+          "outcome"
+        ]
+      }
+    },
+    "notes": {
+      "default": [],
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 1000
+      }
+    },
+    "risks": {
+      "default": [],
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 1000
+      }
+    },
+    "blocked_reason": {
+      "type": "string",
+      "maxLength": 1000
+    }
+  },
+  "required": [
+    "idempotency_key",
+    "task_id",
+    "run_id",
+    "status",
+    "summary"
+  ]
+}

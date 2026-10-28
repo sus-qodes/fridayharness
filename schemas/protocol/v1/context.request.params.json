@@ -1,0 +1,55 @@
+{
+  "$id": "urn:friday:protocol:v1:context.request:params",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocol_version": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "kind": {
+      "default": "task",
+      "type": "string",
+      "enum": [
+        "task",
+        "scope_files",
+        "file",
+        "symbol",
+        "history",
+        "decision",
+        "freeform"
+      ]
+    },
+    "query": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "paths": {
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "max_chars": {
+      "default": 8000,
+      "type": "integer",
+      "minimum": 500,
+      "maximum": 20000
+    }
+  }
+}

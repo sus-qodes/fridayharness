@@ -1,0 +1,101 @@
+{
+  "$id": "urn:friday:api:v1:run",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "run_id": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "harness_id": {
+      "type": "string"
+    },
+    "agent_id": {
+      "type": "string"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "STARTING",
+        "ACTIVE",
+        "DECLINED",
+        "SUSPENDED",
+        "ENDED"
+      ]
+    },
+    "outcome": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "completed_claim",
+            "failed",
+            "cancelled",
+            "released",
+            "declined"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "session_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "observed_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "claim": {
+      "anyOf": [
+        {},
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "accepted_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ended_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "run_id",
+    "task_id",
+    "harness_id",
+    "agent_id",
+    "attempt",
+    "status",
+    "outcome",
+    "session_ref",
+    "observed_paths",
+    "claim",
+    "created_at",
+    "accepted_at",
+    "ended_at"
+  ]
+}

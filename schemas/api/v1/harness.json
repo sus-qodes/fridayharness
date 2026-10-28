@@ -1,0 +1,131 @@
+{
+  "$id": "urn:friday:api:v1:harness",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "harness_id": {
+      "type": "string"
+    },
+    "harness_key": {
+      "type": "string"
+    },
+    "vendor": {
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "cursor",
+        "october",
+        "generic"
+      ]
+    },
+    "name": {
+      "type": "string"
+    },
+    "version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "attach_mode": {
+      "type": "string",
+      "enum": [
+        "attach",
+        "spawn"
+      ]
+    },
+    "protocol_version": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "DISCOVERING",
+        "REGISTERED",
+        "READY",
+        "BUSY",
+        "DEGRADED",
+        "DISCONNECTED",
+        "RECONNECTING",
+        "TERMINATED"
+      ]
+    },
+    "enforcement_level": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "L0",
+            "L1",
+            "L2"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "host_pid": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "host_session_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "capabilities": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "registered_at": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string"
+    },
+    "lease_expires_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "last_heartbeat_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "harness_id",
+    "harness_key",
+    "vendor",
+    "name",
+    "version",
+    "attach_mode",
+    "protocol_version",
+    "status",
+    "enforcement_level",
+    "host_pid",
+    "host_session_id",
+    "capabilities",
+    "registered_at",
+    "updated_at",
+    "lease_expires_at",
+    "last_heartbeat_at"
+  ]
+}

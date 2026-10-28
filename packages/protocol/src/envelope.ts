@@ -1,0 +1,86 @@
+import { z } from 'zod';
+import { ActorKind, Sensitivity } from './enums.js';
+import { idSchema } from './ids.js';
+
+export const Actor = z.object({ kind: ActorKind, id: z.string().min(1).max(200) });
+export type Actor = z.infer<typeof Actor>;
+
+/** Carried by every state-transition event (plan B16). */
+export const Transition = z.object({
+  from: z.string(),
+  to: z.string(),
+  trigger: z.string(),
+  reason: z.string().optional(),
+});
+export type Transition = z.infer<typeof Transition>;
+
+export const RefKind = z.enum(['task', 'run', 'harness', 'agent', 'approval', 'verification', 'context', 'escalation']);
+export type RefKind = z.infer<typeof RefKind>;
+
+/** Canonical domain event envelope (spec Part 14 §2). */
+export const DomainEvent = z.object({
+  event_id: idSchema('evt'),
+  sequence: z.number().int().positive(),
+  schema_version: z.number().int().positive(),
+  type: z.string().min(1),
+  project_id: idSchema('proj'),
+  actor: Actor,
+  caused_by: z.array(z.string()),
+  correlation_id: z.string().nullable(),
+  occurred_at: z.string(),
+  recorded_at: z.string(),
+  payload: z.record(z.string(), z.unknown()),
+  sensitivity: Sensitivity,
+  redaction_status: z.enum(['none', 'redacted']),
+  artifact_refs: z.array(z.string()),
+});
+export type DomainEvent = z.infer<typeof DomainEvent>;
+
+/**
+ * Event types emitted in M1. Transition events carry `payload.transition`.
+ * Kept as documentation and for schema generation; the store accepts any non-empty type.
+ */
+export const EVENT_TYPES = [
+  'project.created',
+  'daemon.started',
+  'daemon.stopped',
+  'task.created',
+  'task.ready',
+  'task.assigned',
+  'task.started',
+  'task.waiting',
+  'task.resumed',
+  'task.released',
+  'task.completion_claimed',
+  'task.verification_started',
+  'task.completed',
+  'task.failed',
+  'task.rework',
+  'task.harness_lost',
+  'task.cancelled',
+  'run.created',
+  'run.accepted',
+  'run.declined',
+  'run.suspended',
+  'run.resumed',
+  'run.ended',
+  'run.paths_observed',
+  'harness.registered',
+  'harness.status_changed',
+  'harness.session_bound',
+  'agent.registered',
+  'agent.status_changed',
+  'agent.event',
+  'verification.started',
+  'verification.check_completed',
+  'verification.finished',
+  'policy.evaluated',
+  'context.compiled',
+  'context.requested',
+  'approval.requested',
+  'approval.decided',
+  'communication.recorded',
+  'escalation.requested',
+  'command.rejected',
+] as const;
+export type KnownEventType = (typeof EVENT_TYPES)[number];

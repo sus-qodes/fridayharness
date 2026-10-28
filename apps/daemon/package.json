@@ -6,8 +6,8 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
       "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
   },
@@ -18,5 +18,15 @@
     "build": "tsc -b",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "@friday/adapter-claude": "workspace:*",
+    "@friday/core": "workspace:*",
+    "@friday/db": "workspace:*",
+    "@friday/events": "workspace:*",
+    "@friday/policy": "workspace:*",
+    "@friday/protocol": "workspace:*",
+    "@friday/state": "workspace:*",
+    "@friday/verification": "workspace:*"
   }
 }

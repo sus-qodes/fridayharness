@@ -1,0 +1,97 @@
+{
+  "$id": "urn:friday:api:v1:task-create-request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "kind": {
+      "default": "implementation",
+      "type": "string",
+      "enum": [
+        "implementation",
+        "verification",
+        "review",
+        "research",
+        "docs",
+        "chore"
+      ]
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 20000
+    },
+    "acceptance_criteria": {
+      "default": [],
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      }
+    },
+    "priority": {
+      "default": "normal",
+      "type": "string",
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ]
+    },
+    "risk_level": {
+      "default": "low",
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "depends_on": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "write": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "read": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "ready": {
+      "default": false,
+      "type": "boolean"
+    },
+    "assign_agent_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    }
+  },
+  "required": [
+    "summary"
+  ]
+}

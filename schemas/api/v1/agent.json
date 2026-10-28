@@ -1,0 +1,64 @@
+{
+  "$id": "urn:friday:api:v1:agent",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_key": {
+      "type": "string"
+    },
+    "role": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "REGISTERED",
+        "AVAILABLE",
+        "ASSIGNED",
+        "BUSY",
+        "WAITING",
+        "DISCONNECTED",
+        "UNHEALTHY",
+        "TERMINATED"
+      ]
+    },
+    "shadow": {
+      "type": "boolean"
+    },
+    "harness_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "current_task_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "current_run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "updated_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "agent_id",
+    "agent_key",
+    "role",
+    "status",
+    "shadow",
+    "harness_id",
+    "current_task_id",
+    "current_run_id",
+    "updated_at"
+  ]
+}

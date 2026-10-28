@@ -1,0 +1,21 @@
+{
+  "$id": "urn:friday:protocol:v1:human.escalation:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "escalation_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "answered"
+      ]
+    }
+  },
+  "required": [
+    "escalation_id",
+    "status"
+  ]
+}

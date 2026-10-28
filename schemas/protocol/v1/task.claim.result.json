@@ -1,0 +1,472 @@
+{
+  "$id": "urn:friday:protocol:v1:task.claim:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "task": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "goal_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plan_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "implementation",
+            "verification",
+            "review",
+            "research",
+            "docs",
+            "chore"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "acceptance_criteria": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "PROPOSED",
+            "READY",
+            "ASSIGNED",
+            "RUNNING",
+            "WAITING",
+            "READY_FOR_VERIFICATION",
+            "VERIFYING",
+            "COMPLETED",
+            "FAILED",
+            "REWORK",
+            "HARNESS_LOST",
+            "CANCELLED",
+            "ABANDONED"
+          ]
+        },
+        "waiting_reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "blocked",
+                "context_required",
+                "human_approval",
+                "dependency_wait",
+                "agent_error"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "urgent"
+          ]
+        },
+        "risk_level": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "write": {
+                  "default": [],
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "read": {
+                  "default": [],
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reserved_for_agent_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "assigned_agent_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "assigned_harness_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "current_run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_by": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "human",
+                "system",
+                "agent",
+                "harness",
+                "master_brain"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cancelled_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "task_id",
+        "project_id",
+        "goal_id",
+        "plan_id",
+        "kind",
+        "summary",
+        "description",
+        "acceptance_criteria",
+        "status",
+        "waiting_reason",
+        "priority",
+        "risk_level",
+        "scope",
+        "dependencies",
+        "reserved_for_agent_key",
+        "assigned_agent_id",
+        "assigned_harness_id",
+        "current_run_id",
+        "created_by",
+        "created_at",
+        "updated_at",
+        "started_at",
+        "completed_at",
+        "cancelled_at",
+        "revision"
+      ]
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "resumed": {
+      "type": "boolean"
+    },
+    "context": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "context_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "recipient": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "agent",
+                    "master_brain",
+                    "human"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "harness_id": {
+                  "type": "string"
+                },
+                "run_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ]
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "purpose": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "state_version": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "budget": {
+              "type": "object",
+              "properties": {
+                "tokens": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "latency_ms": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "chars": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "tokens",
+                "latency_ms"
+              ]
+            },
+            "sections": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "sources": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "source_id": {
+                          "type": "string"
+                        },
+                        "source_type": {
+                          "type": "string",
+                          "enum": [
+                            "task_record",
+                            "git",
+                            "file",
+                            "graph",
+                            "memory",
+                            "event",
+                            "message",
+                            "daemon"
+                          ]
+                        },
+                        "authority": {
+                          "type": "string"
+                        },
+                        "recency": {
+                          "type": "string"
+                        },
+                        "relevance": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "relationship_distance": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "verification_status": {
+                          "type": "string",
+                          "enum": [
+                            "verified",
+                            "unverified",
+                            "superseded"
+                          ]
+                        },
+                        "selection_reason": {
+                          "type": "string"
+                        },
+                        "estimated_tokens": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "source_id",
+                        "source_type",
+                        "authority",
+                        "recency",
+                        "relevance",
+                        "relationship_distance",
+                        "verification_status",
+                        "selection_reason",
+                        "estimated_tokens"
+                      ]
+                    }
+                  },
+                  "authority": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "system",
+                      "agent",
+                      "task",
+                      "git",
+                      "memory",
+                      "graph"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "content",
+                  "sources",
+                  "authority"
+                ]
+              }
+            },
+            "staleness": {
+              "type": "object",
+              "properties": {
+                "is_stale": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "is_stale"
+              ]
+            },
+            "explain_uri": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "context_id",
+            "project_id",
+            "recipient",
+            "created_at",
+            "state_version",
+            "budget",
+            "sections",
+            "staleness"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "task",
+    "run_id",
+    "attempt",
+    "resumed",
+    "context"
+  ]
+}
