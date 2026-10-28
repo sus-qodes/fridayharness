@@ -5,6 +5,8 @@ import type { TestDaemon } from './daemon.js';
 export interface FakeHarnessOptions {
   key?: string;
   agentKey?: string;
+  /** Agent role the Master Brain's delegation matches against ("backend", "qa", …). */
+  role?: string;
   mode?: 'spawn' | 'attach';
   protocolVersion?: string;
   capabilities?: Record<string, unknown>;
@@ -51,6 +53,7 @@ export class FakeHarness {
         reconnect: true,
       },
       ...(opts.agentKey ? { agent_key: opts.agentKey } : {}),
+      ...(opts.role ? { role: opts.role } : {}),
       ...(opts.sessionId ? { host: { session_id: opts.sessionId, pid: process.pid } } : {}),
       protocol_version: opts.protocolVersion ?? CURRENT_PROTOCOL_VERSION,
     };

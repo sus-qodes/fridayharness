@@ -14,6 +14,49 @@ const Check = z.object({
 });
 export type CheckConfig = z.infer<typeof Check>;
 
+const Price = z.object({
+  input: z.number().min(0),
+  cache_write_5m: z.number().min(0),
+  cache_write_1h: z.number().min(0),
+  cache_read: z.number().min(0),
+  output: z.number().min(0),
+});
+
+/** One model provider (plan B28, ADR-0013). Keys never live here: `friday secrets set <provider>`. */
+const Provider = z
+  .object({
+    /** Model calls leave this machine only when true. */
+    allow_remote: z.boolean().default(false),
+    /** Spend per UTC day before Friday stops calling the provider and asks a human. */
+    daily_budget_usd: z.number().min(0).default(5),
+    /** Prompt-cache lifetime of the project context. */
+    cache_ttl: z.enum(['5m', '1h']).default('5m'),
+    base_url: z.string().url().optional(),
+    /** USD per million tokens, per model id, overriding Friday's defaults. */
+    prices: z.record(z.string(), Price).optional(),
+  })
+  .passthrough();
+export type ProviderConfig = z.infer<typeof Provider>;
+
+/** The Master Brain (M2, ADR-0013). */
+const MasterBrainConfig = z
+  .object({
+    /** `none`: plans are written by humans (`friday plan propose`); `fake`: scripted answers for tests and demos. */
+    provider: z.enum(['anthropic', 'fake', 'none']).default('anthropic'),
+    /** `auto` is the default planning model, claude-opus-5-5. */
+    model: z.string().min(1).default('auto'),
+    effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+    max_tokens: z.number().int().min(1000).max(21_000).default(16_000),
+    /** Without it a human approves every plan version. */
+    auto_approve: z.boolean().default(false),
+    escalate_after_failures: z.number().int().min(1).max(10).default(2),
+    max_replans: z.number().int().min(0).max(20).default(3),
+    /** For provider `fake`: a directory of scripted answers, relative to the project root. */
+    fake_responses: z.string().optional(),
+  })
+  .prefault({});
+export type MasterBrainConfig = z.infer<typeof MasterBrainConfig>;
+
 /** `.friday/config.yaml` (plan Appendix 6). Tracked in git; never holds secrets. */
 export const FridayConfig = z
   .object({
@@ -56,7 +99,8 @@ export const FridayConfig = z
       .object({ mode: z.enum(['hybrid', 'off']).default('hybrid'), required: z.array(z.string()).default([]) })
       .prefault({}),
     context: z.object({ session_start_max_chars: z.number().int().min(1000).max(10_000).default(9000) }).prefault({}),
-    providers: z.record(z.string(), z.object({ allow_remote: z.boolean().default(false) }).passthrough()).default({}),
+    providers: z.record(z.string(), Provider).default({}),
+    master_brain: MasterBrainConfig,
   })
   .passthrough();
 export type FridayConfig = z.infer<typeof FridayConfig>;
@@ -105,8 +149,16 @@ verification:
   auto_on_completion: false
   checks: []
 
+# The Master Brain turns goals into plans ("friday goal create"). It calls a model only when the
+# provider allows remote calls; store the key with "friday secrets set anthropic".
+master_brain:
+  provider: anthropic   # anthropic | fake | none (none: you write plans with "friday plan propose")
+  model: auto           # claude-opus-5-5
+  auto_approve: false   # a human approves each plan version with "friday plan approve"
+
 providers:
   anthropic:
-    allow_remote: false   # model calls leave this machine only when you set this to true (M2)
+    allow_remote: false   # model calls leave this machine only when you set this to true
+    daily_budget_usd: 5
 `;
 }

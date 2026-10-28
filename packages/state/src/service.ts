@@ -28,11 +28,16 @@ import {
   type AgentView,
   type ContextPacket,
   FridayError,
+  GoalCreateRequest,
+  type GoalView,
   type HarnessRegisterParams,
   type HarnessStatus,
   type HarnessView,
   negotiateProtocolVersion,
   type OutboundMessage,
+  type PlanStatus,
+  type PlanTaskView,
+  type PlanVersionView,
   type RunStatus,
   type RunView,
   TaskCreateRequest,
@@ -78,6 +83,54 @@ export interface Caller {
   agent_id: string;
 }
 
+/** One task of a plan version as the planner hands it over (ADR-0013). */
+export type PlanTaskInput = Omit<PlanTaskView, 'position'>;
+
+export interface PlanProposal {
+  summary: string;
+  rationale: string;
+  needs_human: { question: string; why: string; options: string[] } | null;
+  /** Why this version exists: "first plan", "verification failed: …", "human answer", … */
+  trigger: string;
+  tasks: PlanTaskInput[];
+  model_call_id?: string | null;
+  prompt_version?: string | null;
+  /** The normalized intent from a first plan (spec Part 03 §5). */
+  intent?: { objective: string; constraints: string[]; outcomes: string[] } | null;
+}
+
+export interface PlanApproval {
+  plan: PlanVersionView;
+  created: TaskView[];
+  reworked: TaskView[];
+  dropped: TaskView[];
+  readied: TaskView[];
+}
+
+/** A model request as recorded in `model.called` (plan B28): never the prompt or the answer. */
+export interface ModelCallInput {
+  goal_id: string | null;
+  plan_id: string | null;
+  purpose: string;
+  prompt_version: string;
+  provider: string;
+  model: string;
+  remote: boolean;
+  status: 'ok' | 'invalid' | 'error' | 'refused';
+  error_code: string | null;
+  error: string | null;
+  attempt: number;
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens: number;
+    cache_read_input_tokens: number;
+  };
+  cost_usd: number;
+  latency_ms: number;
+  request_id: string | null;
+}
+
 export interface TokenInfo {
   credential_id: string;
   project_id: string;
@@ -99,6 +152,7 @@ const OBSERVATION_TYPES = new Set([
 ]);
 
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+const TERMINAL_TASK = new Set(['COMPLETED', 'CANCELLED', 'ABANDONED']);
 const SYSTEM: Actor = { kind: 'system', id: 'friday' };
 const LEASE_MANAGER: Actor = { kind: 'system', id: 'lease-manager' };
 
@@ -412,7 +466,18 @@ export class FridayState {
     taskId: string,
     agentKey: string,
   ): { mode: 'assigned' | 'reserved'; task: TaskView } {
-    return this.exec({ name: 'task.assign', project_id: projectId, actor, params: { taskId, agentKey } }, (ctx) => {
+    return this.exec({ name: 'task.assign', project_id: projectId, actor, params: { taskId, agentKey } }, (ctx) =>
+      this.assignWithin(ctx, projectId, taskId, agentKey),
+    );
+  }
+
+  private assignWithin(
+    ctx: CommandContext,
+    projectId: string,
+    taskId: string,
+    agentKey: string,
+  ): { mode: 'assigned' | 'reserved'; task: TaskView } {
+    {
       let task = this.q.task(projectId, taskId);
       if (task.status === 'PROPOSED') task = this.moveTask(ctx, task, 'task.ready');
       if (task.status !== 'READY') {
@@ -451,7 +516,7 @@ export class FridayState {
         run.run_id,
       );
       return { mode: 'assigned' as const, task };
-    });
+    }
   }
 
   /** Attach-mode pull path (Friday extension, ADR-0007): the agent takes a task and starts it. */
@@ -818,7 +883,13 @@ export class FridayState {
   }
 
   cancelTask(projectId: string, actor: Actor, taskId: string, reason: string): TaskView {
-    return this.exec({ name: 'task.cancel', project_id: projectId, actor, params: { taskId, reason } }, (ctx) => {
+    return this.exec({ name: 'task.cancel', project_id: projectId, actor, params: { taskId, reason } }, (ctx) =>
+      this.cancelWithin(ctx, projectId, taskId, reason),
+    );
+  }
+
+  private cancelWithin(ctx: CommandContext, projectId: string, taskId: string, reason: string): TaskView {
+    {
       let task = this.q.task(projectId, taskId);
       const run = task.current_run_id ? this.q.findRun(task.current_run_id) : undefined;
       const agentId = task.assigned_agent_id;
@@ -836,23 +907,480 @@ export class FridayState {
       }
       this.releaseAgent(ctx, agentId, taskId);
       return task;
-    });
+    }
   }
 
   /** FAILED → REWORK → READY, reserved for the agent that did the work. */
   reworkTask(projectId: string, actor: Actor, taskId: string, reason: string): TaskView {
-    return this.exec({ name: 'task.rework', project_id: projectId, actor, params: { taskId, reason } }, (ctx) => {
-      let task = this.q.task(projectId, taskId);
-      const prevAgent = task.assigned_agent_id ? this.q.findAgent(task.assigned_agent_id) : undefined;
-      task = this.moveTask(ctx, task, 'task.rework', { reason });
-      return this.moveTask(ctx, task, 'task.ready', {
-        changes: {
-          assigned_agent_id: null,
-          assigned_harness_id: null,
-          reserved_for_agent_key: prevAgent?.agent_key ?? task.reserved_for_agent_key,
-        },
-      });
+    return this.exec({ name: 'task.rework', project_id: projectId, actor, params: { taskId, reason } }, (ctx) =>
+      this.reworkWithin(ctx, projectId, taskId, reason),
+    );
+  }
+
+  private reworkWithin(ctx: CommandContext, projectId: string, taskId: string, reason: string): TaskView {
+    let task = this.q.task(projectId, taskId);
+    const prevAgent = task.assigned_agent_id ? this.q.findAgent(task.assigned_agent_id) : undefined;
+    task = this.moveTask(ctx, task, 'task.rework', { reason });
+    return this.moveTask(ctx, task, 'task.ready', {
+      changes: {
+        assigned_agent_id: null,
+        assigned_harness_id: null,
+        reserved_for_agent_key: prevAgent?.agent_key ?? task.reserved_for_agent_key,
+      },
     });
+  }
+
+  // ================================================================ goals and plans (M2, ADR-0013)
+
+  createGoal(
+    projectId: string,
+    actor: Actor,
+    input: z.input<typeof GoalCreateRequest>,
+    opts: { idempotency_key?: string } = {},
+  ): GoalView {
+    const req = GoalCreateRequest.parse(input);
+    return this.exec(
+      { name: 'goal.create', project_id: projectId, actor, idempotency_key: opts.idempotency_key, params: req },
+      (ctx) => {
+        const goal_id = this.ids.next('goal');
+        ctx.emit({
+          type: 'goal.created',
+          payload: {
+            goal: {
+              goal_id,
+              request: req.request,
+              objective: null,
+              constraints: req.constraints,
+              outcomes: req.outcomes,
+              priority: req.priority,
+              created_by: actor,
+            },
+            plan_requested: req.plan,
+          },
+          refs: [{ kind: 'goal', id: goal_id }],
+        });
+        return this.q.goal(projectId, goal_id);
+      },
+    );
+  }
+
+  /** Cancels a goal, its unfinished tasks and any proposal waiting for a decision. */
+  cancelGoal(projectId: string, actor: Actor, goalId: string, reason: string): GoalView {
+    return this.exec({ name: 'goal.cancel', project_id: projectId, actor, params: { goalId, reason } }, (ctx) => {
+      const goal = this.q.goal(projectId, goalId);
+      if (goal.status === 'COMPLETED' || goal.status === 'CANCELLED') {
+        throw new FridayError('invalid_state_transition', `goal ${goalId} is ${goal.status}`);
+      }
+      ctx.emit({
+        type: 'goal.status_changed',
+        payload: {
+          goal_id: goalId,
+          transition: { from: goal.status, to: 'CANCELLED', trigger: 'cancelled', reason },
+          changes: {},
+        },
+        refs: [{ kind: 'goal', id: goalId }],
+      });
+      for (const t of this.q.goalTasks(projectId, goalId)) {
+        if (!TERMINAL_TASK.has(t.status)) this.cancelWithin(ctx, projectId, t.task_id, `goal cancelled: ${reason}`);
+      }
+      for (const v of goal.plan_id ? this.q.planVersions(goal.plan_id) : []) {
+        if (v.status === 'PROPOSED') this.movePlan(ctx, v, 'REJECTED', 'goal cancelled');
+      }
+      return this.q.goal(projectId, goalId);
+    });
+  }
+
+  private movePlan(
+    ctx: CommandContext,
+    v: PlanVersionView,
+    to: Exclude<PlanStatus, 'PROPOSED'>,
+    trigger: string,
+    note?: string,
+  ): void {
+    const allowed: Partial<Record<PlanStatus, PlanStatus[]>> = {
+      PROPOSED: ['ACTIVE', 'REJECTED', 'SUPERSEDED'],
+      ACTIVE: ['SUPERSEDED', 'COMPLETED'],
+    };
+    if (!(allowed[v.status] ?? []).includes(to)) {
+      throw new FridayError(
+        'invalid_state_transition',
+        `plan ${v.plan_id} v${v.version} cannot move from ${v.status} to ${to}`,
+      );
+    }
+    const type = {
+      ACTIVE: 'plan.approved',
+      REJECTED: 'plan.rejected',
+      SUPERSEDED: 'plan.superseded',
+      COMPLETED: 'plan.completed',
+    }[to];
+    ctx.emit({
+      type,
+      payload: {
+        plan_id: v.plan_id,
+        version: v.version,
+        transition: { from: v.status, to, trigger },
+        note: note ?? null,
+      },
+      refs: [
+        { kind: 'goal', id: v.goal_id },
+        { kind: 'plan', id: v.plan_id },
+      ],
+    });
+  }
+
+  /**
+   * Records a plan version as PROPOSED. The planner validated it (or a human wrote it and the
+   * CLI validated it); this only checks that kept, reworked and dropped tasks belong to the goal.
+   */
+  proposePlan(projectId: string, actor: Actor, goalId: string, proposal: PlanProposal): PlanVersionView {
+    return this.exec(
+      { name: 'plan.propose', project_id: projectId, actor, params: { goalId, trigger: proposal.trigger } },
+      (ctx) => {
+        const goal = this.q.goal(projectId, goalId);
+        if (goal.status === 'COMPLETED' || goal.status === 'CANCELLED') {
+          throw new FridayError('invalid_state_transition', `goal ${goalId} is ${goal.status}`);
+        }
+        const plan_id = goal.plan_id ?? this.q.planIdOfGoal(goalId) ?? this.ids.next('plan');
+        const versions = this.q.planVersions(plan_id);
+        const version = (versions.at(-1)?.version ?? 0) + 1;
+        const active = versions.find((v) => v.status === 'ACTIVE');
+        const goalTasks = new Set(this.q.goalTasks(projectId, goalId).map((t) => t.task_id));
+        const keys = new Set<string>();
+        for (const t of proposal.tasks) {
+          if (keys.has(t.key)) throw new FridayError('invalid_request', `plan task key ${t.key} is used twice`);
+          keys.add(t.key);
+          if (t.change !== 'new' && (!t.task_id || !goalTasks.has(t.task_id))) {
+            throw new FridayError(
+              'invalid_request',
+              `plan task ${t.key} (${t.change}) must name a task of goal ${goalId}`,
+            );
+          }
+        }
+        // One proposal waits for a decision at a time.
+        for (const v of versions.filter((x) => x.status === 'PROPOSED')) {
+          this.movePlan(ctx, v, 'SUPERSEDED', `replaced by version ${version}`);
+        }
+        ctx.emit({
+          type: 'plan.proposed',
+          payload: {
+            plan: {
+              plan_id,
+              version,
+              goal_id: goalId,
+              supersedes: active?.version ?? null,
+              summary: proposal.summary,
+              rationale: proposal.rationale || null,
+              needs_human: proposal.needs_human,
+              trigger: proposal.trigger,
+              model_call_id: proposal.model_call_id ?? null,
+              prompt_version: proposal.prompt_version ?? null,
+              tasks: proposal.tasks,
+            },
+          },
+          refs: [
+            { kind: 'goal', id: goalId },
+            { kind: 'plan', id: plan_id },
+          ],
+        });
+        const changes: Record<string, unknown> = {};
+        if (!goal.plan_id) changes.plan_id = plan_id;
+        if (proposal.intent && !goal.objective) Object.assign(changes, proposal.intent);
+        if (Object.keys(changes).length > 0) {
+          ctx.emit({
+            type: 'goal.updated',
+            payload: { goal_id: goalId, changes },
+            refs: [{ kind: 'goal', id: goalId }],
+          });
+        }
+        return this.q.planVersion(plan_id, version) as PlanVersionView;
+      },
+    );
+  }
+
+  /**
+   * Approves a PROPOSED version and applies it in one transaction (ADR-0013): new tasks are
+   * created in dependency order, FAILED tasks go back for rework, dropped tasks are cancelled,
+   * and every task whose dependencies are complete becomes READY.
+   */
+  approvePlan(projectId: string, actor: Actor, planId: string, version: number, note?: string): PlanApproval {
+    return this.exec({ name: 'plan.approve', project_id: projectId, actor, params: { planId, version } }, (ctx) => {
+      const v = this.q.planVersion(planId, version);
+      if (!v) throw new FridayError('plan_not_found', `plan ${planId} version ${version} not found`);
+      if (v.status !== 'PROPOSED') {
+        throw new FridayError(
+          'invalid_state_transition',
+          `plan ${planId} v${version} is ${v.status}; only a PROPOSED version can be approved`,
+        );
+      }
+      const goal = this.q.goal(projectId, v.goal_id);
+      if (goal.status === 'COMPLETED' || goal.status === 'CANCELLED') {
+        throw new FridayError('invalid_state_transition', `goal ${goal.goal_id} is ${goal.status}`);
+      }
+      const active = this.q.latestPlanVersion(planId, ['ACTIVE']);
+      if (active) this.movePlan(ctx, active, 'SUPERSEDED', `superseded by version ${version}`);
+      this.movePlan(ctx, v, 'ACTIVE', 'approved', note);
+
+      const created: TaskView[] = [];
+      const idOfKey = new Map<string, string>();
+      for (const t of v.tasks) if (t.task_id) idOfKey.set(t.key, t.task_id);
+      for (const t of this.newTasksInOrder(v.tasks)) {
+        const task_id = this.ids.next('task');
+        idOfKey.set(t.key, task_id);
+        const dependencies = t.depends_on.map((d) => idOfKey.get(d) ?? d);
+        for (const dep of dependencies) this.q.task(projectId, dep);
+        ctx.emit({
+          type: 'task.created',
+          payload: {
+            task: {
+              task_id,
+              goal_id: v.goal_id,
+              plan_id: planId,
+              plan_version: version,
+              plan_key: t.key,
+              role: t.role,
+              kind: t.kind,
+              summary: t.summary,
+              description: t.description,
+              acceptance_criteria: t.acceptance_criteria,
+              priority: t.priority,
+              risk_level: t.risk_level,
+              scope: t.scope,
+              dependencies,
+              reserved_for_agent_key: null,
+              created_by: ctx.actor,
+            },
+          },
+          refs: [
+            { kind: 'task', id: task_id },
+            { kind: 'goal', id: v.goal_id },
+            { kind: 'plan', id: planId },
+          ],
+        });
+        ctx.emit({
+          type: 'plan.task_materialized',
+          payload: { plan_id: planId, version, key: t.key, task_id },
+          refs: [
+            { kind: 'plan', id: planId },
+            { kind: 'task', id: task_id },
+          ],
+        });
+        created.push(this.q.task(projectId, task_id));
+      }
+      const reworked: TaskView[] = [];
+      const dropped: TaskView[] = [];
+      for (const t of v.tasks) {
+        if (t.change === 'rework' && t.task_id) {
+          reworked.push(this.reworkWithin(ctx, projectId, t.task_id, t.note ?? 'rework requested by the plan'));
+        }
+        if (t.change === 'drop' && t.task_id) {
+          dropped.push(this.cancelWithin(ctx, projectId, t.task_id, t.note ?? 'dropped by the plan'));
+        }
+      }
+      const readied = this.readyWithin(ctx, projectId, v.goal_id);
+      if (goal.status === 'OPEN') {
+        ctx.emit({
+          type: 'goal.status_changed',
+          payload: {
+            goal_id: goal.goal_id,
+            transition: { from: 'OPEN', to: 'ACTIVE', trigger: 'plan approved' },
+            changes: { plan_id: planId },
+          },
+          refs: [{ kind: 'goal', id: goal.goal_id }],
+        });
+      }
+      return {
+        plan: this.q.planVersion(planId, version) as PlanVersionView,
+        created: created.map((t) => this.q.task(projectId, t.task_id)),
+        reworked,
+        dropped,
+        readied,
+      };
+    });
+  }
+
+  /** New tasks of a version, dependencies first (the planner already rejected cycles). */
+  private newTasksInOrder(tasks: PlanTaskView[]): PlanTaskView[] {
+    const fresh = tasks.filter((t) => t.change === 'new');
+    const keys = new Set(fresh.map((t) => t.key));
+    const done = new Set<string>();
+    const out: PlanTaskView[] = [];
+    while (out.length < fresh.length) {
+      const next = fresh.find((t) => !done.has(t.key) && t.depends_on.every((d) => !keys.has(d) || done.has(d)));
+      if (!next) throw new FridayError('invalid_request', 'the plan has a dependency cycle');
+      done.add(next.key);
+      out.push(next);
+    }
+    return out;
+  }
+
+  /** PROPOSED tasks of a goal whose dependencies are all COMPLETED become READY. */
+  private readyWithin(ctx: CommandContext, projectId: string, goalId: string): TaskView[] {
+    const out: TaskView[] = [];
+    for (const t of this.q.goalTasks(projectId, goalId)) {
+      if (t.status === 'PROPOSED' && this.q.openDependencies(t.task_id).length === 0)
+        out.push(this.moveTask(ctx, t, 'task.ready'));
+    }
+    return out;
+  }
+
+  /** After a plan task completes: dependents whose prerequisites are all done may start. */
+  readyDependents(projectId: string, actor: Actor, goalId: string): TaskView[] {
+    return this.exec({ name: 'plan.ready_dependents', project_id: projectId, actor, params: { goalId } }, (ctx) =>
+      this.readyWithin(ctx, projectId, goalId),
+    );
+  }
+
+  rejectPlan(projectId: string, actor: Actor, planId: string, version: number, note?: string): PlanVersionView {
+    return this.exec({ name: 'plan.reject', project_id: projectId, actor, params: { planId, version } }, (ctx) => {
+      const v = this.q.planVersion(planId, version);
+      if (!v) throw new FridayError('plan_not_found', `plan ${planId} version ${version} not found`);
+      this.movePlan(ctx, v, 'REJECTED', 'rejected', note);
+      return this.q.planVersion(planId, version) as PlanVersionView;
+    });
+  }
+
+  /** Completes the goal and its active plan once every task is COMPLETED (cancelled ones aside). */
+  completeGoalIfDone(projectId: string, actor: Actor, goalId: string): GoalView | null {
+    const goal = this.q.goal(projectId, goalId);
+    if (goal.status !== 'ACTIVE' || !goal.plan_id) return null;
+    const active = this.q.latestPlanVersion(goal.plan_id, ['ACTIVE']);
+    const tasks = this.q.goalTasks(projectId, goalId);
+    const done =
+      tasks.every((t) => t.status === 'COMPLETED' || t.status === 'CANCELLED') &&
+      tasks.some((t) => t.status === 'COMPLETED');
+    if (!active || !done) return null;
+    return this.exec({ name: 'goal.complete', project_id: projectId, actor, params: { goalId } }, (ctx) => {
+      this.movePlan(ctx, active, 'COMPLETED', 'all tasks completed');
+      ctx.emit({
+        type: 'goal.status_changed',
+        payload: {
+          goal_id: goalId,
+          transition: { from: 'ACTIVE', to: 'COMPLETED', trigger: 'all tasks completed' },
+          changes: { completed_at: ctx.now },
+        },
+        refs: [{ kind: 'goal', id: goalId }],
+      });
+      return this.q.goal(projectId, goalId);
+    });
+  }
+
+  recordModelCall(projectId: string, actor: Actor, call: ModelCallInput): string {
+    return this.exec({ name: 'model.call', project_id: projectId, actor, params: { purpose: call.purpose } }, (ctx) => {
+      const call_id = this.ids.next('call');
+      ctx.emit({
+        type: 'model.called',
+        payload: { call: { call_id, ...call } },
+        refs: [{ kind: 'call', id: call_id }, ...(call.goal_id ? [{ kind: 'goal' as const, id: call.goal_id }] : [])],
+      });
+      return call_id;
+    });
+  }
+
+  /**
+   * Applies one delegation decision (ADR-0013 §9): assign (spawn mode), reserve (attach mode),
+   * or record why the task waits. A repeated "nobody available" decision is not recorded again.
+   */
+  delegateTask(
+    projectId: string,
+    actor: Actor,
+    taskId: string,
+    decision: { agent_key: string | null; reason: string; scores: unknown[] },
+  ): { mode: 'assigned' | 'reserved' | 'waiting' | 'none'; task: TaskView } {
+    const idle = decision.reason.startsWith('waits') ? 'waiting' : 'none';
+    if (!decision.agent_key) {
+      const last = this.q.assignments(taskId).at(-1);
+      if (last && last.mode === idle && last.reason === decision.reason)
+        return { mode: idle, task: this.q.task(projectId, taskId) };
+    }
+    return this.exec(
+      { name: 'task.delegate', project_id: projectId, actor, params: { taskId, agent_key: decision.agent_key } },
+      (ctx) => {
+        let mode: 'assigned' | 'reserved' | 'waiting' | 'none' = idle;
+        let task = this.q.task(projectId, taskId);
+        if (decision.agent_key) {
+          const r = this.assignWithin(ctx, projectId, taskId, decision.agent_key);
+          mode = r.mode;
+          task = r.task;
+        }
+        const assignment_id = this.ids.next('asg');
+        ctx.emit({
+          type: 'assignment.decided',
+          payload: {
+            assignment: {
+              assignment_id,
+              task_id: taskId,
+              agent_key: decision.agent_key,
+              mode,
+              reason: decision.reason,
+              scores: decision.scores,
+            },
+          },
+          refs: [{ kind: 'task', id: taskId }],
+        });
+        return { mode, task };
+      },
+    );
+  }
+
+  /** An escalation raised by the Master Brain, with the six fields of spec Part 03 §11. */
+  raiseEscalation(
+    projectId: string,
+    actor: Actor,
+    esc: {
+      kind: string;
+      goal_id: string | null;
+      task_id: string | null;
+      question: string;
+      options: string[];
+      details: Record<string, unknown>;
+    },
+  ): string {
+    return this.exec(
+      { name: 'escalation.raise', project_id: projectId, actor, params: { kind: esc.kind, goal_id: esc.goal_id } },
+      (ctx) => {
+        const escalation_id = this.ids.next('esc');
+        ctx.emit({
+          type: 'escalation.requested',
+          payload: {
+            escalation: {
+              escalation_id,
+              task_id: esc.task_id,
+              run_id: null,
+              question: esc.question,
+              options: esc.options.length ? esc.options : null,
+              context: null,
+              goal_id: esc.goal_id,
+              kind: esc.kind,
+              details: esc.details,
+            },
+          },
+          refs: [
+            { kind: 'escalation', id: escalation_id },
+            ...(esc.goal_id ? [{ kind: 'goal' as const, id: esc.goal_id }] : []),
+            ...(esc.task_id ? [{ kind: 'task' as const, id: esc.task_id }] : []),
+          ],
+        });
+        return escalation_id;
+      },
+    );
+  }
+
+  /** HARNESS_LOST tasks of a harness that will not come back go back to READY for someone else. */
+  releaseLostTasks(projectId: string, actor: Actor, harnessId: string): TaskView[] {
+    return this.q
+      .tasks(projectId, { statuses: ['HARNESS_LOST'] })
+      .filter((t) => t.assigned_harness_id === harnessId)
+      .map((t) => this.releaseTask(projectId, actor, t.task_id, `harness ${harnessId} did not come back`));
+  }
+
+  /** Operational: how far the Master Brain has read the event log. */
+  setBrainCursor(projectId: string, sequence: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO brain_cursor (project_id, last_sequence, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(project_id) DO UPDATE SET last_sequence = excluded.last_sequence, updated_at = excluded.updated_at`,
+      )
+      .run(projectId, sequence, this.clock.now());
   }
 
   // ================================================================ verification

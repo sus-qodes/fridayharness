@@ -1,0 +1,83 @@
+/**
+ * @friday/planner
+ * The Master Brain (spec Part 03): goals become versioned plans of tasks, delegated by a
+ * deterministic policy, revised on failure, escalated to humans when needed. Model calls go
+ * through a provider interface (ADR-0013).
+ */
+export const PACKAGE_NAME = '@friday/planner';
+
+export {
+  type BrainDeps,
+  type BrainReport,
+  type BrainSettings,
+  type BrainStep,
+  MASTER_BRAIN,
+  MasterBrain,
+} from './brain.js';
+export {
+  DELEGATION_WEIGHTS,
+  type DelegationCandidate,
+  type DelegationDecision,
+  type DelegationTask,
+  delegate,
+  scoreCandidate,
+} from './delegate.js';
+export { diffPlanVersions, type PlanDiff, type PlanVersionTask } from './diff.js';
+export { buildEscalation, type Escalation, type EscalationDetails, type EscalationReason } from './escalate.js';
+export {
+  formatIssues,
+  type ParseResult,
+  type PlannerCall,
+  type PlannerOutcome,
+  type PlannerPolicy,
+  runPlanner,
+} from './model.js';
+export { parsePlanDraft, parseReplanDraft } from './parse.js';
+export { costOf, DEFAULT_PRICES, type ModelPrice, type PriceTable } from './pricing.js';
+export {
+  type GoalForPrompt,
+  PLAN_SYSTEM,
+  PROMPT_VERSIONS,
+  planPrompt,
+  REPLAN_SYSTEM,
+  repairPrompt,
+  replanPrompt,
+} from './prompts.js';
+export { existingTasks, type ProposalMeta, proposalFromDraft, proposalFromReplan, taskInput } from './proposals.js';
+export {
+  AnthropicPlannerModel,
+  type AnthropicPlannerOptions,
+  DEFAULT_PLANNER_MODEL,
+  type Effort,
+  structuredOutputSchema,
+} from './providers/anthropic.js';
+export { FakePlannerModel, type FakeResponse } from './providers/fake.js';
+export {
+  ModelError,
+  type ModelErrorCode,
+  type ModelRequest,
+  type ModelResponse,
+  type ModelUsage,
+  type PlannerModel,
+  ZERO_USAGE,
+} from './providers/types.js';
+export {
+  draftJsonSchema,
+  NeedsHuman,
+  PLAN_LIMITS,
+  PlanDraft,
+  type PlanDraftInput,
+  PlanKey,
+  PlanTaskDraft,
+  ReplanDraft,
+  type ReplanDraftInput,
+  ScopeGlob,
+} from './schemas.js';
+export { type BrainAction, type TriggerEvent, type TriggerFacts, triggersFor } from './triggers.js';
+export {
+  type ExistingTask,
+  isReadOnly,
+  type ValidationResult,
+  validatePlanDraft,
+  validateReplanDraft,
+} from './validate.js';

@@ -2,7 +2,12 @@ import { fromJson } from '@friday/db';
 import type {
   ActorKind,
   AgentView,
+  AssignmentView,
+  GoalView,
   HarnessView,
+  ModelCallView,
+  PlanTaskView,
+  PlanVersionView,
   RunView,
   TaskScope,
   TaskView,
@@ -14,6 +19,9 @@ export interface TaskRow {
   project_id: string;
   goal_id: string | null;
   plan_id: string | null;
+  plan_version: number | null;
+  plan_key: string | null;
+  role: string | null;
   kind: string;
   summary: string;
   description: string | null;
@@ -102,6 +110,9 @@ export function toTaskView(row: TaskRow, dependencies: string[]): TaskView {
     project_id: row.project_id,
     goal_id: row.goal_id,
     plan_id: row.plan_id,
+    plan_version: row.plan_version ?? null,
+    plan_key: row.plan_key ?? null,
+    role: row.role ?? null,
     kind: row.kind as TaskView['kind'],
     summary: row.summary,
     description: row.description,
@@ -208,5 +219,150 @@ export function toVerificationView(row: VerificationRow, checks: CheckRow[]): Ve
     ended_at: row.ended_at,
     summary: row.summary,
     checks: checks.map((c) => ({ ...c, status: c.status as VerificationView['status'] })),
+  };
+}
+
+// ---- Master Brain (M2) ----------------------------------------------------------------------
+
+export interface GoalRow {
+  goal_id: string;
+  project_id: string;
+  request: string;
+  objective: string | null;
+  constraints_json: string;
+  outcomes_json: string;
+  priority: string;
+  status: string;
+  plan_id: string | null;
+  created_by_kind: string;
+  created_by_id: string;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export function toGoalView(row: GoalRow): GoalView {
+  return {
+    goal_id: row.goal_id,
+    project_id: row.project_id,
+    request: row.request,
+    objective: row.objective,
+    constraints: fromJson<string[]>(row.constraints_json, []),
+    outcomes: fromJson<string[]>(row.outcomes_json, []),
+    priority: row.priority as GoalView['priority'],
+    status: row.status as GoalView['status'],
+    plan_id: row.plan_id,
+    created_by: { kind: row.created_by_kind as ActorKind, id: row.created_by_id },
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    completed_at: row.completed_at,
+  };
+}
+
+export interface PlanRow {
+  plan_id: string;
+  version: number;
+  goal_id: string;
+  status: string;
+  supersedes: number | null;
+  summary: string;
+  rationale: string | null;
+  needs_human_json: string | null;
+  trigger: string;
+  proposed_by_kind: string;
+  proposed_by_id: string;
+  model_call_id: string | null;
+  prompt_version: string | null;
+  created_at: string;
+  decided_at: string | null;
+  decided_by_id: string | null;
+  decision_note: string | null;
+}
+
+export interface PlanTaskRow {
+  key: string;
+  position: number;
+  change: string;
+  task_id: string | null;
+  kind: string;
+  summary: string;
+  description: string | null;
+  acceptance_criteria_json: string;
+  depends_on_json: string;
+  scope_json: string;
+  role: string;
+  priority: string;
+  risk_level: string;
+  note: string | null;
+}
+
+export function toPlanTaskView(row: PlanTaskRow): PlanTaskView {
+  return {
+    key: row.key,
+    position: row.position,
+    change: row.change as PlanTaskView['change'],
+    task_id: row.task_id,
+    kind: row.kind as PlanTaskView['kind'],
+    summary: row.summary,
+    description: row.description,
+    acceptance_criteria: fromJson<string[]>(row.acceptance_criteria_json, []),
+    depends_on: fromJson<string[]>(row.depends_on_json, []),
+    scope: fromJson<TaskScope>(row.scope_json, { write: [], read: [] }),
+    role: row.role,
+    priority: row.priority as PlanTaskView['priority'],
+    risk_level: row.risk_level as PlanTaskView['risk_level'],
+    note: row.note,
+  };
+}
+
+export function toPlanVersionView(row: PlanRow, tasks: PlanTaskRow[]): PlanVersionView {
+  return {
+    plan_id: row.plan_id,
+    version: row.version,
+    goal_id: row.goal_id,
+    status: row.status as PlanVersionView['status'],
+    supersedes: row.supersedes,
+    summary: row.summary,
+    rationale: row.rationale,
+    needs_human: fromJson<PlanVersionView['needs_human']>(row.needs_human_json, null),
+    trigger: row.trigger,
+    proposed_by: { kind: row.proposed_by_kind as ActorKind, id: row.proposed_by_id },
+    model_call_id: row.model_call_id,
+    prompt_version: row.prompt_version,
+    created_at: row.created_at,
+    decided_at: row.decided_at,
+    decided_by_id: row.decided_by_id,
+    decision_note: row.decision_note,
+    tasks: tasks.map(toPlanTaskView),
+  };
+}
+
+export interface ModelCallRow extends Omit<ModelCallView, 'remote'> {
+  remote: number;
+}
+
+export function toModelCallView(row: ModelCallRow): ModelCallView {
+  return { ...row, remote: Boolean(row.remote) };
+}
+
+export interface AssignmentRow {
+  assignment_id: string;
+  task_id: string;
+  agent_key: string | null;
+  mode: string;
+  reason: string;
+  scores_json: string;
+  created_at: string;
+}
+
+export function toAssignmentView(row: AssignmentRow): AssignmentView {
+  return {
+    assignment_id: row.assignment_id,
+    task_id: row.task_id,
+    agent_key: row.agent_key,
+    mode: row.mode as AssignmentView['mode'],
+    reason: row.reason,
+    scores: fromJson<Record<string, unknown>[]>(row.scores_json, []),
+    created_at: row.created_at,
   };
 }

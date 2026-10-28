@@ -93,6 +93,70 @@ export function compileContext(
     const scopeText = `${scope}\nAlways off-limits: .friday/ runtime files, .git/, .claude/, .mcp.json, secrets (.env*, *.pem), Friday's private state directory.`;
     add('task.scope', scopeText, 'task', [taskSrc('policy enforces this scope on edits', scopeText)]);
 
+    // M2: the goal this task serves, why it came back for rework, and what humans decided for the goal.
+    if (task.goal_id) {
+      const pid = project.project_id;
+      const goal = state.q.findGoal(pid, task.goal_id);
+      const lines: string[] = [];
+      const src: SourceRef[] = [];
+      if (goal) {
+        const where = task.plan_key ? ` You do plan task "${task.plan_key}" of version ${task.plan_version}.` : '';
+        lines.push(`Goal ${goal.goal_id}: ${goal.objective ?? goal.request}.${where}`);
+        src.push(
+          source({
+            source_id: goal.goal_id,
+            source_type: 'task_record',
+            authority: goal.created_by.kind,
+            recency: goal.updated_at,
+            relevance: 0.9,
+            relationship_distance: 1,
+            verification_status: 'verified',
+            selection_reason: 'the goal this task serves',
+            content: lines[0] as string,
+          }),
+        );
+      }
+      const rework = state.store.readByRef(pid, 'task', task.task_id, { types: ['task.rework'] }).at(-1);
+      const why = (rework?.payload as { transition?: { reason?: string } } | undefined)?.transition?.reason;
+      if (rework && why) {
+        lines.push(`Rework requested: ${why}`);
+        src.push(
+          source({
+            source_id: rework.event_id,
+            source_type: 'event',
+            authority: rework.actor.kind,
+            recency: rework.occurred_at,
+            relevance: 1,
+            relationship_distance: 0,
+            verification_status: 'verified',
+            selection_reason: 'why this task came back',
+            content: why,
+          }),
+        );
+      }
+      for (const d of state.q
+        .escalations(pid, 'answered')
+        .filter((r) => r.goal_id === task.goal_id)
+        .slice(-5)) {
+        const text = `Decision: ${String(d.question)} -> ${String(d.answer)}`;
+        lines.push(text);
+        src.push(
+          source({
+            source_id: String(d.escalation_id),
+            source_type: 'event',
+            authority: 'human',
+            recency: String(d.answered_at ?? now),
+            relevance: 0.9,
+            relationship_distance: 1,
+            verification_status: 'verified',
+            selection_reason: 'a human decision for this goal',
+            content: text,
+          }),
+        );
+      }
+      if (lines.length) add('task.plan', lines.join('\n'), 'human', src);
+    }
+
     const progress = state.store
       .readByRef(project.project_id, 'task', task.task_id, { types: ['agent.event'] })
       .filter(

@@ -7,7 +7,15 @@ export const PACKAGE_NAME = '@friday/sdk';
 export const FRIDAY_VERSION = '0.1.0';
 
 export { DaemonClient, type DaemonClientOptions, DaemonUnreachableError, type RequestOptions } from './client.js';
-export { type CheckConfig, FridayConfig, loadConfig, parseConfig, renderInitialConfig } from './config.js';
+export {
+  type CheckConfig,
+  FridayConfig,
+  loadConfig,
+  type MasterBrainConfig,
+  type ProviderConfig,
+  parseConfig,
+  renderInitialConfig,
+} from './config.js';
 export {
   CONFIG_FILE,
   type DaemonDiscovery,
@@ -27,4 +35,5 @@ export {
   writePrivateFile,
 } from './discovery.js';
 export { renderContextMarkdown } from './render.js';
+export { credentialsDir, listSecrets, readSecret, removeSecret, writeSecret } from './secrets.js';
 export { formatSse, type SseMessage, SseParser } from './sse.js';

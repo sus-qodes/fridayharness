@@ -20,6 +20,8 @@ export interface PolicyTask {
   task_id: string;
   status: string;
   scope: TaskScope | null;
+  /** Review and research tasks without a write scope are read-only (ADR-0013). */
+  kind?: string;
 }
 
 export interface OtherWriter {
@@ -188,6 +190,14 @@ export function evaluate(input: PolicyInput): PolicyResult {
       'deny',
       'write.task_not_running',
       `your task ${task.task_id} is ${task.status}; edits are only allowed while it is RUNNING.`,
+      { targets },
+    );
+  }
+  if ((task.kind === 'review' || task.kind === 'research') && (task.scope?.write ?? []).length === 0) {
+    return r(
+      'deny',
+      'write.read_only_task',
+      `${task.task_id} is a ${task.kind} task with no write scope, so it is read-only. ${HOW_TO_ASK}`,
       { targets },
     );
   }

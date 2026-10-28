@@ -1,5 +1,17 @@
 import { z } from 'zod';
-import { AgentView, HarnessView, RunView, TaskCreateRequest, TaskView, VerificationView } from './api.js';
+import {
+  AgentView,
+  AssignmentView,
+  GoalCreateRequest,
+  GoalView,
+  HarnessView,
+  ModelCallView,
+  PlanVersionView,
+  RunView,
+  TaskCreateRequest,
+  TaskView,
+  VerificationView,
+} from './api.js';
 import { ContextPacket } from './context.js';
 import { DomainEvent } from './envelope.js';
 import { METHODS, OUTBOUND_METHODS } from './methods.js';
@@ -33,6 +45,11 @@ export function buildSchemas(): Record<string, JsonObject> {
     harness: HarnessView,
     agent: AgentView,
     verification: VerificationView,
+    'goal-create-request': GoalCreateRequest,
+    goal: GoalView,
+    'plan-version': PlanVersionView,
+    'model-call': ModelCallView,
+    assignment: AssignmentView,
   };
   for (const [name, schema] of Object.entries(api)) {
     out[`api/v1/${name}.json`] = toSchema(schema, `urn:friday:api:v1:${name}`);

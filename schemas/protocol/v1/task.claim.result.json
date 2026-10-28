@@ -24,6 +24,33 @@
             "null"
           ]
         },
+        "plan_version": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plan_key": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "kind": {
           "type": "string",
           "enum": [

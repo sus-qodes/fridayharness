@@ -29,8 +29,9 @@ export function exitCodeFor(err: unknown): number {
   }
   if (err instanceof FridayError) {
     process.stderr.write(`friday: ${err.code} ${err.message}\n`);
-    const issues = (err.details as { issues?: { path: string; message: string }[] } | undefined)?.issues;
-    for (const i of issues ?? []) process.stderr.write(`  ${i.path || '(body)'}: ${i.message}\n`);
+    const details = err.details as { issues?: { path: string; message: string }[]; errors?: string[] } | undefined;
+    for (const i of details?.issues ?? []) process.stderr.write(`  ${i.path || '(body)'}: ${i.message}\n`);
+    for (const e of details?.errors ?? []) process.stderr.write(`  - ${e}\n`);
     return 4;
   }
   process.stderr.write(`friday: ${(err as Error)?.message ?? String(err)}\n`);

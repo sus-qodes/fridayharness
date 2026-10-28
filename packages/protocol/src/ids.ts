@@ -34,6 +34,9 @@ export const ID_PREFIXES = [
   'cred',
   'inst',
   'aud',
+  // M2: model calls and delegation decisions.
+  'call',
+  'asg',
 ] as const;
 export type IdPrefix = (typeof ID_PREFIXES)[number];
 export type Id<P extends IdPrefix = IdPrefix> = `${P}_${string}`;

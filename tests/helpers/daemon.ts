@@ -40,6 +40,7 @@ export async function startTestDaemon(
     tickMs?: number;
     extensions?: DaemonOptions['extensions'];
     verify?: DaemonOptions['verify'];
+    brain?: DaemonOptions['brain'];
   } = {},
 ): Promise<TestDaemon> {
   initTestProject(ws, opts.extraConfig ? { extraConfig: opts.extraConfig } : {});
@@ -58,6 +59,7 @@ export async function startTestDaemon(
     ...(opts.clock ? { clock: opts.clock } : {}),
     ...(opts.extensions ? { extensions: opts.extensions } : {}),
     ...(opts.verify ? { verify: opts.verify } : {}),
+    ...(opts.brain !== undefined ? { brain: opts.brain } : {}),
   });
   ws.track({ close: () => daemon.close('test cleanup') });
   const base = { baseUrl: daemon.url, projectId: daemon.project.project_id };

@@ -176,7 +176,7 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           const result: PolicyResult = evaluate({
             action,
             ctx: { projectRoot: project.root, stateDir: path.dirname(path.dirname(ctx.privateDir)) },
-            task: task ? { task_id: task.task_id, status: task.status, scope: task.scope } : null,
+            task: task ? { task_id: task.task_id, status: task.status, scope: task.scope, kind: task.kind } : null,
             otherWriters: action.kind === 'write' ? otherWriters(agent?.agent_id) : [],
             approved: (capability, target) => state.q.grantedApproval(pid, capability, target, state.clock.now()),
             autonomy: project.config.autonomy as Partial<Record<CommandClass, Autonomy>>,

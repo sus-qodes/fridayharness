@@ -1,0 +1,109 @@
+{
+  "$id": "urn:friday:api:v1:goal",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "goal_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "request": {
+      "type": "string"
+    },
+    "objective": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "outcomes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "OPEN",
+        "ACTIVE",
+        "COMPLETED",
+        "CANCELLED"
+      ]
+    },
+    "plan_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_by": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "human",
+            "system",
+            "agent",
+            "harness",
+            "master_brain"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ]
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string"
+    },
+    "completed_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "goal_id",
+    "project_id",
+    "request",
+    "objective",
+    "constraints",
+    "outcomes",
+    "priority",
+    "status",
+    "plan_id",
+    "created_by",
+    "created_at",
+    "updated_at",
+    "completed_at"
+  ]
+}

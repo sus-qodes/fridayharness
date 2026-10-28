@@ -44,10 +44,12 @@ export function statusPageHtml(projectId: string, projectName: string): string {
   <button id="go">Show status</button> <span id="loginErr" class="err"></span>
 </div>
 <main id="app" hidden>
+  <section class="wide"><h2>Goals</h2><table id="goals"></table></section>
   <section class="wide"><h2>Tasks</h2><table id="tasks"></table></section>
   <section><h2>Harnesses</h2><table id="harnesses"></table></section>
   <section><h2>Agents</h2><table id="agents"></table></section>
   <section><h2>Pending approvals</h2><table id="approvals"></table></section>
+  <section class="wide"><h2>Questions for a human</h2><table id="escalations"></table></section>
   <section class="wide"><h2>Recent events</h2><table id="events"></table></section>
 </main>
 <script>
@@ -78,6 +80,10 @@ async function refresh() {
       '<tr><td>' + esc(a.agent_key) + (a.shadow ? ' (shadow)' : '') + '</td><td class="' + cls(a.status) + '">' + esc(a.status) + '</td><td><code>' + esc(a.current_task_id || '') + '</code></td></tr>'));
     table(document.getElementById('approvals'), ['Approval', 'Capability', 'Target'], s.approvals.map((a) =>
       '<tr><td><code>' + esc(a.approval_id) + '</code></td><td>' + esc(a.capability) + '</td><td>' + esc(a.target) + '</td></tr>'));
+    table(document.getElementById('goals'), ['Goal', 'Status', 'Objective'], (s.goals || []).map((g) =>
+      '<tr><td><code>' + esc(g.goal_id) + '</code></td><td class="' + cls(g.status) + '">' + esc(g.status) + '</td><td>' + esc(g.objective || g.request) + '</td></tr>'));
+    table(document.getElementById('escalations'), ['Question', 'From', 'Kind', 'Text'], (s.escalations || []).map((q) =>
+      '<tr><td><code>' + esc(q.escalation_id) + '</code></td><td>' + esc(q.requested_by_kind || 'agent') + '</td><td>' + esc(q.kind || '') + '</td><td>' + esc(q.question) + '</td></tr>'));
     table(document.getElementById('events'), ['#', 'Type', 'Actor', 'When'], s.events.map((e) =>
       '<tr><td>' + esc(e.sequence) + '</td><td><code>' + esc(e.type) + '</code></td><td>' + esc(e.actor.kind + ':' + e.actor.id) + '</td><td>' + esc(e.occurred_at) + '</td></tr>'));
   } catch (e) {

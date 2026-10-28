@@ -7,6 +7,7 @@ import { FRIDAY_DIR, FRIDAY_VERSION, readToken, renderInitialConfig, stateDir, w
 import { Command, CommanderError, Option } from 'commander';
 import { type GlobalOptions, operator, out, project, UsageError } from './context.js';
 import { doctor, renderDoctor } from './doctor.js';
+import { registerGoalCommands, renderEscalation } from './goals.js';
 import { clip, describeEvent, kv, shortTime, table } from './output.js';
 import { runDaemon } from './run.js';
 import { FRIDAY_DIR_GITIGNORE } from './templates.js';
@@ -496,21 +497,15 @@ export function buildProgram(): Command {
   }
   program
     .command('escalations')
-    .description('questions agents asked a human')
+    .description('questions waiting for a human, from agents and the Master Brain')
     .action(async () => {
       const { client } = operator(g());
-      const res = await client.get<{ escalations: Record<string, string | null>[] }>(
+      const res = await client.get<{ escalations: Parameters<typeof renderEscalation>[0][] }>(
         client.projectPath('/escalations'),
         { query: { status: 'pending' } },
       );
       out(g(), res.escalations, () =>
-        res.escalations.length
-          ? table(
-              ['ESCALATION', 'TASK', 'QUESTION'],
-              res.escalations.map((e) => [e.escalation_id, e.task_id, e.question]),
-              { maxWidth: 90 },
-            )
-          : 'No open questions.',
+        res.escalations.length ? res.escalations.map(renderEscalation).join('\n\n') : 'No open questions.',
       );
     });
   program
@@ -560,6 +555,7 @@ export function buildProgram(): Command {
       out(g(), { ok: true }, () => 'Daemon is stopping.');
     });
 
+  registerGoalCommands(program, g);
   for (const plugin of commandPlugins) plugin(program);
   return program;
 }

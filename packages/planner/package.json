@@ -1,0 +1,35 @@
+{
+  "name": "@friday/planner",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Master Brain: goals, versioned plans, delegation, replanning and escalation over a pluggable model provider.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0",
+    "@friday/core": "workspace:*",
+    "@friday/events": "workspace:*",
+    "@friday/policy": "workspace:*",
+    "@friday/protocol": "workspace:*",
+    "@friday/state": "workspace:*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@friday/db": "workspace:*",
+    "@friday/test-support": "workspace:*"
+  }
+}

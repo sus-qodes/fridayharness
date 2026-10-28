@@ -3,6 +3,7 @@ import type { Server } from 'node:http';
 import path from 'node:path';
 import type { Clock, IdGenerator } from '@friday/core';
 import { closeDatabase, openDatabase } from '@friday/db';
+import type { PlannerModel } from '@friday/planner';
 import { type Actor, API_VERSION, FridayError, PROTOCOL_VERSIONS } from '@friday/protocol';
 import {
   type DaemonDiscovery,
@@ -18,6 +19,7 @@ import { FridayState, type StateConfig } from '@friday/state';
 import { serve } from '@hono/node-server';
 import type { Hono } from 'hono';
 import { buildApp } from './app.js';
+import { type BrainHandle, createMasterBrain } from './brain.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
 import { runVerification } from './verify.js';
 
@@ -42,6 +44,11 @@ export interface DaemonOptions {
   /** Runs verification checks for `POST /tasks/:id/verify` without a manual result. */
   verify?: (ctx: DaemonContext, taskId: string, actor: Actor) => Promise<unknown>;
   state?: Partial<StateConfig>;
+  /**
+   * The Master Brain (M2): false leaves it out; `model` replaces the configured provider (tests);
+   * `autoStart: false` leaves it idle until `brain.runOnce()`.
+   */
+  brain?: false | { model?: PlannerModel | null; autoStart?: boolean };
 }
 
 export interface DaemonContext {
@@ -60,6 +67,8 @@ export interface Daemon extends DaemonContext {
   tokens: { operator: string; bootstrap: string };
   app: Hono;
   tick(): ReturnType<FridayState['tick']>;
+  /** The Master Brain, unless it was disabled. */
+  brain: BrainHandle | undefined;
   close(reason?: string): Promise<void>;
   /** Resolves when the daemon has fully stopped (after close or an admin shutdown). */
   closed: Promise<void>;
@@ -192,6 +201,17 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     bootstrapToken: () => tokens.bootstrap,
   };
 
+  const brain =
+    opts.brain === false
+      ? undefined
+      : createMasterBrain({
+          state,
+          project,
+          env,
+          logger,
+          ...(opts.brain && opts.brain.model !== undefined ? { model: opts.brain.model } : {}),
+        });
+
   let closing: Promise<void> | undefined;
   const app = buildApp({
     state,
@@ -209,6 +229,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     streams,
     verify: (taskId: string, actor: Actor) => (opts.verify ?? runVerification)(ctx, taskId, actor),
     ...(opts.pollIntervalMs ? { pollIntervalMs: opts.pollIntervalMs } : {}),
+    ...(brain ? { brain } : {}),
   });
   for (const ext of opts.extensions ?? []) ext(app as unknown as Hono, ctx);
 
@@ -277,11 +298,14 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       : undefined;
   const sweep = setInterval(() => state.bus.sweepIdempotency(), 60 * 60 * 1000);
   sweep.unref();
+  if (brain && !(opts.brain && opts.brain.autoStart === false)) brain.brain.start();
 
   async function close(reason = 'shutdown'): Promise<void> {
     if (closing) return closing;
     closing = (async () => {
       draining = true;
+      // Stop the Master Brain first: it aborts a model call in flight and finishes its current step.
+      if (brain) await brain.brain.stop().catch(() => undefined);
       if (timer) clearInterval(timer);
       clearInterval(sweep);
       for (const s of streams) s.abort();
@@ -316,5 +340,5 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     return closing;
   }
 
-  return { ...ctx, url, instanceId, tokens, app: app as unknown as Hono, tick, close, closed };
+  return { ...ctx, url, instanceId, tokens, app: app as unknown as Hono, tick, brain, close, closed };
 }

@@ -4,7 +4,10 @@
  */
 export const PACKAGE_NAME = '@friday/daemon';
 
-export { type AppDeps, buildApp } from './app.js';
+export { type AppDeps, type AppEnv, buildApp } from './app.js';
+export { type BrainHandle, type BrainStatus, createMasterBrain } from './brain.js';
+export { buildBrainContext } from './brain-context.js';
+export { escalationView } from './brain-routes.js';
 export { type CompileInput, compileContext, withStaleness } from './context.js';
 export { createDaemon, type Daemon, type DaemonContext, type DaemonOptions } from './daemon.js';
 export { createLogger, type Level, type Logger, silentLogger } from './log.js';

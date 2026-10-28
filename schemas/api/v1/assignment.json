@@ -1,0 +1,53 @@
+{
+  "$id": "urn:friday:api:v1:assignment",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "assignment_id": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "agent_key": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "assigned",
+        "reserved",
+        "waiting",
+        "none"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "scores": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string"
+        },
+        "additionalProperties": {}
+      }
+    },
+    "created_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "assignment_id",
+    "task_id",
+    "agent_key",
+    "mode",
+    "reason",
+    "scores",
+    "created_at"
+  ]
+}

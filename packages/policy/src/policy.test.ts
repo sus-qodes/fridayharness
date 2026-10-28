@@ -183,6 +183,19 @@ describe('evaluate', () => {
     ).toBe('write.task_not_running');
   });
 
+  it('keeps review and research tasks without a write scope read-only', () => {
+    const action = { tool: 'Edit', kind: 'write' as const, paths: ['src/a.ts'] };
+    for (const kind of ['review', 'research']) {
+      const res = evaluate({ ctx: WIN, task: { ...running([]), kind }, action });
+      expect(res, kind).toMatchObject({ decision: 'deny', rule: 'write.read_only_task' });
+      expect(res.reason).toContain('friday_request_permission');
+    }
+    expect(evaluate({ ctx: WIN, task: { ...running(['src/**']), kind: 'review' }, action }).decision).toBe('allow');
+    expect(evaluate({ ctx: WIN, task: { ...running([]), kind: 'implementation' }, action }).rule).toBe(
+      'write.no_scope',
+    );
+  });
+
   it('denies writes outside the project and into protected files, whatever the scope', () => {
     expect(write(['..\\other\\x.ts']).rule).toBe('write.outside_project');
     expect(write(['.claude/settings.json']).rule).toBe('sensitive.host.config');

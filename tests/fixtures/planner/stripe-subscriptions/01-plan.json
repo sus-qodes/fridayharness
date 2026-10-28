@@ -1,0 +1,62 @@
+{
+  "purpose": "plan",
+  "match": "Stripe subscriptions",
+  "usage": { "input_tokens": 2400, "output_tokens": 1800, "cache_creation_input_tokens": 3100 },
+  "output": {
+    "objective": "Add Stripe subscription billing while one-time checkout keeps working, with tests",
+    "constraints": [
+      "keep one-time checkout working",
+      "money stays in integer minor units with an ISO-4217 currency (DECISIONS.md ADR-001)",
+      "the frontend reaches the backend only through shared/src (ADR-002)"
+    ],
+    "outcomes": [
+      "a customer can start a monthly subscription",
+      "Stripe webhooks keep the subscription status current",
+      "tests cover the subscription lifecycle"
+    ],
+    "summary": "Build the backend subscription service and the frontend subscribe page in parallel, then Stripe webhooks, then lifecycle tests.",
+    "rationale": "The billing service owns the contract the webhooks and the page need; the page only depends on the shared types, so both can start at once with disjoint write scopes.",
+    "needs_human": null,
+    "tasks": [
+      {
+        "key": "billing-service",
+        "kind": "implementation",
+        "summary": "Backend subscription service and shared billing types",
+        "description": "Add backend/src/billing/subscriptions.ts creating and cancelling subscriptions through a Stripe client interface, and shared/src/billing.ts with the Subscription types.",
+        "acceptance_criteria": ["createSubscription and cancelSubscription exist with unit tests", "one-time checkout tests still pass", "node --test passes"],
+        "scope": { "write": ["backend/src/billing/**", "shared/src/billing.ts"], "read": ["backend/**", "shared/**"] },
+        "role": "backend",
+        "risk_level": "high"
+      },
+      {
+        "key": "subscribe-page",
+        "kind": "implementation",
+        "summary": "Frontend subscription plan picker with monthly prices",
+        "description": "Add frontend/src/subscriptions/ with a plan picker that formats monthly prices from integer minor units.",
+        "acceptance_criteria": ["plans render with formatted monthly prices", "node --test passes"],
+        "scope": { "write": ["frontend/src/subscriptions/**"], "read": ["frontend/**", "shared/**"] },
+        "role": "frontend"
+      },
+      {
+        "key": "stripe-webhooks",
+        "kind": "implementation",
+        "summary": "Stripe webhook handler that updates subscription status",
+        "description": "Add backend/src/webhooks/stripe.ts: verify the signature, then apply customer.subscription.* events.",
+        "acceptance_criteria": ["invalid signatures are rejected", "subscription status follows the events", "node --test passes"],
+        "depends_on": ["billing-service"],
+        "scope": { "write": ["backend/src/webhooks/**"], "read": ["backend/**", "shared/**"] },
+        "role": "backend",
+        "risk_level": "high"
+      },
+      {
+        "key": "lifecycle-tests",
+        "kind": "verification",
+        "summary": "Subscription lifecycle tests across backend and frontend",
+        "acceptance_criteria": ["start, renew and cancel are covered", "node --test passes"],
+        "depends_on": ["stripe-webhooks", "subscribe-page"],
+        "scope": { "write": ["backend/test/subscriptions/**", "frontend/test/subscriptions/**"], "read": ["backend/**", "frontend/**", "shared/**"] },
+        "role": "qa"
+      }
+    ]
+  }
+}

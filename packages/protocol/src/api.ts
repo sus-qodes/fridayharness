@@ -44,6 +44,11 @@ export const TaskView = z.object({
   project_id: z.string(),
   goal_id: z.string().nullable(),
   plan_id: z.string().nullable(),
+  /** The plan version that created the task, and its key in that plan (M2; absent from M1 daemons). */
+  plan_version: z.number().int().nullable().default(null),
+  plan_key: z.string().nullable().default(null),
+  /** The kind of agent the plan asked for ("backend", "qa", …). */
+  role: z.string().nullable().default(null),
   kind: TaskKind,
   summary: z.string(),
   description: z.string().nullable(),
@@ -152,3 +157,118 @@ export const TaskActionRequest = z.object({
   agent_key: z.string().max(64).optional(),
 });
 export type TaskActionRequest = z.input<typeof TaskActionRequest>;
+
+// ---- Master Brain (M2, ADR-0013) ------------------------------------------------------------
+
+export const GoalStatus = z.enum(['OPEN', 'ACTIVE', 'COMPLETED', 'CANCELLED']);
+export type GoalStatus = z.infer<typeof GoalStatus>;
+export const PlanStatus = z.enum(['PROPOSED', 'ACTIVE', 'SUPERSEDED', 'REJECTED', 'COMPLETED']);
+export type PlanStatus = z.infer<typeof PlanStatus>;
+export const PlanChange = z.enum(['new', 'keep', 'rework', 'drop']);
+export type PlanChange = z.infer<typeof PlanChange>;
+
+export const GoalCreateRequest = z.object({
+  request: z.string().min(3).max(4000),
+  constraints: z.array(z.string().min(1).max(300)).max(12).default([]),
+  outcomes: z.array(z.string().min(1).max(300)).max(12).default([]),
+  priority: Priority.default('normal'),
+  /** Ask the Master Brain for a plan right away (default). False: a human will propose one. */
+  plan: z.boolean().default(true),
+});
+export type GoalCreateRequest = z.input<typeof GoalCreateRequest>;
+
+export const GoalView = z.object({
+  goal_id: z.string(),
+  project_id: z.string(),
+  request: z.string(),
+  objective: z.string().nullable(),
+  constraints: z.array(z.string()),
+  outcomes: z.array(z.string()),
+  priority: Priority,
+  status: GoalStatus,
+  plan_id: z.string().nullable(),
+  created_by: Actor,
+  created_at: z.string(),
+  updated_at: z.string(),
+  completed_at: z.string().nullable(),
+});
+export type GoalView = z.infer<typeof GoalView>;
+
+export const PlanTaskView = z.object({
+  key: z.string(),
+  position: z.number().int(),
+  change: PlanChange,
+  task_id: z.string().nullable(),
+  kind: TaskKind,
+  summary: z.string(),
+  description: z.string().nullable(),
+  acceptance_criteria: z.array(z.string()),
+  depends_on: z.array(z.string()),
+  scope: TaskScope,
+  role: z.string(),
+  priority: Priority,
+  risk_level: RiskLevel,
+  note: z.string().nullable(),
+});
+export type PlanTaskView = z.infer<typeof PlanTaskView>;
+
+export const NeedsHumanView = z.object({ question: z.string(), why: z.string(), options: z.array(z.string()) });
+
+export const PlanVersionView = z.object({
+  plan_id: z.string(),
+  version: z.number().int(),
+  goal_id: z.string(),
+  status: PlanStatus,
+  supersedes: z.number().int().nullable(),
+  summary: z.string(),
+  rationale: z.string().nullable(),
+  needs_human: NeedsHumanView.nullable(),
+  trigger: z.string(),
+  proposed_by: Actor,
+  model_call_id: z.string().nullable(),
+  prompt_version: z.string().nullable(),
+  created_at: z.string(),
+  decided_at: z.string().nullable(),
+  decided_by_id: z.string().nullable(),
+  decision_note: z.string().nullable(),
+  tasks: z.array(PlanTaskView),
+});
+export type PlanVersionView = z.infer<typeof PlanVersionView>;
+
+export const PlanDecisionRequest = z.object({ note: z.string().max(2000).optional() });
+export type PlanDecisionRequest = z.input<typeof PlanDecisionRequest>;
+
+export const ModelCallView = z.object({
+  call_id: z.string(),
+  goal_id: z.string().nullable(),
+  plan_id: z.string().nullable(),
+  purpose: z.string(),
+  prompt_version: z.string(),
+  provider: z.string(),
+  model: z.string(),
+  remote: z.boolean(),
+  status: z.enum(['ok', 'invalid', 'error', 'refused']),
+  error_code: z.string().nullable(),
+  error: z.string().nullable(),
+  attempt: z.number().int(),
+  input_tokens: z.number().int(),
+  output_tokens: z.number().int(),
+  cache_creation_input_tokens: z.number().int(),
+  cache_read_input_tokens: z.number().int(),
+  cost_usd: z.number(),
+  latency_ms: z.number().int(),
+  request_id: z.string().nullable(),
+  created_at: z.string(),
+});
+export type ModelCallView = z.infer<typeof ModelCallView>;
+
+export const AssignmentView = z.object({
+  assignment_id: z.string(),
+  task_id: z.string(),
+  agent_key: z.string().nullable(),
+  mode: z.enum(['assigned', 'reserved', 'waiting', 'none']),
+  reason: z.string(),
+  scores: z.array(z.record(z.string(), z.unknown())),
+  created_at: z.string(),
+});
+export type AssignmentView = z.infer<typeof AssignmentView>;

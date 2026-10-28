@@ -259,11 +259,133 @@ CREATE TABLE audit_records (
   },
 ];
 
+/** M2: goals, versioned plans, delegation decisions and model calls (ADR-0013). */
+export const MASTER_BRAIN_MIGRATIONS: Migration[] = [
+  {
+    version: 4,
+    name: 'goals_plans',
+    up: `
+CREATE TABLE goals (
+  goal_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  request TEXT NOT NULL,
+  objective TEXT,
+  constraints_json TEXT NOT NULL DEFAULT '[]',
+  outcomes_json TEXT NOT NULL DEFAULT '[]',
+  priority TEXT NOT NULL,
+  status TEXT NOT NULL,
+  plan_id TEXT,
+  created_by_kind TEXT NOT NULL,
+  created_by_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT
+);
+CREATE INDEX ix_goals_project ON goals(project_id, status);
+CREATE TABLE plans (
+  plan_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  project_id TEXT NOT NULL,
+  goal_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  supersedes INTEGER,
+  summary TEXT NOT NULL,
+  rationale TEXT,
+  needs_human_json TEXT,
+  trigger TEXT NOT NULL,
+  proposed_by_kind TEXT NOT NULL,
+  proposed_by_id TEXT NOT NULL,
+  model_call_id TEXT,
+  prompt_version TEXT,
+  created_at TEXT NOT NULL,
+  decided_at TEXT,
+  decided_by_id TEXT,
+  decision_note TEXT,
+  PRIMARY KEY (plan_id, version)
+);
+CREATE INDEX ix_plans_goal ON plans(goal_id, version);
+CREATE TABLE plan_tasks (
+  plan_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  key TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  change TEXT NOT NULL,
+  task_id TEXT,
+  kind TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  description TEXT,
+  acceptance_criteria_json TEXT NOT NULL,
+  depends_on_json TEXT NOT NULL,
+  scope_json TEXT NOT NULL,
+  role TEXT NOT NULL,
+  priority TEXT NOT NULL,
+  risk_level TEXT NOT NULL,
+  note TEXT,
+  PRIMARY KEY (plan_id, version, key)
+);
+CREATE TABLE agent_assignments (
+  assignment_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  agent_key TEXT,
+  mode TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  scores_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_assignments_task ON agent_assignments(task_id, created_at);
+CREATE TABLE model_calls (
+  call_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  goal_id TEXT,
+  plan_id TEXT,
+  purpose TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  remote INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  error_code TEXT,
+  error TEXT,
+  attempt INTEGER NOT NULL,
+  input_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
+  cache_creation_input_tokens INTEGER NOT NULL,
+  cache_read_input_tokens INTEGER NOT NULL,
+  cost_usd REAL NOT NULL,
+  latency_ms INTEGER NOT NULL,
+  request_id TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_model_calls_time ON model_calls(project_id, provider, created_at);
+ALTER TABLE tasks ADD COLUMN plan_version INTEGER;
+ALTER TABLE tasks ADD COLUMN plan_key TEXT;
+ALTER TABLE tasks ADD COLUMN role TEXT;
+ALTER TABLE escalations ADD COLUMN goal_id TEXT;
+ALTER TABLE escalations ADD COLUMN kind TEXT;
+ALTER TABLE escalations ADD COLUMN requested_by_kind TEXT;
+ALTER TABLE escalations ADD COLUMN details_json TEXT;
+-- Operational: how far the Master Brain has read the event log (excluded from replay).
+CREATE TABLE brain_cursor (
+  project_id TEXT PRIMARY KEY,
+  last_sequence INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
-export const ALL_MIGRATIONS: Migration[] = [...EVENT_MIGRATIONS, ...STATE_MIGRATIONS];
+export const ALL_MIGRATIONS: Migration[] = [...EVENT_MIGRATIONS, ...STATE_MIGRATIONS, ...MASTER_BRAIN_MIGRATIONS];
 
 /** Domain tables cleared by a replay, children first. */
 export const DOMAIN_TABLES = [
+  'model_calls',
+  'agent_assignments',
+  'plan_tasks',
+  'plans',
+  'goals',
   'context_packets',
   'escalations',
   'approvals',

@@ -4,7 +4,11 @@ Friday is a local orchestration and context control plane for AI software develo
 
 The architecture is called **ContextOS** in the original specification.
 
-**Status:** M1: the event spine, the daemon, the `friday` CLI, a read-only status page, and Claude Code attached through an MCP server, a skill and policy hooks. A task runs from creation through a Claude Code session to a verified completion, with Friday's policy enforced on the session's tools. The Master Brain (planning) arrives in M2. See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
+**Status:** M2.
+- **M1** gives you the event spine, the daemon, the `friday` CLI, a read-only status page, and Claude Code attached through an MCP server, a skill and policy hooks. A task runs from creation through a Claude Code session to a verified completion, with Friday's policy enforced on the session's tools.
+- **M2** adds the Master Brain. A goal becomes a versioned plan that you approve; its tasks are delegated to agents, revised when verification fails, and escalated to you when only a human can decide.
+
+See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 
 ## Documentation
 
@@ -15,6 +19,7 @@ The architecture is called **ContextOS** in the original specification.
 | [docs/decisions/](docs/decisions/) | Architecture decision records |
 | [docs/security/model.md](docs/security/model.md) | Enforcement levels, token scopes, what is and isn't intercepted, known gaps, threat model |
 | [docs/integration/claude-code.md](docs/integration/claude-code.md) | Attaching Claude Code: setup, what is enforced, headless runs, troubleshooting |
+| [docs/master-brain.md](docs/master-brain.md) | Goals, plans and the Master Brain: turning planning on, approving, revisions, questions, costs |
 | [docs/protocol/README.md](docs/protocol/README.md) | The harness protocol: transport, tokens, methods, errors, versions |
 | [docs/integration/claude-code-spike.md](docs/integration/claude-code-spike.md) | Verified Claude Code hook and MCP behaviour on Windows |
 | [docs/reviews/](docs/reviews/) | External reviews of the plan |
@@ -43,6 +48,19 @@ friday verify <task>                           # runs the configured checks: COM
 ```
 
 Details, headless use and troubleshooting: [docs/integration/claude-code.md](docs/integration/claude-code.md).
+
+### Plan a goal with the Master Brain
+
+```powershell
+friday secrets set anthropic                   # paste your Anthropic API key (hidden; stored for your user only)
+# in .friday/config.yaml: providers.anthropic.allow_remote: true, then restart "friday run"
+friday goal create "Add Stripe subscriptions, keep one-time checkout working, add tests"
+friday plan approve                            # tasks are created and handed to agents
+friday goal show                               # live plan; revisions and questions appear here
+friday escalations                             # questions only you can answer: friday answer <id> "..."
+```
+
+Without a key, set `master_brain.provider: none` and write plans yourself (`friday plan propose`). See [docs/master-brain.md](docs/master-brain.md).
 
 ## Development
 

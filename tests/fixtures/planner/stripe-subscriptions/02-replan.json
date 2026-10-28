@@ -1,0 +1,20 @@
+{
+  "purpose": "replan",
+  "match": "verification failed",
+  "usage": { "input_tokens": 900, "output_tokens": 1100, "cache_read_input_tokens": 3100 },
+  "output": {
+    "summary": "Send the subscribe page back for rework: its price test expects tax-inclusive prices, which the plan never decided.",
+    "rationale": "The failing check compares against prices including VAT; ADR-001 fixes the money format but says nothing about tax. Rework the page once the human decides how prices are shown.",
+    "needs_human": {
+      "question": "Should subscription prices on the subscribe page include VAT?",
+      "why": "The failing test expects VAT-inclusive prices, and neither the goal nor DECISIONS.md says which is right.",
+      "options": ["show prices including VAT", "show prices excluding VAT, with a note"]
+    },
+    "rework": [
+      {
+        "task_id": "${task:subscribe-page}",
+        "note": "Format monthly prices the way the human decides (with or without VAT), and update the test to match that decision."
+      }
+    ]
+  }
+}

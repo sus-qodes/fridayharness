@@ -36,10 +36,11 @@ export async function cli(args: string[]): Promise<{ code: number; stdout: strin
 export async function spawnFridayRun(
   ws: TestWorkspace,
   timeoutMs = 30_000,
+  projectDir: string = ws.projectDir,
 ): Promise<{ child: ChildProcess; url: string; output: () => string }> {
   const child = spawn(
     process.execPath,
-    ['--conditions', 'development', '--import', 'tsx', CLI_SOURCE, '--project', ws.projectDir, 'run'],
+    ['--conditions', 'development', '--import', 'tsx', CLI_SOURCE, '--project', projectDir, 'run'],
     {
       cwd: REPO_ROOT,
       env: { ...process.env, FRIDAY_STATE_DIR: ws.stateDir, NO_COLOR: '1' },

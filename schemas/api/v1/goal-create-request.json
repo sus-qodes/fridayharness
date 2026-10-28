@@ -1,0 +1,49 @@
+{
+  "$id": "urn:friday:api:v1:goal-create-request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "request": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 4000
+    },
+    "constraints": {
+      "default": [],
+      "maxItems": 12,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      }
+    },
+    "outcomes": {
+      "default": [],
+      "maxItems": 12,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      }
+    },
+    "priority": {
+      "default": "normal",
+      "type": "string",
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ]
+    },
+    "plan": {
+      "default": true,
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "request"
+  ]
+}

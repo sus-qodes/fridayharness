@@ -1,9 +1,13 @@
 import type { SqlDatabase } from '@friday/db';
 import {
   type AgentView,
+  type AssignmentView,
   type ContextPacket,
   FridayError,
+  type GoalView,
   type HarnessView,
+  type ModelCallView,
+  type PlanVersionView,
   type RunView,
   type TaskStatus,
   type TaskView,
@@ -11,12 +15,21 @@ import {
 } from '@friday/protocol';
 import {
   type AgentRow,
+  type AssignmentRow,
   type CheckRow,
+  type GoalRow,
   type HarnessRow,
+  type ModelCallRow,
+  type PlanRow,
+  type PlanTaskRow,
   type RunRow,
   type TaskRow,
   toAgentView,
+  toAssignmentView,
+  toGoalView,
   toHarnessView,
+  toModelCallView,
+  toPlanVersionView,
   toRunView,
   toTaskView,
   toVerificationView,
@@ -288,6 +301,150 @@ export class Queries {
       this.db
         .prepare("SELECT count(*) AS n FROM outbox_messages WHERE harness_id = ? AND status IN ('queued','delivered')")
         .get<{ n: number }>(harnessId)?.n ?? 0
+    );
+  }
+  // ---- Master Brain (M2) ---------------------------------------------------------------------
+
+  findGoal(projectId: string, goalId: string): GoalView | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM goals WHERE project_id = ? AND goal_id = ?')
+      .get<GoalRow>(projectId, goalId);
+    return row ? toGoalView(row) : undefined;
+  }
+
+  goal(projectId: string, goalId: string): GoalView {
+    const g = this.findGoal(projectId, goalId);
+    if (!g) throw new FridayError('goal_not_found', `goal ${goalId} not found`);
+    return g;
+  }
+
+  goals(projectId: string, opts: { statuses?: string[]; limit?: number } = {}): GoalView[] {
+    const statuses = opts.statuses ?? [];
+    const filter = statuses.length ? ` AND status IN (${statuses.map(() => '?').join(',')})` : '';
+    return this.db
+      .prepare(`SELECT * FROM goals WHERE project_id = ?${filter} ORDER BY created_at, goal_id LIMIT ?`)
+      .all<GoalRow>(projectId, ...statuses, opts.limit ?? 200)
+      .map(toGoalView);
+  }
+
+  private planTaskRows(planId: string, version: number): PlanTaskRow[] {
+    return this.db
+      .prepare('SELECT * FROM plan_tasks WHERE plan_id = ? AND version = ? ORDER BY position')
+      .all<PlanTaskRow>(planId, version);
+  }
+
+  planVersion(planId: string, version: number): PlanVersionView | undefined {
+    const row = this.db.prepare('SELECT * FROM plans WHERE plan_id = ? AND version = ?').get<PlanRow>(planId, version);
+    return row ? toPlanVersionView(row, this.planTaskRows(planId, version)) : undefined;
+  }
+
+  /** Every version of a plan, oldest first. */
+  planVersions(planId: string): PlanVersionView[] {
+    return this.db
+      .prepare('SELECT * FROM plans WHERE plan_id = ? ORDER BY version')
+      .all<PlanRow>(planId)
+      .map((row) => toPlanVersionView(row, this.planTaskRows(row.plan_id, row.version)));
+  }
+
+  /** The newest version with one of these statuses (any status when omitted). */
+  latestPlanVersion(planId: string, statuses: string[] = []): PlanVersionView | undefined {
+    const filter = statuses.length ? ` AND status IN (${statuses.map(() => '?').join(',')})` : '';
+    const row = this.db
+      .prepare(`SELECT * FROM plans WHERE plan_id = ?${filter} ORDER BY version DESC LIMIT 1`)
+      .get<PlanRow>(planId, ...statuses);
+    return row ? toPlanVersionView(row, this.planTaskRows(row.plan_id, row.version)) : undefined;
+  }
+
+  planIdOfGoal(goalId: string): string | undefined {
+    return (
+      this.db
+        .prepare('SELECT plan_id FROM plans WHERE goal_id = ? ORDER BY version LIMIT 1')
+        .get<{ plan_id: string }>(goalId)?.plan_id ?? undefined
+    );
+  }
+
+  goalTasks(projectId: string, goalId: string): TaskView[] {
+    return this.db
+      .prepare('SELECT * FROM tasks WHERE project_id = ? AND goal_id = ? ORDER BY created_at, task_id')
+      .all<TaskRow>(projectId, goalId)
+      .map((r) => toTaskView(r, this.deps(r.task_id)));
+  }
+
+  modelCalls(projectId: string, opts: { goalId?: string; limit?: number } = {}): ModelCallView[] {
+    const filter = opts.goalId ? ' AND goal_id = ?' : '';
+    const args: unknown[] = opts.goalId ? [projectId, opts.goalId] : [projectId];
+    return this.db
+      .prepare(`SELECT * FROM model_calls WHERE project_id = ?${filter} ORDER BY created_at DESC, rowid DESC LIMIT ?`)
+      .all<ModelCallRow>(...(args as string[]), opts.limit ?? 50)
+      .map(toModelCallView);
+  }
+
+  /** USD spent on a provider since an ISO time (the daily budget, ADR-0013). */
+  modelSpend(projectId: string, provider: string, sinceIso: string): number {
+    return (
+      this.db
+        .prepare(
+          'SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM model_calls WHERE project_id = ? AND provider = ? AND created_at >= ?',
+        )
+        .get<{ usd: number }>(projectId, provider, sinceIso)?.usd ?? 0
+    );
+  }
+
+  assignments(taskId: string): AssignmentView[] {
+    return this.db
+      .prepare('SELECT * FROM agent_assignments WHERE task_id = ? ORDER BY created_at')
+      .all<AssignmentRow>(taskId)
+      .map(toAssignmentView);
+  }
+
+  /** Verification runs of a task that ended FAILED. */
+  verificationFailures(taskId: string): number {
+    return (
+      this.db
+        .prepare("SELECT count(*) AS n FROM verification_runs WHERE task_id = ? AND status = 'FAILED'")
+        .get<{ n: number }>(taskId)?.n ?? 0
+    );
+  }
+
+  /** Track record used by delegation: verified passes and failures, recent paths, goals contributed to. */
+  agentStats(agentId: string): { completed: number; failed: number; recent_paths: string[]; goals_done: string[] } {
+    const outcomes = this.db
+      .prepare(
+        `SELECT v.status AS status, count(*) AS n FROM verification_runs v
+         JOIN task_runs r ON r.run_id = COALESCE(v.run_id,
+           (SELECT r2.run_id FROM task_runs r2 WHERE r2.task_id = v.task_id ORDER BY r2.attempt DESC LIMIT 1))
+         WHERE r.agent_id = ? AND v.status IN ('PASSED','FAILED') GROUP BY v.status`,
+      )
+      .all<{ status: string; n: number }>(agentId);
+    const paths = this.db
+      .prepare('SELECT observed_paths_json FROM task_runs WHERE agent_id = ? ORDER BY created_at DESC LIMIT 10')
+      .all<{ observed_paths_json: string }>(agentId)
+      .flatMap((r) => JSON.parse(r.observed_paths_json) as string[]);
+    const goals = this.db
+      .prepare(
+        `SELECT DISTINCT t.goal_id AS goal_id FROM tasks t JOIN task_runs r ON r.task_id = t.task_id
+         WHERE r.agent_id = ? AND t.status = 'COMPLETED' AND t.goal_id IS NOT NULL`,
+      )
+      .all<{ goal_id: string }>(agentId)
+      .map((r) => r.goal_id);
+    return {
+      completed: outcomes.find((o) => o.status === 'PASSED')?.n ?? 0,
+      failed: outcomes.find((o) => o.status === 'FAILED')?.n ?? 0,
+      recent_paths: [...new Set(paths)].slice(0, 200),
+      goals_done: goals,
+    };
+  }
+
+  escalation(escalationId: string): Record<string, unknown> | undefined {
+    return this.db.prepare('SELECT * FROM escalations WHERE escalation_id = ?').get(escalationId);
+  }
+
+  /** How far the Master Brain has read the event log (operational, not replayed). */
+  brainCursor(projectId: string): number {
+    return (
+      this.db
+        .prepare('SELECT last_sequence FROM brain_cursor WHERE project_id = ?')
+        .get<{ last_sequence: number }>(projectId)?.last_sequence ?? 0
     );
   }
 }

@@ -23,13 +23,14 @@
     "@friday/core": "workspace:*",
     "@friday/db": "workspace:*",
     "@friday/events": "workspace:*",
+    "@friday/planner": "workspace:*",
     "@friday/policy": "workspace:*",
     "@friday/protocol": "workspace:*",
+    "@friday/sdk": "workspace:*",
     "@friday/state": "workspace:*",
     "@friday/verification": "workspace:*",
-    "@friday/sdk": "workspace:*",
-    "hono": "^4.13.13",
     "@hono/node-server": "^2.1.4",
+    "hono": "^4.13.13",
     "zod": "^4.6.5"
   },
   "devDependencies": {

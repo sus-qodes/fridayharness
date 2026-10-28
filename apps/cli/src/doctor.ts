@@ -9,6 +9,7 @@ import {
   type ProjectRef,
   privateDirFor,
   readDiscovery,
+  readSecret,
   readToken,
   stateDir,
 } from '@friday/sdk';
@@ -185,6 +186,36 @@ export async function doctor(projectDir?: string): Promise<CheckResult[]> {
         status: 'warn',
         message: `remote model providers enabled: ${remote.map(([n]) => n).join(', ')}`,
       });
+    const mb = ref.config.master_brain;
+    if (mb.provider === 'anthropic') {
+      const allowed = ref.config.providers.anthropic?.allow_remote ?? false;
+      const key = readSecret('anthropic') !== undefined || Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+      out.push(
+        allowed && key
+          ? {
+              id: 'master-brain',
+              status: 'ok',
+              message: `the Master Brain plans with ${mb.model === 'auto' ? 'claude-opus-5-5' : mb.model}`,
+            }
+          : {
+              id: 'master-brain',
+              status: 'info',
+              message: `the Master Brain cannot plan yet: ${key ? 'remote calls are off' : 'no Anthropic API key is stored'}`,
+              fix: key
+                ? 'set providers.anthropic.allow_remote: true in .friday/config.yaml'
+                : 'friday secrets set anthropic',
+            },
+      );
+    } else {
+      out.push({
+        id: 'master-brain',
+        status: 'info',
+        message:
+          mb.provider === 'none'
+            ? 'plans are written by humans (master_brain.provider: none)'
+            : 'the Master Brain replays scripted answers (provider: fake)',
+      });
+    }
     if (ref.root.length > 180)
       out.push({
         id: 'long-path',

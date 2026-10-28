@@ -15,6 +15,7 @@
     "@friday/core": "workspace:*",
     "@friday/daemon": "workspace:*",
     "@friday/mcp-server": "workspace:*",
+    "@friday/planner": "workspace:*",
     "@friday/policy": "workspace:*",
     "@friday/protocol": "workspace:*",
     "@friday/sdk": "workspace:*",

@@ -19,6 +19,8 @@ import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
 import { ZodError } from 'zod';
+import type { BrainHandle } from './brain.js';
+import { escalationView, mountBrainRoutes } from './brain-routes.js';
 import { type CompileInput, compileContext, withStaleness } from './context.js';
 import type { Logger } from './log.js';
 import { type AuthInfo, callerFor, dispatchRpc } from './rpc.js';
@@ -41,9 +43,12 @@ export interface AppDeps {
   /** Runs the configured verification checks (wired by the daemon; M1c). */
   verify?: (taskId: string, actor: Actor) => Promise<unknown>;
   pollIntervalMs?: number;
+  /** The Master Brain (M2); goals and plans are served even without one. */
+  brain?: BrainHandle;
 }
 
 type Env = { Variables: { auth: AuthInfo; requestId: string } };
+export type AppEnv = Env;
 
 const OPERATOR: TokenClass[] = ['operator'];
 const HUMAN: Actor = { kind: 'human', id: 'local-operator' };
@@ -209,10 +214,15 @@ export function buildApp(deps: AppDeps): Hono<Env> {
       harnesses: state.q.harnesses(pid),
       agents,
       approvals: state.q.approvals(pid, 'pending'),
-      escalations: state.q.escalations(pid, 'pending'),
+      escalations: state.q.escalations(pid, 'pending').map(escalationView),
+      goals: state.q.goals(pid, { statuses: ['OPEN', 'ACTIVE'] }),
       events: state.store.readSince(pid, Math.max(0, head - 25), { limit: 25 }).reverse(),
     });
   });
+
+  // ---- goals, plans, the Master Brain (M2) ---------------------------------------------------
+
+  mountBrainRoutes({ app, allow, json, state, project, brain: deps.brain, human: HUMAN });
 
   // ---- tasks ---------------------------------------------------------------------------------
 
@@ -385,7 +395,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     });
   }
   app.get(`${P}/escalations`, allow(...OPERATOR), (c) =>
-    c.json({ escalations: state.q.escalations(pid, c.req.query('status')) }),
+    c.json({ escalations: state.q.escalations(pid, c.req.query('status')).map(escalationView) }),
   );
   app.post(`${P}/escalations/:eid/answer`, allow(...OPERATOR), async (c) => {
     const body = await json(c);

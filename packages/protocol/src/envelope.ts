@@ -14,7 +14,20 @@ export const Transition = z.object({
 });
 export type Transition = z.infer<typeof Transition>;
 
-export const RefKind = z.enum(['task', 'run', 'harness', 'agent', 'approval', 'verification', 'context', 'escalation']);
+export const RefKind = z.enum([
+  'task',
+  'run',
+  'harness',
+  'agent',
+  'approval',
+  'verification',
+  'context',
+  'escalation',
+  // M2: the Master Brain's objects.
+  'goal',
+  'plan',
+  'call',
+]);
 export type RefKind = z.infer<typeof RefKind>;
 
 /** Canonical domain event envelope (spec Part 14 §2). */

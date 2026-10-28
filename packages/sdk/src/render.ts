@@ -38,6 +38,7 @@ function titleOf(kind: string): string {
     'task.contract': 'Task',
     'task.acceptance': 'Acceptance criteria',
     'task.scope': 'Scope',
+    'task.plan': 'Goal, plan and decisions',
     'task.progress': 'Progress so far',
     'repo.head': 'Repository',
     'repo.dirty': 'Uncommitted changes',

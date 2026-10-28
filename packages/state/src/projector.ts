@@ -184,8 +184,9 @@ export class StateProjector implements Projector {
         const x = p.escalation as Payload;
         this.db
           .prepare(
-            `INSERT INTO escalations (escalation_id, project_id, task_id, run_id, requested_by_id, question, options_json, status, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+            `INSERT INTO escalations (escalation_id, project_id, task_id, run_id, requested_by_id, requested_by_kind, question,
+               options_json, status, created_at, goal_id, kind, details_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
           )
           .run(
             str(x.escalation_id),
@@ -193,9 +194,13 @@ export class StateProjector implements Projector {
             opt(x.task_id),
             opt(x.run_id),
             e.actor.id,
+            e.actor.kind,
             str(x.question),
             x.options ? toJson(x.options) : null,
             e.occurred_at,
+            opt(x.goal_id),
+            opt(x.kind),
+            x.details ? toJson(x.details) : null,
           );
         return;
       }
@@ -204,6 +209,70 @@ export class StateProjector implements Projector {
           .prepare("UPDATE escalations SET status = 'answered', answer = ?, answered_at = ? WHERE escalation_id = ?")
           .run(str(p.answer), e.occurred_at, str(p.escalation_id));
         return;
+      case 'goal.created':
+        this.insertGoal(e, p.goal as Payload);
+        return;
+      case 'goal.updated':
+      case 'goal.status_changed':
+        this.updateGoal(e, str(p.goal_id), (p.changes as Payload) ?? {}, (p.transition as Payload | undefined)?.to);
+        return;
+      case 'plan.proposed':
+        this.insertPlan(e, p.plan as Payload);
+        return;
+      case 'plan.approved':
+      case 'plan.superseded':
+      case 'plan.rejected':
+      case 'plan.completed': {
+        const tr = p.transition as Payload;
+        const decided = e.type === 'plan.approved' || e.type === 'plan.rejected';
+        const res = this.db
+          .prepare(
+            `UPDATE plans SET status = ?, decided_at = COALESCE(?, decided_at), decided_by_id = COALESCE(?, decided_by_id),
+               decision_note = COALESCE(?, decision_note) WHERE plan_id = ? AND version = ?`,
+          )
+          .run(
+            str(tr.to),
+            decided ? e.occurred_at : null,
+            decided ? e.actor.id : null,
+            opt(p.note),
+            str(p.plan_id),
+            Number(p.version),
+          );
+        if (res.changes !== 1) {
+          throw new FridayError(
+            'internal_error',
+            `event ${e.type}: plan ${str(p.plan_id)} v${str(p.version)} not found`,
+          );
+        }
+        return;
+      }
+      case 'plan.task_materialized':
+        this.db
+          .prepare('UPDATE plan_tasks SET task_id = ? WHERE plan_id = ? AND version = ? AND key = ?')
+          .run(str(p.task_id), str(p.plan_id), Number(p.version), str(p.key));
+        return;
+      case 'model.called':
+        this.insertModelCall(e, p.call as Payload);
+        return;
+      case 'assignment.decided': {
+        const a = p.assignment as Payload;
+        this.db
+          .prepare(
+            `INSERT INTO agent_assignments (assignment_id, project_id, task_id, agent_key, mode, reason, scores_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            str(a.assignment_id),
+            e.project_id,
+            str(a.task_id),
+            opt(a.agent_key),
+            str(a.mode),
+            str(a.reason),
+            toJson(a.scores ?? []),
+            e.occurred_at,
+          );
+        return;
+      }
       case 'context.compiled': {
         const packet = p.packet as Payload;
         this.db
@@ -281,16 +350,19 @@ export class StateProjector implements Projector {
     const createdBy = (t.created_by as Payload | undefined) ?? { kind: e.actor.kind, id: e.actor.id };
     this.db
       .prepare(
-        `INSERT INTO tasks (task_id, project_id, goal_id, plan_id, kind, summary, description, acceptance_criteria_json, status,
-           priority, risk_level, scope_json, reserved_for_agent_key, created_by_kind, created_by_id, created_at, updated_at,
-           last_event_sequence, revision)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PROPOSED', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+        `INSERT INTO tasks (task_id, project_id, goal_id, plan_id, plan_version, plan_key, role, kind, summary, description,
+           acceptance_criteria_json, status, priority, risk_level, scope_json, reserved_for_agent_key, created_by_kind,
+           created_by_id, created_at, updated_at, last_event_sequence, revision)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROPOSED', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       )
       .run(
         str(t.task_id),
         e.project_id,
         opt(t.goal_id),
         opt(t.plan_id),
+        opt(t.plan_version),
+        opt(t.plan_key),
+        opt(t.role),
         str(t.kind),
         str(t.summary),
         opt(t.description),
@@ -309,6 +381,138 @@ export class StateProjector implements Projector {
       'INSERT INTO task_dependencies (task_id, depends_on_task_id, project_id) VALUES (?, ?, ?)',
     );
     for (const d of (t.dependencies as string[] | undefined) ?? []) dep.run(str(t.task_id), d, e.project_id);
+  }
+
+  private insertGoal(e: StoredEvent, g: Payload): void {
+    const by = (g.created_by as Payload | undefined) ?? { kind: e.actor.kind, id: e.actor.id };
+    this.db
+      .prepare(
+        `INSERT INTO goals (goal_id, project_id, request, objective, constraints_json, outcomes_json, priority, status,
+           created_by_kind, created_by_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
+      )
+      .run(
+        str(g.goal_id),
+        e.project_id,
+        str(g.request),
+        opt(g.objective),
+        toJson(g.constraints ?? []),
+        toJson(g.outcomes ?? []),
+        str(g.priority),
+        str(by.kind),
+        str(by.id),
+        e.occurred_at,
+        e.occurred_at,
+      );
+  }
+
+  private updateGoal(e: StoredEvent, goalId: string, changes: Payload, status: unknown): void {
+    const allowed: Record<string, Encoder> = {
+      objective: 'objective',
+      constraints: { column: 'constraints_json', encode: (v) => toJson(v ?? []) },
+      outcomes: { column: 'outcomes_json', encode: (v) => toJson(v ?? []) },
+      plan_id: 'plan_id',
+      completed_at: 'completed_at',
+    };
+    const sets: string[] = ['updated_at = ?'];
+    const params: SqlValue[] = [e.occurred_at];
+    for (const [k, v] of Object.entries(changes)) {
+      const enc = allowed[k];
+      if (!enc) throw new FridayError('internal_error', `event ${e.type} may not change goals.${k}`);
+      sets.push(`${typeof enc === 'string' ? enc : enc.column} = ?`);
+      params.push(typeof enc === 'string' ? opt(v) : enc.encode(v));
+    }
+    if (status !== undefined) {
+      sets.push('status = ?');
+      params.push(str(status));
+    }
+    const res = this.db.prepare(`UPDATE goals SET ${sets.join(', ')} WHERE goal_id = ?`).run(...params, goalId);
+    if (res.changes !== 1) throw new FridayError('internal_error', `event ${e.type}: goal ${goalId} not found`);
+  }
+
+  private insertPlan(e: StoredEvent, plan: Payload): void {
+    this.db
+      .prepare(
+        `INSERT INTO plans (plan_id, version, project_id, goal_id, status, supersedes, summary, rationale, needs_human_json, trigger,
+           proposed_by_kind, proposed_by_id, model_call_id, prompt_version, created_at)
+         VALUES (?, ?, ?, ?, 'PROPOSED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        str(plan.plan_id),
+        Number(plan.version),
+        e.project_id,
+        str(plan.goal_id),
+        opt(plan.supersedes),
+        str(plan.summary),
+        opt(plan.rationale),
+        plan.needs_human ? toJson(plan.needs_human) : null,
+        str(plan.trigger),
+        e.actor.kind,
+        e.actor.id,
+        opt(plan.model_call_id),
+        opt(plan.prompt_version),
+        e.occurred_at,
+      );
+    const insert = this.db.prepare(
+      `INSERT INTO plan_tasks (plan_id, version, key, project_id, position, change, task_id, kind, summary, description,
+         acceptance_criteria_json, depends_on_json, scope_json, role, priority, risk_level, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    ((plan.tasks as Payload[] | undefined) ?? []).forEach((t, i) => {
+      insert.run(
+        str(plan.plan_id),
+        Number(plan.version),
+        str(t.key),
+        e.project_id,
+        i,
+        str(t.change),
+        opt(t.task_id),
+        str(t.kind),
+        str(t.summary),
+        opt(t.description),
+        toJson(t.acceptance_criteria ?? []),
+        toJson(t.depends_on ?? []),
+        toJson(t.scope ?? { write: [], read: [] }),
+        str(t.role),
+        str(t.priority),
+        str(t.risk_level),
+        opt(t.note),
+      );
+    });
+  }
+
+  private insertModelCall(e: StoredEvent, c: Payload): void {
+    const u = (c.usage as Payload | undefined) ?? {};
+    this.db
+      .prepare(
+        `INSERT INTO model_calls (call_id, project_id, goal_id, plan_id, purpose, prompt_version, provider, model, remote, status,
+           error_code, error, attempt, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd,
+           latency_ms, request_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        str(c.call_id),
+        e.project_id,
+        opt(c.goal_id),
+        opt(c.plan_id),
+        str(c.purpose),
+        str(c.prompt_version),
+        str(c.provider),
+        str(c.model),
+        c.remote ? 1 : 0,
+        str(c.status),
+        opt(c.error_code),
+        opt(c.error),
+        Number(c.attempt ?? 0),
+        Number(u.input_tokens ?? 0),
+        Number(u.output_tokens ?? 0),
+        Number(u.cache_creation_input_tokens ?? 0),
+        Number(u.cache_read_input_tokens ?? 0),
+        Number(c.cost_usd ?? 0),
+        Number(c.latency_ms ?? 0),
+        opt(c.request_id),
+        e.occurred_at,
+      );
   }
 
   private insertRun(e: StoredEvent, r: Payload): void {

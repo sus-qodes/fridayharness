@@ -15,6 +15,8 @@ export const ERROR_CODES = {
   agent_not_found: { code: 'COS-2003', http: 404, retryable: false },
   harness_not_found: { code: 'COS-2004', http: 404, retryable: false },
   agent_unavailable: { code: 'COS-2005', http: 409, retryable: true },
+  goal_not_found: { code: 'COS-2006', http: 404, retryable: false },
+  plan_not_found: { code: 'COS-2007', http: 404, retryable: false },
 
   permission_denied: { code: 'COS-3000', http: 403, retryable: false },
   capability_not_granted: { code: 'COS-3001', http: 403, retryable: false },

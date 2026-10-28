@@ -1,0 +1,283 @@
+{
+  "$id": "urn:friday:api:v1:plan-version",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plan_id": {
+      "type": "string"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "goal_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "PROPOSED",
+        "ACTIVE",
+        "SUPERSEDED",
+        "REJECTED",
+        "COMPLETED"
+      ]
+    },
+    "supersedes": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "rationale": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "needs_human": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "question": {
+              "type": "string"
+            },
+            "why": {
+              "type": "string"
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "question",
+            "why",
+            "options"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "trigger": {
+      "type": "string"
+    },
+    "proposed_by": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "human",
+            "system",
+            "agent",
+            "harness",
+            "master_brain"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ]
+    },
+    "model_call_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "prompt_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "decided_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "decided_by_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "decision_note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "change": {
+            "type": "string",
+            "enum": [
+              "new",
+              "keep",
+              "rework",
+              "drop"
+            ]
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "implementation",
+              "verification",
+              "review",
+              "research",
+              "docs",
+              "chore"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "acceptance_criteria": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "write": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "read": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "role": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ]
+          },
+          "risk_level": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "position",
+          "change",
+          "task_id",
+          "kind",
+          "summary",
+          "description",
+          "acceptance_criteria",
+          "depends_on",
+          "scope",
+          "role",
+          "priority",
+          "risk_level",
+          "note"
+        ]
+      }
+    }
+  },
+  "required": [
+    "plan_id",
+    "version",
+    "goal_id",
+    "status",
+    "supersedes",
+    "summary",
+    "rationale",
+    "needs_human",
+    "trigger",
+    "proposed_by",
+    "model_call_id",
+    "prompt_version",
+    "created_at",
+    "decided_at",
+    "decided_by_id",
+    "decision_note",
+    "tasks"
+  ]
+}
