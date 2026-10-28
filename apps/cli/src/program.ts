@@ -415,6 +415,76 @@ export function buildProgram(): Command {
     });
 
   const events = program.command('events').description('the project event log');
+  // Snapshots, isolated replay and backup (M3c, ADR-0018).
+  events
+    .command('snapshot')
+    .description('snapshot the domain tables at the current event head')
+    .action(async () => {
+      const { client } = operator(g());
+      const s = await client.post<{
+        snapshot_id: string;
+        up_to_sequence: number;
+        sha256: string;
+        file: string;
+        tables: Record<string, number>;
+      }>('/admin/snapshot', {});
+      const rows = Object.values(s.tables).reduce((a, b) => a + b, 0);
+      out(
+        g(),
+        s,
+        () =>
+          `Snapshot ${s.snapshot_id} at event ${s.up_to_sequence}: ${rows} rows, sha256 ${s.sha256.slice(0, 12)}…\n${s.file}`,
+      );
+    });
+  events
+    .command('snapshots')
+    .description('snapshots taken for this project')
+    .action(async () => {
+      const { client } = operator(g());
+      const r = await client.get<{
+        snapshots: { snapshot_id: string; up_to_sequence: number; created_at: string; present: boolean }[];
+      }>('/admin/snapshots');
+      out(g(), r.snapshots, () =>
+        r.snapshots.length
+          ? table(
+              ['SNAPSHOT', 'EVENT', 'TAKEN', 'FILE'],
+              r.snapshots.map((s) => [
+                s.snapshot_id,
+                s.up_to_sequence,
+                shortTime(s.created_at),
+                s.present ? 'present' : 'missing',
+              ]),
+            )
+          : 'No snapshots.',
+      );
+    });
+  events
+    .command('replay')
+    .description('rebuild the state in an isolated copy and compare it with the live state; nothing is sent or started')
+    .requiredOption('--into <dir>', 'a new or empty directory for the copy')
+    .option('--snapshot <id>', 'start from this snapshot instead of the first event')
+    .action(async (o: { into: string; snapshot?: string }) => {
+      const { client } = operator(g());
+      const r = await client.post<{
+        events_applied: number;
+        up_to_sequence: number;
+        from_snapshot: string | null;
+        equal: boolean;
+        tables: { table: string; rows: number; equal: boolean }[];
+      }>(
+        '/admin/replay',
+        { into: path.resolve(o.into), ...(o.snapshot ? { snapshot: o.snapshot } : {}) },
+        { timeoutMs: 600_000 },
+      );
+      const diff = r.tables.filter((t) => !t.equal).map((t) => t.table);
+      out(g(), r, () =>
+        [
+          `Replayed ${r.events_applied} event(s)${r.from_snapshot ? ` after snapshot ${r.from_snapshot}` : ' from the first event'} up to ${r.up_to_sequence} into ${path.resolve(o.into)}.`,
+          r.equal ? 'Every table equals the live state.' : `Different from the live state: ${diff.join(', ')}`,
+        ].join('\n'),
+      );
+      if (!r.equal) process.exitCode = 1;
+    });
   events
     .command('tail')
     .description('print events; --follow keeps streaming')
@@ -526,6 +596,25 @@ export function buildProgram(): Command {
     });
 
   // ---- daemon and tokens -----------------------------------------------------------------------
+
+  program
+    .command('backup')
+    .description('a consistent copy of the project database and artifacts, with a manifest (ADR-0018)')
+    .requiredOption('--into <dir>', 'a new or empty directory')
+    .action(async (o: { into: string }) => {
+      const { client } = operator(g());
+      const r = await client.post<{ files: string[]; event_head: number; into: string }>(
+        '/admin/backup',
+        { into: path.resolve(o.into) },
+        { timeoutMs: 600_000 },
+      );
+      out(g(), r, () =>
+        [
+          `Backed up ${r.files.join(', ')} at event ${r.event_head} to ${r.into}.`,
+          'Tokens are not included (they are created again at start); back up provider keys per user if you want them.',
+        ].join('\n'),
+      );
+    });
 
   program
     .command('ui')

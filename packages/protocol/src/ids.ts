@@ -42,6 +42,8 @@ export const ID_PREFIXES = [
   // M3: one delivery of a message to one recipient; correlation ids.
   'dlv',
   'corr',
+  // M3c: snapshots of the domain tables.
+  'snap',
 ] as const;
 export type IdPrefix = (typeof ID_PREFIXES)[number];
 export type Id<P extends IdPrefix = IdPrefix> = `${P}_${string}`;

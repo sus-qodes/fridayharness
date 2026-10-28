@@ -31,3 +31,15 @@ export {
   type StateConfig,
   type TokenInfo,
 } from './service.js';
+export {
+  type BackupReport,
+  backupTo,
+  createSnapshot,
+  listSnapshots,
+  loadSnapshot,
+  type ReplayReport,
+  replayInto,
+  SNAPSHOT_FORMAT,
+  type SnapshotFile,
+  type SnapshotInfo,
+} from './snapshot.js';

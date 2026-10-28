@@ -2,7 +2,7 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
-## Unreleased — M3 communication authority (in progress)
+## Unreleased — M3 communication authority, replay and backup
 
 - **M3a, messages through Friday:**
   - Agents send with `friday_communicate`: to an agent, `role:<role>` (Friday picks the best-fit agent), `task:<id>`, `dependencies`, `dependents`, `master` or `human`.
@@ -19,6 +19,13 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - A full inbox refuses low-value notifications (`COS-2005`) but never requests or urgent messages; senders learn when a recipient is not attached.
   - Claude Code sessions are held at their next stop while urgent messages are unread.
   - The Master Brain's place in the event log is a durable consumer (`event_consumers`).
+- **M3c, snapshots, replay and backup:**
+  - `friday events snapshot` captures the domain tables with an integrity hash.
+  - `friday events replay --into <dir> [--snapshot <id>]` rebuilds everything in an isolated copy (no credentials, nothing sent or started) and says whether it equals the live state.
+  - `friday backup --into <dir>` makes a consistent copy of the database and artifacts with a manifest.
+  - Corrupt, interrupted, foreign and old snapshots are refused.
+  - Decision: ADR-0018; runbook: [docs/runbooks/backup.md](docs/runbooks/backup.md).
+- **Gate:** the M3 scenario on fixture-shop (Part 12 §3/§4: role routing, minimal recipient context, correlated answers with facts, an unrelated agent refused; replay equals live).
 
 ## Unreleased — M2.5 stabilization (review 2026-10-14)
 

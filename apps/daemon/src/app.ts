@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
   type Actor,
@@ -14,8 +15,8 @@ import {
   type TokenClass,
   VerifyRequest,
 } from '@friday/protocol';
-import type { ProjectRef } from '@friday/sdk';
-import type { FridayState } from '@friday/state';
+import { FRIDAY_DIR, FRIDAY_VERSION, type ProjectRef } from '@friday/sdk';
+import { backupTo, createSnapshot, type FridayState, listSnapshots, replayInto } from '@friday/state';
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
@@ -597,6 +598,40 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.post('/admin/rotate-tokens', allow(...OPERATOR), (c) => {
     deps.rotateTokens();
     return c.json({ ok: true, note: 'new tokens were written to the private state directory' });
+  });
+
+  // Snapshots, isolated replay and backup (M3c, ADR-0018).
+  const fridayDir = path.join(project.root, FRIDAY_DIR);
+  const target = (body: Record<string, unknown>, what: string): string => {
+    if (typeof body.into !== 'string' || !path.isAbsolute(body.into)) {
+      throw new FridayError('invalid_request', `${what} needs "into": an absolute path to a new or empty directory`);
+    }
+    return body.into;
+  };
+  app.post('/admin/snapshot', allow(...OPERATOR), (c) =>
+    c.json(createSnapshot(state, pid, path.join(fridayDir, 'artifacts', 'snapshots')), 201),
+  );
+  app.get('/admin/snapshots', allow(...OPERATOR), (c) => c.json({ snapshots: listSnapshots(state, pid) }));
+  app.post('/admin/replay', allow(...OPERATOR), async (c) => {
+    const body = await json(c);
+    const into = target(body, 'a replay');
+    let snapshotFile: string | undefined;
+    if (typeof body.snapshot === 'string' && body.snapshot) {
+      const snap = listSnapshots(state, pid).find((s) => s.snapshot_id === body.snapshot);
+      if (!snap) throw new FridayError('invalid_request', `no snapshot ${body.snapshot}`);
+      snapshotFile = snap.file;
+    }
+    return c.json(replayInto(state, pid, into, snapshotFile ? { snapshotFile } : {}));
+  });
+  app.post('/admin/backup', allow(...OPERATOR), async (c) => {
+    const body = await json(c);
+    return c.json(
+      backupTo(state, pid, target(body, 'a backup'), {
+        artifactsDir: path.join(fridayDir, 'artifacts'),
+        fridayVersion: FRIDAY_VERSION,
+      }),
+      201,
+    );
   });
 
   // ---- errors --------------------------------------------------------------------------------

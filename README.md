@@ -4,7 +4,7 @@ Friday is a local orchestration and context control plane for AI software develo
 
 The architecture is called **ContextOS** in the original specification.
 
-**Status:** M2, plus the M2.5 stabilization from an independent review (see [the disposition](docs/reviews/2026-10-14-review-disposition.md)).
+**Status:** M3 built (gates pending), after the M2.5 stabilization from an independent review (see [the disposition](docs/reviews/2026-10-14-review-disposition.md)).
 - **M1** gives you the event spine, the daemon, the `friday` CLI, a read-only status page, and Claude Code attached through an MCP server, a skill and policy hooks. A task runs from creation through a Claude Code session to a verified completion, with Friday's policy enforced on the session's tools.
 - **M2** adds the Master Brain. A goal becomes a versioned plan that you approve; its tasks are delegated to agents, revised when verification fails, and escalated to you when only a human can decide.
 - **M2.5** closes the twelve findings of the 2026-10-14 review:
@@ -14,6 +14,7 @@ The architecture is called **ContextOS** in the original specification.
   - planning sends only redacted, bounded project text, and only to an endpoint you chose, with your local approval;
   - costs are never under-reported, and the Master Brain survives restarts without losing work;
   - stale plan revisions are refused, your own requirements stay authoritative, and reservations expire.
+- **M3** makes Friday the communication authority: agents message each other, roles, the Master Brain and humans only through Friday, with per-recipient delivery and real acknowledgements. Events can be snapshotted, replayed into an isolated copy and backed up.
 
 See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 
@@ -27,6 +28,7 @@ See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 | [docs/security/model.md](docs/security/model.md) | Enforcement levels, token scopes, what is and isn't intercepted, known gaps, threat model |
 | [docs/integration/claude-code.md](docs/integration/claude-code.md) | Attaching Claude Code: setup, what is enforced, headless runs, troubleshooting |
 | [docs/messaging.md](docs/messaging.md) | Messages between agents and humans through Friday: addresses, the inbox, acknowledgements |
+| [docs/runbooks/backup.md](docs/runbooks/backup.md) | Back up, inspect with snapshots and replay, and restore |
 | [docs/master-brain.md](docs/master-brain.md) | Goals, plans and the Master Brain: turning planning on, approving, revisions, questions, costs |
 | [docs/protocol/README.md](docs/protocol/README.md) | The harness protocol: transport, tokens, methods, errors, versions |
 | [docs/integration/claude-code-spike.md](docs/integration/claude-code-spike.md) | Verified Claude Code hook and MCP behaviour on Windows |
