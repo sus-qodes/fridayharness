@@ -61,22 +61,38 @@ export function registerContextCommands(program: Command, g: () => GlobalOptions
   const context = program.command('context').description('the context Friday compiles for tasks and sessions');
   context
     .command('explain <task-or-context>')
-    .description('which files, facts and memories a packet holds, and why; a task id compiles a fresh packet first')
+    .description(
+      'which files, facts and memories a packet holds, and why; for a task, the newest packet its agent was given (a preview compiled for you when there is none, or with --fresh)',
+    )
     .option('--max-chars <n>', 'budget for a fresh packet', Number)
-    .action(async (id: string, o: { maxChars?: number }) => {
+    .option('--fresh', 'compile a preview now, as you may read, instead of the packet the agent was given')
+    .action(async (id: string, o: { maxChars?: number; fresh?: boolean }) => {
       const { client } = operator(g());
       let contextId = id;
+      let header = '';
       if (!id.startsWith('ctx_')) {
-        const packet = await client.post<ContextPacket>(
-          client.projectPath('/context/compile'),
-          { task_id: id, purpose: 'explain', ...(o.maxChars ? { max_chars: o.maxChars } : {}) },
-          { timeoutMs: 120_000 },
-        );
-        contextId = packet.context_id;
+        // What the task's agent was given, not what a human may read (LESSONS D-49).
+        const delivered = o.fresh
+          ? null
+          : await client.get<{ context_id: string | null; agent_key: string | null }>(
+              client.projectPath(`/tasks/${id}/delivered-context`),
+            );
+        if (delivered?.context_id) {
+          contextId = delivered.context_id;
+          header = `Delivered to ${delivered.agent_key ?? 'its agent'}: the newest packet Friday gave this task's agent.`;
+        } else {
+          const packet = await client.post<ContextPacket>(
+            client.projectPath('/context/compile'),
+            { task_id: id, purpose: 'explain', ...(o.maxChars ? { max_chars: o.maxChars } : {}) },
+            { timeoutMs: 120_000 },
+          );
+          contextId = packet.context_id;
+          header = `A preview compiled for you, a human, now${o.fresh ? '' : ': no agent has been given a packet for this task yet'}; an agent may be shown less (its own memories and grants).`;
+        }
       }
       const r = await client.get<{ packet: ContextPacket; explanation: ContextExplanation }>(
         client.projectPath(`/context/${contextId}/explain`),
       );
-      out(g(), r, () => renderExplanation(r.packet, r.explanation));
+      out(g(), r, () => [header, renderExplanation(r.packet, r.explanation)].filter(Boolean).join('\n'));
     });
 }

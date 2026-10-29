@@ -420,6 +420,16 @@ const OBSERVATION_TYPES = new Set([
 
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
 const TERMINAL_TASK = new Set(['COMPLETED', 'CANCELLED', 'ABANDONED']);
+/** The Master Brain's questions about what to do with a failed task (not `ambiguous_intent`). */
+const FAILURE_QUESTIONS = new Set([
+  'planner_unavailable',
+  'budget_exceeded',
+  'invalid_plan',
+  'repeated_verification_failures',
+  'replan_limit',
+  'plan_rejected',
+  'action_failed',
+]);
 const SYSTEM: Actor = { kind: 'system', id: 'friday' };
 const LEASE_MANAGER: Actor = { kind: 'system', id: 'lease-manager' };
 
@@ -537,11 +547,33 @@ export class FridayState {
     const runRef = (changes.current_run_id as string | undefined) ?? task.current_run_id;
     if (runRef) refs.push({ kind: 'run', id: runRef });
     ctx.emit({ type: tr.event, actor, payload: { task_id: task.task_id, transition, changes }, refs });
+    if (tr.to === 'REWORK' || tr.to === 'COMPLETED' || tr.to === 'CANCELLED') {
+      this.settleFailureQuestions(ctx, task.task_id, tr.to);
+    }
     const awaitsIntegration = tr.to === 'COMPLETED' && this.awaitsIntegration(task);
     if ((tr.to === 'COMPLETED' && !awaitsIntegration) || tr.to === 'CANCELLED' || tr.to === 'ABANDONED') {
       this.endFileReservations(ctx, task.task_id, 'released', `the task was ${tr.to.toLowerCase()}`);
     }
     return this.q.task(ctx.project_id, task.task_id);
+  }
+
+  /**
+   * The Master Brain's open questions about what to do with a failed task no longer need an answer
+   * once the task was sent back for rework, completed or cancelled: they are answered as moot, in
+   * the same transaction, and an answer marked moot starts no revision (LESSONS D-50).
+   */
+  private settleFailureQuestions(ctx: CommandContext, taskId: string, to: 'REWORK' | 'COMPLETED' | 'CANCELLED'): void {
+    const why = { REWORK: 'was sent back for rework', COMPLETED: 'was completed', CANCELLED: 'was cancelled' }[to];
+    for (const e of this.q.escalations(ctx.project_id, 'pending')) {
+      if (e.task_id !== taskId || e.requested_by_kind !== 'master_brain') continue;
+      if (!FAILURE_QUESTIONS.has(String(e.kind))) continue;
+      ctx.emit({
+        type: 'escalation.answered',
+        actor: SYSTEM,
+        payload: { escalation_id: e.escalation_id, answer: `no longer needed: the task ${why}`, moot: true },
+        refs: [{ kind: 'escalation', id: String(e.escalation_id) }],
+      });
+    }
   }
 
   /**
@@ -4155,8 +4187,29 @@ export class FridayState {
           },
           refs: [{ kind: 'approval', id: approvalId }],
         });
+        if (granted) this.resumeAfterApproval(ctx, projectId, approvalId);
       },
     );
+  }
+
+  /**
+   * A task its agent set waiting for a human resumes when the approval it waited on is granted
+   * (task lifecycle: WAITING → RUNNING on an approval granted; LESSONS D-46), unless another
+   * request of the same attempt still waits for a human.
+   */
+  private resumeAfterApproval(ctx: CommandContext, projectId: string, approvalId: string): void {
+    const a = this.db
+      .prepare('SELECT task_id, run_id FROM approvals WHERE approval_id = ? AND project_id = ?')
+      .get<{ task_id: string | null; run_id: string | null }>(approvalId, projectId);
+    if (!a?.task_id || !a.run_id) return;
+    const task = this.q.findTask(projectId, a.task_id);
+    if (task?.status !== 'WAITING' || task.waiting_reason !== 'human_approval') return;
+    if (task.current_run_id !== a.run_id) return;
+    const others = this.db
+      .prepare("SELECT COUNT(*) AS n FROM approvals WHERE run_id = ? AND status = 'pending' AND approval_id <> ?")
+      .get<{ n: number }>(a.run_id, approvalId);
+    if ((others?.n ?? 0) > 0) return;
+    this.moveTask(ctx, task, 'task.resume', { reason: `${approvalId} was granted` });
   }
 
   /** Records that an action relied on approvals (ADR-0027 §5); a `once` grant is used up. */

@@ -74,6 +74,48 @@ describe('friday context explain (M4 gate, Part 12 §13)', () => {
     expect(stored.staleness).toMatchObject({ is_stale: true, reason: expect.stringContaining('memory') });
   });
 
+  it("explains the packet a task's agent was given, not what a human may read (LESSONS D-49)", async () => {
+    const td = await startTestDaemon(ws(), { git: true });
+    const dir = ws().projectDir;
+    for (const part of ['backend', 'frontend', 'shared', 'tsconfig.json']) {
+      cpSync(path.join(REPO_ROOT, 'tests', 'fixtures', 'fixture-shop', part), path.join(dir, part), {
+        recursive: true,
+      });
+    }
+    const be = await FakeHarness.connect(td, { agentKey: 'be-1', role: 'backend' });
+    const other = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Choose the launch discount codes',
+      scope: { write: ['frontend/**'], read: [] },
+    });
+    const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Add discount codes to checkout',
+      scope: { write: ['backend/**'], read: [] },
+      assign_agent_key: 'be-1',
+    });
+    // A decision kept in another task's memory: be-1 holds no scope that reads it.
+    const kept = await td.operator.post<{ memory: { memory_id: string } }>(td.operator.projectPath('/memory'), {
+      scope_type: 'task',
+      scope_id: other.task_id,
+      kind: 'decision',
+      subject: 'launch discount codes',
+      content: 'The launch discount codes are WELCOME10 and FIVEOFF.',
+    });
+    const memoryId = kept.memory.memory_id;
+    await be.client.call('task.claim', { task_id: task.task_id });
+
+    const explained = await cli(['--project', dir, 'context', 'explain', task.task_id]);
+    expect(explained.code, explained.stderr).toBe(0);
+    expect(explained.stdout).toContain('Delivered to be-1');
+    expect(explained.stdout).not.toContain(memoryId);
+
+    // A preview on request says whose view it is.
+    const preview = await cli(['--project', dir, 'context', 'explain', task.task_id, '--fresh']);
+    expect(preview.code, preview.stderr).toBe(0);
+    expect(preview.stdout).toContain('compiled for you');
+    // A human may read every memory, so the preview shows what the agent was not given.
+    expect(preview.stdout).toContain(memoryId);
+  });
+
   it('never names what the project policy keeps from agents, also after a tightening, except a path a human approved (review F02)', async () => {
     const td = await startTestDaemon(ws(), { git: true });
     const dir = ws().projectDir;

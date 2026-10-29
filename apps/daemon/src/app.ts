@@ -320,6 +320,16 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     });
   });
 
+  // The newest packet the task's agent was given, for `friday context explain <task>` (LESSONS D-49).
+  app.get(`${P}/tasks/:tid/delivered-context`, allow(...OPERATOR), (c) => {
+    const task = state.q.task(pid, c.req.param('tid'));
+    const runs = state.q.runs(task.task_id);
+    const agentId = task.assigned_agent_id ?? runs.at(-1)?.agent_id ?? null;
+    const contextId = agentId ? (state.q.deliveredPacketId(pid, task.task_id, agentId) ?? null) : null;
+    const agent = agentId ? state.q.findAgent(agentId) : undefined;
+    return c.json({ context_id: contextId, agent_id: agentId, agent_key: agent?.agent_key ?? null });
+  });
+
   app.get(`${P}/tasks/:tid`, allow('operator', 'harness'), (c) => {
     const task = state.q.task(pid, c.req.param('tid'));
     const auth = c.get('auth');

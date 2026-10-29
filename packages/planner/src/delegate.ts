@@ -4,8 +4,9 @@ import { globsOverlap, matchesAny } from '@friday/policy';
  * Delegation policy (spec Part 03 §10): a deterministic score, not a model call.
  *   score = 3·capability_fit + 2·context_fit + 1.5·reliability + 1·locality + 1·model_fit − 0.5·cost
  * `model_fit` is how well the best model the agent's harness can run fits the task (ADR-0031 §9).
- * Only available agents are eligible; ties go to the lower agent key, so the same state always
- * gives the same assignment.
+ * Only available agents are eligible. A task that names a role goes to a free agent of that role
+ * when there is one, the score deciding among them; ties go to the lower agent key, so the same
+ * state always gives the same assignment.
  */
 
 export interface DelegationTask {
@@ -132,18 +133,31 @@ export function delegate(
       scores: [],
     };
   }
+  // A task that names a role goes to a free agent of that role when there is one: the score decides
+  // among them, and among everyone when there is none. A generalist's history in the same files
+  // must not outweigh the role the plan chose (LESSONS D-48).
+  const named = task.role !== 'developer';
+  const ofRole = (s: CandidateScore) => (named && s.parts.capability_fit === 1 ? 1 : 0);
   const scores = candidates
     .map((c) => scoreCandidate(task, c))
     .sort(
-      (a, b) => Number(b.eligible) - Number(a.eligible) || b.total - a.total || a.agent_key.localeCompare(b.agent_key),
+      (a, b) =>
+        Number(b.eligible) - Number(a.eligible) ||
+        ofRole(b) - ofRole(a) ||
+        b.total - a.total ||
+        a.agent_key.localeCompare(b.agent_key),
     );
   const best = scores.find((s) => s.eligible);
-  return best
-    ? {
-        task_id: task.task_id,
-        agent_key: best.agent_key,
-        reason: `highest score ${best.total} (${best.agent_key})`,
-        scores,
-      }
-    : { task_id: task.task_id, agent_key: null, reason: 'no available agent; the task stays claimable', scores };
+  if (!best)
+    return { task_id: task.task_id, agent_key: null, reason: 'no available agent; the task stays claimable', scores };
+  const top = Math.max(...scores.filter((s) => s.eligible).map((s) => s.total));
+  return {
+    task_id: task.task_id,
+    agent_key: best.agent_key,
+    reason:
+      best.total < top
+        ? `the role it names (${task.role}): the highest score among its agents ${best.total} (${best.agent_key})`
+        : `highest score ${best.total} (${best.agent_key})`,
+    scores,
+  };
 }

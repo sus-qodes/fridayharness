@@ -2,6 +2,13 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — the recorded live MVP demonstration
+
+Part 12 §18 ran once with two real hosts: Claude Code 2.1.301 and Codex 0.162.1, both spawned, on one goal ([the record](docs/integration/mvp-demo.md#recorded-live-2026-10-16)). Two tasks ran in parallel worktrees; the shared contract's change reached only the backend agent; the Codex adapter was killed mid-turn and the same run resumed in the same Codex thread, with Friday's tools; a failed verification was reworked; both tasks were verified and integrated, and the goal completed. What it found is fixed, each with a regression that failed before the change (LESSONS D-49, D-50):
+
+- **Fix:** `friday context explain <task>` compiled a new packet for the human asking, who may read more than the agent, and showed it as the task's context. It now explains the newest packet the task's agent was given; `--fresh` compiles a preview, labelled as compiled for a human.
+- **Fix:** a Master Brain question about a failed task stayed open after the human reworked the task, and the goal completed with it pending. When a task is sent back for rework, completed or cancelled, Friday closes its open failure questions as no longer needed, and that answer starts no revision.
+
 ## Unreleased — the interactive Claude Code check
 
 Claude Code 2.1.300 in the VS Code panel ran two tasks end to end, both verified COMPLETED. What it found is fixed, each with a regression that failed before the change ([the guide](docs/integration/claude-code.md), LESSONS D-41 to D-45):
@@ -12,6 +19,10 @@ Claude Code 2.1.300 in the VS Code panel ran two tasks end to end, both verified
 - **Commands:**
   - bash loops over files, `command -v`, `[ … ]` and `read` are judged as reads, so they no longer ask;
   - **Fix:** commands in backticks (`` echo `rm -rf x` ``), `find -delete`, `find -exec`, and a leading `$x` in bash passed as reads. Each is judged as what it runs, by the shell the host names.
+- **From the owner's hands-on tests:**
+  - **Fix:** approving a request now resumes the task its agent set waiting for it, and an operation refused for a waiting task says why.
+  - **Fix:** `friday plan propose --goal X` failed, and `plan approve --goal X` approved the newest goal's plan instead of X's.
+  - **Delegation:** a task that names a role goes to a free agent of that role when there is one; experience decides among them.
 
 ## Unreleased — M8a.5, the M8 readiness review
 

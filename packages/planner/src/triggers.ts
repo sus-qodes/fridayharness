@@ -167,6 +167,8 @@ export function triggersFor(e: TriggerEvent, f: TriggerFacts): BrainAction[] {
       ];
     }
     case 'escalation.answered': {
+      // Friday closed the question because its task moved on; nothing to plan again (LESSONS D-50).
+      if (p.moot === true) return [];
       const escalation_id = String(p.escalation_id);
       const raised = f.brainEscalation(escalation_id);
       if (!raised?.replan || !f.planner.available) return [];

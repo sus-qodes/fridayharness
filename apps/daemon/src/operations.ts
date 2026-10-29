@@ -141,6 +141,12 @@ export class OperationManager {
     const task = p.task_id
       ? state.q.findTask(this.pid, p.task_id)
       : state.q.tasks(this.pid, { statuses: ['RUNNING'] }).find((t) => t.assigned_agent_id === caller.agent_id);
+    if (task && task.assigned_agent_id === caller.agent_id && task.status === 'WAITING') {
+      // Held, but set waiting (LESSONS D-46): say so, not "claim it first".
+      return denied(
+        `your task ${task.task_id} is WAITING (${task.waiting_reason ?? 'waiting'}); report progress with status "working" to continue it, then run the operation again`,
+      );
+    }
     if (!task || task.assigned_agent_id !== caller.agent_id || task.status !== 'RUNNING') {
       return denied('operations run for the task you hold while it is RUNNING; claim it first');
     }

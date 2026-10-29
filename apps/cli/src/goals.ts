@@ -320,6 +320,12 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
       const d = await goalDetail(client, id);
       out(g(), d, () => renderGoal(d));
     });
+  // `plan` and its subcommands share `--goal` and `--version`, and the parent takes them wherever
+  // they stand: a subcommand reads its own, else the parent's (LESSONS D-47).
+  const shared = (o: { goal?: string; version?: number }) => {
+    const p = plan.opts<{ goal?: string; version?: number }>();
+    return { goal: o.goal ?? p.goal, version: o.version ?? p.version };
+  };
   const decide = (verb: 'approve' | 'reject') =>
     plan
       .command(verb)
@@ -333,8 +339,9 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
       .option('--note <text>')
       .action(async (o: { goal?: string; version?: number; note?: string }) => {
         const { client } = operator(g());
-        const id = await resolveGoal(client, o.goal);
-        const v = await versionOf(client, id, o.version, 'proposed');
+        const { goal, version } = shared(o);
+        const id = await resolveGoal(client, goal);
+        const v = await versionOf(client, id, version, 'proposed');
         const res = await client.post<{ plan: LiveVersion; created?: { task_id: string }[] }>(
           client.projectPath(`/plans/${v.plan_id}/versions/${v.version}/${verb}`),
           o.note ? { note: o.note } : {},
@@ -358,7 +365,7 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
     .option('--goal <goal>')
     .action(async (from: string, to: string, o: { goal?: string }) => {
       const { client } = operator(g());
-      const d = await goalDetail(client, await resolveGoal(client, o.goal));
+      const d = await goalDetail(client, await resolveGoal(client, shared(o).goal));
       if (!d.goal.plan_id) throw new UsageError('this goal has no plan');
       const res = await client.get<{
         diff: {
@@ -385,17 +392,19 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
   plan
     .command('propose')
     .description("propose a plan you wrote (YAML or JSON); validated like a model's plan")
-    .requiredOption('--goal <goal>')
+    .option('--goal <goal>', 'the goal (required)')
     .requiredOption(
       '--file <path>',
       'a plan (objective, summary, tasks) or, for an active plan, a revision (rework, drop, new_tasks)',
     )
-    .action(async (o: { goal: string; file: string }) => {
+    .action(async (o: { goal?: string; file: string }) => {
+      const goal = shared(o).goal;
+      if (!goal) throw new UsageError('say which goal the plan is for: --goal <goal>');
       const { client } = operator(g());
-      const v = await client.post<LiveVersion>(client.projectPath(`/goals/${o.goal}/plans`), {
+      const v = await client.post<LiveVersion>(client.projectPath(`/goals/${goal}/plans`), {
         draft: readPlanFile(o.file),
       });
-      out(g(), v, () => `${renderPlan(v)}\n\nApprove with: friday plan approve --goal ${o.goal}`);
+      out(g(), v, () => `${renderPlan(v)}\n\nApprove with: friday plan approve --goal ${goal}`);
     });
 
   // ---- the Master Brain ------------------------------------------------------------------------

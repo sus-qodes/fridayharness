@@ -345,6 +345,15 @@ export class Queries {
     return toVerificationView(row, checks);
   }
 
+  /** The newest packet compiled for an agent about a task: what that agent was given (LESSONS D-49). */
+  deliveredPacketId(projectId: string, taskId: string, agentId: string): string | undefined {
+    return this.db
+      .prepare(
+        'SELECT context_id FROM context_packets WHERE project_id = ? AND task_id = ? AND recipient_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+      )
+      .get<{ context_id: string }>(projectId, taskId, agentId)?.context_id;
+  }
+
   contextPacket(contextId: string): ContextPacket | undefined {
     const row = this.db
       .prepare('SELECT packet_json FROM context_packets WHERE context_id = ?')

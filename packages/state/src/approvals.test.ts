@@ -71,6 +71,46 @@ const use = (a: ReturnType<typeof agentOnTask>, version = 'v1', run = a.run_id) 
   });
 
 describe('bound approvals', () => {
+  it('resumes a task its agent set waiting once the approvals it waited on are granted (LESSONS D-46)', () => {
+    const a = agentOnTask(1);
+    const push = ask(a, 'once');
+    const tag = state.requestPermission(
+      PROJECT,
+      a.caller,
+      {
+        task_id: a.task_id,
+        run_id: a.run_id,
+        action_class: 'shell.git.push',
+        command: 'git push --tags',
+        justification: 'release tags',
+        ttl_s: 600,
+      },
+      { ...PUSH, policy_version: 'v1' },
+    ).approval_id as string;
+    const waiting = { task_id: a.task_id, run_id: a.run_id, note: 'waiting for the human' };
+    state.updateTask(PROJECT, a.caller, { ...waiting, status: 'waiting', waiting_reason: 'human_approval' });
+    expect(state.q.task(PROJECT, a.task_id).status).toBe('WAITING');
+
+    // One of two requests granted: the other still waits for a human.
+    state.decideApproval(PROJECT, human, push, true, { via: 'cli' });
+    expect(state.q.task(PROJECT, a.task_id).status).toBe('WAITING');
+    state.decideApproval(PROJECT, human, tag, true, { via: 'cli' });
+    expect(state.q.task(PROJECT, a.task_id)).toMatchObject({ status: 'RUNNING', waiting_reason: null });
+
+    // A task waiting for something else, or a refusal, does not resume.
+    const b = agentOnTask(2);
+    const other = ask(b, 'once');
+    state.updateTask(PROJECT, b.caller, {
+      task_id: b.task_id,
+      run_id: b.run_id,
+      note: 'needs more context',
+      status: 'waiting',
+      waiting_reason: 'context_required',
+    });
+    state.decideApproval(PROJECT, human, other, true, { via: 'cli' });
+    expect(state.q.task(PROJECT, b.task_id).status).toBe('WAITING');
+  });
+
   it('covers one use of the exact target, for its own task only', () => {
     const a = agentOnTask(1);
     const b = agentOnTask(2);

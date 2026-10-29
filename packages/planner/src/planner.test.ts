@@ -291,6 +291,24 @@ describe('delegation', () => {
     ]);
   });
 
+  it('gives a task that names a role to a free agent of that role, whatever the others did before (LESSONS D-48)', () => {
+    const frontendTask = { task_id: 'task_2', goal_id: 'goal_1', role: 'frontend', write: ['frontend/**'] };
+    // As in the interactive check: a generalist that did frontend work before, a frontend agent new to it.
+    const generalist = agent('dev-1', { recent_paths: ['frontend/src/pricing/discount.ts'], completed: 4 });
+    const specialist = agent('fe-1', { role: 'frontend' });
+    expect(scoreCandidate(frontendTask, generalist).total).toBeGreaterThan(
+      scoreCandidate(frontendTask, specialist).total,
+    );
+    const d = delegate(frontendTask, [generalist, specialist], []);
+    expect(d.agent_key).toBe('fe-1');
+    expect(d.reason).toContain('frontend');
+    // With no free agent of that role, the score decides.
+    const busy = agent('fe-1', { role: 'frontend', current_task_id: 'task_9' });
+    expect(delegate(frontendTask, [generalist, busy], []).agent_key).toBe('dev-1');
+    // A task for any developer names no role: the score decides.
+    expect(delegate({ ...frontendTask, role: 'developer' }, [generalist, specialist], []).agent_key).toBe('dev-1');
+  });
+
   it('prefers role fit, then context, reliability and locality; ties go to the lower key', () => {
     const decision = delegate(
       backendTask,
@@ -492,6 +510,12 @@ describe('Master Brain trigger table', () => {
     ],
     ['a reservation ends', ev('task.reservation_released', { task_id: 'task_g1' }), facts(), [{ kind: 'delegate' }]],
     ['human answers an agent', ev('escalation.answered', { escalation_id: 'esc_agent' }), facts(), []],
+    [
+      'Friday closes a question its task made moot',
+      ev('escalation.answered', { escalation_id: 'esc_brain', moot: true }, { kind: 'system', id: 'friday' }),
+      facts(),
+      [],
+    ],
     [
       'human answers after deciding the proposal',
       ev('escalation.answered', { escalation_id: 'esc_decided' }),

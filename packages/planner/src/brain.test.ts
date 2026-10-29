@@ -399,6 +399,42 @@ describe('Master Brain', () => {
     expect(byKey(goal.goal_id)['vat-note']).toMatchObject({ status: 'ASSIGNED' });
   });
 
+  it('closes its question about a failed task once a human reworks it, and plans nothing (LESSONS D-50)', async () => {
+    const b = brain(null, {}, 'no Anthropic key is stored');
+    const dev = spawnAgent('dev-1', 'developer');
+    const goal = state.createGoal(PROJECT, human, { request: 'Add a VAT note to prices', plan: false });
+    const parsed = parsePlanDraft({
+      objective: 'Show a VAT note next to prices',
+      summary: 'One frontend task',
+      tasks: [
+        {
+          key: 'vat-note',
+          summary: 'Add the VAT note',
+          acceptance_criteria: ['note shown'],
+          scope: { write: ['frontend/src/**'] },
+        },
+      ],
+    });
+    if (!parsed.ok) throw new Error(parsed.errors.join('; '));
+    const v = state.proposePlan(PROJECT, human, goal.goal_id, proposalFromDraft(parsed.value, { trigger: 'human' }));
+    state.approvePlan(PROJECT, human, v.plan_id, v.version);
+    await b.runOnce();
+    accept(dev);
+    const task = finish(dev, byKey(goal.goal_id)['vat-note'] as TaskView, false);
+    await b.runOnce();
+    const asked = pending();
+    expect(asked).toMatchObject([{ kind: 'planner_unavailable', task_id: task.task_id }]);
+    // The human does what the question asked: the task goes back for rework.
+    state.reworkTask(PROJECT, human, task.task_id, 'show the note under the total');
+    expect(pending()).toEqual([]);
+    const closed = state.q.escalations(PROJECT).find((e) => e.escalation_id === asked[0]?.escalation_id);
+    expect(closed).toMatchObject({ status: 'answered', answer: 'no longer needed: the task was sent back for rework' });
+    const after = await b.runOnce();
+    expect(after.steps.map((s) => s.action)).not.toContain('replan');
+    expect(after.steps.map((s) => s.action)).not.toContain('escalate');
+    expect(pending()).toEqual([]);
+  });
+
   it('releases the tasks of a harness that never comes back and delegates them again', async () => {
     const b = brain(FakePlannerModel.fromDirectory(FIXTURES), { autoApprove: true });
     const be = spawnAgent('be-1', 'backend');
