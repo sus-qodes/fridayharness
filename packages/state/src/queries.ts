@@ -19,6 +19,7 @@ import {
   type RunView,
   type TaskStatus,
   type TaskView,
+  type UsageReport,
   type VerificationView,
   type WorktreeView,
 } from '@friday/protocol';
@@ -47,6 +48,7 @@ import {
   toVerificationView,
   type VerificationRow,
 } from './rows.js';
+import { buildUsageReport, type UsageReportOptions } from './usage.js';
 
 /** Harness view plus internal fields the service needs. */
 export type HarnessRecord = HarnessView & {
@@ -319,6 +321,25 @@ export class Queries {
       )
       .get<VerificationRow>(taskId);
     return row ? this.verificationView(row) : undefined;
+  }
+
+  /** The latest verification that judged one attempt (plan M10a: a row never borrows another attempt's verdict). */
+  latestVerificationForRun(runId: string): VerificationView | undefined {
+    const row = this.db
+      .prepare(
+        'SELECT * FROM verification_runs WHERE run_id = ? ORDER BY started_at DESC, verification_id DESC LIMIT 1',
+      )
+      .get<VerificationRow>(runId);
+    return row ? this.verificationView(row) : undefined;
+  }
+
+  /**
+   * The token baseline (plan M10a): one row per run attempt with the host's reported usage, the
+   * packets delivered to it, its context requests and tool calls by kind, and its verification.
+   * Without a goal or task, the newest `limit` attempts (default 500), flagged as cut.
+   */
+  usageReport(projectId: string, opts: UsageReportOptions = {}): UsageReport {
+    return buildUsageReport(this.db, this, projectId, opts);
   }
 
   verification(verificationId: string): VerificationView {

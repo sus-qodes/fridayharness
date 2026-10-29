@@ -29,8 +29,19 @@ const UNRECORDABLE: ErrorName[] = ['invalid_request', 'schema_mismatch', 'payloa
 type ResultParams = Omit<ParamsOf<'agent.result'>, 'idempotency_key'>;
 type ErrorParams = Omit<ParamsOf<'agent.error'>, 'idempotency_key'>;
 
+/**
+ * Something the attempt reported about itself as it ended (what the host said the turn cost,
+ * `host.usage`), kept with the report of how it ended and recorded before it: the usage row of the
+ * token baseline would otherwise show a verified attempt as one whose host said nothing whenever
+ * Friday was out of reach at that moment.
+ */
+export interface KeptEvent {
+  event_type: string;
+  data: Record<string, unknown>;
+}
+
 /** How a run attempt ended, as Friday is told it; the key is the same on every try. */
-export type TerminalReport = { idempotency_key: string; created_at: string } & (
+export type TerminalReport = { idempotency_key: string; created_at: string; events?: KeptEvent[] } & (
   | { kind: 'result'; params: ResultParams }
   | { kind: 'error'; params: ErrorParams }
 );
@@ -74,11 +85,24 @@ export class TerminalReports {
     return this.#pending.has(runId);
   }
 
-  /** Records how an attempt ended (on disk first, when kept there), and delivers it. */
-  report(kind: 'result', params: ResultParams): Promise<ReportOutcome>;
-  report(kind: 'error', params: ErrorParams): Promise<ReportOutcome>;
-  report(kind: 'result' | 'error', params: ResultParams | ErrorParams): Promise<ReportOutcome> {
-    this.#keep({ kind, params, idempotency_key: newId('msg'), created_at: new Date().toISOString() } as TerminalReport);
+  /**
+   * Records how an attempt ended (on disk first, when kept there), with what it reported about
+   * itself (`events`, recorded before the report), and delivers it.
+   */
+  report(kind: 'result', params: ResultParams, opts?: { events?: KeptEvent[] }): Promise<ReportOutcome>;
+  report(kind: 'error', params: ErrorParams, opts?: { events?: KeptEvent[] }): Promise<ReportOutcome>;
+  report(
+    kind: 'result' | 'error',
+    params: ResultParams | ErrorParams,
+    opts: { events?: KeptEvent[] } = {},
+  ): Promise<ReportOutcome> {
+    this.#keep({
+      kind,
+      params,
+      idempotency_key: newId('msg'),
+      created_at: new Date().toISOString(),
+      ...(opts.events?.length ? { events: [...opts.events] } : {}),
+    } as TerminalReport);
     return this.deliver(params.run_id);
   }
 
@@ -97,6 +121,28 @@ export class TerminalReports {
       if (!r) return 'dropped';
       try {
         const client = this.opts.client();
+        // What the attempt reported about itself goes first, each once Friday took it. An event has
+        // no idempotency key: one whose answer was lost after Friday recorded it is sent again, and
+        // the usage row reads a repeated `host.usage` as one (its last report counts).
+        while (r.events?.length) {
+          const [ev] = r.events as [KeptEvent, ...KeptEvent[]];
+          try {
+            await client.call('agent.event', {
+              task_id: r.params.task_id,
+              run_id: r.params.run_id,
+              event_type: ev.event_type,
+              data: ev.data,
+            });
+          } catch (e) {
+            // Friday out of reach, or this registration being renewed: tried again with the report.
+            if (transient(e) || (isFridayError(e) && LOST.includes(e.errorName))) throw e;
+            // Anything else Friday will never take (the run is another session's now): the report
+            // itself decides what becomes of the attempt.
+            this.opts.log(`Friday did not take the ${ev.event_type} of ${r.params.task_id}: ${(e as Error).message}`);
+          }
+          r.events.shift();
+          this.#keep(r);
+        }
         if (r.kind === 'result') await client.call('agent.result', { ...r.params, idempotency_key: r.idempotency_key });
         else await client.call('agent.error', { ...r.params, idempotency_key: r.idempotency_key });
         this.drop(runId);

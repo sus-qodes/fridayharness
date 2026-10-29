@@ -230,9 +230,13 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
               .map((p) => canonicalize(p, { projectRoot: root }).relative)
               .filter((p): p is string => Boolean(p));
           }
-          const run = task?.current_run_id ? state.q.findRun(task.current_run_id) : undefined;
-          if (changed.length && run && harness && run.harness_id === harness.harness_id && run.status === 'ACTIVE') {
-            state.observePaths(pid, { kind: 'harness', id: harness.harness_id }, run.run_id, changed);
+          // The call counts for the attempt only when this session is the one running it: a second
+          // live session of the same agent (a shadow, or one restarted during the reconnect grace)
+          // resolves to the same agent and task, and its reads and edits are not the attempt's.
+          const current = task?.current_run_id ? state.q.findRun(task.current_run_id) : undefined;
+          const run = current && harness && current.harness_id === harness.harness_id ? current : undefined;
+          if (changed.length && run && run.status === 'ACTIVE') {
+            state.observePaths(pid, { kind: 'harness', id: run.harness_id }, run.run_id, changed);
           }
           state.recordObservation(
             pid,
@@ -241,6 +245,7 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
             {
               task_id: task?.task_id ?? null,
               run_id: run?.run_id ?? null,
+              harness_id: harness?.harness_id ?? null,
               event_type: failed ? 'tool.failed' : 'tool.completed',
               tool: toolName,
               summary:

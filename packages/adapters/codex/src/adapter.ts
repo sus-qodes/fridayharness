@@ -439,7 +439,8 @@ export class CodexAdapter {
   async #instructions(p: TaskStartParams): Promise<string> {
     let packet = '';
     try {
-      const ctx = await this.client.requestContext({ task_id: p.task_id, kind: 'task' });
+      // The run is named so the packet is recorded as this attempt's (the usage row, plan M10a).
+      const ctx = await this.client.requestContext({ task_id: p.task_id, run_id: p.run_id, kind: 'task' });
       // Codex has none of Friday's own tools: the packet does not point at them.
       packet = renderContextMarkdown(ctx, 12_000, { fridayTools: false });
     } catch (e) {

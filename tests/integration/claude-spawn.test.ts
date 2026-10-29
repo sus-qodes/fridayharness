@@ -18,10 +18,11 @@ import {
   SPAWN_TOOLS,
 } from '@friday/adapter-claude';
 import { SPAWNED_AGENT_TOOLS } from '@friday/mcp-server';
-import type { TaskStartParams, TaskView } from '@friday/protocol';
+import type { TaskStartParams, TaskView, UsageReport } from '@friday/protocol';
 import type { DaemonClient } from '@friday/sdk';
 import { FakeClock, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { cli } from '../helpers/cli.js';
 import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
 import { answerLost, gate, interceptedBootstrap, method, notDelivered } from '../helpers/faults.js';
 
@@ -739,5 +740,144 @@ describe('Claude Code in spawn mode', () => {
     expect(
       c.adapter.received.some((m) => m.method === 'task.resume' && (m.params as TaskStartParams).run_id === runId),
     ).toBe(true);
+  });
+
+  it('records what the session reported the turn cost, and what it did not report as unknown (M10a)', async () => {
+    const td = await daemon();
+    const pid = td.project.project_id;
+    // One host reports usage in full, as Claude Code does; one reports no cache fields and no model;
+    // one ends in an error, which still carries what it reported.
+    const full = claude(td, 'cl-1', {
+      model: 'claude-fake-sonnet',
+      turns: [[{ op: 'final', status: 'completed', summary: 'done', changed_paths: [] }]],
+    });
+    const bare = claude(td, 'cl-2', {
+      turns: [
+        [
+          {
+            op: 'final',
+            status: 'completed',
+            summary: 'done',
+            changed_paths: [],
+            usage: { input_tokens: 300, output_tokens: 20 },
+          },
+        ],
+      ],
+    });
+    const failing = claude(td, 'cl-3', { turns: [[{ op: 'fail', message: 'the model quit' }]] });
+    for (const x of [full, bare, failing]) await x.adapter.start();
+    const one = await assigned(td, 'cl-1', ['src/**']);
+    const two = await assigned(td, 'cl-2', ['lib/**']);
+    const three = await assigned(td, 'cl-3', ['app/**']);
+    await eventually(
+      () => [status(td, one), status(td, two), status(td, three)].map((t) => t.status),
+      (s) => s[0] === 'READY_FOR_VERIFICATION' && s[1] === 'READY_FOR_VERIFICATION' && s[2] === 'WAITING',
+      'the three turns to end',
+    );
+    const usageOf = (id: string) => {
+      const events = td.daemon.state.store
+        .readByRef(pid, 'task', id)
+        .filter((e) => e.type === 'agent.event' && (e.payload as { event_type: string }).event_type === 'host.usage');
+      expect(events, `one usage record for ${id}`).toHaveLength(1);
+      return events[0]?.payload as { run_id?: string; data?: Record<string, unknown> };
+    };
+    // Every field of the result message, against the run that spent it. The model is the one the
+    // message's per-model usage names: the routed one when Friday routed the run.
+    const routed = full.adapter.received.find((m) => m.method === 'task.start')?.params as TaskStartParams;
+    const first = usageOf(one);
+    expect(first.run_id).toBe(status(td, one).current_run_id);
+    expect(first.data).toEqual({
+      cost_usd: 0.0012,
+      input_tokens: 1200,
+      output_tokens: 80,
+      cache_read_input_tokens: 9600,
+      cache_creation_input_tokens: 2400,
+      turns: 3,
+      model: routed.model ?? 'claude-fake-sonnet',
+    });
+    // What a host does not report is unknown, never zero.
+    expect(usageOf(two).data).toEqual({
+      cost_usd: 0.0012,
+      input_tokens: 300,
+      output_tokens: 20,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+      turns: 3,
+      model: null,
+    });
+    // An error result is recorded too: the cost it reported, and nulls for the counts it left out.
+    expect(usageOf(three).data).toEqual({
+      cost_usd: 0,
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+      turns: 1,
+      model: null,
+    });
+
+    // The usage row joins the report with the attempt it belongs to: `friday usage --task` shows
+    // the host's figures as the session reported them, with the cache fields and the model, next
+    // to the packet the adapter asked Friday for as the session began.
+    const shown = await cli(['--project', td.ws.projectDir, 'usage', '--task', one, '--json']);
+    expect(shown.code, shown.stderr).toBe(0);
+    const report = JSON.parse(shown.stdout) as UsageReport;
+    expect(report.rows.map((r) => r.run_id)).toEqual([status(td, one).current_run_id]);
+    expect(report.rows[0]).toMatchObject({
+      task_id: one,
+      attempt: 1,
+      agent_key: 'cl-1',
+      harness_vendor: 'claude-code',
+      harness_mode: 'spawn',
+      host: {
+        reported: true,
+        input_tokens: 1200,
+        output_tokens: 80,
+        cache_read_input_tokens: 9600,
+        cache_creation_input_tokens: 2400,
+        cost_usd: 0.0012,
+        turns: 3,
+        model: routed.model ?? 'claude-fake-sonnet',
+      },
+    });
+    expect(report.rows[0]?.packets.count).toBeGreaterThanOrEqual(1);
+    expect(report.totals).toMatchObject({ attempts: 1, host_reported: 1, cache_read_input_tokens: 9600 });
+  });
+
+  it('keeps the host’s usage report with the result until Friday records both (M10a, review M8-R05)', async () => {
+    const td = await daemon();
+    const pid = td.project.project_id;
+    const x = interceptedBootstrap(td);
+    // Friday is out of reach the moment the turn ends: the usage report does not get through.
+    x.on(
+      method('agent.event', (p) => p.event_type === 'host.usage'),
+      notDelivered,
+    );
+    const one = claude(
+      td,
+      'h-1',
+      { turns: [[{ op: 'final', status: 'completed', summary: 'done', changed_paths: [] }]] },
+      { bootstrap: x.client },
+    );
+    await one.adapter.start();
+    const id = await assigned(td, 'h-1', ['src/**']);
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the claim',
+      15_000,
+    );
+    // The report was tried again and recorded, once, before the claim it belongs with.
+    const events = td.daemon.state.store.readByRef(pid, 'task', id);
+    const usage = events.filter(
+      (e) => e.type === 'agent.event' && (e.payload as { event_type: string }).event_type === 'host.usage',
+    );
+    expect(usage).toHaveLength(1);
+    const claimed = events.find((e) => e.type === 'task.completion_claimed');
+    expect(usage[0]?.sequence).toBeLessThan(claimed?.sequence as number);
+    expect(x.calls.filter((c) => c.method === 'agent.event' && c.params.event_type === 'host.usage')).toHaveLength(2);
+    // The attempt's row shows what the host spent, not a host that said nothing.
+    const report = td.daemon.state.q.usageReport(pid, { taskId: id });
+    expect(report.rows[0]?.host).toMatchObject({ reported: true, input_tokens: 1200, cache_read_input_tokens: 9600 });
   });
 });

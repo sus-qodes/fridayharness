@@ -276,7 +276,30 @@ async function play(steps) {
         return;
       }
       log({ final: structured });
-      send({ type: 'result', subtype: 'success', is_error: false, num_turns: 3, duration_ms: 10, total_cost_usd: 0.0012, usage: { input_tokens: 1200, output_tokens: 80 }, result: JSON.stringify(structured), structured_output: structured });
+      // The result reports usage as a real one does (2.1.300): the cache fields beside the token
+      // counts, and a per-model map whose entry names the model. A step's own `usage` replaces the
+      // usage and leaves the map out, for a host that reports less.
+      const usage = s.usage ?? { input_tokens: 1200, cache_creation_input_tokens: 2400, cache_read_input_tokens: 9600, output_tokens: 80 };
+      const modelUsage = s.usage
+        ? {}
+        : {
+            modelUsage: {
+              [model]: {
+                inputTokens: 1200,
+                outputTokens: 80,
+                cacheReadInputTokens: 9600,
+                cacheCreationInputTokens: 2400,
+                webSearchRequests: 0,
+                costUSD: 0.0012,
+                contextWindow: 200000,
+                maxOutputTokens: 32000,
+                canonicalModel: model,
+                provider: 'firstParty',
+                costBasis: 'list',
+              },
+            },
+          };
+      send({ type: 'result', subtype: 'success', is_error: false, num_turns: 3, duration_ms: 10, total_cost_usd: 0.0012, usage, ...modelUsage, result: JSON.stringify(structured), structured_output: structured });
       return;
     } else if (s.op === 'fail') {
       send({ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 1, total_cost_usd: 0, usage: {}, result: s.message ?? 'failed' });

@@ -2,6 +2,15 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M10a, the token baseline
+
+Friday now joins what each run attempt cost with what it was given. `friday usage [--goal <id>] [--task <id>] [--json]` and `GET /usage` show, per attempt, the host's reported input and output tokens, cache reads and writes, cost, turns and model, the weight of the context packets delivered to it, its context requests by kind, its tool calls by kind (read, edit, shell, web, Friday) and the verification verdict. A host that reports nothing shows unknown values, never zeros, and the totals say how many attempts reported. This row is the yardstick every later change to context handling is measured against.
+
+- **What counts for an attempt:** only what its own session did. A second live session of the same agent (a shadow, or one restarted during the reconnect grace) reads the same task and gets its own packet at its start; the hooks no longer record its tool calls against the attempt, and the row counts neither its packet nor its calls. The rules for a task worked on twice (a boundary packet goes to the earlier attempt, once; an attempt never shows another attempt's verdict) are tested.
+- **Context requests:** Friday records a `context.requested` event when a request arrives, before the compiler answers or refuses it, so the row counts a refused request too.
+- **Totals:** `host_reported` says how many attempts sent a usage report at all; `reporters` says how many each token total sums, since a host may leave a field out (an older report without the cache fields, an error result with a cost and no counts). The CLI prints "(from N of M)" next to a total whose reporters differ, and its legend says which "-" means the host did not report and which means nothing to show.
+- **The Claude spawn adapter** keeps the host's usage report with the report of how the turn ended, so an outage at that moment loses neither.
+
 ## Unreleased — M9, the user interface
 
 Friday can be used from a browser for daily work: `friday ui` (or `friday ui --start` and `friday shortcut`, which start Friday when it is not running) opens the Studio signed in ([the plan](docs/frontend/PLAN.md)).

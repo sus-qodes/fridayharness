@@ -293,6 +293,7 @@ export class GenericHarnessClient {
 
 export { FINAL_SCHEMA, type Final, parseFinal } from './final.js';
 export {
+  type KeptEvent,
   type ReportOutcome,
   SpawnLink,
   type SpawnLinkOptions,

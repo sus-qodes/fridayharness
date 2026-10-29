@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { takeRequestedReach } from '../governance/decisions.js';
 import { SAVE_DEBOUNCE_MS } from '../store/prefs.js';
 import { makeContext } from '../test/context.js';
-import { makeApproval, makeEvent, makeRun, makeSnapshot, makeTask } from '../test/fixtures.js';
+import { makeApproval, makeEvent, makeRun, makeSnapshot, makeTask, T0 } from '../test/fixtures.js';
 import {
   applyDeepLink,
   bootDesktopNotch,
@@ -317,10 +317,13 @@ describe('the tray line', () => {
       approvals: [makeApproval()],
       tasks: [makeTask({ status: 'RUNNING' })],
     });
-    const t = trayState(board, 'live', Date.now());
+    // The fixtures' clock, not the machine's: the approval expires at a fixed time, and a test that
+    // read the real clock passed only until that afternoon (LESSONS T-69).
+    const now = Date.parse(T0);
+    const t = trayState(board, 'live', now);
     expect(t.state).toBe('waiting');
     expect(t.countsLine).toContain('1 waiting for you');
-    expect(trayState(makeSnapshot(), 'live', Date.now()).state).toBe('idle');
-    expect(trayState(null, 'stopped', Date.now())).toMatchObject({ state: 'error' });
+    expect(trayState(makeSnapshot(), 'live', now).state).toBe('idle');
+    expect(trayState(null, 'stopped', now)).toMatchObject({ state: 'error' });
   });
 });

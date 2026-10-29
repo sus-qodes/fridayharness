@@ -103,6 +103,45 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v 
 /** What `system/init` lists, by name: a string, or an object with a `name`. */
 const nameOf = (v: unknown): string =>
   typeof v === 'string' ? v : String((v as { name?: unknown } | null)?.name ?? '?');
+/** A number the host reported, or null: what a host did not report is unknown, never zero. */
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/**
+ * What the host's result message says the turn cost, for the token baseline (M10a). Every field is
+ * null when the message does not carry it, so a host that reports nothing is never read as one that
+ * spent nothing. The two cache fields are the measure of a stable prompt: what was read back from
+ * the cache and what was written into it. The model is the one the message's per-model usage names.
+ */
+function hostUsage(m: Record<string, unknown>): Record<string, unknown> {
+  const usage = (m.usage ?? {}) as Record<string, unknown>;
+  return {
+    cost_usd: num(m.total_cost_usd),
+    input_tokens: num(usage.input_tokens),
+    output_tokens: num(usage.output_tokens),
+    cache_read_input_tokens: num(usage.cache_read_input_tokens),
+    cache_creation_input_tokens: num(usage.cache_creation_input_tokens),
+    turns: num(m.num_turns),
+    model: reportedModel(m.modelUsage),
+  };
+}
+
+/**
+ * The model a result message's `modelUsage` map names: the entry's canonical name, else its key
+ * (a model id). A spawned session's work is done by one model; should a host ever name several, the
+ * one that took the most tokens is the one the spend is read against.
+ */
+function reportedModel(modelUsage: unknown): string | null {
+  if (!modelUsage || typeof modelUsage !== 'object') return null;
+  const entries = Object.entries(modelUsage as Record<string, Record<string, unknown> | null>);
+  if (!entries.length) return null;
+  const tokens = (e: Record<string, unknown> | null) =>
+    (['inputTokens', 'outputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens'] as const).reduce(
+      (n, k) => n + (num(e?.[k]) ?? 0),
+      0,
+    );
+  const [key, entry] = entries.reduce((a, b) => (tokens(b[1]) > tokens(a[1]) ? b : a));
+  return str(entry?.canonicalModel) ?? key;
+}
 
 /**
  * Claude Code working for Friday (ADR-0032 §11): registers as a spawn-mode harness and, for each
@@ -392,7 +431,8 @@ export class ClaudeSpawnAdapter {
   async #instructions(p: TaskStartParams): Promise<string> {
     let packet = '';
     try {
-      const ctx = await this.client.requestContext({ task_id: p.task_id, kind: 'task' });
+      // The run is named so the packet is recorded as this attempt's (the usage row, plan M10a).
+      const ctx = await this.client.requestContext({ task_id: p.task_id, run_id: p.run_id, kind: 'task' });
       // The session has none of Friday's own tools: the packet does not point at them.
       packet = renderContextMarkdown(ctx, 12_000, { fridayTools: false });
     } catch (e) {
@@ -538,24 +578,25 @@ export class ClaudeSpawnAdapter {
     }
     a.done = true;
     const ids = { task_id: a.taskId, run_id: a.runId };
-    const usage = (m.usage ?? {}) as { input_tokens?: number; output_tokens?: number };
-    await this.#event(a, 'host.usage', {
-      cost_usd: typeof m.total_cost_usd === 'number' ? m.total_cost_usd : null,
-      input_tokens: usage.input_tokens ?? null,
-      output_tokens: usage.output_tokens ?? null,
-      turns: typeof m.num_turns === 'number' ? m.num_turns : null,
-    });
-    // Kept until Friday records it, whatever happens to this adapter meanwhile (review M8-R05).
+    // Kept until Friday records it, whatever happens to this adapter meanwhile (review M8-R05),
+    // together with what the turn cost, whatever it ended as: the usage row of the token baseline
+    // reads that per run, and a report lost to an outage at the end of a turn would show a verified
+    // attempt as one whose host said nothing.
     const reports = this.#link.reports;
+    const spent = { events: [{ event_type: 'host.usage', data: hostUsage(m) }] };
     if (m.subtype === 'success' && m.is_error !== true) {
       const final = parseFinal(m.structured_output ?? str(m.result) ?? a.lastText);
       if (final.status === 'blocked') {
-        void reports.report('result', {
-          ...ids,
-          status: 'blocked',
-          summary: final.summary.slice(0, 2000) || 'blocked',
-          blocked_reason: (final.blocked_reason || final.summary || 'blocked').slice(0, 1000),
-        });
+        void reports.report(
+          'result',
+          {
+            ...ids,
+            status: 'blocked',
+            summary: final.summary.slice(0, 2000) || 'blocked',
+            blocked_reason: (final.blocked_reason || final.summary || 'blocked').slice(0, 1000),
+          },
+          spent,
+        );
       } else {
         const changed = new Set(final.changed_paths.map((x) => this.#rel(a, x)));
         try {
@@ -563,25 +604,33 @@ export class ClaudeSpawnAdapter {
         } catch {
           // the worktree's own changes are optional evidence; verification reads them itself
         }
-        void reports.report('result', {
-          ...ids,
-          status: 'completed_claim',
-          summary: final.summary.slice(0, 2000) || 'done',
-          changed_paths: [...changed].slice(0, 200),
-          checks: [],
-        });
+        void reports.report(
+          'result',
+          {
+            ...ids,
+            status: 'completed_claim',
+            summary: final.summary.slice(0, 2000) || 'done',
+            changed_paths: [...changed].slice(0, 200),
+            checks: [],
+          },
+          spent,
+        );
       }
     } else {
-      void reports.report('error', {
-        ...ids,
-        message:
-          `the Claude Code turn ended: ${String(m.subtype ?? 'error')}${str(m.result) ? `: ${m.result}` : ''}`.slice(
-            0,
-            2000,
-          ),
-        // The attempt is over (its session ends below): Friday's recovery decides what follows.
-        fatal: true,
-      });
+      void reports.report(
+        'error',
+        {
+          ...ids,
+          message:
+            `the Claude Code turn ended: ${String(m.subtype ?? 'error')}${str(m.result) ? `: ${m.result}` : ''}`.slice(
+              0,
+              2000,
+            ),
+          // The attempt is over (its session ends below): Friday's recovery decides what follows.
+          fatal: true,
+        },
+        spent,
+      );
     }
     await this.#end(a.runId);
   }

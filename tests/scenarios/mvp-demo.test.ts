@@ -19,7 +19,7 @@ import { CodexAdapter } from '@friday/adapter-codex';
 import { materializeFixtureShop } from '@friday/cli';
 import { createDaemon, type Daemon } from '@friday/daemon';
 import { runGit } from '@friday/git';
-import type { IntegrationView, TaskStartParams, TaskView, VerificationView } from '@friday/protocol';
+import type { IntegrationView, TaskStartParams, TaskView, UsageReport, VerificationView } from '@friday/protocol';
 import { DaemonClient } from '@friday/sdk';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -568,5 +568,92 @@ describe('the MVP demonstration (Part 12 §18)', () => {
     expect(models.stdout).toContain(ranModel as string);
     const kept = daemon.state.q.latestVerification(service)?.checks.find((c) => c.name === 'tests');
     expect(kept?.artifact_ref).toMatch(/^artifact:/);
+
+    // 17. The token baseline (plan M10a): one usage row per attempt of the goal, from Friday's own
+    // log. No host here reports what it spent (an attached session, a Codex thread, a plain
+    // harness), so every host field is unknown, never 0, while what Friday saw itself (the packets
+    // it delivered, the tool calls it judged, the verdict) is complete.
+    const usage = await friday('usage', '--goal', goal.goal_id, '--json');
+    expect(usage.code, usage.stderr).toBe(0);
+    const report = JSON.parse(usage.stdout) as UsageReport;
+    const attempts = Object.values(ids).flatMap((t) => daemon.state.q.attemptsOf(t).map((r) => r.run_id));
+    expect(report.rows.map((r) => r.run_id).sort()).toEqual([...attempts].sort());
+    // Each task ran once: the Codex attempt was resumed after the crash, not started again.
+    expect(report.rows).toHaveLength(3);
+    const rowOf = (key: keyof typeof ids) => {
+      const row = report.rows.find((r) => r.task_id === ids[key]);
+      if (!row) throw new Error(`no usage row for ${key}`);
+      return row;
+    };
+    for (const row of report.rows) {
+      expect(row).toMatchObject({
+        goal_id: goal.goal_id,
+        attempt: 1,
+        host: {
+          reported: false,
+          input_tokens: null,
+          output_tokens: null,
+          cache_read_input_tokens: null,
+          cache_creation_input_tokens: null,
+          cost_usd: null,
+          turns: null,
+          model: null,
+        },
+        verification: { status: 'PASSED' },
+      });
+      expect(row.verification?.checks_passed).toBeGreaterThanOrEqual(1);
+      expect(row.verification?.checks_total).toBeGreaterThanOrEqual(row.verification?.checks_passed ?? 0);
+      // Verified attempts have ended.
+      expect(row.ended_at).not.toBeNull();
+      expect(row.duration_ms).not.toBeNull();
+    }
+    // Claude Code's claim delivered its packet; its edits and its test run came through Friday's
+    // hooks (the denied write never ran, so it is not a call).
+    const contract = rowOf('discount-contract');
+    expect(contract).toMatchObject({ agent_key: 'fe-1', harness_vendor: 'claude-code', harness_mode: 'attach' });
+    expect(contract.packets.count).toBeGreaterThanOrEqual(1);
+    expect(contract.packets.tokens).toBeGreaterThan(0);
+    expect(contract.tool_calls.total).toBeGreaterThan(0);
+    expect(contract.tool_calls.by_kind.edit).toBeGreaterThanOrEqual(3);
+    expect(contract.tool_calls.by_kind.shell).toBeGreaterThanOrEqual(1);
+    // Codex asked Friday for its packet as its thread began; the adapter reported its file changes
+    // and commands, before the crash and after the resume, against the one run.
+    const serviceRow = rowOf('discount-service');
+    expect(serviceRow).toMatchObject({
+      run_id: run1,
+      agent_key: 'cx-1',
+      harness_vendor: 'codex',
+      harness_mode: 'spawn',
+      model_observed: ranModel,
+    });
+    expect(serviceRow.packets.count).toBeGreaterThanOrEqual(1);
+    expect(serviceRow.packets.tokens).toBeGreaterThan(0);
+    expect(serviceRow.tool_calls.total).toBeGreaterThan(0);
+    expect(serviceRow.tool_calls.by_kind.edit).toBeGreaterThanOrEqual(2);
+    expect(serviceRow.tool_calls.by_kind.shell).toBeGreaterThanOrEqual(1);
+    // The docs agent asked for nothing and reported no tool call: nothing is made up for it.
+    expect(rowOf('discount-docs')).toMatchObject({
+      agent_key: 'dc-1',
+      harness_vendor: 'generic',
+      packets: { count: 0, tokens: 0, chars: null, source_tokens: 0 },
+      tool_calls: { total: 0, failed: 0 },
+    });
+    expect(report.totals).toEqual({
+      attempts: 3,
+      host_reported: 0,
+      reporters: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cost_usd: 0,
+      },
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+      cost_usd: null,
+      tool_calls: contract.tool_calls.total + serviceRow.tool_calls.total,
+    });
   });
 });

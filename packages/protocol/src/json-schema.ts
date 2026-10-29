@@ -12,6 +12,8 @@ import {
   RunView,
   TaskCreateRequest,
   TaskView,
+  UsageReport,
+  UsageRowView,
   VerificationView,
 } from './api.js';
 import { ContextPacket } from './context.js';
@@ -54,6 +56,8 @@ export function buildSchemas(): Record<string, JsonObject> {
     assignment: AssignmentView,
     message: MessageView,
     'human-message-request': HumanMessageRequest,
+    'usage-row': UsageRowView,
+    'usage-report': UsageReport,
   };
   for (const [name, schema] of Object.entries(api)) {
     out[`api/v1/${name}.json`] = toSchema(schema, `urn:friday:api:v1:${name}`);

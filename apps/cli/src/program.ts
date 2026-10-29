@@ -24,6 +24,7 @@ import { registerLayaCommands, registerRoutingCommands } from './routing.js';
 import { runDaemon } from './run.js';
 import { createShortcut } from './shortcut.js';
 import { FRIDAY_DIR_GITIGNORE } from './templates.js';
+import { registerUsageCommands } from './usage.js';
 import { registerWorktreeCommands } from './worktrees.js';
 
 const collect = (v: string, prev: string[] = []) => [...prev, v];
@@ -805,6 +806,7 @@ export function buildProgram(): Command {
   registerOperationCommands(program, g);
   registerRoutingCommands(program, g);
   registerLayaCommands(program, g);
+  registerUsageCommands(program, g);
   registerMemoryCommands(program, g);
   for (const plugin of commandPlugins) plugin(program);
   return program;

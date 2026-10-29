@@ -470,6 +470,40 @@ describe('Claude Code hook routes', () => {
     expect(JSON.stringify(inspected)).not.toContain('secret body');
   });
 
+  it('PostToolUse from a second live session of the same agent (a shadow) is not recorded against the attempt (M10a)', async () => {
+    const r = await rig();
+    const mcp = await mcpSession(r.td);
+    await createTask(r.td, ['src/**']);
+    const claim = await mcp.claim({ next: true });
+    // A second window with the same agent key while the first session is live: a shadow, which
+    // resolves to the same agent and so to the same held task.
+    const shadowSession = 'sess-router-shadow';
+    const shadow = await mcpSession(r.td, { pid: 4343, sessionId: shadowSession, agentKey: 'dev-1' });
+    expect(shadow.registration.shadow).toBe(true);
+    const file = { file_path: path.join(r.vars.projectDir, 'src', 'a.ts') };
+    const fromShadow = await r.hook(
+      'PostToolUse',
+      toolHook('PostToolUse', 'Read', file, { projectDir: r.vars.projectDir, sessionId: shadowSession }),
+      { claudePid: 4343 },
+    );
+    expect(fromShadow.status).toBe(200);
+    const fromHolder = await r.hook('PostToolUse', toolHook('PostToolUse', 'Read', file, r.vars));
+    expect(fromHolder.status).toBe(200);
+
+    const events = eventsOf(r.td, 'agent.event').map(
+      (e) => e.payload as { tool: string; run_id: string | null; harness_id: string | null },
+    );
+    // Both calls are recorded, each naming its session; only the holder's names the attempt.
+    expect(events).toEqual([
+      expect.objectContaining({ tool: 'Read', run_id: null, harness_id: shadow.harnessId }),
+      expect.objectContaining({ tool: 'Read', run_id: claim.run_id, harness_id: mcp.harnessId }),
+    ]);
+    expect(r.td.daemon.state.q.usageReport(r.td.project.project_id).rows[0]).toMatchObject({
+      run_id: claim.run_id,
+      tool_calls: { total: 1, by_kind: { read: 1 } },
+    });
+  });
+
   it('Stop nudges once when a RUNNING task saw no progress this turn, and never creates a completion claim', async () => {
     const r = await rig();
     const mcp = await mcpSession(r.td);

@@ -347,6 +347,26 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
         if (!allowed) throw new FridayError('permission_denied', `task ${p.task_id} is assigned to another agent`);
       }
       const agent = state.q.agent(c.agent_id);
+      const taskId = p.task_id ?? agent.current_task_id ?? null;
+      // The request is recorded as it arrives, before the compiler answers or refuses it, so the
+      // usage row (plan M10a) counts what the attempt asked for, refusals included. It is the
+      // attempt's when it names this session's run, or when this session's active run is about the
+      // task asked about; a shadow session's request names no run.
+      const named = p.run_id ? state.q.findRun(p.run_id) : state.q.activeRunForAgent(c.agent_id);
+      const runId =
+        named && named.harness_id === harnessId && (p.run_id || taskId === null || named.task_id === taskId)
+          ? named.run_id
+          : null;
+      state.recordObservation(
+        pid,
+        { kind: 'agent', id: c.agent_id },
+        'context.requested',
+        { task_id: taskId, run_id: runId, kind: p.kind, harness_id: harnessId, max_chars: p.max_chars },
+        [
+          ...(taskId ? [{ kind: 'task' as const, id: taskId }] : []),
+          ...(runId ? [{ kind: 'run' as const, id: runId }] : []),
+        ],
+      );
       return deps.compile(
         {
           recipient: {
@@ -355,7 +375,7 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
             harness_id: harnessId,
             ...(p.run_id ? { run_id: p.run_id } : {}),
           },
-          task_id: p.task_id ?? agent.current_task_id ?? undefined,
+          task_id: taskId ?? undefined,
           purpose: `request:${p.kind}`,
           max_chars: p.max_chars,
           // The size was asked for: a packet that cannot fit says so (review F12); and what was

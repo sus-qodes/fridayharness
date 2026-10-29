@@ -1026,6 +1026,16 @@ export function buildApp(deps: AppDeps): Hono<Env> {
       min_samples: r.settings.min_samples,
     });
   });
+  // The token baseline (plan M10a): one usage row per run attempt, joined from the event log. An
+  // unknown goal or task answers with the usual not-found error.
+  app.get(`${P}/usage`, allow(...OPERATOR), (c) =>
+    c.json(
+      state.q.usageReport(pid, {
+        ...(c.req.query('goal') ? { goalId: c.req.query('goal') as string } : {}),
+        ...(c.req.query('task') ? { taskId: c.req.query('task') as string } : {}),
+      }),
+    ),
+  );
   app.get(`${P}/routing/explain/:tid`, allow(...OPERATOR), (c) => {
     const tid = c.req.param('tid');
     return c.json({ dry_run: routingOf().explain(tid), decisions: state.q.routingDecisions(pid, { task_id: tid }) });

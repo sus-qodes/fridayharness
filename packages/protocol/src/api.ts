@@ -624,3 +624,120 @@ export const HumanMessageRequest = z.object({
   priority: z.enum(['low', 'normal', 'high', 'urgent']).default('normal'),
 });
 export type HumanMessageRequest = z.input<typeof HumanMessageRequest>;
+
+// ---- usage, the token baseline (M10a) ----------------------------------------------------------
+
+/**
+ * The tool calls a host reported for one attempt, grouped by what the tool does, so that "how
+ * often did the model read a whole file" can be answered per attempt.
+ */
+export const UsageToolKinds = z.object({
+  /** Read, Glob, Grep, LS and the like: the host looked at files. */
+  read: z.number().int(),
+  /** Edit, Write, NotebookEdit, fileChange: the host changed files. */
+  edit: z.number().int(),
+  /** Bash, PowerShell, commandExecution: the host ran a command. */
+  shell: z.number().int(),
+  /** WebFetch, WebSearch. */
+  web: z.number().int(),
+  /** Friday's own tools (`mcp__friday__*`). */
+  friday: z.number().int(),
+  other: z.number().int(),
+});
+export type UsageToolKinds = z.infer<typeof UsageToolKinds>;
+
+/**
+ * What the host said it spent on the attempt (its last `host.usage` event). A host that reports
+ * nothing (an attached session, a Codex thread) has `reported: false` and every number null: an
+ * unknown value is never written as 0.
+ */
+export const UsageHostView = z.object({
+  reported: z.boolean(),
+  input_tokens: z.number().int().nullable(),
+  output_tokens: z.number().int().nullable(),
+  cache_read_input_tokens: z.number().int().nullable(),
+  cache_creation_input_tokens: z.number().int().nullable(),
+  cost_usd: z.number().nullable(),
+  turns: z.number().int().nullable(),
+  /** The model the host named in its report. */
+  model: z.string().nullable(),
+});
+export type UsageHostView = z.infer<typeof UsageHostView>;
+
+/** One run attempt as the token baseline sees it: what it was given, what it spent, what it did, how it ended. */
+export const UsageRowView = z.object({
+  task_id: z.string(),
+  task_summary: z.string(),
+  goal_id: z.string().nullable(),
+  run_id: z.string(),
+  attempt: z.number().int(),
+  agent_key: z.string().nullable(),
+  /** Null when the harness record is gone. */
+  harness_vendor: Vendor.nullable(),
+  harness_mode: AttachMode.nullable(),
+  model_requested: z.string().nullable(),
+  model_observed: z.string().nullable(),
+  model_basis: z.string().nullable(),
+  /** The context packets delivered to this attempt, and their weight. */
+  packets: z.object({
+    count: z.number().int(),
+    /** The sum of the packets' `budget.tokens`. */
+    tokens: z.number().int(),
+    /** The sum of the packets' `budget.chars`; null when no packet named its size in characters. */
+    chars: z.number().int().nullable(),
+    /** The sum of every source's `estimated_tokens` over every section. */
+    source_tokens: z.number().int(),
+  }),
+  /**
+   * The attempt's `context.request`s, counted by kind (`task`, `file`, `symbol`, …) as they were
+   * asked, so a request the compiler refused counts too. For a log older than that record, the
+   * packets that answered requests count instead.
+   */
+  context_requests: z.object({ count: z.number().int(), kinds: z.record(z.string(), z.number().int()) }),
+  host: UsageHostView,
+  tool_calls: z.object({ total: z.number().int(), failed: z.number().int(), by_kind: UsageToolKinds }),
+  /** The attempt's latest verification; null when nothing was verified yet. */
+  verification: z
+    .object({ status: VerificationStatus, checks_passed: z.number().int(), checks_total: z.number().int() })
+    .nullable(),
+  /** When the host accepted the attempt (or Friday created it, for a claim). */
+  started_at: z.string(),
+  ended_at: z.string().nullable(),
+  /** Null while the attempt still runs. */
+  duration_ms: z.number().int().nullable(),
+});
+export type UsageRowView = z.infer<typeof UsageRowView>;
+
+/**
+ * `GET /usage`: the rows and their totals. Each total sums only the attempts that reported that
+ * field, and `reporters` says how many did, because a host may report some fields and not others
+ * (an older report without the cache fields; an error result with a cost and no counts).
+ */
+export const UsageReport = z.object({
+  rows: z.array(UsageRowView),
+  totals: z.object({
+    attempts: z.number().int(),
+    /** Attempts whose host sent a usage report at all, whatever it carried. */
+    host_reported: z.number().int(),
+    /** Per total, the number of attempts whose reported value it sums; a share computed from two totals is sound only when their reporters match. */
+    reporters: z.object({
+      input_tokens: z.number().int(),
+      output_tokens: z.number().int(),
+      cache_read_input_tokens: z.number().int(),
+      cache_creation_input_tokens: z.number().int(),
+      cost_usd: z.number().int(),
+    }),
+    /** Null when no attempt reported the value. */
+    input_tokens: z.number().int().nullable(),
+    output_tokens: z.number().int().nullable(),
+    cache_read_input_tokens: z.number().int().nullable(),
+    cache_creation_input_tokens: z.number().int().nullable(),
+    cost_usd: z.number().nullable(),
+    /** Tool calls are counted from events, so this total is always known. */
+    tool_calls: z.number().int(),
+  }),
+  /** True when the report holds only the newest `limit` attempts; a goal or task filter shows the rest. */
+  truncated: z.boolean(),
+  limit: z.number().int().nullable(),
+});
+export type UsageReport = z.infer<typeof UsageReport>;
