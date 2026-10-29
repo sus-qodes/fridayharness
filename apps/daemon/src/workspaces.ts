@@ -16,6 +16,7 @@ import {
 import { type Actor, FridayError, type WorktreeView } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
+import { InFlight } from './in-flight.js';
 import type { Logger } from './log.js';
 
 const SYSTEM: Actor = { kind: 'system', id: 'friday' };
@@ -67,6 +68,7 @@ export async function taskBase(state: FridayState, project: ProjectRef, taskId: 
  */
 export class WorkspaceManager {
   readonly #preparing = new Set<string>();
+  readonly #inFlight = new InFlight();
 
   constructor(
     private readonly opts: {
@@ -98,7 +100,21 @@ export class WorkspaceManager {
   }
 
   /** Creates or reuses the run's task worktree, then lets the state deliver `task.start`. */
-  async prepare(runId: string): Promise<void> {
+  prepare(runId: string): Promise<void> {
+    return this.#inFlight.track(this.#prepare(runId));
+  }
+
+  /** The task ended: its worktree is released, or preserved when it holds uncommitted work. */
+  release(taskId: string, reason: string): Promise<void> {
+    return this.#inFlight.track(this.#release(taskId, reason));
+  }
+
+  /** Resolves once the worktree jobs in flight have finished, or after `ms` (the daemon's shutdown). */
+  idle(ms: number): Promise<boolean> {
+    return this.#inFlight.idle(ms);
+  }
+
+  async #prepare(runId: string): Promise<void> {
     if (this.#preparing.has(runId)) return;
     this.#preparing.add(runId);
     const { state, project, logger } = this.opts;
@@ -249,8 +265,7 @@ export class WorkspaceManager {
     return { worktree, warnings: alloc.warnings, created: alloc.created };
   }
 
-  /** The task ended: its worktree is released, or preserved when it holds uncommitted work. */
-  async release(taskId: string, reason: string): Promise<void> {
+  async #release(taskId: string, reason: string): Promise<void> {
     const { state, logger } = this.opts;
     const w = state.q.worktreeForTask(taskId);
     if (w?.status !== 'active') return;

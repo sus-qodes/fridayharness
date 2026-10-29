@@ -3,8 +3,10 @@
  */
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { closeDatabase, openDatabase } from '@friday/db';
 import { commitContent, FRIDAY_IDENTITY, GitRoot, runGit } from '@friday/git';
 import type { IntegrationView, TaskStartParams, TaskView, VerificationView } from '@friday/protocol';
+import { FridayState } from '@friday/state';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cli } from '../helpers/cli.js';
@@ -479,5 +481,32 @@ describe('goal branches', () => {
     expect(done.summary).toMatch(/repair/);
     expect((await git(['rev-parse', branch])).trim()).toBe(repaired);
     expect((await git(['show', `${branch}:src/a.mjs`])).replace(/\r\n/g, '\n').trim()).toBe('export const a = 1;');
+  });
+
+  it('lets an integration in flight finish when the daemon stops, so none is cut off in the checkout', async () => {
+    // A slow check: the merged revision's checks are still running when the daemon is told to stop.
+    const td = await project(
+      `${CHECKS}    - name: slow\n      command: node\n      args: ["-e", "setTimeout(() => {}, 2500)"]\n`,
+      { 'src/c.mjs': 'export const c = 1;\n' },
+    );
+    const { ids } = await goalWith(td, [
+      { key: 'one', summary: 'Raise a', write: ['src/a.mjs'] },
+      { key: 'two', summary: 'Raise c', write: ['src/c.mjs'] },
+    ]);
+    // Both from the same base: once one is integrated, the other needs a merge, checked again.
+    const wOne = await begin(td, 'be-1', ids.one as string);
+    const wTwo = await begin(td, 'fe-1', ids.two as string);
+    await finish(td, wOne, { 'src/a.mjs': 'export const a = 2;\n' });
+    expect((await integrationOf(td, ids.one as string)).status).toBe('integrated');
+    await finish(td, wTwo, { 'src/c.mjs': 'export const c = 2;\n' });
+    // The second integration has just begun its merge checks; the daemon stops now.
+    await td.daemon.close('stopped during an integration');
+    const db = openDatabase(path.join(ws().projectDir, '.friday', 'project.db'));
+    try {
+      const after = new FridayState({ db }).q.latestIntegration(td.project.project_id, ids.two as string);
+      expect(after?.status).toBe('integrated');
+    } finally {
+      closeDatabase(db);
+    }
   });
 });

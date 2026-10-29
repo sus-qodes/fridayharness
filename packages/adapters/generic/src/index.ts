@@ -201,3 +201,5 @@ export class GenericHarnessClient {
     if (this.#registration) await this.call('harness.disconnect', { reason, final });
   }
 }
+
+export { FINAL_SCHEMA, type Final, parseFinal } from './final.js';

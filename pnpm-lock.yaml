@@ -278,9 +278,18 @@ importers:
 
   packages/adapters/claude:
     dependencies:
+      '@friday/adapter-generic':
+        specifier: workspace:*
+        version: link:../generic
       '@friday/daemon':
         specifier: workspace:*
         version: link:../../../apps/daemon
+      '@friday/execution':
+        specifier: workspace:*
+        version: link:../../execution
+      '@friday/git':
+        specifier: workspace:*
+        version: link:../../git
       '@friday/mcp-server':
         specifier: workspace:*
         version: link:../../mcp-server

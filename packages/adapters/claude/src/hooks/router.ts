@@ -101,6 +101,9 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
       // A Friday hook from this session reached the daemon: the evidence behind L1 (review F09).
       const harness = found ? state.noteHookEvidence(pid, found.harness_id) : undefined;
       const agent = agentOf(harness);
+      // A session Friday's spawn adapter started (ADR-0032 §11): no human is at it, the adapter gives
+      // it its context and ends it, and the adapter's harness outlives each session.
+      const spawned = harness?.attach_mode === 'spawn';
       const actor: Actor = agent
         ? { kind: 'agent', id: agent.agent_id }
         : { kind: 'harness', id: harness?.harness_id ?? `claude-pid:${body.claude_pid ?? '?'}` };
@@ -133,6 +136,7 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           if (typeof model === 'string' && model) {
             state.observeModel(pid, actor, { harness_id: harness.harness_id }, model, 'session_start');
           }
+          if (spawned) return c.json({ ok: true, hook_output: null });
           const packet = await ctx.compile(
             {
               recipient: { kind: 'agent', id: agent.agent_id, harness_id: harness.harness_id },
@@ -159,24 +163,40 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           const action = actionFromTool(toolName, (hook.tool_input as Record<string, unknown>) ?? {});
           if (!action) return c.json({ ok: true, hook_output: null });
           // The same judgment as every other host's tool calls (ADR-0032 §4).
-          const { result } = ctx.judgeTool({
+          const { result, approval_id } = ctx.judgeTool({
             harness,
             agent: agent ? { agent_id: agent.agent_id, role: agent.role } : undefined,
             action,
             actor,
             decidedLocally: body.local_decision === 'deny',
+            askHuman: spawned,
           });
-          if (result.decision === 'allow') return c.json({ ok: true, hook_output: null });
-          return c.json({
-            ok: true,
-            hook_output: {
-              hookSpecificOutput: {
-                hookEventName: 'PreToolUse',
-                permissionDecision: result.decision,
-                permissionDecisionReason: `Friday: ${result.reason}`,
+          const decide = (decision: string, reason: string) =>
+            c.json({
+              ok: true,
+              hook_output: {
+                hookSpecificOutput: {
+                  hookEventName: 'PreToolUse',
+                  permissionDecision: decision,
+                  permissionDecisionReason: `Friday: ${reason}`,
+                },
               },
-            },
-          });
+            });
+          if (spawned) {
+            // Friday decides for a spawned session: what it allows goes ahead without a prompt
+            // nobody would answer, and what a human decides is declined until one has.
+            if (result.decision === 'allow') return decide('allow', result.reason);
+            if (result.decision === 'ask') {
+              return decide(
+                'deny',
+                `${result.reason}. A human decides this${approval_id ? ` (approval ${approval_id})` : ''}: it is declined until then. Do not try it another way; if you cannot finish without it, end as blocked and say so.`,
+              );
+            }
+            return decide('deny', result.reason);
+          }
+          // Attached sessions: Friday only restricts, and Claude Code's own rules still apply.
+          if (result.decision === 'allow') return c.json({ ok: true, hook_output: null });
+          return decide(result.decision, result.reason);
         }
 
         case 'PostToolUse':
@@ -229,7 +249,8 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
             { harness_id: harness?.harness_id ?? null, task_id: task?.task_id ?? null },
             refs(task),
           );
-          if (hook.stop_hook_active || !agent) return c.json({ ok: true, hook_output: null });
+          // A spawned session's end is its adapter's to report.
+          if (hook.stop_hook_active || !agent || spawned) return c.json({ ok: true, hook_output: null });
           // Urgent and blocking messages surface before the session stops (Part 05 §15, M3b).
           const waiting = state
             .peekInbox(pid, agent.agent_id, 20)
@@ -278,6 +299,7 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           );
           if (
             harness &&
+            !spawned &&
             !['clear', 'resume', 'compact'].includes(reason) &&
             harness.status !== 'DISCONNECTED' &&
             harness.status !== 'TERMINATED'

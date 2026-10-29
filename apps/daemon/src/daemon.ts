@@ -580,6 +580,10 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       stopAutoVerify();
       stopLaya();
       laya.close();
+      // Integrations and worktree jobs in flight finish first, within a bound: no git process the
+      // daemon started outlives it in the user's checkout, and none records into a closed database.
+      const settled = (await integration.idle(60_000)) && (await workspaces.idle(30_000));
+      if (!settled) logger.warn('stopping with an integration or a worktree job still running', { reason });
       // Every operation's processes end, confirmed, before the database closes (review F07).
       await operations
         .close()

@@ -1,7 +1,9 @@
 import path from 'node:path';
 import {
   type Autonomy,
+  type Capability,
   type CommandClass,
+  DEFAULT_RISK,
   evaluate,
   mcpLevel,
   type OtherWriter,
@@ -23,12 +25,19 @@ export interface ToolJudgeInput {
   actor: Actor;
   /** Claude Code's hook launcher already denied it, from what it could check alone. */
   decidedLocally?: boolean;
+  /**
+   * No human is at the host (a spawn adapter's session): where a human decides, one pending
+   * approval is recorded for exactly this action, and the host is told no until it is granted.
+   */
+  askHuman?: boolean;
 }
 
 export interface ToolJudgement {
   result: PolicyResult;
   /** The task the session holds, which the decision was made for. */
   task: TaskView | null;
+  /** The pending approval a human decides, when `askHuman` asked for one. */
+  approval_id: string | null;
 }
 
 /** Judges one host tool call and records it (see `createToolJudge`). */
@@ -89,7 +98,59 @@ export function createToolJudge(deps: {
       }));
   };
 
-  return ({ harness, agent, action, actor, decidedLocally }) => {
+  /**
+   * The one pending approval for an action a human decides (ADR-0032 §4): asking again while it
+   * waits does not ask a human twice. The verdict is what a human decides: exactly the capability
+   * and target the policy looks for when the host tries again.
+   */
+  const pendingApproval = (
+    caller: { agent_id: string; harness_id: string },
+    task: TaskView,
+    toolName: string,
+    result: PolicyResult,
+  ): string | null => {
+    if (!result.grant) return null;
+    const { capability, target } = result.grant;
+    const pending = (
+      state.q.approvals(pid, 'pending') as {
+        approval_id: string;
+        requested_by_id: string;
+        run_id: string | null;
+        capability: string;
+        target: string | null;
+      }[]
+    ).find(
+      (a) =>
+        a.requested_by_id === caller.agent_id &&
+        a.run_id === task.current_run_id &&
+        a.capability === capability &&
+        a.target === target,
+    );
+    if (pending) return pending.approval_id;
+    const effective = deps.policy?.();
+    return state.requestPermission(
+      pid,
+      caller,
+      {
+        task_id: task.task_id,
+        ...(task.current_run_id ? { run_id: task.current_run_id } : {}),
+        action_class: capability,
+        resource: target,
+        justification: `${toolName}: ${result.reason}`.slice(0, 1000),
+        ttl_s: 3600,
+        reuse: 'once',
+      },
+      {
+        capability,
+        decision: 'review',
+        risk: effective?.risk?.[capability as Capability] ?? DEFAULT_RISK[capability as Capability] ?? 'high',
+        reason: result.reason,
+        policy_version: effective?.version ?? policyVersion(project.config),
+      },
+    ).approval_id;
+  };
+
+  return ({ harness, agent, action, actor, decidedLocally, askHuman }) => {
     const toolName = action.tool;
     const task = heldTask(agent?.agent_id);
     const root = executionRoot(harness, task);
@@ -215,6 +276,10 @@ export function createToolJudge(deps: {
         tool: toolName,
       });
     }
-    return { result, task };
+    const approvalId =
+      askHuman && result.decision === 'ask' && task && agent && harness
+        ? pendingApproval({ agent_id: agent.agent_id, harness_id: harness.harness_id }, task, toolName, result)
+        : null;
+    return { result, task, approval_id: approvalId };
   };
 }

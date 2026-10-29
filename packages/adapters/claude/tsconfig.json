@@ -8,6 +8,15 @@
   "exclude": ["src/**/*.test.ts"],
   "references": [
     {
+      "path": "../../git"
+    },
+    {
+      "path": "../../execution"
+    },
+    {
+      "path": "../generic"
+    },
+    {
       "path": "../../protocol"
     },
     {

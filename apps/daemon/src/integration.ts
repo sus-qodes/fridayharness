@@ -21,6 +21,7 @@ import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
 import { selectChecks, summarizeOutcome } from '@friday/verification';
 import { runCheckInProfile } from './execution.js';
+import { InFlight } from './in-flight.js';
 import type { Logger } from './log.js';
 import type { WorkspaceManager } from './workspaces.js';
 
@@ -52,6 +53,7 @@ export interface IntegrateOptions {
  */
 export class IntegrationManager {
   readonly #chains = new Map<string, Promise<unknown>>();
+  readonly #inFlight = new InFlight();
 
   constructor(
     private readonly opts: {
@@ -90,7 +92,12 @@ export class IntegrationManager {
     const prev = this.#chains.get(goalId) ?? Promise.resolve();
     const next = prev.catch(() => undefined).then(() => this.#integrate(taskId, actor, opts));
     this.#chains.set(goalId, next);
-    return next;
+    return this.#inFlight.track(next);
+  }
+
+  /** Resolves once the integrations in flight have finished, or after `ms` (the daemon's shutdown). */
+  idle(ms: number): Promise<boolean> {
+    return this.#inFlight.idle(ms);
   }
 
   /**

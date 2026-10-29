@@ -4,7 +4,7 @@ Friday is a local orchestration and context control plane for AI software develo
 
 The architecture is called **ContextOS** in the original specification.
 
-**Status:** M0–M7 built and tested locally, after three stabilizations from independent reviews (M2.5, M3.1 and M7.1, with its follow-up M7.1e; see [the dispositions](docs/reviews/)). The gates are pending: they need live runs with real hosts, CI on both operating systems, and the owner's acceptance of the decision records ([status table](docs/BUILD_PLAN.md#f1-status-table-updated-at-every-gate)). M8a, a second host, is under way: Codex works for Friday as a spawn-mode harness (`friday harness run codex`), tested against a scripted host; runs with real accounts wait for the owner.
+**Status:** M0–M7 built and tested locally, after three stabilizations from independent reviews (M2.5, M3.1 and M7.1, with its follow-up M7.1e; see [the dispositions](docs/reviews/)). The gates are pending: they need live runs with real hosts, CI on both operating systems, and the owner's acceptance of the decision records ([status table](docs/BUILD_PLAN.md#f1-status-table-updated-at-every-gate)). M8a, a second host, is under way: Codex works for Friday as a spawn-mode harness (`friday harness run codex`), checked live in six turns the owner approved, and Friday can start the installed Claude Code itself (`friday harness run claude-code`), tested against a scripted Claude Code; the recorded live demonstration waits for the owner.
 - **M1** gives you the event spine, the daemon, the `friday` CLI, a read-only status page, and Claude Code attached through an MCP server, a skill and policy hooks. A task runs from creation through a Claude Code session to a verified completion, with Friday's policy enforced on the session's tools.
 - **M2** adds the Master Brain. A goal becomes a versioned plan that you approve; its tasks are delegated to agents, revised when verification fails, and escalated to you when only a human can decide.
 - **M2.5** closes the twelve findings of the 2026-10-14 review:
@@ -56,7 +56,7 @@ See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 | [docs/handoff/](docs/handoff/) | The original 16-part ContextOS specification, verbatim, plus [ERRATA](docs/handoff/ERRATA.md) |
 | [docs/decisions/](docs/decisions/) | Architecture decision records |
 | [docs/security/model.md](docs/security/model.md) | Enforcement levels, token scopes, what is and isn't intercepted, known gaps, threat model |
-| [docs/integration/claude-code.md](docs/integration/claude-code.md) | Attaching Claude Code: setup, what is enforced, headless runs, troubleshooting |
+| [docs/integration/claude-code.md](docs/integration/claude-code.md) | Claude Code attached (setup, what is enforced, headless runs, troubleshooting) and in spawn mode (`friday harness run claude-code`) |
 | [docs/messaging.md](docs/messaging.md) | Messages between agents and humans through Friday: addresses, the inbox, acknowledgements |
 | [docs/runbooks/backup.md](docs/runbooks/backup.md) | Back up, inspect with snapshots and replay, and restore |
 | [docs/policy.md](docs/policy.md) | The project's policy: what restricts at once, what needs your trust, policy files with deny rules and team scopes |

@@ -2,7 +2,7 @@
   "name": "@friday/adapter-claude",
   "version": "0.0.0",
   "private": true,
-  "description": "Claude Code adapter: hook launcher and router, host configurator, Agent SDK spawn mode.",
+  "description": "Claude Code adapter: hook launcher and router, host configurator, and spawn mode driving the installed Claude Code headless.",
   "type": "module",
   "exports": {
     ".": {
@@ -17,7 +17,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@friday/adapter-generic": "workspace:*",
     "@friday/daemon": "workspace:*",
+    "@friday/execution": "workspace:*",
+    "@friday/git": "workspace:*",
     "@friday/mcp-server": "workspace:*",
     "@friday/policy": "workspace:*",
     "@friday/protocol": "workspace:*",

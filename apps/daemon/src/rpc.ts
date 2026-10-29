@@ -4,7 +4,6 @@ import {
   type Capability,
   type CommandClass,
   capabilityOf,
-  DEFAULT_RISK,
   evaluateCapability,
   mcpLevel,
   type ProjectPolicy,
@@ -217,58 +216,15 @@ function checkTool(deps: RpcDeps, c: Caller, p: ParsedParamsOf<'tool.check'>): R
     throw new FridayError('permission_denied', `${p.run_id} is not the run this session works in`);
   }
   const agent = state.q.findAgent(c.agent_id);
-  const { result, task } = deps.judgeTool({
+  // No human is at a spawn adapter's host: where one decides, one pending approval is recorded.
+  const { result, approval_id } = deps.judgeTool({
     harness: state.q.harness(c.harness_id),
     agent: agent ? { agent_id: agent.agent_id, role: agent.role } : undefined,
     action: { ...p.action, tool: p.tool },
     actor: { kind: 'agent', id: c.agent_id },
+    askHuman: true,
   });
-  let approvalId: string | null = null;
-  if (result.decision === 'ask' && result.grant && task) {
-    const { capability, target } = result.grant;
-    // One request per action: asking again while it waits does not ask a human twice.
-    const pending = (
-      state.q.approvals(pid, 'pending') as {
-        approval_id: string;
-        requested_by_id: string;
-        run_id: string | null;
-        capability: string;
-        target: string | null;
-      }[]
-    ).find(
-      (a) =>
-        a.requested_by_id === c.agent_id &&
-        a.run_id === task.current_run_id &&
-        a.capability === capability &&
-        a.target === target,
-    );
-    // The judgment above is the verdict: a human decides exactly the capability and target the
-    // policy will look for when the host tries again (not a path-based judgment of a command).
-    const effective = deps.policy?.();
-    approvalId =
-      pending?.approval_id ??
-      state.requestPermission(
-        pid,
-        c,
-        {
-          task_id: task.task_id,
-          ...(task.current_run_id ? { run_id: task.current_run_id } : {}),
-          action_class: capability,
-          resource: target,
-          justification: `${p.tool}: ${result.reason}`.slice(0, 1000),
-          ttl_s: 3600,
-          reuse: 'once',
-        },
-        {
-          capability,
-          decision: 'review',
-          risk: effective?.risk?.[capability as Capability] ?? DEFAULT_RISK[capability as Capability] ?? 'high',
-          reason: result.reason,
-          policy_version: effective?.version ?? policyVersion(project.config),
-        },
-      ).approval_id;
-  }
-  return { decision: result.decision, reason: result.reason, rule: result.rule, approval_id: approvalId };
+  return { decision: result.decision, reason: result.reason, rule: result.rule, approval_id };
 }
 
 /** Handles one JSON-RPC request to /protocol/v1/rpc. Errors become JSON-RPC error objects. */

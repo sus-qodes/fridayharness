@@ -19,6 +19,12 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - **Doctor.** `friday harness doctor codex` checks the executable, its app-server and its sandbox, without calling a model.
   - Writes Codex makes without asking, and its own delegation, are reported, not hidden.
 - **M8a.4, the MVP demonstration:** `tests/scenarios/mvp-demo.test.ts` runs the spec's MVP script end to end with Claude Code and Codex on one project. That covers the plan, parallel worktrees, each agent's context, a contract change routed only to the agent it concerns, tests, one harness killed and recovered, verification, integration and the verified goal. `docs/integration/mvp-demo.md` is the same script for a recorded run with real hosts.
+- **M8a.3, Claude Code in spawn mode:** `friday harness run claude-code` lets Friday start your installed Claude Code (2.1.300 or newer) itself for the tasks it gives an agent. Each run attempt is one headless session in the task's worktree, ended with the attempt, on cancel, or when you stop the adapter. The session:
+  - reads no settings files of yours or the repository's;
+  - has only the tools Friday's hooks judge, and no MCP servers or skills.
+
+  Friday decides every tool call: what a human decides waits for `friday approve`, and the session is told no until then. A restarted adapter resumes the same session. `--max-budget-usd` caps each attempt's spending.
+- **Stopping Friday lets work in flight finish:** an integration or a task worktree job that is still running when the daemon stops now finishes first (within a minute), instead of being cut off with no record and leaving git working in your checkout.
 - **The live Codex check:** Friday's Codex adapter ran against the real Codex in six turns the owner approved (`tests/scenarios/codex.live.test.ts`, results in `docs/integration/codex.md`). What it changed:
   - Friday's Codex threads no longer carry your own Codex tools (plugins, ChatGPT apps, MCP servers, web search), and a repository's own Codex configuration no longer applies in them; nothing is written to your Codex configuration.
   - A run's first turn starts only once Friday knows the run started. An error before that frees the task instead of leaving it stuck.

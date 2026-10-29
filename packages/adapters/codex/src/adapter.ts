@@ -1,6 +1,12 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { GenericHarnessClient, type HarnessDescriptor, type Registration } from '@friday/adapter-generic';
+import {
+  FINAL_SCHEMA,
+  GenericHarnessClient,
+  type HarnessDescriptor,
+  parseFinal,
+  type Registration,
+} from '@friday/adapter-generic';
 import { type InteractiveProcess, type ProcessGroup, ProcessGroups, startProcess } from '@friday/execution';
 import { GitRoot } from '@friday/git';
 import {
@@ -44,19 +50,6 @@ export interface CodexAdapterOptions {
   trace?: (direction: 'send' | 'receive', line: string) => void;
 }
 
-/** The final message every turn ends with (`turn/start`'s `outputSchema`, ADR-0032 §9). */
-export const FINAL_SCHEMA = {
-  type: 'object',
-  properties: {
-    status: { type: 'string', enum: ['completed', 'blocked'] },
-    summary: { type: 'string' },
-    changed_paths: { type: 'array', items: { type: 'string' } },
-    blocked_reason: { type: 'string' },
-  },
-  required: ['status', 'summary', 'changed_paths', 'blocked_reason'],
-  additionalProperties: false,
-} as const;
-
 /** What Friday tells every thread it starts, before the task's own context. */
 export const CODEX_RULES = [
   "You are working on a task that Friday assigned. Friday runs this project: it decides what you may do, routes messages between agents, and verifies your work with the project's own checks.",
@@ -87,8 +80,6 @@ interface Attempt {
   stopping: boolean;
   done: boolean;
 }
-
-type Final = { status: 'completed' | 'blocked'; summary: string; changed_paths: string[]; blocked_reason: string };
 
 /** What `thread/start` and `thread/resume` answer (0.162.1). */
 interface OpenedThread {
@@ -684,20 +675,5 @@ export class CodexAdapter {
   }
 }
 
-/** The turn's final message, as the output schema asks; plain text counts as a summary. */
-export function parseFinal(text: string): Final {
-  try {
-    const v = JSON.parse(text) as Partial<Final>;
-    if (v && (v.status === 'completed' || v.status === 'blocked')) {
-      return {
-        status: v.status,
-        summary: typeof v.summary === 'string' ? v.summary : '',
-        changed_paths: Array.isArray(v.changed_paths) ? v.changed_paths.filter((x) => typeof x === 'string') : [],
-        blocked_reason: typeof v.blocked_reason === 'string' ? v.blocked_reason : '',
-      };
-    }
-  } catch {
-    // not JSON: the model answered in prose
-  }
-  return { status: 'completed', summary: text.trim(), changed_paths: [], blocked_reason: '' };
-}
+/** The final message every turn ends with (ADR-0032 §9), shared by every spawn adapter. */
+export { FINAL_SCHEMA, parseFinal };

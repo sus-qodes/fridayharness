@@ -7,7 +7,15 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { bundledHookSource } from './config/claude-code.js';
 import { fridayHooks, LAUNCH_MCP, MCP_ENTRY } from './config/templates.js';
-import { type ClaudeInstall, detectClaudeCode, ENFORCING_MIN, type HookLevel, hookLevel } from './detect.js';
+import {
+  type ClaudeInstall,
+  compareVersions,
+  detectClaudeCode,
+  ENFORCING_MIN,
+  type HookLevel,
+  hookLevel,
+  SPAWN_MIN,
+} from './detect.js';
 import { PRE_TOOL_MATCHER } from './hooks/types.js';
 
 /** Same shape as the CLI's doctor results (the CLI renders them). */
@@ -209,6 +217,15 @@ export async function claudeDoctor(ref: ProjectRef, opts: ClaudeDoctorOptions = 
       status,
       message: `Claude Code ${install.version} via ${install.source} (${level}: ${note})`,
       ...(level === 'enforcing' ? {} : { fix: 'update Claude Code' }),
+    });
+    // Spawn mode (`friday harness run claude-code`, ADR-0032 §11) needs its restricted headless mode.
+    const spawnable = install.version !== null && compareVersions(install.version, SPAWN_MIN) >= 0;
+    checks.push({
+      id: 'cc.spawn',
+      status: 'info',
+      message: spawnable
+        ? `spawn mode available: friday harness run claude-code starts this Claude Code headless, restricted to the tools Friday's hooks judge`
+        : `spawn mode needs Claude Code ${SPAWN_MIN} or newer; attach mode works as above`,
     });
   }
 

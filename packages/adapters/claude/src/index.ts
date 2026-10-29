@@ -1,12 +1,14 @@
 /**
  * @friday/adapter-claude
- * Claude Code adapter (attach mode): hook launcher and daemon hook routes, host configurator,
- * Claude Code detection and doctor checks. Spawn mode via the Agent SDK follows.
+ * Claude Code adapter: attach mode (hook launcher and daemon hook routes, host configurator,
+ * detection and doctor checks) and spawn mode, which drives the installed Claude Code headless
+ * with Friday's hooks (ADR-0032 §11).
  */
 export const PACKAGE_NAME = '@friday/adapter-claude';
 
 export {
   applyPlan,
+  bundledHookPath,
   bundledHookSource,
   type ClaudeConfigOptions,
   type FileChange,
@@ -33,6 +35,7 @@ export {
   ENFORCING_MIN,
   type HookLevel,
   hookLevel,
+  SPAWN_MIN,
 } from './detect.js';
 export {
   type ClaudeCheck,
@@ -62,3 +65,10 @@ export {
   PRE_TOOL_MATCHER,
   WRITE_TOOLS,
 } from './hooks/types.js';
+export {
+  CLAUDE_SPAWN_RULES,
+  ClaudeSpawnAdapter,
+  type ClaudeSpawnOptions,
+  SPAWN_TOOLS,
+} from './spawn/adapter.js';
+export { claudeEnvironment } from './spawn/environment.js';

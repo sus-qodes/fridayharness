@@ -5,6 +5,12 @@ import path from 'node:path';
 
 export const ENFORCING_MIN = '2.1.295';
 export const DEGRADED_MIN = '2.1.232';
+/**
+ * Spawn mode (ADR-0032 §11) needs the headless flags it was checked against: `--restricted`,
+ * `--permission-prompts`, `--append-system-prompt-file`, `--json-schema`, `--replay-user-messages`
+ * (checked without a model call on 2.1.300).
+ */
+export const SPAWN_MIN = '2.1.300';
 
 export interface ClaudeInstall {
   binary: string;

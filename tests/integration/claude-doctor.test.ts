@@ -54,6 +54,8 @@ describe('friday harness doctor claude-code', () => {
     expect(after.achieved).toBe('L1 enforcing');
     expect(statuses(after)).toEqual({
       'cc.binary': 'ok',
+      // Whether this Claude Code can run spawn mode too (2.1.296 cannot: 2.1.300 is the minimum).
+      'cc.spawn': 'info',
       'cc.hook': 'ok',
       'cc.launcher': 'ok',
       'cc.mcp-json': 'ok',

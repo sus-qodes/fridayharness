@@ -59,6 +59,21 @@ function json(text: string | null, file: string): Record<string, unknown> {
 
 const stringify = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
 
+/**
+ * Where Friday's own built hook launcher is: spawn mode runs it from there (ADR-0032 §11), since a
+ * spawned session reads no settings of the repository's, and no tracked copy is needed.
+ */
+export function bundledHookPath(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  for (const candidate of [path.resolve(here, '..', 'hook.mjs'), path.resolve(here, '..', '..', 'dist', 'hook.mjs')]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new FridayError(
+    'invalid_request',
+    'the hook launcher is not built yet; run "pnpm build" in the Friday repository first',
+  );
+}
+
 export function bundledHookSource(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   for (const candidate of [path.resolve(here, '..', 'hook.mjs'), path.resolve(here, '..', '..', 'dist', 'hook.mjs')]) {
