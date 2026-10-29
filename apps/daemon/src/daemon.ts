@@ -29,7 +29,7 @@ import { IntegrationManager } from './integration.js';
 import { LayaService } from './laya.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
 import { OperationManager } from './operations.js';
-import { type EffectivePolicy, loadEffectivePolicy, writePolicyTrust } from './policy.js';
+import { type EffectivePolicy, loadEffectivePolicy, reloadingPolicy, writePolicyTrust } from './policy.js';
 import { RecoveryManager } from './recovery.js';
 import { RoutingService } from './routing.js';
 import { createToolJudge, type ToolJudge } from './tool-policy.js';
@@ -231,6 +231,20 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
           redact: (line) => state.redactor.redactString(line).value,
         });
 
+  // Read again whenever the policy files change, so what they tighten applies at once (LESSONS D-43).
+  const policies = reloadingPolicy({
+    projectRoot: project.root,
+    initial: policy,
+    load: () => loadEffectivePolicy(project, privateDir),
+    onLoad: (p, why) => {
+      policy = p;
+      (state.config as { enforcementRequired: StateConfig['enforcementRequired'] }).enforcementRequired =
+        p.enforcement_required;
+      logger.info('policy reloaded', { why, version: p.version, trusted: p.trusted, errors: p.errors.length });
+    },
+  });
+  const currentPolicy = () => policies.current();
+
   state.ensureProject({ project_id: project.project_id, name: project.name, root_path: project.root });
 
   const tokens = { operator: '', bootstrap: '' };
@@ -290,7 +304,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   // Checks and operations run in the execution profile of the effective policy (ADR-0029 §4).
   const stateRoot = path.dirname(path.dirname(privateDir));
   const profileOf = profileCache({ forbiddenRoots: () => [project.root, workspaces.dir], stateDir: stateRoot, env });
-  const profile = () => profileOf(policy);
+  const profile = () => profileOf(currentPolicy());
   // A completed goal task's verified work goes to its goal branch before its worktree is released (ADR-0025).
   const integration = new IntegrationManager({ state, project, logger, workspaces, profile, groups });
   const stopWorkspaces = state.transport.subscribe(
@@ -335,13 +349,13 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     project,
     graph,
     stateDir: path.dirname(path.dirname(privateDir)),
-    policy: () => policy,
+    policy: currentPolicy,
   });
   // One judgment of host tool calls for every host: the hooks and spawn adapters (ADR-0032 §4).
   const judgeTool = createToolJudge({
     state,
     project,
-    policy: () => policy,
+    policy: currentPolicy,
     stateDir: path.dirname(path.dirname(privateDir)),
   });
   const ctx: DaemonContext = {
@@ -354,18 +368,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     compile: (input, actor) => context.compile(input, actor),
     graph,
     verifying: new Set(),
-    policy: () => policy,
-    reloadPolicy: () => {
-      policy = loadEffectivePolicy(project, privateDir);
-      (state.config as { enforcementRequired: StateConfig['enforcementRequired'] }).enforcementRequired =
-        policy.enforcement_required;
-      logger.info('policy reloaded', {
-        version: policy.version,
-        trusted: policy.trusted,
-        errors: policy.errors.length,
-      });
-      return policy;
-    },
+    policy: currentPolicy,
+    reloadPolicy: () => policies.reload(),
     profile,
     groups,
     quiesce: (taskId, reason) => quiesce(taskId, reason),
@@ -382,7 +386,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     logger.warn('verification interrupted at start', { verification_id: id });
   }
   // The execution gateway (ADR-0029): operations a project declared, run with stored secrets.
-  const operations = new OperationManager({ state, project, logger, policy: () => policy, profile, env, groups });
+  const operations = new OperationManager({ state, project, logger, policy: currentPolicy, profile, env, groups });
   quiesce = (taskId, reason) => operations.stopTask(taskId, reason);
   for (const id of operations.sweep()) logger.warn('operation interrupted at start', { operation_run_id: id });
   // Automatic verification, once this clone trusted it (ADR-0029 §6): a claim is verified at once.
@@ -396,7 +400,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     { project_id: project.project_id, types: ['task.completion_claimed'] },
     (e) => {
       const taskId = (e.payload as { task_id?: string }).task_id;
-      if (taskId && policy.auto_verification && project.config.verification.checks.length) void autoVerify(taskId);
+      if (taskId && currentPolicy().auto_verification && project.config.verification.checks.length)
+        void autoVerify(taskId);
     },
   );
   if (policy.auto_verification && project.config.verification.checks.length) {
@@ -416,7 +421,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
           project,
           env,
           logger,
-          policy: () => policy,
+          policy: currentPolicy,
           modelFit: (task, agentId) => routing.fitFor(task, agentId),
           // A task Laya is still asked about waits for the answer, or its deadline (review F11).
           routingReady: (task) => laya.ready(task),
@@ -447,7 +452,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     integration,
     recovery,
     stateDir: path.dirname(path.dirname(privateDir)),
-    policy: () => policy,
+    policy: currentPolicy,
     reloadPolicy: () => ctx.reloadPolicy(),
     trustPolicy: (hash: string) => {
       writePolicyTrust(privateDir, hash, 'human');

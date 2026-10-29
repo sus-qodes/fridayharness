@@ -604,7 +604,13 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
           });
           if (answer) {
             const status = answer.status === 'granted' ? 'granted' : answer.status === 'denied' ? 'denied' : res.status;
-            const done = { ...res, status: status as typeof res.status };
+            const reason =
+              status === 'granted'
+                ? 'the human approved it in this session'
+                : status === 'denied'
+                  ? 'the human rejected it in this session'
+                  : res.reason;
+            const done = { ...res, status: status as typeof res.status, reason };
             return {
               text:
                 status === 'granted'

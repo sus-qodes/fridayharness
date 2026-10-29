@@ -2,6 +2,17 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — the interactive Claude Code check
+
+Claude Code 2.1.300 in the VS Code panel ran two tasks end to end, both verified COMPLETED. What it found is fixed, each with a regression that failed before the change ([the guide](docs/integration/claude-code.md), LESSONS D-41 to D-45):
+
+- **Approvals:** the panel declines Friday's in-panel approval form without showing it, and Friday counted that as the human's refusal. Only a filled-in form counts now; a decline leaves the request pending for `friday approve`.
+- **Verification:** a session working in the main checkout had no base commit, so what it committed during the task escaped the diff and secret checks. Its run now starts from the commit its checkout was at when it claimed.
+- **Policy files:** a new or changed file in `.friday/policies/` applied only after a reload or a restart. Friday reads them again when they change; `config.yaml` still needs a restart.
+- **Commands:**
+  - bash loops over files, `command -v`, `[ … ]` and `read` are judged as reads, so they no longer ask;
+  - **Fix:** commands in backticks (`` echo `rm -rf x` ``), `find -delete`, `find -exec`, and a leading `$x` in bash passed as reads. Each is judged as what it runs, by the shell the host names.
+
 ## Unreleased — M8a.5, the M8 readiness review
 
 A review of M8a found 7 gaps; each is closed, those that were defects with a regression that failed before the change ([disposition](docs/reviews/2026-10-15-m8-readiness-review-disposition.md)).

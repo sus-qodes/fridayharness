@@ -61,8 +61,12 @@ export function createFridayMcpServer(session: FridaySession): McpServer {
         },
         { timeout: 300_000 },
       );
-      if (r.action === 'accept') return r.content?.decision === 'approve' ? 'approve' : 'reject';
-      return r.action === 'decline' ? 'reject' : null;
+      // Only a filled-in form is the human's answer. A host may decline a form without showing it
+      // (the VS Code panel does, at once), so a decline, like a dismissal, leaves the request
+      // pending for the CLI and the status page (LESSONS CC-25, D-42).
+      if (r.action !== 'accept') return null;
+      const decision = r.content?.decision;
+      return decision === 'approve' || decision === 'reject' ? decision : null;
     },
   };
   for (const tool of createFridayTools(session, host)) {

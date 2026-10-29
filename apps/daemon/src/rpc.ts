@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
+import { GitRoot } from '@friday/git';
 import {
   type Autonomy,
   type Capability,
@@ -30,6 +31,16 @@ import type { Caller, FridayState } from '@friday/state';
 import type { CompileInput } from './context.js';
 import type { OperationManager } from './operations.js';
 import type { ToolJudge } from './tool-policy.js';
+
+/** The commit a checkout is at, or null where git cannot read one (a folder outside git). */
+async function checkoutHead(cwd: string | null): Promise<string | null> {
+  if (!cwd) return null;
+  try {
+    return (await (await GitRoot.open(cwd)).refs()).head || null;
+  } catch {
+    return null;
+  }
+}
 
 export interface AuthInfo {
   token_class: TokenClass;
@@ -300,7 +311,15 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
     case 'task.claim': {
       const p = METHODS[method].params.parse(raw);
       const c = caller();
-      const out = state.claimTask(pid, c, { task_id: p.task_id, next: p.next }, { idempotency_key: p.idempotency_key });
+      // Where an attached session's work starts: the commit its checkout is at now (LESSONS D-41).
+      const harness = state.q.harness(harnessId);
+      const head = harness.attach_mode === 'spawn' ? null : await checkoutHead(harness.host_cwd);
+      const out = state.claimTask(
+        pid,
+        c,
+        { task_id: p.task_id, next: p.next },
+        { idempotency_key: p.idempotency_key, head },
+      );
       const context = await deps.compile(
         {
           recipient: { kind: 'agent', id: c.agent_id, harness_id: harnessId, run_id: out.run_id },

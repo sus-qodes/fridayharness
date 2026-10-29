@@ -585,14 +585,22 @@ export class FridayState {
    * its task's worktree (reused when it exists, else prepared by the daemon: `pending`); without
    * worktrees, in the main checkout.
    */
-  private workspaceFor(ctx: CommandContext, projectId: string, task: TaskView, harness: HarnessRecord): Workspace {
+  private workspaceFor(
+    ctx: CommandContext,
+    projectId: string,
+    task: TaskView,
+    harness: HarnessRecord,
+    head: string | null = null,
+  ): Workspace {
     const root = this.q.project(projectId)?.root_path ?? '.';
     if (harness.attach_mode !== 'spawn') {
-      // A session in a task worktree works from that worktree's base (verification diffs against it).
+      // A session in a task worktree works from that worktree's base (verification diffs against it);
+      // elsewhere, from the commit its checkout was at when it claimed, which the daemon read just
+      // before: what it commits during the task is then judged too (LESSONS D-41).
       const tree = harness.host_cwd ? this.q.worktreeAt(projectId, harness.host_cwd) : undefined;
       return {
         execution_root: harness.host_cwd ?? root,
-        base_commit: tree?.base_commit ?? null,
+        base_commit: tree?.base_commit ?? head ?? null,
         branch_ref: tree?.branch ?? null,
         workspace: 'ready',
       };
@@ -1350,11 +1358,15 @@ export class FridayState {
   }
 
   /** Attach-mode pull path (Friday extension, ADR-0007): the agent takes a task and starts it. */
+  /**
+   * An attached session takes a task. `head` is the commit the session's checkout is at, read by the
+   * daemon just before: a run outside a task worktree starts from it (LESSONS D-41).
+   */
   claimTask(
     projectId: string,
     caller: Caller,
     p: { task_id?: string | undefined; next?: boolean | undefined },
-    opts: { idempotency_key?: string | undefined } = {},
+    opts: { idempotency_key?: string | undefined; head?: string | null } = {},
   ): { task: TaskView; run_id: string; attempt: number; resumed: boolean } {
     const actor: Actor = { kind: 'agent', id: caller.agent_id };
     return this.routed(projectId, () => this.claimWithin(projectId, caller, actor, p, opts));
@@ -1365,7 +1377,7 @@ export class FridayState {
     caller: Caller,
     actor: Actor,
     p: { task_id?: string | undefined; next?: boolean | undefined },
-    opts: { idempotency_key?: string | undefined },
+    opts: { idempotency_key?: string | undefined; head?: string | null },
   ): { task: TaskView; run_id: string; attempt: number; resumed: boolean } {
     return this.exec(
       { name: 'task.claim', project_id: projectId, actor, idempotency_key: opts.idempotency_key, params: p },
@@ -1431,7 +1443,7 @@ export class FridayState {
             task,
             harness.harness_id,
             agent.agent_id,
-            this.workspaceFor(ctx, projectId, task, harness),
+            this.workspaceFor(ctx, projectId, task, harness, opts.head ?? null),
           );
           let t = this.moveTask(ctx, task, 'task.claim', {
             changes: {
@@ -1488,7 +1500,7 @@ export class FridayState {
             task,
             harness.harness_id,
             agent.agent_id,
-            this.workspaceFor(ctx, projectId, task, harness),
+            this.workspaceFor(ctx, projectId, task, harness, opts.head ?? null),
           );
           this.moveRun(ctx, run, 'ACTIVE', 'resumed', { accepted_at: ctx.now, session_ref: harness.host_session_id });
           const moved =

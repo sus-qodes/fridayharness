@@ -159,4 +159,20 @@ describe('project policy and trust', () => {
     const shown = await cli(['--project', ws().projectDir, 'policy', 'show']);
     expect(shown.stdout).toContain('NOT APPLIED policies/broken.yaml');
   });
+
+  it('applies a new or changed policy file without a reload (LESSONS D-43)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
+    const { edit } = await session(td);
+    expect(await edit('infra/deploy.json')).toBe('allow');
+
+    // A file a teammate's commit adds, or a human writes: it tightens on the next judgment.
+    policyFile('infra.yaml', 'deny:\n  write: ["infra/**"]\n');
+    expect(await edit('infra/deploy.json')).toBe('deny');
+    expect((await show(td)).deny.write).toEqual(['infra/**']);
+
+    // Changed: the new rule replaces the old one.
+    policyFile('infra.yaml', 'deny:\n  write: ["docs/**"]\n');
+    expect(await edit('infra/deploy.json')).toBe('allow');
+    expect(await edit('docs/a.md')).toBe('deny');
+  });
 });

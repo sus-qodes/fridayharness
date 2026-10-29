@@ -326,6 +326,58 @@ describe('friday-mcp over stdio', () => {
     expect(push.structured).toMatchObject({ status: 'pending', risk: 'high' });
   });
 
+  it('leaves a request pending when the host declines its form without an answer (LESSONS CC-25, D-42)', async () => {
+    // The VS Code panel answers every form at once with "decline", without showing it.
+    const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
+    await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Save the pricing work',
+      scope: { write: ['src/**'], read: [] },
+      assign_agent_key: 'dev-1',
+    });
+    let asked = 0;
+    const mcp = await startMcp(ws(), {}, undefined, {
+      elicit: () => {
+        asked += 1;
+        return { action: 'decline' };
+      },
+    });
+    await eventually(
+      () => mcp.call('friday_whoami'),
+      (r) => (r.structured.daemon as { reachable?: boolean } | undefined)?.reachable === true,
+    );
+    const daemon = { url: td.url, projectId: td.project.project_id, token: td.daemon.tokens.bootstrap };
+    const start = await postHook(
+      daemon,
+      'SessionStart',
+      { session_id: 'sess-test-1', cwd: ws().projectDir, hook_event_name: 'SessionStart', source: 'startup' },
+      { claudePid: process.pid },
+    );
+    expect(start.status, JSON.stringify(start.body)).toBe(200);
+    expect((await mcp.call('friday_task_claim', { next: true })).isError).toBe(false);
+
+    const commit = await mcp.call('friday_request_permission', {
+      action_class: 'shell.git.commit',
+      command: 'git commit -m wip',
+      justification: 'save the pricing work',
+    });
+    expect(asked).toBe(1);
+    expect(commit.structured).toMatchObject({ status: 'pending' });
+    expect(commit.text).toContain('waiting for a human');
+    expect(commit.text).not.toContain('rejected');
+    const id = commit.structured.approval_id as string;
+    const pending = await td.operator.get<{ approvals: { approval_id: string; status: string }[] }>(
+      td.operator.projectPath('/approvals'),
+    );
+    expect(pending.approvals.find((x) => x.approval_id === id)).toMatchObject({ status: 'pending' });
+
+    // The human still decides it, on the CLI.
+    await td.operator.post(td.operator.projectPath(`/approvals/${id}/approve`), {});
+    const after = await td.operator.get<{ approvals: { approval_id: string; status: string }[] }>(
+      td.operator.projectPath('/approvals'),
+    );
+    expect(after.approvals.find((x) => x.approval_id === id)).toMatchObject({ status: 'granted' });
+  });
+
   it('rejects invalid tool arguments without crashing', async () => {
     await startTestDaemon(ws());
     const mcp = await startMcp(ws());

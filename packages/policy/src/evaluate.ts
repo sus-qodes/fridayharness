@@ -252,7 +252,10 @@ export function evaluate(input: PolicyInput): PolicyResult {
   }
 
   if (action.kind === 'command') {
-    const c = classifyCommand(action.command ?? '', input.autonomy);
+    // The host tool names the shell: Claude Code's Bash tool runs bash (Git Bash on Windows), its
+    // PowerShell tool PowerShell; other hosts name it in the command's own wrapper (LESSONS D-45).
+    const shell = action.tool === 'PowerShell' ? 'powershell' : action.tool === 'Bash' ? 'posix' : undefined;
+    const c = classifyCommand(action.command ?? '', input.autonomy, shell);
     const target = action.command ?? '';
     if (c.autonomy === 'never') {
       return r(

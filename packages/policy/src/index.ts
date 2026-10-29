@@ -23,6 +23,7 @@ export {
   classifyCommand,
   classifySegment,
   DEFAULT_AUTONOMY,
+  type Shell,
   splitSegments,
   wrappedCommand,
 } from './commands.js';

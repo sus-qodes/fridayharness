@@ -205,7 +205,9 @@ describe('command classification', () => {
       // A method named inside quotes is text.
       ['rg "this.apply(" src', 'read.local'],
     ];
-    for (const [cmd, cls] of cases) expect(classifyCommand(cmd).class, cmd).toBe(cls);
+    // PowerShell commands, as Claude Code's PowerShell tool sends them: a shell not named is read as
+    // POSIX, where a leading `$f` runs a command (LESSONS D-45).
+    for (const [cmd, cls] of cases) expect(classifyCommand(cmd, {}, 'powershell').class, cmd).toBe(cls);
     expect(splitSegments('if (a) { b; c }; d')).toEqual(['if (a) { b; c }', 'd']);
   });
 });

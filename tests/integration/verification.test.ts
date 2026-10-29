@@ -3,6 +3,8 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { claudeCodeHooks } from '@friday/adapter-claude';
+import { GenericHarnessClient } from '@friday/adapter-generic';
 import { createDaemon } from '@friday/daemon';
 import { GitRoot } from '@friday/git';
 import type { Actor, TaskStartParams, TaskView, VerificationView } from '@friday/protocol';
@@ -11,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cli } from '../helpers/cli.js';
 import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
 import { FakeHarness } from '../helpers/fake-harness.js';
+import { postHook } from '../helpers/hooks.js';
 
 const ws = useTestWorkspace();
 let saved: string | undefined;
@@ -438,5 +441,71 @@ describe('verification at a recorded revision of the task checkout', () => {
     expect(
       (again.verification.checks.find((c) => c.name === 'friday.diff')?.details?.findings ?? []).map((f) => f.rule),
     ).toContain('diff.denied_by_policy');
+  });
+});
+
+describe('an attached session in the shared main checkout (LESSONS D-41)', () => {
+  it('judges what the session committed during its task, not only what it left uncommitted', async () => {
+    const td = await startTestDaemon(ws(), { git: true, editConfig, extensions: [claudeCodeHooks()] });
+    const dir = ws().projectDir;
+    mkdirSync(path.join(dir, 'src'), { recursive: true });
+    writeFileSync(path.join(dir, 'src', 'shared.mjs'), 'export const shared = 1;\n');
+    const git = deterministicGit(dir, { startEpoch: 1_767_225_700 });
+    await git.commitAll('sources');
+
+    // A Claude Code session in the main checkout, its hooks reporting in, claims a task.
+    const pid = 8201;
+    const sessionId = 'sess-main';
+    const client = new GenericHarnessClient(td.bootstrap, {
+      harness_key: `claude-code:${td.project.project_id}:pid:${pid}`,
+      vendor: 'claude-code',
+      name: 'Claude Code',
+      version: '2.1.300',
+      adapter_version: '0.1.0',
+      attach_mode: 'attach',
+      project_id: td.project.project_id,
+      capabilities: { hooks: true },
+      agent_key: 'dev-1',
+      role: 'developer',
+      host: { pid, session_id: sessionId, cwd: dir },
+    });
+    await client.register();
+    const daemon = { url: td.url, projectId: td.project.project_id, token: td.daemon.tokens.bootstrap };
+    const started = await postHook(
+      daemon,
+      'SessionStart',
+      { session_id: sessionId, cwd: dir, hook_event_name: 'SessionStart', source: 'startup' },
+      { claudePid: pid },
+    );
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'the configuration',
+      kind: 'docs',
+      scope: { write: ['src/**'], read: [] },
+      assign_agent_key: 'dev-1',
+    });
+    const claim = await client.claim({ task_id: task.task_id });
+
+    // The session writes a credential into the code and commits it before claiming completion.
+    const aws = `AKIA${'Q'.repeat(16)}`;
+    writeFileSync(path.join(dir, 'src', 'config.mjs'), `export const key = '${aws}';\n`);
+    await git.commitAll('the configuration');
+    await client.reportResult({
+      task_id: task.task_id,
+      run_id: claim.run_id,
+      status: 'completed_claim',
+      summary: 'done',
+      changed_paths: ['src/config.mjs'],
+      checks: [],
+    });
+
+    const v = await verify(td, task.task_id);
+    expect(v.verification.base_commit).toMatch(/^[0-9a-f]{40}$/);
+    const secrets = v.verification.checks.find((c) => c.name === 'friday.secrets');
+    expect(secrets?.status).toBe('FAILED');
+    expect(secrets?.details?.findings?.[0]?.message).toContain('src/config.mjs:1 (aws_key)');
+    const diff = v.verification.checks.find((c) => c.name === 'friday.diff');
+    expect((diff?.details?.findings ?? []).map((f) => f.rule)).not.toContain('diff.claimed_unchanged');
+    expect(v.task.status).toBe('FAILED');
   });
 });
