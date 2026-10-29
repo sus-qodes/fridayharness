@@ -1,0 +1,26 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    {
+      "path": "../protocol"
+    },
+    {
+      "path": "../git"
+    },
+    {
+      "path": "../code-graph"
+    },
+    {
+      "path": "../policy"
+    },
+    {
+      "path": "../state"
+    }
+  ]
+}

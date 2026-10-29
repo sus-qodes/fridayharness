@@ -217,6 +217,9 @@ importers:
       '@friday/code-graph':
         specifier: workspace:*
         version: link:../../packages/code-graph
+      '@friday/context':
+        specifier: workspace:*
+        version: link:../../packages/context
       '@friday/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -322,6 +325,34 @@ importers:
         specifier: 0.3.1
         version: 0.3.1
     devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../tests/support
+
+  packages/context:
+    dependencies:
+      '@friday/code-graph':
+        specifier: workspace:*
+        version: link:../code-graph
+      '@friday/git':
+        specifier: workspace:*
+        version: link:../git
+      '@friday/policy':
+        specifier: workspace:*
+        version: link:../policy
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@friday/state':
+        specifier: workspace:*
+        version: link:../state
+    devDependencies:
+      '@friday/core':
+        specifier: workspace:*
+        version: link:../core
+      '@friday/db':
+        specifier: workspace:*
+        version: link:../db
       '@friday/test-support':
         specifier: workspace:*
         version: link:../../tests/support

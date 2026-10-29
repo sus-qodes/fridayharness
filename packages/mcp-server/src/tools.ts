@@ -421,6 +421,88 @@ export function createFridayTools(session: FridaySession): FridayTool[] {
       },
     },
     {
+      name: 'friday_remember',
+      title: 'Remember something for the project',
+      description:
+        'Record what others working on this should know: a decision, constraint, convention, bug pattern, dependency, risk or open question. It is kept for your task (default), for yourself ("agent") or this session, marked unverified with you as its source; it never overrides what a human decided, and a contradiction waits for a human to review.',
+      shape: {
+        kind: z.enum([
+          'decision',
+          'architecture',
+          'constraint',
+          'convention',
+          'bug-pattern',
+          'dependency',
+          'operational-runbook',
+          'human-preference',
+          'outcome',
+          'learned-risk',
+          'unresolved-question',
+          'summary',
+        ]),
+        subject: z.string().min(1).max(200),
+        content: z.string().min(1).max(4000),
+        scope: z.enum(['task', 'agent', 'session']).optional(),
+        tags: z.array(z.string()).max(10).optional(),
+      },
+      alwaysLoad: false,
+      readOnly: false,
+      handler: async (a) => {
+        const client = await session.ready();
+        const res = await client.call('memory.record', {
+          kind: a.kind as ResultOf<'memory.record'>['memory']['kind'],
+          subject: a.subject as string,
+          content: a.content as string,
+          scope: (a.scope as 'task' | 'agent' | 'session' | undefined) ?? 'task',
+          tags: (a.tags as string[] | undefined) ?? [],
+          idempotency_key: idem('remember', a),
+        });
+        const m = res.memory;
+        const parts = [
+          res.deduplicated
+            ? `Already remembered as ${m.memory_id}.`
+            : `Remembered ${m.memory_id} (${m.scope_type} scope).`,
+          res.superseded.length ? `It replaces your earlier ${res.superseded.join(', ')}.` : '',
+          res.contradicts.length
+            ? `It contradicts ${res.contradicts.join(', ')}${m.needs_review ? ', so a human will review it; the other one still counts until then' : ''}.`
+            : '',
+        ];
+        return { text: parts.filter(Boolean).join(' '), structured: res };
+      },
+    },
+    {
+      name: 'friday_recall',
+      title: 'Recall project memory',
+      description:
+        'Search what the project remembers that you may read: project decisions and constraints, your team, yourself and your tasks. Best first: human-approved decisions outrank guesses, and old guesses fade.',
+      shape: {
+        query: z.string().max(500).optional(),
+        kinds: z.array(z.string()).max(12).optional(),
+        limit: z.number().int().min(1).max(50).optional(),
+      },
+      alwaysLoad: false,
+      readOnly: true,
+      handler: async (a) => {
+        const client = await session.ready();
+        const res = await client.call('memory.search', {
+          ...(a.query ? { query: a.query as string } : {}),
+          ...(a.kinds ? { kinds: a.kinds as ResultOf<'memory.record'>['memory']['kind'][] } : {}),
+          limit: (a.limit as number | undefined) ?? 10,
+        });
+        return {
+          text: res.memories.length
+            ? res.memories
+                .map(
+                  (m) =>
+                    `- [${m.authority}, ${m.kind}, ${m.scope_type}] ${m.subject}: ${m.content} (${m.memory_id})${m.contradicts.length ? ` — contradicts ${m.contradicts.join(', ')}` : ''}`,
+                )
+                .join('\n')
+            : 'Nothing remembered matches.',
+          structured: res,
+        };
+      },
+    },
+    {
       name: 'friday_request_permission',
       title: 'Request permission',
       description:

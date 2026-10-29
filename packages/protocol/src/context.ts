@@ -40,5 +40,49 @@ export const ContextPacket = z.object({
   sections: z.array(ContextSection),
   staleness: z.object({ is_stale: z.boolean(), reason: z.string().optional() }),
   explain_uri: z.string().optional(),
+  /** The execution root's source version the packet was compiled at (ADR-0019, ADR-0022). */
+  source_version: z.string().optional(),
 });
 export type ContextPacket = z.infer<typeof ContextPacket>;
+
+/** Why a packet holds what it holds (ADR-0022 §8). Sources withheld by permission are only counted. */
+export const ContextExplanation = z.object({
+  context_id: z.string(),
+  cache_key: z.string(),
+  source_version: z.string().nullable(),
+  budget: z.object({
+    chars: z.number().int(),
+    used_chars: z.number().int(),
+    max_sources: z.number().int(),
+    sources: z.number().int(),
+  }),
+  included: z.array(
+    z.object({
+      section: z.string(),
+      source_id: z.string(),
+      priority: z.number().int(),
+      relevance: z.number(),
+      protected: z.boolean(),
+      reason: z.string(),
+      rule: z.string(),
+      tokens: z.number().int(),
+    }),
+  ),
+  cut_by_budget: z.array(
+    z.object({
+      section: z.string(),
+      source_id: z.string(),
+      priority: z.number().int(),
+      reason: z.string(),
+      tokens: z.number().int(),
+    }),
+  ),
+  withheld_by_permission: z.number().int(),
+  unsupported_edges: z.array(z.object({ from: z.string(), specifier: z.string().nullable(), reason: z.string() })),
+  memory_conflicts: z.array(z.object({ memory_id: z.string(), contradicts: z.array(z.string()), kept: z.string() })),
+  semantic_fallback: z.object({ enabled: z.boolean(), results: z.number().int() }),
+  escalate: z.boolean(),
+  notes: z.array(z.string()),
+  timings_ms: z.record(z.string(), z.number()),
+});
+export type ContextExplanation = z.infer<typeof ContextExplanation>;

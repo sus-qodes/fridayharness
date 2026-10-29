@@ -1,0 +1,34 @@
+{
+  "name": "@friday/context",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The context compiler: permission-first, deterministic packets with ranking, budgets, a cache and explanations (ADR-0022).",
+  "type": "module",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@friday/code-graph": "workspace:*",
+    "@friday/git": "workspace:*",
+    "@friday/policy": "workspace:*",
+    "@friday/protocol": "workspace:*",
+    "@friday/state": "workspace:*"
+  },
+  "devDependencies": {
+    "@friday/core": "workspace:*",
+    "@friday/db": "workspace:*",
+    "@friday/test-support": "workspace:*"
+  }
+}

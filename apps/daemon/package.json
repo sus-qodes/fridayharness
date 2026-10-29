@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@friday/code-graph": "workspace:*",
+    "@friday/context": "workspace:*",
     "@friday/core": "workspace:*",
     "@friday/db": "workspace:*",
     "@friday/events": "workspace:*",

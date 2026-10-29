@@ -1,0 +1,163 @@
+{
+  "$id": "urn:friday:protocol:v1:memory.record:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "memory": {
+      "type": "object",
+      "properties": {
+        "memory_id": {
+          "type": "string"
+        },
+        "scope_type": {
+          "type": "string",
+          "enum": [
+            "project",
+            "team",
+            "agent",
+            "task",
+            "session"
+          ]
+        },
+        "scope_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "decision",
+            "architecture",
+            "constraint",
+            "convention",
+            "bug-pattern",
+            "dependency",
+            "operational-runbook",
+            "human-preference",
+            "outcome",
+            "learned-risk",
+            "unresolved-question",
+            "summary"
+          ]
+        },
+        "subject": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        "authority": {
+          "type": "string",
+          "enum": [
+            "human-approved",
+            "verified",
+            "system",
+            "agent"
+          ]
+        },
+        "verification_status": {
+          "type": "string",
+          "enum": [
+            "verified",
+            "unverified"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "superseded",
+            "retracted"
+          ]
+        },
+        "supersedes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "superseded_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contradicts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "needs_review": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "memory_id",
+        "scope_type",
+        "scope_id",
+        "kind",
+        "subject",
+        "content",
+        "tags",
+        "source",
+        "authority",
+        "verification_status",
+        "status",
+        "supersedes",
+        "superseded_by",
+        "contradicts",
+        "needs_review",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "deduplicated": {
+      "type": "boolean"
+    },
+    "superseded": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "contradicts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "memory",
+    "deduplicated",
+    "superseded",
+    "contradicts"
+  ]
+}

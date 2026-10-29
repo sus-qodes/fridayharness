@@ -26,7 +26,7 @@ export interface AuthInfo {
 export interface RpcDeps {
   state: FridayState;
   project: ProjectRef;
-  compile: (input: CompileInput, actor: Actor) => ContextPacket;
+  compile: (input: CompileInput, actor: Actor) => Promise<ContextPacket>;
   signal?: AbortSignal;
   pollIntervalMs?: number;
 }
@@ -119,7 +119,7 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
       const p = METHODS[method].params.parse(raw);
       const c = caller();
       const out = state.claimTask(pid, c, { task_id: p.task_id, next: p.next }, { idempotency_key: p.idempotency_key });
-      const context = deps.compile(
+      const context = await deps.compile(
         {
           recipient: { kind: 'agent', id: c.agent_id, harness_id: harnessId, run_id: out.run_id },
           task_id: out.task.task_id,
@@ -217,6 +217,32 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
     case 'message.ack': {
       const p = METHODS[method].params.parse(raw);
       return state.acknowledgeMessages(pid, caller(), p.ids);
+    }
+    case 'memory.record': {
+      const p = METHODS[method].params.parse(raw);
+      return state.memory.record(
+        pid,
+        { kind: 'agent', caller: caller() },
+        {
+          scope_type: p.scope,
+          ...(p.scope === 'task' && p.task_id ? { scope_id: p.task_id } : {}),
+          kind: p.kind,
+          subject: p.subject,
+          content: p.content,
+          tags: p.tags,
+          source_events: p.source_events,
+        },
+        p.idempotency_key ? { idempotency_key: p.idempotency_key } : {},
+      );
+    }
+    case 'memory.search': {
+      const p = METHODS[method].params.parse(raw);
+      const hits = state.memory.search(
+        pid,
+        { kind: 'agent', caller: caller() },
+        { ...(p.query ? { query: p.query } : {}), ...(p.kinds ? { kinds: p.kinds } : {}), limit: p.limit },
+      );
+      return { memories: hits.map(({ why: _why, ...m }) => m) };
     }
     case 'permission.request': {
       const p = METHODS[method].params.parse(raw);

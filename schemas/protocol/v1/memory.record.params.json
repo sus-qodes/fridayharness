@@ -1,0 +1,81 @@
+{
+  "$id": "urn:friday:protocol:v1:memory.record:params",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocol_version": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "scope": {
+      "default": "task",
+      "type": "string",
+      "enum": [
+        "task",
+        "agent",
+        "session"
+      ]
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "decision",
+        "architecture",
+        "constraint",
+        "convention",
+        "bug-pattern",
+        "dependency",
+        "operational-runbook",
+        "human-preference",
+        "outcome",
+        "learned-risk",
+        "unresolved-question",
+        "summary"
+      ]
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "tags": {
+      "default": [],
+      "maxItems": 10,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 50
+      }
+    },
+    "source_events": {
+      "default": [],
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "kind",
+    "subject",
+    "content"
+  ]
+}

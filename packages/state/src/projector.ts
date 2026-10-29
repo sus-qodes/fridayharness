@@ -459,8 +459,9 @@ export class StateProjector implements Projector {
         const packet = p.packet as Payload;
         this.db
           .prepare(
-            `INSERT INTO context_packets (context_id, project_id, task_id, recipient_id, created_at, state_version, packet_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO context_packets (context_id, project_id, task_id, recipient_id, created_at, state_version, packet_json,
+               explanation_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             str(packet.context_id),
@@ -470,6 +471,7 @@ export class StateProjector implements Projector {
             str(packet.created_at),
             Number(packet.state_version),
             toJson(packet),
+            p.explanation === undefined ? null : toJson(p.explanation),
           );
         return;
       }

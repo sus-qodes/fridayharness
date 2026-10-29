@@ -6,6 +6,7 @@ import { newId, TaskStatus } from '@friday/protocol';
 import { FRIDAY_DIR, FRIDAY_VERSION, readToken, renderInitialConfig, stateDir, writePrivateFile } from '@friday/sdk';
 import { Command, CommanderError, Option } from 'commander';
 import { type GlobalOptions, operator, out, project, UsageError } from './context.js';
+import { registerContextCommands } from './context-cmd.js';
 import { doctor, renderDoctor } from './doctor.js';
 import { registerGoalCommands, renderEscalation } from './goals.js';
 import { registerGraphCommands } from './graph.js';
@@ -680,6 +681,7 @@ export function buildProgram(): Command {
   registerGoalCommands(program, g);
   registerMessageCommands(program, g);
   registerGraphCommands(program, g);
+  registerContextCommands(program, g);
   registerMemoryCommands(program, g);
   for (const plugin of commandPlugins) plugin(program);
   return program;

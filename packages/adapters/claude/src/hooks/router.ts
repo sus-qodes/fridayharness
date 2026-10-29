@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { compileContext, type DaemonContext } from '@friday/daemon';
+import type { DaemonContext } from '@friday/daemon';
 import {
   type Autonomy,
   type CommandClass,
@@ -146,9 +146,7 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
               ok: true,
               hook_output: 'Friday could not identify this session yet. Call friday_whoami before editing.',
             });
-          const packet = compileContext(
-            state,
-            project,
+          const packet = await ctx.compile(
             {
               recipient: { kind: 'agent', id: agent.agent_id, harness_id: harness.harness_id },
               task_id: task?.task_id,

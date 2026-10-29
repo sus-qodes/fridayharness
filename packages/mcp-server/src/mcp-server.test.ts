@@ -20,11 +20,11 @@ describe('friday MCP server definition', () => {
     expect(SERVER_INSTRUCTIONS.indexOf('friday_whoami')).toBeLessThan(SERVER_INSTRUCTIONS.indexOf('friday_claim_done'));
   });
 
-  it('defines the 14 tools of plan Appendix 3, five of them always loaded', () => {
+  it('defines the 16 tools of plan Appendix 3, five of them always loaded', () => {
     const tools = createFridayTools({} as FridaySession);
     const names = tools.map((t) => t.name);
-    expect(names).toHaveLength(14);
-    expect(new Set(names).size).toBe(14);
+    expect(names).toHaveLength(16);
+    expect(new Set(names).size).toBe(16);
     expect(names.every((n) => /^friday_[a-z_]+$/.test(n))).toBe(true);
     expect(
       tools

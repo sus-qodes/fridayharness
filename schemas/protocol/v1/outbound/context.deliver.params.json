@@ -197,6 +197,9 @@
         },
         "explain_uri": {
           "type": "string"
+        },
+        "source_version": {
+          "type": "string"
         }
       },
       "required": [

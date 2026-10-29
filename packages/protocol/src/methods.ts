@@ -339,6 +339,66 @@ export const MessageAckResult = z.object({
   refused: z.array(z.string()),
 });
 
+/** Memory an agent records or reads (ADR-0021): its own task, agent and session scopes only. */
+export const MemoryKind = z.enum([
+  'decision',
+  'architecture',
+  'constraint',
+  'convention',
+  'bug-pattern',
+  'dependency',
+  'operational-runbook',
+  'human-preference',
+  'outcome',
+  'learned-risk',
+  'unresolved-question',
+  'summary',
+]);
+export const MemoryItem = z.object({
+  memory_id: z.string(),
+  scope_type: z.enum(['project', 'team', 'agent', 'task', 'session']),
+  scope_id: z.string(),
+  kind: MemoryKind,
+  subject: z.string(),
+  content: z.string(),
+  tags: z.array(z.string()),
+  source: z.object({ kind: z.string(), id: z.string() }),
+  authority: z.enum(['human-approved', 'verified', 'system', 'agent']),
+  verification_status: z.enum(['verified', 'unverified']),
+  status: z.enum(['active', 'superseded', 'retracted']),
+  supersedes: z.string().nullable(),
+  superseded_by: z.string().nullable(),
+  contradicts: z.array(z.string()),
+  needs_review: z.boolean(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export const MemoryRecordParams = z.object({
+  ...Base,
+  /** Where it applies: the task you hold (default), yourself, or this session. */
+  scope: z.enum(['task', 'agent', 'session']).default('task'),
+  task_id: z.string().optional(),
+  kind: MemoryKind,
+  subject: z.string().min(1).max(200),
+  content: z.string().min(1).max(4000),
+  tags: z.array(z.string().min(1).max(50)).max(10).default([]),
+  /** Event ids the memory is based on. */
+  source_events: z.array(z.string()).max(20).default([]),
+});
+export const MemoryRecordResult = z.object({
+  memory: MemoryItem,
+  deduplicated: z.boolean(),
+  superseded: z.array(z.string()),
+  contradicts: z.array(z.string()),
+});
+export const MemorySearchParams = z.object({
+  ...Base,
+  query: z.string().max(500).optional(),
+  kinds: z.array(MemoryKind).max(12).optional(),
+  limit: z.number().int().min(1).max(50).default(10),
+});
+export const MemorySearchResult = z.object({ memories: z.array(MemoryItem.extend({ score: z.number() })) });
+
 export const PermissionRequestParams = z.object({
   ...Base,
   task_id: z.string().optional(),
@@ -398,6 +458,8 @@ export const METHODS = {
   'task.release': { params: TaskReleaseParams, result: TaskReleaseResult },
   'message.inbox': { params: MessageInboxParams, result: MessageInboxResult },
   'message.ack': { params: MessageAckParams, result: MessageAckResult },
+  'memory.record': { params: MemoryRecordParams, result: MemoryRecordResult },
+  'memory.search': { params: MemorySearchParams, result: MemorySearchResult },
 } as const;
 
 export type MethodName = keyof typeof METHODS;

@@ -32,7 +32,7 @@ import { streamSSE } from 'hono/streaming';
 import { ZodError } from 'zod';
 import type { BrainHandle } from './brain.js';
 import { escalationView, mountBrainRoutes } from './brain-routes.js';
-import { type CompileInput, compileContext, withStaleness } from './context.js';
+import type { CompileInput, ContextService } from './context.js';
 import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
 import type { Logger } from './log.js';
 import { type AuthInfo, callerFor, dispatchRpc } from './rpc.js';
@@ -59,6 +59,8 @@ export interface AppDeps {
   brain?: BrainHandle;
   /** The code graph of the execution root (M4b). */
   graph?: GraphService;
+  /** The context compiler (M4d). */
+  context: ContextService;
 }
 
 type Env = { Variables: { auth: AuthInfo; requestId: string } };
@@ -76,7 +78,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   const { state, project, logger } = deps;
   const pid = project.project_id;
   const app = new Hono<Env>();
-  const compile = (input: CompileInput, actor: Actor) => compileContext(state, project, input, actor);
+  const compile = (input: CompileInput, actor: Actor) => deps.context.compile(input, actor);
 
   // ---- middleware --------------------------------------------------------------------------
 
@@ -471,7 +473,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     const purpose = typeof body.purpose === 'string' ? body.purpose : 'request';
     if (auth.token_class === 'harness' && auth.harness_id) {
       const caller = callerFor(state, pid, auth.harness_id);
-      const packet = compile(
+      const packet = await compile(
         {
           recipient: { kind: 'agent', id: caller.agent_id, harness_id: auth.harness_id },
           task_id: taskId ?? state.q.agent(caller.agent_id).current_task_id ?? undefined,
@@ -484,7 +486,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     }
     const recipientId = typeof body.recipient_id === 'string' ? body.recipient_id : 'local-operator';
     return c.json(
-      compile(
+      await compile(
         {
           recipient: { kind: 'human', id: recipientId },
           task_id: taskId,
@@ -496,14 +498,26 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     );
   });
 
-  app.get(`${P}/context/:cid`, allow('operator', 'harness'), (c) => {
-    const packet = state.q.contextPacket(c.req.param('cid'));
+  const ownPacket = (c: Context<Env>, id: string) => {
+    const packet = state.q.contextPacket(id);
     if (!packet) throw new FridayError('context_unavailable', 'unknown context packet');
     const auth = c.get('auth');
     if (auth.token_class === 'harness' && auth.harness_id && packet.recipient.harness_id !== auth.harness_id) {
       throw new FridayError('permission_denied', 'this packet was compiled for another session');
     }
-    return c.json(withStaleness(packet, state.store.head(pid)));
+    return packet;
+  };
+  app.get(`${P}/context/:cid`, allow('operator', 'harness'), async (c) => {
+    ownPacket(c, c.req.param('cid'));
+    return c.json(await deps.context.packet(c.req.param('cid')));
+  });
+  // Why a packet holds what it holds (ADR-0022 §8).
+  app.get(`${P}/context/:cid/explain`, allow('operator', 'harness'), (c) => {
+    const packet = ownPacket(c, c.req.param('cid'));
+    const explanation = deps.context.explanation(packet.context_id);
+    if (!explanation)
+      throw new FridayError('context_unavailable', 'this packet was compiled before explanations existed (M4d)');
+    return c.json({ packet, explanation });
   });
 
   // ---- events --------------------------------------------------------------------------------

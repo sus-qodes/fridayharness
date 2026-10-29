@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { Clock, IdGenerator } from '@friday/core';
 import { closeDatabase, openDatabase } from '@friday/db';
 import type { PlannerModel } from '@friday/planner';
-import { type Actor, API_VERSION, FridayError, PROTOCOL_VERSIONS } from '@friday/protocol';
+import { type Actor, API_VERSION, type ContextPacket, FridayError, PROTOCOL_VERSIONS } from '@friday/protocol';
 import {
   type DaemonDiscovery,
   ensurePrivateDir,
@@ -20,6 +20,7 @@ import { serve } from '@hono/node-server';
 import type { Hono } from 'hono';
 import { buildApp } from './app.js';
 import { type BrainHandle, createMasterBrain } from './brain.js';
+import { type CompileInput, createContextService } from './context.js';
 import { GraphService } from './graph-service.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
 import { runVerification } from './verify.js';
@@ -60,6 +61,8 @@ export interface DaemonContext {
   port: () => number;
   /** Raw bootstrap token, for in-process components that call back into the daemon. */
   bootstrapToken: () => string;
+  /** The context compiler (M4d, ADR-0022). */
+  compile: (input: CompileInput, actor: Actor) => Promise<ContextPacket>;
 }
 
 export interface Daemon extends DaemonContext {
@@ -203,6 +206,9 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     resolveClosed = r;
   });
 
+  const graph = new GraphService({ root: project.root, cacheDir: path.join(fridayDir, 'graph') });
+  // The per-user state folder (it holds every project's private folder): never gathered into context.
+  const context = createContextService({ state, project, graph, stateDir: path.dirname(path.dirname(privateDir)) });
   const ctx: DaemonContext = {
     state,
     project,
@@ -210,6 +216,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     logger,
     port: () => port,
     bootstrapToken: () => tokens.bootstrap,
+    compile: (input, actor) => context.compile(input, actor),
   };
 
   const brain =
@@ -224,7 +231,6 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
         });
 
   let closing: Promise<void> | undefined;
-  const graph = new GraphService({ root: project.root, cacheDir: path.join(fridayDir, 'graph') });
   const app = buildApp({
     state,
     project,
@@ -243,6 +249,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     ...(opts.pollIntervalMs ? { pollIntervalMs: opts.pollIntervalMs } : {}),
     ...(brain ? { brain } : {}),
     graph,
+    context,
   });
   for (const ext of opts.extensions ?? []) ext(app as unknown as Hono, ctx);
 

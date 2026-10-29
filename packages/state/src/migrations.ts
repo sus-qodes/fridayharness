@@ -566,6 +566,15 @@ CREATE TABLE memory_usage (
   },
 ];
 
+/** M4d: the explanation of each context packet (ADR-0022 §8). */
+export const CONTEXT_MIGRATIONS: Migration[] = [
+  {
+    version: 9,
+    name: 'context_explanations',
+    up: `ALTER TABLE context_packets ADD COLUMN explanation_json TEXT;`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -575,6 +584,7 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...MESSAGING_MIGRATIONS,
   ...CONSUMER_MIGRATIONS,
   ...MEMORY_MIGRATIONS,
+  ...CONTEXT_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */

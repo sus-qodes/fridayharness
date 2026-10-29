@@ -268,6 +268,14 @@ export class Queries {
     return row ? (JSON.parse(row.packet_json) as ContextPacket) : undefined;
   }
 
+  /** The explanation stored with a packet (ADR-0022 §8). */
+  contextExplanation(contextId: string): unknown | undefined {
+    const row = this.db
+      .prepare('SELECT explanation_json FROM context_packets WHERE context_id = ?')
+      .get<{ explanation_json: string | null }>(contextId);
+    return row?.explanation_json ? JSON.parse(row.explanation_json) : undefined;
+  }
+
   approvals(projectId: string, status?: string): Record<string, unknown>[] {
     return status
       ? this.db

@@ -22,6 +22,14 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - Search ranks by text relevance, authority, verification, recency and reuse; approved decisions do not fade, guesses do.
   - `friday memory add|search|review|show|approve|supersede|retract`.
   - Decision: ADR-0021.
+- **M4d, context that explains itself:**
+  - `@friday/context` replaces the M1 context stub. Every packet is compiled in the order of the spec: permissions first, then the task, the code as it is now (including uncommitted work), the files related through the code graph (consumers, tests, shared contracts), memory, and waiting messages.
+  - Sources are ranked by authority (git state and the task first, human decisions before guesses). The budget never cuts identity, the task contract, scope, the human's requirements or the protocol reminder.
+  - Files the task may not read are never gathered and never named.
+  - Packets are cached by what they depend on: an uncommitted edit, a new memory or a status change gives a new packet; a tool completion does not. A stored packet says when it is stale and why.
+  - **`friday context explain <task|ctx>`** lists every file with its reason and rule, what the budget cut, how many sources permission withheld, memory conflicts and what was not resolved.
+  - Agents can **remember and recall** through Friday: `friday_remember`, `friday_recall` (MCP) and `memory.record`, `memory.search` (protocol), within their own scopes.
+  - Decision: ADR-0022.
 
 ## Unreleased — M3.5 second-harness spike (Codex app-server)
 

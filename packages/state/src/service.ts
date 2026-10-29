@@ -3586,11 +3586,11 @@ export class FridayState {
     return todo.map((d) => d.delivery_id);
   }
 
-  recordContextPacket(projectId: string, actor: Actor, packet: ContextPacket): void {
+  recordContextPacket(projectId: string, actor: Actor, packet: ContextPacket, explanation?: unknown): void {
     this.exec({ name: 'context.compiled', project_id: projectId, actor }, (ctx) => {
       ctx.emit({
         type: 'context.compiled',
-        payload: { packet },
+        payload: explanation === undefined ? { packet } : { packet, explanation },
         refs: [
           { kind: 'context', id: packet.context_id },
           ...(packet.task_id ? [{ kind: 'task' as const, id: packet.task_id }] : []),

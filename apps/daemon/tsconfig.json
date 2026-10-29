@@ -35,6 +35,9 @@
       "path": "../../packages/code-graph"
     },
     {
+      "path": "../../packages/context"
+    },
+    {
       "path": "../../packages/sdk"
     },
     {
