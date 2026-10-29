@@ -37,6 +37,7 @@ import type { CompileInput, ContextService } from './context.js';
 import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
 import type { IntegrationManager } from './integration.js';
 import type { Logger } from './log.js';
+import type { RecoveryManager } from './recovery.js';
 import { type AuthInfo, callerFor, dispatchRpc } from './rpc.js';
 import { statusPageHtml } from './ui.js';
 import type { WorkspaceManager } from './workspaces.js';
@@ -68,6 +69,8 @@ export interface AppDeps {
   workspaces?: WorkspaceManager;
   /** Integration into goal branches (M5c). */
   integration?: IntegrationManager;
+  /** Recovery of lost and failed attempts (M5d). */
+  recovery?: RecoveryManager;
 }
 
 type Env = { Variables: { auth: AuthInfo; requestId: string } };
@@ -731,6 +734,24 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.post(`${P}/tasks/:tid/worktree`, allow(...OPERATOR), async (c) =>
     c.json(await workspaces().forTask(c.req.param('tid'), HUMAN), 201),
   );
+
+  // Recovery of lost and failed attempts (M5d, ADR-0026).
+  const recovery = (): RecoveryManager => {
+    if (!deps.recovery) throw new FridayError('capability_unsupported', 'this daemon has no recovery');
+    return deps.recovery;
+  };
+  app.get(`${P}/tasks/:tid/recovery`, allow(...OPERATOR), async (c) =>
+    c.json({ assessment: await recovery().assess(c.req.param('tid')) }),
+  );
+  app.post(`${P}/tasks/:tid/recover`, allow(...OPERATOR), async (c) => {
+    const body = z
+      .object({
+        action: z.enum(['reassign', 'restart', 'needs_human', 'cancel']),
+        reason: z.string().min(1).max(500).optional(),
+      })
+      .parse(await c.req.json());
+    return c.json(await recovery().perform(c.req.param('tid'), body.action, HUMAN, body.reason));
+  });
 
   // Integration into goal branches (M5c, ADR-0025).
   app.get(`${P}/integrations`, allow(...OPERATOR), (c) =>

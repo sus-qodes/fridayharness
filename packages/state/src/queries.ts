@@ -112,6 +112,11 @@ export class Queries {
       .map((r) => r.id);
   }
 
+  /** Runs of a task that started work (were accepted), oldest first: its attempts (ADR-0026). */
+  attemptsOf(taskId: string): RunView[] {
+    return this.runs(taskId).filter((r) => r.accepted_at !== null);
+  }
+
   /** Every task this one depends on. */
   dependencies(taskId: string): string[] {
     return this.db

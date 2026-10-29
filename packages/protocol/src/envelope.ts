@@ -125,6 +125,8 @@ export const EVENT_TYPES = [
   'integration.conflicted',
   'integration.failed',
   'integration.not_needed',
+  // M5d: recovery of lost or failed attempts (ADR-0026).
+  'recovery.performed',
   'memory.superseded',
   'memory.approved',
   'memory.retracted',

@@ -4,7 +4,7 @@ Friday is a local orchestration and context control plane for AI software develo
 
 The architecture is called **ContextOS** in the original specification.
 
-**Status:** M4 built and M5 under way (gates pending), after two stabilizations from independent reviews (M2.5 and M3.1; see [the dispositions](docs/reviews/)).
+**Status:** M5 built (gates pending), after two stabilizations from independent reviews (M2.5 and M3.1; see [the dispositions](docs/reviews/)).
 - **M1** gives you the event spine, the daemon, the `friday` CLI, a read-only status page, and Claude Code attached through an MCP server, a skill and policy hooks. A task runs from creation through a Claude Code session to a verified completion, with Friday's policy enforced on the session's tools.
 - **M2** adds the Master Brain. A goal becomes a versioned plan that you approve; its tasks are delegated to agents, revised when verification fails, and escalated to you when only a human can decide.
 - **M2.5** closes the twelve findings of the 2026-10-14 review:
@@ -21,6 +21,7 @@ The architecture is called **ContextOS** in the original specification.
 - **M5a** gives each task its own git worktree: agents working in parallel no longer share a checkout, a session started in a task's worktree works on that task only, and worktrees holding uncommitted work are kept.
 - **M5b** verifies a task in the checkout it worked in, at a recorded revision: Friday's own checks (changes against the task's scope and claim, credentials in the code) run before the project's checks for that kind of task, related tests first, and a verification whose code changed while it ran judges nothing.
 - **M5c** serializes changes to conflict-prone files with file reservations, and brings each goal's verified task branches together in a goal branch, verifying the merged code before the branch moves; dependent tasks start from that integrated work, and you land the goal branch yourself.
+- **M5d** recovers from a lost harness or a failed attempt without losing work: the worktree's state is preserved, the stale attempt fenced, and the task reassigned in the same worktree and branch, within limits beyond which you decide.
 
 See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 
@@ -36,6 +37,7 @@ See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 | [docs/integration/claude-code.md](docs/integration/claude-code.md) | Attaching Claude Code: setup, what is enforced, headless runs, troubleshooting |
 | [docs/messaging.md](docs/messaging.md) | Messages between agents and humans through Friday: addresses, the inbox, acknowledgements |
 | [docs/runbooks/backup.md](docs/runbooks/backup.md) | Back up, inspect with snapshots and replay, and restore |
+| [docs/runbooks/recovery.md](docs/runbooks/recovery.md) | When a harness is lost or an attempt fails: what Friday does by itself, the recovery options, getting preserved work back |
 | [docs/master-brain.md](docs/master-brain.md) | Goals, plans and the Master Brain: turning planning on, approving, revisions, questions, costs |
 | [docs/protocol/README.md](docs/protocol/README.md) | The harness protocol: transport, tokens, methods, errors, versions |
 | [docs/integration/claude-code-spike.md](docs/integration/claude-code-spike.md) | Verified Claude Code hook and MCP behaviour on Windows |

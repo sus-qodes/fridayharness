@@ -361,6 +361,7 @@ const OBSERVATION_TYPES = new Set([
   'daemon.stopped',
   'scope.violation',
   'ownership.conflict',
+  'recovery.performed',
 ]);
 
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
@@ -1206,7 +1207,20 @@ export class FridayState {
 
   /** Back to READY. Operators release ASSIGNED/WAITING/HARNESS_LOST/RUNNING; agents release their own RUNNING task. */
   releaseTask(projectId: string, actor: Actor, taskId: string, reason: string, caller?: Caller): TaskView {
-    return this.exec({ name: 'task.release', project_id: projectId, actor, params: { taskId, reason } }, (ctx) => {
+    return this.exec({ name: 'task.release', project_id: projectId, actor, params: { taskId, reason } }, (ctx) =>
+      this.releaseWithin(ctx, projectId, actor, taskId, reason, caller),
+    );
+  }
+
+  private releaseWithin(
+    ctx: CommandContext,
+    projectId: string,
+    actor: Actor,
+    taskId: string,
+    reason: string,
+    caller?: Caller,
+  ): TaskView {
+    {
       let task = this.q.task(projectId, taskId);
       const run = task.current_run_id ? this.q.findRun(task.current_run_id) : undefined;
       if (caller) {
@@ -1239,7 +1253,83 @@ export class FridayState {
       }
       this.releaseAgent(ctx, agentId, taskId);
       return task;
-    });
+    }
+  }
+
+  /**
+   * Recovers a task's lost or failed attempt (ADR-0026 §4). `reassign` and `restart` fence the
+   * attempt (its run ended, its outbox expired, a spawn session still alive told to stop) and give
+   * the task back to READY: the next attempt reuses the task's worktree and branch. The daemon has
+   * preserved the worktree's state first, and reset it for `restart`. `needs_human` asks a human
+   * with the assessment; `cancel` cancels.
+   */
+  recoverTask(
+    projectId: string,
+    actor: Actor,
+    taskId: string,
+    action: 'reassign' | 'restart' | 'needs_human' | 'cancel',
+    opts: { reason: string; preserved_ref?: string | null; details?: Record<string, unknown> },
+  ): TaskView {
+    let task: TaskView;
+    if (action === 'cancel') {
+      task = this.cancelTask(projectId, actor, taskId, opts.reason);
+    } else if (action === 'needs_human') {
+      const t = this.q.task(projectId, taskId);
+      this.raiseEscalation(projectId, actor, {
+        kind: 'recovery_needed',
+        goal_id: t.goal_id ?? null,
+        task_id: taskId,
+        question: `${taskId} needs a decision before it continues: ${opts.reason}`,
+        options: [
+          `friday recover ${taskId} --action reassign`,
+          `friday recover ${taskId} --action restart`,
+          `friday recover ${taskId} --action cancel`,
+        ],
+        details: { ...(opts.details ?? {}), ...(opts.preserved_ref ? { preserved_ref: opts.preserved_ref } : {}) },
+      });
+      task = this.q.task(projectId, taskId);
+    } else {
+      task = this.exec(
+        { name: 'task.recover', project_id: projectId, actor, params: { taskId, action, reason: opts.reason } },
+        (ctx) => {
+          const before = this.q.task(projectId, taskId);
+          const run = before.current_run_id ? this.q.findRun(before.current_run_id) : undefined;
+          const released = this.releaseWithin(ctx, projectId, actor, taskId, `${action}: ${opts.reason}`);
+          const h = run ? this.q.findHarness(run.harness_id) : undefined;
+          if (
+            run?.status === 'ACTIVE' &&
+            h?.attach_mode === 'spawn' &&
+            !['DISCONNECTED', 'TERMINATED'].includes(h.status)
+          ) {
+            this.enqueue(
+              ctx,
+              run.harness_id,
+              'task.cancel',
+              { task_id: taskId, run_id: run.run_id, reason: `${action}: ${opts.reason}` },
+              run.run_id,
+            );
+          }
+          return released;
+        },
+      );
+    }
+    this.recordObservation(
+      projectId,
+      actor,
+      'recovery.performed',
+      { task_id: taskId, action, reason: opts.reason, preserved_ref: opts.preserved_ref ?? null },
+      [{ kind: 'task', id: taskId }],
+    );
+    return task;
+  }
+
+  /** Fatal agent errors reported for a task, oldest first (ADR-0026 §5). */
+  agentErrors(projectId: string, taskId: string): string[] {
+    return this.store
+      .readByRef(projectId, 'task', taskId, { types: ['agent.event'] })
+      .map((e) => e.payload as { event_type?: string; fatal?: boolean; message?: string })
+      .filter((p) => p.event_type === 'error' && p.fatal)
+      .map((p) => String(p.message ?? ''));
   }
 
   cancelTask(projectId: string, actor: Actor, taskId: string, reason: string): TaskView {

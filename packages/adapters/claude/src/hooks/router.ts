@@ -207,6 +207,18 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
             autonomy: project.config.autonomy as Partial<Record<CommandClass, Autonomy>>,
             ...(reservations ? { reservations } : {}),
           });
+          // A task worktree belongs to its task: a session that does not hold it (a stale attempt
+          // after recovery, or one that never claimed it) may not write there (ADR-0026 §2).
+          const tree =
+            action.kind === 'write' && result.decision !== 'deny' ? state.q.worktreeAt(pid, root) : undefined;
+          if (tree && tree.task_id !== task?.task_id) {
+            result = {
+              ...result,
+              decision: 'deny',
+              rule: 'write.not_your_worktree',
+              reason: `this checkout is the worktree of ${tree.task_id}, which this session does not hold. Claim it with friday_task_claim to continue its work; if Friday gave it to another attempt, stop here.`,
+            };
+          }
           if (result.decision === 'allow' && result.reserve?.length && task) {
             try {
               state.reserveFiles(pid, actor, task.task_id, result.reserve, 'write', patternsOverlap);

@@ -26,7 +26,8 @@ export const agentIdentity = (agentKey: string): CommitIdentity => ({
   email: `${agentKey.replace(/[^A-Za-z0-9._-]/g, '-')}@agents.friday.invalid`,
 });
 
-const identityEnv = (author: CommitIdentity, committer: CommitIdentity = FRIDAY_IDENTITY) => ({
+/** Environment that makes git record `author` and `committer` on a commit. */
+export const identityEnv = (author: CommitIdentity, committer: CommitIdentity = FRIDAY_IDENTITY) => ({
   GIT_AUTHOR_NAME: author.name,
   GIT_AUTHOR_EMAIL: author.email,
   GIT_COMMITTER_NAME: committer.name,

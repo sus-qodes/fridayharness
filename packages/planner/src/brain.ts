@@ -65,6 +65,12 @@ export interface BrainDeps {
   log?: (level: 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void;
   /** Waits before retrying a job whose action failed; the last failure escalates (tests shorten them). */
   retryDelaysMs?: number[];
+  /**
+   * Who recovers the work of harnesses that will not come back: `release` (default) gives their
+   * tasks back to READY here; `external` leaves them to the daemon's recovery, which preserves and
+   * fences the attempt first (ADR-0026).
+   */
+  lostWork?: 'release' | 'external';
 }
 
 export interface BrainStep {
@@ -461,10 +467,12 @@ export class MasterBrain {
     const steps: BrainStep[] = [];
     try {
       const lost = new Set(
-        state.q
-          .tasks(projectId, { statuses: ['HARNESS_LOST'] })
-          .map((t) => t.assigned_harness_id)
-          .filter((h): h is string => Boolean(h && state.q.findHarness(h)?.status === 'TERMINATED')),
+        this.#deps.lostWork === 'external'
+          ? []
+          : state.q
+              .tasks(projectId, { statuses: ['HARNESS_LOST'] })
+              .map((t) => t.assigned_harness_id)
+              .filter((h): h is string => Boolean(h && state.q.findHarness(h)?.status === 'TERMINATED')),
       );
       for (const h of lost) {
         const released = state.releaseLostTasks(projectId, MASTER_BRAIN, h);

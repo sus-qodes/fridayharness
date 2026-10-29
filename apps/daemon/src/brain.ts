@@ -183,6 +183,8 @@ export function createMasterBrain(input: {
         },
       }),
     log: (level, message, data) => logger[level](message, data ?? {}),
+    // The daemon's recovery preserves and fences lost attempts before reassigning them (ADR-0026).
+    lostWork: 'external',
   });
 
   return {

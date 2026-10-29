@@ -14,6 +14,7 @@ import { registerIntegrationCommands } from './integrations.js';
 import { registerMemoryCommands } from './memory.js';
 import { registerMessageCommands } from './messages.js';
 import { clip, describeEvent, kv, shortTime, table, verificationLines } from './output.js';
+import { registerRecoveryCommands } from './recovery.js';
 import { registerReservationCommands } from './reservations.js';
 import { restoreProject } from './restore.js';
 import { runDaemon } from './run.js';
@@ -686,6 +687,7 @@ export function buildProgram(): Command {
   registerWorktreeCommands(program, g);
   registerReservationCommands(program, g);
   registerIntegrationCommands(program, g);
+  registerRecoveryCommands(program, g);
   registerMemoryCommands(program, g);
   for (const plugin of commandPlugins) plugin(program);
   return program;

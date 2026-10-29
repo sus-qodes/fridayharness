@@ -25,6 +25,7 @@ import { type CompileInput, createContextService } from './context.js';
 import { GraphService } from './graph-service.js';
 import { IntegrationManager } from './integration.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
+import { RecoveryManager } from './recovery.js';
 import { runVerification } from './verify.js';
 import { WorkspaceManager } from './workspaces.js';
 
@@ -80,6 +81,8 @@ export interface Daemon extends DaemonContext {
   tick(): ReturnType<FridayState['tick']>;
   /** The Master Brain, unless it was disabled. */
   brain: BrainHandle | undefined;
+  /** Recovery of lost and failed attempts (M5d, ADR-0026). */
+  recovery: RecoveryManager;
   close(reason?: string): Promise<void>;
   /** Resolves when the daemon has fully stopped (after close or an admin shutdown). */
   closed: Promise<void>;
@@ -244,6 +247,17 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       );
     },
   );
+  // Lost and failed attempts: assessed, preserved, fenced and reassigned within limits (ADR-0026).
+  const recovery = new RecoveryManager({
+    state,
+    project,
+    logger,
+    settings: {
+      maxRetries: project.config.recovery.max_retries,
+      maxSameErrorRetries: project.config.recovery.max_same_error_retries,
+      reconnectWindowMs: state.config.reconnectWindowMs,
+    },
+  });
   void integration
     .sweep()
     .catch((err) => logger.warn('integrating completed tasks failed', { message: (err as Error).message }));
@@ -302,6 +316,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     context,
     workspaces,
     integration,
+    recovery,
   });
   for (const ext of opts.extensions ?? []) ext(app as unknown as Hono, ctx);
 
@@ -390,6 +405,9 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
             void workspaces
               .sweep()
               .catch((e) => logger.warn('preparing worktrees failed', { message: (e as Error).message }));
+            void recovery
+              .sweep()
+              .catch((e) => logger.warn('automatic recovery failed', { message: (e as Error).message }));
             if (
               r.lost.length ||
               r.degraded.length ||
@@ -452,5 +470,5 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     return closing;
   }
 
-  return { ...ctx, url, instanceId, tokens, app: app as unknown as Hono, tick, brain, close, closed };
+  return { ...ctx, url, instanceId, tokens, app: app as unknown as Hono, tick, brain, recovery, close, closed };
 }

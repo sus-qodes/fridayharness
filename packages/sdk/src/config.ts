@@ -136,6 +136,16 @@ export const FridayConfig = z
      * beside Friday's state directory; `off`: everything works in the main checkout.
      */
     worktrees: z.object({ mode: z.enum(['per_task', 'off']).default('per_task') }).prefault({}),
+    /**
+     * Recovering work from a lost harness or a failed attempt (ADR-0026): how many more attempts a
+     * task gets automatically, and how often the same agent error may repeat, before a human decides.
+     */
+    recovery: z
+      .object({
+        max_retries: z.number().int().min(0).max(10).default(2),
+        max_same_error_retries: z.number().int().min(0).max(10).default(1),
+      })
+      .prefault({}),
     context: z.object({ session_start_max_chars: z.number().int().min(1000).max(10_000).default(9000) }).prefault({}),
     /** Agent messaging (M3, ADR-0017). */
     communication: z

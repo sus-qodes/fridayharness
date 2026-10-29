@@ -29,6 +29,13 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - `friday integrations [--goal <goal>]` lists every attempt; `friday integrate <task>` tries again after you resolved a problem.
   - Fix: an attach session started in a task worktree now records the worktree's base commit, so verification sees what it committed.
   - Decision: ADR-0025.
+- **M5d, recovering lost and failed attempts:**
+  - `friday recover <task>` shows what Friday knows about a task's last attempt: the session (status, last heartbeat, whether its process still runs on this machine, how long it may still come back), the last activity, the worktree's commits and uncommitted files, agent errors and preserved states, with the options and a recommendation.
+  - **Nothing is lost.** Before an attempt is reassigned or restarted, the worktree's full state, untracked files included, is kept under `refs/friday/preserved/<task>/attempt-<n>`, without changing the worktree.
+  - **Reassign** gives the task to the next agent in the same worktree and branch, so it continues from the work left there; no second branch is made. **Restart** first puts the worktree back at its last commit. Also `needs-human` and `cancel`.
+  - **The old attempt is fenced:** its run ends, nothing more is delivered to it, its late results are refused, and Friday's hooks refuse writes into the task's worktree from any session that does not hold the task.
+  - **Automatic, with limits:** when a lost session's reconnect window passes, or an attempt ends in a fatal agent error, Friday reassigns the task, up to `recovery.max_retries` (2) more attempts and as long as the same error does not keep repeating (`recovery.max_same_error_retries`, 1). Then, or when the old process still runs on this machine, it asks you once.
+  - Runbook: [docs/runbooks/recovery.md](docs/runbooks/recovery.md). Decision: ADR-0026.
 
 ## Unreleased — M4 context engine
 

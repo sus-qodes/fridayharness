@@ -20,6 +20,14 @@ export {
   resolveCommit,
 } from './integrate.js';
 export {
+  commitsSince,
+  listRefs,
+  preserveCommit,
+  preservedPrefix,
+  resetWorktree,
+  snapshotWorktree,
+} from './recover.js';
+export {
   type ChangedPath,
   type DiffEntry,
   GitRoot,

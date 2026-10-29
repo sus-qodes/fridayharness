@@ -168,6 +168,54 @@ export const IntegrationView = z.object({
 });
 export type IntegrationView = z.infer<typeof IntegrationView>;
 
+export const RecoveryAction = z.enum(['reconnect', 'reassign', 'restart', 'needs_human', 'cancel']);
+export type RecoveryAction = z.infer<typeof RecoveryAction>;
+
+/** What Friday knows about a task's last attempt before it recovers it (ADR-0026 §1). */
+export const RecoveryAssessment = z.object({
+  task_id: z.string(),
+  task_status: TaskStatus,
+  waiting_reason: z.string().nullable(),
+  /** Attempts that started work (accepted runs), the last one included. */
+  attempts: z.number().int(),
+  run: z
+    .object({ run_id: z.string(), attempt: z.number().int(), status: z.string(), outcome: z.string().nullable() })
+    .nullable(),
+  harness: z
+    .object({
+      harness_id: z.string(),
+      status: z.string(),
+      agent_key: z.string().nullable(),
+      last_heartbeat_at: z.string().nullable(),
+      /** Until when a disconnected session may still come back and resume. */
+      reconnect_until: z.string().nullable(),
+      host_pid: z.number().int().nullable(),
+      /** Whether its host process still runs on this machine (null: unknown). */
+      process_alive: z.boolean().nullable(),
+    })
+    .nullable(),
+  last_activity: z.object({ type: z.string(), at: z.string() }).nullable(),
+  worktree: z
+    .object({
+      path: z.string(),
+      branch: z.string(),
+      exists: z.boolean(),
+      base_commit: z.string().nullable(),
+      head: z.string().nullable(),
+      commits_since_base: z.number().int().nullable(),
+      uncommitted: z.array(z.string()),
+    })
+    .nullable(),
+  /** Fatal agent errors of the task, and how often the latest one repeated. */
+  errors: z.object({ total: z.number().int(), same_as_last: z.number().int(), last: z.string().nullable() }),
+  /** Refs holding the preserved state of earlier attempts (`refs/friday/preserved/<task>/…`). */
+  preserved: z.array(z.string()),
+  options: z.array(
+    z.object({ action: RecoveryAction, available: z.boolean(), recommended: z.boolean(), reason: z.string() }),
+  ),
+});
+export type RecoveryAssessment = z.infer<typeof RecoveryAssessment>;
+
 export const HarnessView = z.object({
   harness_id: z.string(),
   harness_key: z.string(),
