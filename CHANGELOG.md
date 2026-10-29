@@ -31,6 +31,11 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - Context for a host without Friday's tools no longer names them.
   - Friday's command policy judges what PowerShell blocks run, so Codex's reads on Windows pass and the writes inside them do not.
   - `friday harness doctor codex` starts a command in Codex's sandbox to see whether it works. `friday harness run codex` takes `--windows-sandbox` and `--service-tier`.
+- **The live Claude spawn check:** Friday ran your installed Claude Code (2.1.300) in three turns the owner approved (`tests/scenarios/claude-spawn.live.test.ts`, results in `docs/integration/claude-code.md`). The third turn ran a task end to end, for $0.006: Friday judged every tool call, a message reached the running turn, and verification completed the task. What it changed:
+  - **Fix:** Claude Code adds a tool, `StructuredOutput`, for the final answer. Friday ended every session that reported it; it now expects that tool and allows it.
+  - Friday now also checks the plugins and skills a session reports. Claude Code's own built-in plugins are accepted; any other plugin, or any skill, ends the attempt before a tool runs.
+  - Friday's rules for spawned sessions, Claude Code's and Codex's, now say to change files with the file tools, not shell commands. They also say a refused call is Friday's decision: the agent should not get the same effect another way.
+  - The guide says where Claude Code keeps each session's transcript (`~/.claude/projects`, one folder per worktree).
 
 ## Unreleased — M7.1e, the follow-up review of M7.1
 

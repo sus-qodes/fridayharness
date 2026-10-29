@@ -1,0 +1,354 @@
+[
+  {
+    "run": "first run (turns 1 and 2)",
+    "what": "turns 1 and 2: --json-schema adds the StructuredOutput tool, which the adapter did not expect, so it ended both attempts as their turns began",
+    "mode": "live",
+    "claude": "2.1.300",
+    "model": "claude-haiku-5-5",
+    "effort": "default",
+    "turn1": {
+      "task_status": "WAITING",
+      "waiting_reason": "agent_error",
+      "decisions": [],
+      "settings": [
+        {
+          "tools": [
+            "Bash",
+            "Edit",
+            "Glob",
+            "Grep",
+            "NotebookEdit",
+            "PowerShell",
+            "Read",
+            "StructuredOutput",
+            "Write"
+          ],
+          "mcp_servers": [],
+          "permission_mode": "default",
+          "model": "claude-haiku-5-5",
+          "host_version": "2.1.300",
+          "repository_config": "ignored"
+        }
+      ],
+      "usage": [],
+      "message_delivery": [
+        "queued"
+      ],
+      "report": null,
+      "discount_ts": false,
+      "result": null,
+      "claim": null
+    },
+    "turns2_3": {
+      "stopped": "the turn ended before the slow check ran",
+      "decisions": []
+    },
+    "turns_started": 2,
+    "refused": [],
+    "inits": [
+      {
+        "model": "claude-haiku-5-5",
+        "tools": [
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "NotebookEdit",
+          "PowerShell",
+          "Read",
+          "StructuredOutput",
+          "Write"
+        ],
+        "mcp_servers": []
+      },
+      {
+        "model": "claude-haiku-5-5",
+        "tools": [
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "NotebookEdit",
+          "PowerShell",
+          "Read",
+          "StructuredOutput",
+          "Write"
+        ],
+        "mcp_servers": []
+      }
+    ],
+    "claude_projects_added": [],
+    "claude_session_folders_added": []
+  },
+  {
+    "run": "second run (turn 3)",
+    "what": "turn 3: a task end to end, every tool call judged by Friday, a message taken into the running turn, a claim in the schema, verification COMPLETED",
+    "mode": "live",
+    "claude": "2.1.300",
+    "model": "claude-haiku-5-5",
+    "effort": "default",
+    "turn1": {
+      "task_status": "READY_FOR_VERIFICATION",
+      "waiting_reason": null,
+      "decisions": [
+        {
+          "tool": "Bash",
+          "decision": "allow",
+          "rule": "command.read.local",
+          "targets": [
+            "ls -la backend backend/src backend/test 2>&1; cat backend/package.json 2>&1; ls backend/test 2>&1; node --version"
+          ]
+        },
+        {
+          "tool": "Read",
+          "decision": "allow",
+          "rule": "read.default",
+          "targets": []
+        },
+        {
+          "tool": "Read",
+          "decision": "allow",
+          "rule": "read.default",
+          "targets": []
+        },
+        {
+          "tool": "Write",
+          "decision": "allow",
+          "rule": "write.in_scope",
+          "targets": [
+            "backend/src/discount.ts"
+          ]
+        },
+        {
+          "tool": "Write",
+          "decision": "allow",
+          "rule": "write.in_scope",
+          "targets": [
+            "backend/test/discount.test.ts"
+          ]
+        },
+        {
+          "tool": "Write",
+          "decision": "allow",
+          "rule": "write.in_scope",
+          "targets": [
+            "backend/report.md"
+          ]
+        },
+        {
+          "tool": "Bash",
+          "decision": "allow",
+          "rule": "command.test.local",
+          "targets": [
+            "node --test backend/test/discount.test.ts"
+          ]
+        }
+      ],
+      "settings": [
+        {
+          "tools": [
+            "Bash",
+            "Edit",
+            "Glob",
+            "Grep",
+            "NotebookEdit",
+            "PowerShell",
+            "Read",
+            "StructuredOutput",
+            "Write"
+          ],
+          "mcp_servers": [],
+          "permission_mode": "default",
+          "model": "claude-haiku-5-5",
+          "host_version": "2.1.300",
+          "repository_config": "ignored"
+        }
+      ],
+      "usage": [
+        {
+          "cost_usd": 0.005816600000000001,
+          "input_tokens": 10,
+          "output_tokens": 2676,
+          "turns": 9
+        }
+      ],
+      "message_delivery": [
+        "acknowledged"
+      ],
+      "report": "done\nchecked-by: friday-message\n",
+      "discount_ts": true,
+      "result": {
+        "duration_api_ms": 16388,
+        "stop_reason": "tool_use",
+        "session_id": "3bf75ec3-7dc2-4df7-858b-f659f73b9d03",
+        "total_cost_usd": 0.005816600000000001,
+        "usage": {
+          "input_tokens": 10,
+          "cache_creation_input_tokens": 19108,
+          "cache_read_input_tokens": 65600,
+          "output_tokens": 2676,
+          "output_tokens_details": {
+            "thinking_tokens": 734
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 19108,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "global",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 362,
+              "cache_read_input_tokens": 18803,
+              "cache_creation_input_tokens": 305,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 305
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard",
+          "fallback_credit": null
+        },
+        "modelUsage": {
+          "claude-haiku-5-5": {
+            "inputTokens": 10,
+            "outputTokens": 2676,
+            "cacheReadInputTokens": 65600,
+            "cacheCreationInputTokens": 19108,
+            "webSearchRequests": 0,
+            "costUSD": 0.005816600000000001,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 128000,
+            "thinkingTokens": 734,
+            "canonicalModel": "claude-haiku-5-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "safety_stops": 0,
+        "is_error": false,
+        "num_turns": 9,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "{\"status\":\"completed\",\"summary\":\"Added applyDiscount(amount, percent) in backend/src/discount.ts. It returns the integer minor-unit amount after the percent discount, rounded to the nearest unit with halves rounding up. It throws RangeError for a non-integer or negative amount and for a percent outside 0–100. Added three node:test cases in backend/test/discount.test.ts covering the discount, rounding, and invalid inputs. `node --test backend/test/discount.test.ts` passes 3/3. backend/report.md contains \\\"done\\\" on the first line and \\\"checked-by: friday-message\\\" on the second, per the follow-up message. Nothing was committed.\",\"changed_paths\":[\"backend/src/discount.ts\",\"backend/test/discount.test.ts\",\"backend/report.md\"],\"blocked_reason\":\"\"}",
+        "structured_output": {
+          "status": "completed",
+          "summary": "Added applyDiscount(amount, percent) in backend/src/discount.ts. It returns the integer minor-unit amount after the percent discount, rounded to the nearest unit with halves rounding up. It throws RangeError for a non-integer or negative amount and for a percent outside 0–100. Added three node:test cases in backend/test/discount.test.ts covering the discount, rounding, and invalid inputs. `node --test backend/test/discount.test.ts` passes 3/3. backend/report.md contains \"done\" on the first line and \"checked-by: friday-message\" on the second, per the follow-up message. Nothing was committed.",
+          "changed_paths": [
+            "backend/src/discount.ts",
+            "backend/test/discount.test.ts",
+            "backend/report.md"
+          ],
+          "blocked_reason": ""
+        },
+        "ttft_ms": 5318,
+        "type": "result",
+        "duration_ms": 26931,
+        "uuid": "e1696a13-3b20-4508-8c05-e71c1a9cb450",
+        "ttft_stream_ms": 4960,
+        "time_to_request_ms": 3697,
+        "first_content_frame_ms": 4960,
+        "user_message_uuid": "ea5360ea-ac9e-43fb-894e-81074dcc2e89",
+        "user_message_uuids": [
+          "ea5360ea-ac9e-43fb-894e-81074dcc2e89",
+          "1c026079-2638-4ae6-a687-9dbf2e33bbfe"
+        ],
+        "request_sent_wall_ms": 1792077978643,
+        "first_request_input_tokens": 14439,
+        "queued_turn_count": 0,
+        "result_index": 0
+      },
+      "claim": {
+        "summary": "Added applyDiscount(amount, percent) in backend/src/discount.ts. It returns the integer minor-unit amount after the percent discount, rounded to the nearest unit with halves rounding up. It throws RangeError for a non-integer or negative amount and for a percent outside 0–100. Added three node:test cases in backend/test/discount.test.ts covering the discount, rounding, and invalid inputs. `node --test backend/test/discount.test.ts` passes 3/3. backend/report.md contains \"done\" on the first line and \"checked-by: friday-message\" on the second, per the follow-up message. Nothing was committed.",
+        "changed_paths": [
+          "backend/report.md",
+          "backend/src/discount.ts",
+          "backend/test/discount.test.ts"
+        ],
+        "checks": [],
+        "notes": [],
+        "risks": [],
+        "discrepancies": []
+      },
+      "verification": {
+        "status": "COMPLETED",
+        "checks": [
+          {
+            "name": "friday.diff",
+            "status": "PASSED",
+            "summary": "3 changed file(s) within scope"
+          },
+          {
+            "name": "friday.secrets",
+            "status": "PASSED",
+            "summary": "no credentials in 3 of 3 changed file(s)"
+          },
+          {
+            "name": "tests",
+            "status": "PASSED",
+            "summary": "passed in 597 ms: ℹ fail 0"
+          }
+        ]
+      }
+    },
+    "turns2_3": {},
+    "turns_started": 1,
+    "refused": [],
+    "inits": [
+      {
+        "model": "claude-haiku-5-5",
+        "tools": [
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "NotebookEdit",
+          "PowerShell",
+          "Read",
+          "StructuredOutput",
+          "Write"
+        ],
+        "mcp_servers": []
+      }
+    ],
+    "claude_projects_added": [],
+    "claude_session_folders_added": [
+      "C--Users-<user>-AppData-Local-Temp-fri-hT8H9u-friday-worktrees-da35adf2-k8znsx2n"
+    ]
+  }
+]

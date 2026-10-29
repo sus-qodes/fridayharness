@@ -4,7 +4,7 @@ Friday is a local orchestration and context control plane for AI software develo
 
 The architecture is called **ContextOS** in the original specification.
 
-**Status:** M0–M7 built and tested locally, after three stabilizations from independent reviews (M2.5, M3.1 and M7.1, with its follow-up M7.1e; see [the dispositions](docs/reviews/)). The gates are pending: they need live runs with real hosts, CI on both operating systems, and the owner's acceptance of the decision records ([status table](docs/BUILD_PLAN.md#f1-status-table-updated-at-every-gate)). M8a, a second host, is under way: Codex works for Friday as a spawn-mode harness (`friday harness run codex`), checked live in six turns the owner approved, and Friday can start the installed Claude Code itself (`friday harness run claude-code`), tested against a scripted Claude Code; the recorded live demonstration waits for the owner.
+**Status:** M0–M7 built and tested locally, after three stabilizations from independent reviews (M2.5, M3.1 and M7.1, with its follow-up M7.1e; see [the dispositions](docs/reviews/)). The gates are pending: they need live runs with real hosts, CI on both operating systems, and the owner's acceptance of the decision records ([status table](docs/BUILD_PLAN.md#f1-status-table-updated-at-every-gate)). M8a, a second host, is under way: Codex works for Friday as a spawn-mode harness (`friday harness run codex`), checked live in six turns the owner approved, and Friday can start the installed Claude Code itself (`friday harness run claude-code`), tested against a scripted Claude Code and checked live in three turns the owner approved; the recorded live demonstration waits for the owner.
 - **M1** gives you the event spine, the daemon, the `friday` CLI, a read-only status page, and Claude Code attached through an MCP server, a skill and policy hooks. A task runs from creation through a Claude Code session to a verified completion, with Friday's policy enforced on the session's tools.
 - **M2** adds the Master Brain. A goal becomes a versioned plan that you approve; its tasks are delegated to agents, revised when verification fails, and escalated to you when only a human can decide.
 - **M2.5** closes the twelve findings of the 2026-10-14 review:
@@ -136,4 +136,4 @@ tests/       support and helpers, cross-package suites (integration, failure, ho
 docs/        plan, spec, decisions, security, integration notes, runbooks, reviews
 ```
 
-Messaging and memory live in `packages/state`, because each change commits with the event log. The Codex adapter arrived in M8a.2; Claude spawn mode follows in M8a.3, further adapters in M8b and the full UI in M9, as listed in the build plan.
+Messaging and memory live in `packages/state`, because each change commits with the event log. The Codex adapter arrived in M8a.2 and Claude spawn mode in M8a.3; further adapters follow in M8b and the full UI in M9, as listed in the build plan.

@@ -40,6 +40,8 @@ interface Script {
   model?: string;
   extraTools?: string[];
   mcpServers?: string[];
+  plugins?: string[];
+  skills?: string[];
   turns: Step[][];
   resume?: Step[];
 }
@@ -127,6 +129,7 @@ describe('Claude Code in spawn mode', () => {
           { op: 'bash', command: 'git push' },
           { op: 'bash', command: 'git commit -m wip' },
           { op: 'bash', command: 'git commit -m wip' },
+          { op: 'tool', name: 'TodoWrite', input: { todos: [] } },
           { op: 'final', status: 'completed', summary: 'wrote ok', changed_paths: ['src/ok.ts'] },
         ],
       ],
@@ -171,12 +174,14 @@ describe('Claude Code in spawn mode', () => {
     const decisions = c
       .entries()
       .filter((e) => e.hook === 'PreToolUse')
-      .map((e) => [
-        e.tool,
-        (e.input as { file_path?: string; command?: string }).command ??
-          path.basename(String((e.input as { file_path?: string }).file_path)),
-        e.decision,
-      ]);
+      .map((e) => {
+        const input = e.input as { file_path?: string; command?: string };
+        const what =
+          e.tool === 'StructuredOutput'
+            ? 'the final answer'
+            : (input.command ?? (input.file_path ? path.basename(input.file_path) : 'no target'));
+        return [e.tool, what, e.decision];
+      });
     expect(decisions).toEqual([
       ['Write', 'ok.ts', 'allow'],
       ['Write', 'no.md', 'deny'],
@@ -185,14 +190,21 @@ describe('Claude Code in spawn mode', () => {
       [expect.any(String), 'git push', 'deny'],
       [expect.any(String), 'git commit -m wip', 'deny'],
       [expect.any(String), 'git commit -m wip', 'deny'],
+      // A tool Friday does not judge is refused, should a session ever have one.
+      ['TodoWrite', 'no target', 'deny'],
+      // The final answer comes back through Claude Code's StructuredOutput tool, which Friday lets through.
+      ['StructuredOutput', 'the final answer', 'allow'],
     ]);
+    expect(String(c.entries().find((e) => e.tool === 'TodoWrite')?.reason)).toMatch(
+      /TodoWrite is not a tool Friday judges/,
+    );
     expect(existsSync(path.join(root, 'src', 'ok.ts'))).toBe(true);
     expect(existsSync(path.join(root, 'docs', 'no.md'))).toBe(false);
     // A commit is a human's decision: one pending approval, however often the session asks.
     const commitReason = String(
       c
         .entries()
-        .filter((e) => e.hook === 'PreToolUse')
+        .filter((e) => e.hook === 'PreToolUse' && (e.input as { command?: string }).command === 'git commit -m wip')
         .at(-1)?.reason,
     );
     expect(commitReason).toMatch(/A human decides this \(approval apr_/);
@@ -207,7 +219,14 @@ describe('Claude Code in spawn mode', () => {
     const settings = events.find(
       (e) => e.type === 'agent.event' && (e.payload as { event_type: string }).event_type === 'host.settings',
     )?.payload as { data?: Record<string, unknown> } | undefined;
-    expect(settings?.data).toMatchObject({ tools: [...SPAWN_TOOLS], mcp_servers: [], repository_config: 'ignored' });
+    expect(settings?.data).toMatchObject({
+      tools: [...SPAWN_TOOLS, 'StructuredOutput'],
+      mcp_servers: [],
+      // Claude Code's own plugins are recorded and accepted; they add no tool.
+      plugins: ['cc-plugin-agents-md', 'cc-plugin-telemetry', 'cc-plugin-plugin-authoring'],
+      skills: [],
+      repository_config: 'ignored',
+    });
     const observed = td.daemon.state.store
       .readByRef(pid, 'run', run?.run_id as string)
       .filter((e) => e.type === 'run.model_observed')
@@ -273,6 +292,8 @@ describe('Claude Code in spawn mode', () => {
     const widened = claude(td, 'cl-3', {
       extraTools: ['WebFetch'],
       mcpServers: ['someone'],
+      plugins: ['helper'],
+      skills: ['deploy'],
       turns: [
         [
           { op: 'write', path: 'src/x.ts', text: 'x' },
@@ -296,7 +317,7 @@ describe('Claude Code in spawn mode', () => {
       .readByRef(td.project.project_id, 'task', three)
       .find((e) => e.type === 'agent.event' && (e.payload as { event_type: string }).event_type === 'error');
     expect(String((error?.payload as { message?: string } | undefined)?.message)).toMatch(
-      /tools Friday did not give it \(WebFetch\) and MCP servers \(someone\)/,
+      /tools Friday did not give it \(WebFetch\), MCP servers \(someone\), plugins \(helper\) and skills \(deploy\), which Friday cannot judge/,
     );
   });
 

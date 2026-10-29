@@ -7,7 +7,7 @@
 //
 // Environment:
 //   FAKE_CLAUDE_SCRIPT  a JSON file: { model?, extraTools?: string[], mcpServers?: string[],
-//                       turns: Step[][], resume?: Step[] }
+//                       plugins?: string[], skills?: string[], turns: Step[][], resume?: Step[] }
 //   FAKE_CLAUDE_LOG     a JSON-lines file of what it was given and what it did
 //   FAKE_CLAUDE_WORK    a folder: <task>.work files grow while a long command runs;
 //                       session-<id>.json remembers each session, so --resume can find it
@@ -200,6 +200,9 @@ async function play(steps) {
         if (s.write) writeFileSync(at(s.write.path), s.write.text);
         return 'ok';
       });
+    } else if (s.op === 'tool') {
+      // Any other tool, as a session that has it would call it.
+      await tool(s.name, s.input ?? {}, () => 'ok');
     } else if (s.op === 'message') {
       send({ type: 'assistant', message: { role: 'assistant', model, content: [{ type: 'text', text: s.text }] }, parent_tool_use_id: null });
     } else if (s.op === 'waitMessage') {
@@ -214,6 +217,12 @@ async function play(steps) {
         changed_paths: s.changed_paths ?? [],
         blocked_reason: s.blocked_reason ?? '',
       };
+      // With `--json-schema` the final answer comes back through the StructuredOutput tool, judged
+      // by the hooks like any tool call (2.1.300, live check).
+      if (flags['--json-schema'] && !(await tool('StructuredOutput', structured, () => 'ok'))) {
+        send({ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 1, total_cost_usd: 0, usage: {}, result: 'the structured output was refused' });
+        return;
+      }
       log({ final: structured });
       send({ type: 'result', subtype: 'success', is_error: false, num_turns: 3, duration_ms: 10, total_cost_usd: 0.0012, usage: { input_tokens: 1200, output_tokens: 80 }, result: JSON.stringify(structured), structured_output: structured });
       return;
@@ -229,20 +238,35 @@ async function play(steps) {
 }
 
 // ---- the session ------------------------------------------------------------------------------
+// Claude Code runs SessionStart as the session starts, before any message, and says so on its
+// output stream (checked without a model call on 2.1.300).
+const source = flags['--resume'] ? 'resume' : 'startup';
+send({ type: 'system', subtype: 'hook_started', hook_name: `SessionStart:${source}`, hook_event: 'SessionStart' });
+await runHook('SessionStart', { source, model });
+send({ type: 'system', subtype: 'hook_response', hook_name: `SessionStart:${source}`, hook_event: 'SessionStart' });
 const first = await nextMessage();
 if (!first) process.exit(0);
 const text = textOf(first);
 const task = /task_[0-9a-z]{26}/i.exec(text)?.[0];
 if (task) session.task = task;
 const resumed = /Continue the task where you left off/.test(text);
-await runHook('SessionStart', { source: flags['--resume'] ? 'resume' : 'startup', model });
 send({
   type: 'system',
   subtype: 'init',
   cwd,
   model,
-  tools: [...tools, ...(script.extraTools ?? [])],
+  tools: [...tools, ...(flags['--json-schema'] ? ['StructuredOutput'] : []), ...(script.extraTools ?? [])],
   mcp_servers: (script.mcpServers ?? []).map((name) => ({ name, status: 'connected' })),
+  // Claude Code's built-in plugins load in a restricted session too (2.1.300).
+  plugins: [
+    ...['cc-plugin-agents-md', 'cc-plugin-telemetry', 'cc-plugin-plugin-authoring'].map((name) => ({
+      name,
+      path: 'builtin',
+      source: `${name}@builtin`,
+    })),
+    ...(script.plugins ?? []).map((name) => ({ name, path: `plugins/${name}`, source: `${name}@local` })),
+  ],
+  skills: script.skills ?? [],
   permissionMode: 'default',
   claude_code_version: '2.1.300',
   apiKeySource: 'none',

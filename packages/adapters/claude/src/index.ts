@@ -70,5 +70,6 @@ export {
   ClaudeSpawnAdapter,
   type ClaudeSpawnOptions,
   SPAWN_TOOLS,
+  STRUCTURED_OUTPUT,
 } from './spawn/adapter.js';
 export { claudeEnvironment } from './spawn/environment.js';

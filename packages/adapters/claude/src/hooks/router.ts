@@ -161,7 +161,25 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
         case 'PreToolUse': {
           const toolName = String(hook.tool_name ?? '');
           const action = actionFromTool(toolName, (hook.tool_input as Record<string, unknown>) ?? {});
-          if (!action) return c.json({ ok: true, hook_output: null });
+          if (!action) {
+            if (!spawned) return c.json({ ok: true, hook_output: null });
+            // A spawned session has only the tools Friday judges, and the one that hands back its
+            // final answer (`--json-schema`), which acts on nothing: anything else is refused.
+            const decision = toolName === 'StructuredOutput' ? 'allow' : 'deny';
+            return c.json({
+              ok: true,
+              hook_output: {
+                hookSpecificOutput: {
+                  hookEventName: 'PreToolUse',
+                  permissionDecision: decision,
+                  permissionDecisionReason:
+                    decision === 'allow'
+                      ? 'Friday: the final answer, which Friday verifies'
+                      : `Friday: ${toolName} is not a tool Friday judges, so a spawned session may not use it`,
+                },
+              },
+            });
+          }
           // The same judgment as every other host's tool calls (ADR-0032 §4).
           const { result, approval_id } = ctx.judgeTool({
             harness,
