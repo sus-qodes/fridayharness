@@ -8,7 +8,14 @@ import type { BrainStatusView } from '@friday/protocol';
 import type { PolicyView } from '../api/client.js';
 import { visible } from '../model/text.js';
 import { clearSession } from '../platform/session.js';
-import { type AppContext, type Component, type DrawerRequest, openDrawer } from '../shell/context.js';
+import {
+  type AppContext,
+  type Component,
+  type DesktopCommands,
+  type DesktopShortcut,
+  type DrawerRequest,
+  openDrawer,
+} from '../shell/context.js';
 import type { Prefs } from '../store/state.js';
 import { button, h, replace } from '../ui/dom.js';
 import { usd } from '../ui/format.js';
@@ -116,6 +123,63 @@ export function plannerSteps(
     });
   steps.push({ text: 'Restart Friday: it reads its configuration when it starts.' });
   return steps;
+}
+
+/** What each desktop shortcut does (the shell's ids, FD-16). */
+const SHORTCUT_LABELS: Record<string, string> = {
+  notch: 'Open the Notch and give it the keyboard',
+  studio: 'Show the Studio',
+  halt: 'Open the halt dialog',
+};
+
+/** The desktop app's section: its global shortcuts, each changeable, and a restart of Friday. */
+function desktopSection(ctx: AppContext, desktop: DesktopCommands, td: Teardown): HTMLElement {
+  const list = h('div', { class: 'pn-shortcuts' }, note('Reading the shortcuts…'));
+  const render = (items: DesktopShortcut[]) => {
+    if (td.done) return;
+    replace(
+      list,
+      items.map((s) => {
+        const accel = input({ value: s.accel, aria: { label: `Keys for: ${SHORTCUT_LABELS[s.id] ?? s.id}` } });
+        const save = button('Set', () => void set(s.id, accel.value.trim()), { class: 'btn' });
+        return h(
+          'div',
+          { class: 'pn-shortcut' },
+          h('div', { class: 'field-label' }, SHORTCUT_LABELS[s.id] ?? plain(s.id, 40)),
+          h('div', { class: 'row' }, accel, save),
+          s.state === 'registered'
+            ? null
+            : note(`Not active: ${plain(s.state.replace(/_/g, ' '), 40)}${s.note ? `. ${plain(s.note, 200)}` : ''}`),
+        );
+      }),
+    );
+  };
+  async function set(id: string, accel: string) {
+    if (!accel) return;
+    const r = await ctx.act('Change the shortcut', () => desktop.setShortcut(id, accel), 'Shortcut changed');
+    if (r) render(r);
+  }
+  desktop
+    .shortcuts()
+    .then(render)
+    .catch(() => {
+      if (!td.done) replace(list, note('The desktop app did not say which shortcuts it has.'));
+    });
+  const restartBtn = button([icon('rework', 14), 'Restart Friday'], () => void restart(), { class: 'btn' });
+  async function restart() {
+    restartBtn.disabled = true;
+    // The shell asks natively first; the page reads the board again once Friday is back.
+    await ctx.act('Restart Friday', () => desktop.restart(), 'Friday is restarting');
+    if (!td.done) restartBtn.disabled = false;
+  }
+  return h(
+    'section',
+    { class: 'pn-section' },
+    h('h3', { class: 'section-title' }, 'Desktop app'),
+    note('Shortcuts work anywhere in Windows while the app runs, for example Ctrl+Alt+Shift+F.'),
+    list,
+    h('div', { class: 'pn-actions pn-actions-start' }, restartBtn),
+  );
 }
 
 export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Component & { title: string } {
@@ -464,6 +528,9 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
   }
   const friday = h('section', { class: 'pn-section' }, h('h3', { class: 'section-title' }, 'Friday'), stopBtn);
 
+  // ---- the desktop app: its global shortcuts and a restart (plan §8.6)
+  const desktop = ctx.platform.desktop ? desktopSection(ctx, ctx.platform.desktop, td) : null;
+
   // ---- about
   const aboutBox = h('dl', { class: 'pn-kv' });
   function renderAbout() {
@@ -493,7 +560,19 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
     linkButton('Open routing pins', () => openDrawer(ctx, { kind: 'agents', tab: 'pins' })),
   );
 
-  const el = panel('pn-settings', sound, notifications, look, planner, routing, policy, session, friday, about);
+  const el = panel(
+    'pn-settings',
+    sound,
+    notifications,
+    look,
+    planner,
+    routing,
+    policy,
+    session,
+    friday,
+    desktop,
+    about,
+  );
 
   renderPlanner();
   renderAbout();

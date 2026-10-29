@@ -1,0 +1,61 @@
+[package]
+name = "friday-desktop"
+version = "0.1.0"
+description = "Friday's desktop shell: the Notch over your editor and the Studio window, hosting the apps/ui bundle"
+edition = "2021"
+rust-version = "1.90"
+publish = false
+
+[lib]
+name = "friday_desktop_lib"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "friday-desktop"
+path = "src/main.rs"
+
+[features]
+# A verification harness (README "Verifying the shell"): runs a script in both windows that checks
+# the IPC under the CSP and Trusted Types, then writes the result to a file and quits. Never part
+# of a normal build.
+probe = []
+
+[build-dependencies]
+tauri-build = { version = "2.7.3", features = ["config-toml"] }
+# Already in the tree through tauri-build; links the application manifest into test binaries.
+embed-resource = "3.0.12"
+
+[dependencies]
+# custom-protocol: the bundled pages are served from the app itself in every build (there is no
+# dev server); `cargo build` without the Tauri CLI needs it named here.
+tauri = { version = "2.12.4", features = ["config-toml", "tray-icon", "custom-protocol"] }
+tauri-plugin-dialog = "2.8.3"
+tauri-plugin-global-shortcut = "2.4.1"
+tauri-plugin-notification = "2.7.0"
+tauri-plugin-single-instance = "2.5.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2.5.8"
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_Networking_WinSock",
+  "Win32_Security",
+  "Win32_Security_Credentials",
+  "Win32_System_StationsAndDesktops",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

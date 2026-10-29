@@ -1160,9 +1160,16 @@ export class MasterBrain {
         .map((e) => String(e.task_id)),
     );
     const routingReady = this.#deps.routingReady ?? (() => true);
+    // Plan tasks of active goals, and loose tasks a human reserved for an agent: a spawned agent
+    // cannot claim a reservation, so it is pushed (below); other loose tasks stay a human's.
     const ready = state.q
       .tasks(projectId, { statuses: ['READY'] })
-      .filter((t) => t.goal_id && active.has(t.goal_id) && !asked.has(t.task_id) && routingReady(t))
+      .filter(
+        (t) =>
+          ((t.goal_id && active.has(t.goal_id)) || (!t.goal_id && t.reserved_for_agent_key)) &&
+          !asked.has(t.task_id) &&
+          routingReady(t),
+      )
       .sort(
         (a, b) => (PRIORITY[a.priority] ?? 9) - (PRIORITY[b.priority] ?? 9) || a.created_at.localeCompare(b.created_at),
       );

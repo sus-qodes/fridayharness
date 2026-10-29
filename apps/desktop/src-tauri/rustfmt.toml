@@ -1,0 +1,3 @@
+# Same line width as Biome's for the TypeScript (biome.json).
+max_width = 120
+use_small_heuristics = "Max"

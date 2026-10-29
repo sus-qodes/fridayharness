@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-show-studio"
+description = "Enables the show_studio command without any pre-configured scope."
+commands.allow = ["show_studio"]
+
+[[permission]]
+identifier = "deny-show-studio"
+description = "Denies the show_studio command without any pre-configured scope."
+commands.deny = ["show_studio"]

@@ -1,0 +1,25 @@
+# Friday's desktop shell. TOML, not tauri.conf.json: the repository's portability check rejects
+# the word for the loopback host name in scanned .json files, and the CSP below must name Tauri's
+# IPC host (LESSONS UI-16, UI-28). The windows are created in src/lib.rs (both need the same
+# WebView2 arguments), so none is declared here.
+
+productName = "Friday"
+version = "0.1.0"
+identifier = "dev.friday.desktop"
+
+[build]
+# The built apps/ui bundle (run its build first). There is no dev server: `cargo run` serves the
+# bundle too.
+frontendDist = "../../ui/dist"
+
+[app]
+withGlobalTauri = false
+
+[app.security]
+csp = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'"
+capabilities = ["default"]
+
+[bundle]
+# `cargo build --release` (or `tauri build --no-bundle`): no installer; the MSI needs WiX.
+active = false
+icon = ["icons/icon.ico", "icons/icon.png"]

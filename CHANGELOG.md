@@ -2,7 +2,7 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
-## Unreleased — M9, the user interface (the desktop shell still to come)
+## Unreleased — M9, the user interface
 
 Friday can be used from a browser for daily work: `friday ui` (or `friday ui --start` and `friday shortcut`, which start Friday when it is not running) opens the Studio signed in ([the plan](docs/frontend/PLAN.md)).
 
@@ -11,6 +11,8 @@ Friday can be used from a browser for daily work: `friday ui` (or `friday ui --s
 - **Sign-in:** a one-time link opened through a file in the private folder, so the code is on no command line; a session per tab, at most 12 hours; a page served under a path new at every start, never cached, so nothing an earlier program left on the address runs in it.
 - **Daemon:** pause, resume and halt by effect; spawned agents continue in their run after a human decides; Friday's own questions act by kind and close when their cause is resolved; verification runs Friday's own checks when a project has none.
 - **Tests:** `tests/ui-e2e` drives the real page in the installed Edge or Chrome against a real Friday (`FRIDAY_TEST_UI_E2E=1`), including a day in the life from `friday init` to a verified, integrated goal across a restart. What those runs found is fixed and recorded ([lessons](docs/frontend/LESSONS.md) UI-43 to UI-52).
+- **The desktop app (Windows, `apps/desktop`):** a Tauri 2 shell that floats the Notch over the editor, keeps the Studio in its own window and a tray icon, starts Friday when it is not running, and forwards only an allowlist of routes from its pages, which hold no credential. Built per user with Rust's GNU toolchain ([steps](apps/desktop/README.md)).
+- **Fix:** a loose task a human reserved for a spawned agent (`friday task create --assign <agent> --ready`) was never started; Friday now starts it when that agent is free (LESSONS D-51).
 
 ## Unreleased — the recorded live MVP demonstration
 

@@ -45,6 +45,25 @@ export interface Platform {
   openInEditor(path: string, line?: number): void;
   /** Copies text to the clipboard; resolves false when the page may not. */
   copy(text: string): Promise<boolean>;
+  /** What only the desktop shell can do (plan §8.6); absent in a browser tab. */
+  readonly desktop?: DesktopCommands;
+}
+
+/** A global shortcut of the desktop shell, as it registered it. */
+export interface DesktopShortcut {
+  id: string;
+  accel: string;
+  /** `registered`, or why not (`taken`, `skipped`, …). */
+  state: string;
+  note?: string;
+}
+
+export interface DesktopCommands {
+  shortcuts(): Promise<DesktopShortcut[]>;
+  /** Registers `accel` for the shortcut; answers the new list. */
+  setShortcut(id: string, accel: string): Promise<DesktopShortcut[]>;
+  /** Stops Friday and starts it again (the shell asks natively first). */
+  restart(): Promise<void>;
 }
 
 /** The daemon routes a page needs to decide things, and the shell's helpers. */

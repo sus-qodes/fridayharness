@@ -10,6 +10,9 @@
     "test": "vitest run",
     "dev": "vite"
   },
+  "dependencies": {
+    "@tauri-apps/api": "~2.12.4"
+  },
   "devDependencies": {
     "@friday/protocol": "workspace:*",
     "@friday/sdk": "workspace:*",

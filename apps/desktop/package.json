@@ -1,0 +1,12 @@
+{
+  "name": "@friday/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Friday's desktop shell (Tauri 2, Windows): the Notch over your editor and the Studio window. Built with cargo, outside turbo build; see README.md.",
+  "type": "module",
+  "scripts": {
+    "desktop:build": "cargo build --release --manifest-path src-tauri/Cargo.toml",
+    "desktop:test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "desktop:icons": "node scripts/make-icons.mjs"
+  }
+}

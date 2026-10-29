@@ -1,0 +1,30 @@
+{
+  "identifier": "default",
+  "description": "The Notch and Studio windows: read-only core APIs, events, and the app's own commands. No plugin permission: Rust calls the dialog, notification and shortcut plugins itself.",
+  "windows": ["notch", "studio"],
+  "permissions": [
+    "core:app:default",
+    "core:event:default",
+    "core:webview:default",
+    "core:window:default",
+    "allow-friday-request",
+    "allow-confirm-and-send",
+    "allow-stream-open",
+    "allow-stream-close",
+    "allow-project-info",
+    "allow-daemon-status",
+    "allow-stop-daemon",
+    "allow-restart-daemon",
+    "allow-notch-rect",
+    "allow-notch-keyboard",
+    "allow-show-studio",
+    "allow-set-tray-state",
+    "allow-notify",
+    "allow-get-shortcuts",
+    "allow-set-shortcut",
+    "allow-open-in-editor",
+    "allow-open-in-browser",
+    "allow-store-key",
+    "allow-allow-spending"
+  ]
+}

@@ -41,7 +41,7 @@ describe('isTestPath', () => {
     ['tests/a.ts', true],
     ['pkg/__tests__/x.js', true],
     ['src/testing.ts', false],
-    ['src/contest/a.ts', false],
+    ['src/latest/a.ts', false],
   ])('%s → %s', (p, v) => expect(isTestPath(p)).toBe(v));
 });
 

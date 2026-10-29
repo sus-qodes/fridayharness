@@ -118,6 +118,44 @@ describe('settings drawer', () => {
     d.destroy();
   });
 
+  it('offers the desktop app its shortcuts and a restart, and nothing of them in a browser', async () => {
+    expect(settingsDrawer(makeContext(), { kind: 'settings' }).el.textContent).not.toContain('Desktop app');
+    const ctx = makeContext();
+    const setShortcut = vi.fn(async (id: string, accel: string) => [
+      { id, accel, state: 'registered' },
+      { id: 'notch', accel: 'Ctrl+Alt+Shift+N', state: 'skipped', note: 'the keyboard layout types a letter' },
+    ]);
+    const restart = vi.fn(async () => undefined);
+    (ctx as { platform: unknown }).platform = {
+      kind: 'tauri',
+      openInEditor: () => undefined,
+      copy: async () => true,
+      desktop: {
+        shortcuts: async () => [
+          { id: 'studio', accel: 'Ctrl+Alt+Shift+F', state: 'registered' },
+          { id: 'notch', accel: 'Ctrl+Alt+Shift+N', state: 'in_use' },
+        ],
+        setShortcut,
+        restart,
+      },
+    };
+    const d = settingsDrawer(ctx, { kind: 'settings' });
+    await flush();
+    expect(d.el.textContent).toContain('Show the Studio');
+    expect(d.el.textContent).toContain('Not active: in use');
+    const keys = d.el.querySelector('input[aria-label="Keys for: Show the Studio"]') as HTMLInputElement;
+    type(keys, 'Ctrl+Alt+Shift+B');
+    const set = [...d.el.querySelectorAll('button')].find((b) => b.textContent === 'Set');
+    set?.click();
+    await flush();
+    expect(setShortcut).toHaveBeenCalledWith('studio', 'Ctrl+Alt+Shift+B');
+    expect(d.el.textContent).toContain('Not active: skipped. the keyboard layout types a letter');
+    buttonBy(d.el, 'Restart Friday').click();
+    await flush();
+    expect(restart).toHaveBeenCalledOnce();
+    d.destroy();
+  });
+
   it('asks the browser for notification permission and says when it was refused', async () => {
     const requestPermission = vi.fn(async () => 'denied');
     vi.stubGlobal('Notification', { requestPermission });

@@ -461,6 +461,24 @@ describe('reservations end (review F08)', () => {
     expect(state.tick(PROJECT).unreserved).toContain(billing?.task_id);
   });
 
+  it('pushes a loose task a human reserved for a free spawned agent, and leaves other loose tasks alone', async () => {
+    const b = brain(new FakePlannerModel([]));
+    const sp = register('sp-1', 'developer', 'spawn');
+    register('dev-1', 'developer', 'attach');
+    const forSpawned = state.createTask(PROJECT, human, { summary: 'write the page', assign_agent_key: 'sp-1' });
+    const forAttached = state.createTask(PROJECT, human, { summary: 'fix the form', assign_agent_key: 'dev-1' });
+    const unreserved = state.createTask(PROJECT, human, { summary: 'tidy the docs', ready: true });
+    await b.runOnce();
+    expect(state.q.task(PROJECT, forSpawned.task_id).status).toBe('ASSIGNED');
+    expect(state.pollOutbox(PROJECT, sp.harness_id, 10).map((m) => m.method)).toEqual(['task.start']);
+    // An attached session claims its reservation itself; an unreserved loose task waits for a human.
+    expect(state.q.task(PROJECT, forAttached.task_id)).toMatchObject({
+      status: 'READY',
+      reserved_for_agent_key: 'dev-1',
+    });
+    expect(state.q.task(PROJECT, unreserved.task_id)).toMatchObject({ status: 'READY', reserved_for_agent_key: null });
+  });
+
   it("keeps a human's reservation, and lets a human release it", () => {
     const task = state.createTask(PROJECT, human, { summary: 'manual task', assign_agent_key: 'ghost' });
     expect(task).toMatchObject({ status: 'READY', reserved_for_agent_key: 'ghost', reserved_by: 'human' });

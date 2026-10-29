@@ -276,7 +276,13 @@ importers:
         specifier: workspace:*
         version: link:../../tests/support
 
+  apps/desktop: {}
+
   apps/ui:
+    dependencies:
+      '@tauri-apps/api':
+        specifier: ~2.12.4
+        version: 2.12.4
     devDependencies:
       '@friday/protocol':
         specifier: workspace:*
@@ -1066,6 +1072,9 @@ packages:
 
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
+
+  '@tauri-apps/api@2.12.4':
+    resolution: {integrity: sha512-pVmfis+4zT8H0Qhp3xPZx9Ju7kpzvA6rr/PSJPyuwfvucTQ8sVt61NYU9KMkK703UFlYadFmjKA4HhybOtN0gg==}
 
   '@turbo/darwin-64@2.11.7':
     resolution: {integrity: sha512-Z2LFOxwbiJueD1miByXJS/BrW21vv6YaQXZustty5jEX4vQYw6zyh101Sz1QO7WG0mqBzKagZ/DoAeeujI0/Sw==}
@@ -2072,6 +2081,8 @@ snapshots:
   '@rolldown/pluginutils@1.0.1': {}
 
   '@stablelib/base64@1.0.1': {}
+
+  '@tauri-apps/api@2.12.4': {}
 
   '@turbo/darwin-64@2.11.7':
     optional: true

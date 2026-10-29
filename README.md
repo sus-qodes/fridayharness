@@ -96,6 +96,8 @@ This creates `.friday/config.yaml` and `.friday/.gitignore` (commit both) and a 
 
 A sign-in link works once, for a minute; a browser session lasts until Friday stops or restarts, at most 12 hours. `friday ui` opens it again from a terminal. See [docs/frontend/README.md](docs/frontend/README.md).
 
+**The desktop app (Windows)** floats the Notch over your editor and keeps the Studio in its own window, with a tray icon; it starts Friday for the project when it is not running, and holds no credential in its pages. It is built with Rust's per-user toolchain (no administrator rights; the steps are in [apps/desktop/README.md](apps/desktop/README.md)), then started with `apps\desktop\src-tauri\target\release\friday-desktop.exe --project <the project's folder>`.
+
 ## Try it (Windows, PowerShell)
 
 ```powershell
