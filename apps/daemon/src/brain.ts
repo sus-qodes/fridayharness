@@ -103,6 +103,8 @@ export function createMasterBrain(input: {
   env: NodeJS.ProcessEnv;
   logger: Logger;
   model?: PlannerModel | null;
+  /** The effective policy: whether plans are approved without a human comes from it (ADR-0028). */
+  policy?: () => { auto_approve: boolean };
 }): BrainHandle {
   const { state, project, env, logger } = input;
   const cfg = project.config.master_brain;
@@ -159,13 +161,16 @@ export function createMasterBrain(input: {
   const settings = {
     model: modelId,
     maxTokens: cfg.max_tokens,
-    autoApprove: cfg.auto_approve,
+    autoApprove: input.policy ? input.policy().auto_approve : cfg.auto_approve,
     escalateAfterFailures: cfg.escalate_after_failures,
     maxReplans: cfg.max_replans,
     allowRemote: provider.allow_remote,
     dailyBudgetUsd: provider.daily_budget_usd,
     ...(provider.prices ? { prices: provider.prices } : {}),
   };
+  // Read on every pass, so a trusted (or no longer trusted) policy applies without a restart.
+  if (input.policy)
+    Object.defineProperty(settings, 'autoApprove', { get: () => input.policy?.().auto_approve ?? false });
   const brain = new MasterBrain({
     state,
     projectId: project.project_id,

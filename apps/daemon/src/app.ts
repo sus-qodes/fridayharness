@@ -37,6 +37,7 @@ import type { CompileInput, ContextService } from './context.js';
 import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
 import type { IntegrationManager } from './integration.js';
 import type { Logger } from './log.js';
+import type { EffectivePolicy } from './policy.js';
 import type { RecoveryManager } from './recovery.js';
 import { type AuthInfo, callerFor, dispatchRpc } from './rpc.js';
 import { statusPageHtml } from './ui.js';
@@ -73,6 +74,11 @@ export interface AppDeps {
   recovery?: RecoveryManager;
   /** The per-user state folder, for Friday's protected paths. */
   stateDir?: string;
+  /** The project's effective policy and its reload (ADR-0028). */
+  policy?: () => EffectivePolicy;
+  reloadPolicy?: () => EffectivePolicy;
+  /** Records this clone's trust in exactly the loosening with this hash, then reloads. */
+  trustPolicy?: (looseningHash: string) => EffectivePolicy;
 }
 
 type Env = { Variables: { auth: AuthInfo; requestId: string } };
@@ -621,6 +627,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
           signal: ctrl.signal,
           ...(deps.pollIntervalMs ? { pollIntervalMs: deps.pollIntervalMs } : {}),
           ...(deps.stateDir ? { stateDir: deps.stateDir } : {}),
+          ...(deps.policy ? { policy: deps.policy } : {}),
         },
         c.get('auth'),
         body,
@@ -760,6 +767,29 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.post(`${P}/tasks/:tid/worktree`, allow(...OPERATOR), async (c) =>
     c.json(await workspaces().forTask(c.req.param('tid'), HUMAN), 201),
   );
+
+  // The project's policy and this clone's trust (M6b, ADR-0028).
+  const effective = (): EffectivePolicy => {
+    if (!deps.policy) throw new FridayError('capability_unsupported', 'this daemon has no project policy');
+    return deps.policy();
+  };
+  app.get(`${P}/policy`, allow(...OPERATOR), (c) => c.json({ policy: effective() }));
+  app.post(`${P}/policy/reload`, allow(...OPERATOR), (c) => c.json({ policy: deps.reloadPolicy?.() ?? effective() }));
+  app.post(`${P}/policy/trust`, allow(...OPERATOR), async (c) => {
+    const body = z.object({ loosening_hash: z.string().min(1).max(64) }).parse(await c.req.json());
+    const now = deps.reloadPolicy?.() ?? effective();
+    // Trust is for exactly what the human was shown: refused when the files changed since.
+    if (now.loosening_hash !== body.loosening_hash) {
+      throw new FridayError(
+        'invalid_request',
+        now.loosening_hash
+          ? `the policy files changed since you looked: run "friday policy show" again (now ${now.loosening_hash})`
+          : "nothing in the policy files loosens Friday's defaults; there is nothing to trust",
+      );
+    }
+    if (!deps.trustPolicy) throw new FridayError('capability_unsupported', 'this daemon cannot record trust');
+    return c.json({ policy: deps.trustPolicy(body.loosening_hash) });
+  });
 
   // Recovery of lost and failed attempts (M5d, ADR-0026).
   const recovery = (): RecoveryManager => {

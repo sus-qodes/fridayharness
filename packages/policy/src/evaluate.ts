@@ -23,6 +23,8 @@ export interface PolicyTask {
   scope: TaskScope | null;
   /** Review and research tasks without a write scope are read-only (ADR-0013). */
   kind?: string;
+  /** The team scopes of the agent's role (ADR-0028): a write must fall inside each. */
+  teams?: readonly { source: string; write: readonly string[] }[];
 }
 
 export interface OtherWriter {
@@ -50,6 +52,8 @@ export interface PolicyInput {
    * other tasks hold.
    */
   reservations?: { required: readonly string[]; held: readonly { pattern: string; task_id: string }[] };
+  /** The project's deny rules (ADR-0028): paths no task writes or reads without a human approving that path. */
+  deny?: { write: readonly string[]; read: readonly string[] };
 }
 
 export type Decision = 'allow' | 'deny' | 'ask';
@@ -132,8 +136,23 @@ export function evaluate(input: PolicyInput): PolicyResult {
   const sensitive = evaluateSensitive(action, ctx);
   if (sensitive) return sensitive;
 
-  if (action.kind === 'read' || action.kind === 'search')
+  if (action.kind === 'read' || action.kind === 'search') {
+    // Paths the project keeps from agents (ADR-0028), unless a human approved that exact path.
+    for (const p of input.deny?.read.length ? (action.paths ?? []) : []) {
+      const rel = canonicalize(p, ctx).relative;
+      if (rel === null || !matchesAny(rel, input.deny?.read ?? [], ctx.windows)) continue;
+      if (input.approved?.('file.read', rel)) {
+        return r('allow', 'read.approved', `a human approved reading ${rel}.`, {
+          targets: [rel],
+          relied_on: [{ capability: 'file.read', target: rel }],
+        });
+      }
+      return r('deny', 'read.denied_by_policy', `the project's policy keeps ${rel} from agents. ${HOW_TO_ASK}`, {
+        targets: [rel],
+      });
+    }
     return r('allow', 'read.default', 'reading is not restricted by task scope in M1.');
+  }
 
   if (action.kind === 'network') {
     const target = action.url ?? action.tool;
@@ -266,6 +285,30 @@ export function evaluate(input: PolicyInput): PolicyResult {
         `${rel} is outside the scope of ${task.task_id} (${scope.join(', ')}). ${HOW_TO_ASK}`,
         { targets },
       );
+    }
+    // The project's deny rules and the team scopes of the agent's role only tighten (ADR-0028).
+    const denied = input.deny?.write.length ? matchesAny(rel, input.deny.write, windows) : false;
+    const team = (task.teams ?? []).find((t) => t.write.length > 0 && !matchesAny(rel, t.write, windows));
+    if (denied || team) {
+      if (input.approved?.('file.write', rel)) {
+        if (!relied.some((x) => x.target === rel)) relied.push({ capability: 'file.write', target: rel });
+      } else {
+        return denied
+          ? r(
+              'deny',
+              'write.denied_by_policy',
+              `the project's policy keeps agents from changing ${rel}. ${HOW_TO_ASK}`,
+              {
+                targets,
+              },
+            )
+          : r(
+              'deny',
+              'write.outside_team_scope',
+              `${rel} is outside your team's scope (${team?.write.join(', ')}, from ${team?.source}). ${HOW_TO_ASK}`,
+              { targets },
+            );
+      }
     }
     const holder = input.reservations?.held.find((h) => matchesAny(rel, [h.pattern], windows));
     if (holder) {

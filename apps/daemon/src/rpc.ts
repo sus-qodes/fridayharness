@@ -5,6 +5,7 @@ import {
   type CommandClass,
   capabilityOf,
   evaluateCapability,
+  type ProjectPolicy,
   type Risk,
 } from '@friday/policy';
 import {
@@ -39,6 +40,8 @@ export interface RpcDeps {
   pollIntervalMs?: number;
   /** The per-user state folder, for Friday's protected paths. */
   stateDir?: string;
+  /** The project's effective policy (ADR-0028). */
+  policy?: () => ProjectPolicy;
 }
 
 function issuesOf(err: { issues: { path: PropertyKey[]; message: string }[] }) {
@@ -267,20 +270,30 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
           ? state.q.findRun(task.current_run_id)
           : undefined;
       const capability = capabilityOf(p.action_class);
-      const version = policyVersion(project.config);
+      const effective = deps.policy?.();
+      const version = effective?.version ?? policyVersion(project.config);
       const verdict = capability
         ? (() => {
             const v = evaluateCapability({
               capability,
               target: p.resource ?? p.command ?? null,
-              task: task ? { task_id: task.task_id, status: task.status, scope: task.scope, kind: task.kind } : null,
+              task: task
+                ? {
+                    task_id: task.task_id,
+                    status: task.status,
+                    scope: task.scope,
+                    kind: task.kind,
+                    teams: effective?.teams[state.q.findAgent(c.agent_id)?.role ?? ''] ?? [],
+                  }
+                : null,
               ctx: {
                 projectRoot: run?.execution_root ?? state.q.findHarness(c.harness_id)?.host_cwd ?? project.root,
                 mainRoot: project.root,
                 ...(deps.stateDir ? { stateDir: deps.stateDir } : {}),
               },
-              autonomy: project.config.autonomy as Partial<Record<CommandClass, Autonomy>>,
-              risk: project.config.risk as Partial<Record<Capability, Risk>>,
+              autonomy: effective?.autonomy ?? (project.config.autonomy as Partial<Record<CommandClass, Autonomy>>),
+              risk: effective?.risk ?? (project.config.risk as Partial<Record<Capability, Risk>>),
+              ...(effective ? { deny: effective.deny } : {}),
             });
             return { capability, decision: v.decision, risk: v.risk, reason: v.reason, policy_version: version };
           })()

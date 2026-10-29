@@ -187,6 +187,7 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           if (!action) return c.json({ ok: true, hook_output: null });
           const task = heldTask(agent?.agent_id);
           const root = executionRoot(harness, task);
+          const effective = ctx.policy?.();
           /** The approval that covers this session's use of a capability on a target (ADR-0027 §4). */
           const approvalFor = (capability: string, target: string) =>
             state.q.usableApproval(pid, {
@@ -195,12 +196,14 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
               task_id: task?.task_id ?? null,
               run_id: task?.current_run_id ?? null,
               agent_id: agent?.agent_id ?? null,
-              policy_version: policyVersion(project.config),
+              policy_version: ctx.policy?.().version ?? policyVersion(project.config),
               now: state.clock.now(),
             });
           // Conflict-prone files (ADR-0025): what other tasks hold, and what a first write takes.
           const reservations =
-            action.kind === 'write' && task && project.config.reservations.mode !== 'off'
+            action.kind === 'write' &&
+            task &&
+            (ctx.policy?.().reservations_mode ?? project.config.reservations.mode) !== 'off'
               ? {
                   required: project.config.reservations.required,
                   held: state.q
@@ -212,10 +215,20 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           let result: PolicyResult = evaluate({
             action,
             ctx: { projectRoot: root, mainRoot: project.root, stateDir: path.dirname(path.dirname(ctx.privateDir)) },
-            task: task ? { task_id: task.task_id, status: task.status, scope: task.scope, kind: task.kind } : null,
+            task: task
+              ? {
+                  task_id: task.task_id,
+                  status: task.status,
+                  scope: task.scope,
+                  kind: task.kind,
+                  // The team scopes of the agent's role only tighten (ADR-0028).
+                  teams: (agent?.role ? effective?.teams[agent.role] : undefined) ?? [],
+                }
+              : null,
             otherWriters: action.kind === 'write' ? otherWriters(agent?.agent_id, root) : [],
             approved: (capability, target) => Boolean(approvalFor(capability, target)),
-            autonomy: project.config.autonomy as Partial<Record<CommandClass, Autonomy>>,
+            autonomy: effective?.autonomy ?? (project.config.autonomy as Partial<Record<CommandClass, Autonomy>>),
+            ...(effective ? { deny: effective.deny } : {}),
             ...(reservations ? { reservations } : {}),
           });
           // A task worktree belongs to its task: a session that does not hold it (a stale attempt

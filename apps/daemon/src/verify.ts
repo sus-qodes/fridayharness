@@ -134,7 +134,7 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       });
     }
     // Conflict-prone files (ADR-0025): a change to what another task holds fails; free ones are taken.
-    if (since && project.config.reservations.mode !== 'off') {
+    if (since && ctx.policy().reservations_mode !== 'off') {
       const active = state.q.fileReservations(pid, ['active']);
       const res = checkReservations({
         changed: [...new Set(changes.flatMap((c) => (c.origPath ? [c.path, c.origPath] : [c.path])))],

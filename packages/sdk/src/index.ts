@@ -45,6 +45,14 @@ export {
   writePrivateFile,
 } from './discovery.js';
 export {
+  POLICY_DIR,
+  PolicyFile,
+  type PolicySourceData,
+  readPolicySources,
+  readPolicyTrust,
+  writePolicyTrust,
+} from './policy-files.js';
+export {
   approveProvider,
   type ProviderApproval,
   providerApproval,

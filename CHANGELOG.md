@@ -10,6 +10,13 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - **An approval is bound** to the task, the agent's attempt, the exact target and the policy in force. By default it covers **one** use; approve with `--for run` or `--for task` to let it reach further, and `--ttl` to set how long it lasts. A changed policy retires older approvals. Every use is recorded, and `friday approvals revoke <id>` stops later ones.
   - `friday approvals` shows the risk, the task, the reach and the uses. The status page can approve once or reject.
   - Decision: ADR-0027.
+- **M6b, the project's own policy, behind a trust boundary:**
+  - **Fix:** settings in the tracked `config.yaml` that widen what agents may do (such as `autonomy: { git.push: auto }`, a lower `security.enforcement_required`, `reservations.mode: off`, `master_brain.auto_approve`) were applied as written. A cloned repository could loosen Friday's rules on your machine.
+  - Now anything tracked files **loosen waits for your trust** on this clone: `friday policy trust` shows exactly what, `--yes` applies it, and a later change needs trust again. Anything they **restrict applies at once**.
+  - **Policy files** in `.friday/policies/*.yaml`: autonomy, risk tiers, **deny rules** (paths no agent changes or reads without a human approving that path) and **team scopes** (the only paths agents of a role may change). See [docs/policy.md](docs/policy.md).
+  - `friday policy show`, `friday policy trust`, `friday policy validate`. A file that does not parse applies nothing and is reported.
+  - Approvals granted under a policy stop counting when it changes.
+  - Decision: ADR-0028.
 
 ## Unreleased — M5 verification, recovery, worktrees
 

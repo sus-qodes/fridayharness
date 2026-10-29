@@ -47,6 +47,29 @@ describe('capabilities', () => {
     expect(judge('task.reassign', 'task_b')).toEqual(['review', 'high']);
   });
 
+  it("applies the project's deny rules and the team scopes, as the hooks do", () => {
+    const teamTask = { ...task, teams: [{ source: 'policies/teams.yaml', write: ['frontend/src/**'] }] };
+    const deny = { write: ['frontend/legacy/**'], read: ['shared/secret/**'] };
+    expect(
+      evaluateCapability({ capability: 'file.write', target: 'frontend/src/a.ts', task: teamTask, ctx, deny }).decision,
+    ).toBe('allow');
+    expect(
+      evaluateCapability({ capability: 'file.write', target: 'frontend/test/a.ts', task: teamTask, ctx, deny }),
+    ).toMatchObject({
+      decision: 'review',
+      rule: 'capability.outside_team_scope',
+    });
+    expect(
+      evaluateCapability({ capability: 'file.write', target: 'frontend/legacy/a.ts', task, ctx, deny }),
+    ).toMatchObject({
+      decision: 'review',
+      rule: 'capability.denied_by_policy',
+    });
+    expect(evaluateCapability({ capability: 'file.read', target: 'shared/secret/k.ts', task, ctx, deny }).rule).toBe(
+      'capability.denied_by_policy',
+    );
+  });
+
   it('never approves a raw secret, and lets a project change autonomy and risk', () => {
     const secret = evaluateCapability({ capability: 'secret.resolve', target: 'STRIPE_KEY', task, ctx });
     expect(secret.decision).toBe('deny');

@@ -97,6 +97,8 @@ export interface CapabilityRequest {
   ctx: PathContext;
   autonomy?: Partial<Record<CommandClass, Autonomy>>;
   risk?: Partial<Record<Capability, Risk>>;
+  /** The project's deny rules (ADR-0028); the task's team scopes come with the task. */
+  deny?: { write: readonly string[]; read: readonly string[] };
 }
 
 export interface CapabilityDecision {
@@ -142,6 +144,21 @@ export function evaluateCapability(req: CapabilityRequest): CapabilityDecision {
       if (hit) return d('deny', `sensitive.${hit.class}`, `${hit.path} is protected by Friday (${hit.class})`);
       const rel = canonicalize(req.target, req.ctx).relative;
       if (rel === null) return d('deny', 'capability.outside_project', `${req.target} is outside the project`);
+      // The project's own tightening (ADR-0028) holds here as in the hooks: a human decides.
+      const denied = op === 'read' ? (req.deny?.read ?? []) : (req.deny?.write ?? []);
+      if (denied.length && matchesAny(rel, denied, req.ctx.windows)) {
+        return d(
+          'review',
+          'capability.denied_by_policy',
+          `the project's policy keeps agents from ${op === 'read' ? 'reading' : 'changing'} ${rel}`,
+        );
+      }
+      const team =
+        op === 'read'
+          ? undefined
+          : req.task?.teams?.find((t) => t.write.length > 0 && !matchesAny(rel, t.write, req.ctx.windows));
+      if (team)
+        return d('review', 'capability.outside_team_scope', `${rel} is outside your team's scope (${team.source})`);
       const globs = op === 'read' ? [...(scope?.read ?? []), ...(scope?.write ?? [])] : (scope?.write ?? []);
       if (op === 'read' && !scope?.read?.length)
         return d('allow', 'capability.in_scope', 'reading is not limited for this task');

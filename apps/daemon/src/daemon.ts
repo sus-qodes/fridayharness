@@ -25,6 +25,7 @@ import { type CompileInput, createContextService } from './context.js';
 import { GraphService } from './graph-service.js';
 import { IntegrationManager } from './integration.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
+import { type EffectivePolicy, loadEffectivePolicy, writePolicyTrust } from './policy.js';
 import { RecoveryManager } from './recovery.js';
 import { runVerification } from './verify.js';
 import { WorkspaceManager } from './workspaces.js';
@@ -71,6 +72,10 @@ export interface DaemonContext {
   graph: GraphService;
   /** Verifications this daemon is running; any other RUNNING one has lost its runner (ADR-0024 §6). */
   verifying: Set<string>;
+  /** The project's effective policy (ADR-0028). */
+  policy: () => EffectivePolicy;
+  /** Reads the policy files and this clone's trust again. */
+  reloadPolicy: () => EffectivePolicy;
 }
 
 export interface Daemon extends DaemonContext {
@@ -146,6 +151,10 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   const head = gitRoot ? ((await gitRoot.refs().catch(() => null))?.head ?? null) : null;
   const worktreeMode = project.config.worktrees.mode === 'per_task' && head ? 'per_task' : 'off';
 
+  // The project's own policy (ADR-0028): what tracked files tighten applies now, what they loosen
+  // only once this clone trusted exactly that.
+  let policy = loadEffectivePolicy(project, privateDir);
+
   const leases = project.config.leases;
   const stateConfig: Partial<StateConfig> = {
     ...(leases.heartbeat_interval_ms ? { heartbeatIntervalMs: leases.heartbeat_interval_ms } : {}),
@@ -155,7 +164,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     ...(leases.ack_timeout_ms ? { ackTimeoutMs: leases.ack_timeout_ms } : {}),
     ...(leases.max_delivery_attempts ? { maxDeliveryAttempts: leases.max_delivery_attempts } : {}),
     // Sessions below the project's enforcement requirement cannot take work (review F09).
-    enforcementRequired: project.config.security.enforcement_required,
+    enforcementRequired: policy.enforcement_required,
     requireEnforcingHooks: project.config.security.require_enforcing_hooks,
     reservationTtlMs: project.config.master_brain.reservation_ttl_ms,
     allowBroadcast: project.config.communication.allow_broadcast,
@@ -273,7 +282,21 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     compile: (input, actor) => context.compile(input, actor),
     graph,
     verifying: new Set(),
+    policy: () => policy,
+    reloadPolicy: () => {
+      policy = loadEffectivePolicy(project, privateDir);
+      (state.config as { enforcementRequired: StateConfig['enforcementRequired'] }).enforcementRequired =
+        policy.enforcement_required;
+      logger.info('policy reloaded', {
+        version: policy.version,
+        trusted: policy.trusted,
+        errors: policy.errors.length,
+      });
+      return policy;
+    },
   };
+  for (const e of policy.errors) logger.error('policy file not applied', e);
+  if (!policy.trusted) logger.warn('policy settings wait for "friday policy trust"', { loosening: policy.loosening });
   // Checks run inside the daemon: a verification still RUNNING from before this start has no runner.
   for (const id of state.interruptOrphanedVerifications(
     project.project_id,
@@ -291,6 +314,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
           project,
           env,
           logger,
+          policy: () => policy,
           ...(opts.brain && opts.brain.model !== undefined ? { model: opts.brain.model } : {}),
         });
 
@@ -318,6 +342,12 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     integration,
     recovery,
     stateDir: path.dirname(path.dirname(privateDir)),
+    policy: () => policy,
+    reloadPolicy: () => ctx.reloadPolicy(),
+    trustPolicy: (hash: string) => {
+      writePolicyTrust(privateDir, hash, 'human');
+      return ctx.reloadPolicy();
+    },
   });
   for (const ext of opts.extensions ?? []) ext(app as unknown as Hono, ctx);
 
