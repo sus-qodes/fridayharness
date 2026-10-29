@@ -7,4 +7,11 @@ export const PACKAGE_NAME = '@friday/mcp-server';
 export { SERVER_INSTRUCTIONS } from './instructions.js';
 export { createFridayMcpServer } from './server.js';
 export { FridaySession, type MeView, resolveAgentKey, type SessionOptions } from './session.js';
-export { createFridayTools, type FridayTool, type ToolResult } from './tools.js';
+export {
+  callTool,
+  createToolServer,
+  SPAWNED_AGENT_TOOLS,
+  spawnedAgentTools,
+  toolInputSchema,
+} from './spawned.js';
+export { createFridayTools, type FridayTool, type HostUi, type ToolResult } from './tools.js';

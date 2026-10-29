@@ -2868,11 +2868,14 @@ export class FridayState {
         });
       }
 
-      if (reconnected && params.attach_mode === 'spawn') {
-        // Tell a returning spawn-mode harness to resume its suspended runs (acknowledged via harness.ack).
-        for (const run of this.q.suspendedRunsFor(harness_id)) {
+      if (existing && params.attach_mode === 'spawn') {
+        // A spawn adapter that registers again has lost its hosts: a new process, or one that ended
+        // the work it could no longer govern (review M8-R02, R05). Friday tells it to resume its
+        // runs, those it judged lost and those it still holds as running (acknowledged via harness.ack).
+        for (const run of [...this.q.suspendedRunsFor(harness_id), ...this.q.activeRunsForHarness(harness_id)]) {
           const task = this.q.task(projectId, run.task_id);
-          if (task.status !== 'HARNESS_LOST' || task.current_run_id !== run.run_id) continue;
+          const live = run.status === 'SUSPENDED' ? 'HARNESS_LOST' : run.status === 'ACTIVE' ? 'RUNNING' : null;
+          if (task.status !== live || task.current_run_id !== run.run_id) continue;
           this.enqueue(ctx, harness_id, 'task.resume', this.startParams(projectId, task, run, agent.role), run.run_id);
         }
       }
@@ -3357,9 +3360,10 @@ export class FridayState {
     projectId: string,
     harnessId: string,
     acks: { message_id: string; accepted: boolean; session_ref?: string | undefined; reason?: string | undefined }[],
-  ): { acked: string[]; unknown: string[] } {
+  ): { acked: string[]; unknown: string[]; current: string[] } {
     const acked: string[] = [];
     const unknown: string[] = [];
+    const current: string[] = [];
     for (const a of acks) {
       const m = this.db
         .prepare('SELECT * FROM outbox_messages WHERE message_id = ? AND harness_id = ? AND project_id = ?')
@@ -3372,24 +3376,37 @@ export class FridayState {
         unknown.push(a.message_id);
         continue;
       }
-      if (m.status === 'acked') {
-        acked.push(a.message_id);
-        continue;
+      const work = (m.method === 'task.start' || m.method === 'task.resume') && m.run_id ? m.run_id : null;
+      if (m.status !== 'acked') {
+        if (m.method === 'task.start' && m.run_id && m.status !== 'expired') {
+          if (a.accepted) this.acceptRun(projectId, harnessId, m.run_id, a.session_ref ?? null);
+          else
+            this.declineRun(projectId, m.run_id, a.reason ?? 'declined by harness', { kind: 'harness', id: harnessId });
+        }
+        if (m.method === 'task.resume' && m.run_id && m.status !== 'expired' && a.accepted) {
+          this.resumeRun(projectId, harnessId, m.run_id);
+        }
+        this.db
+          .prepare(
+            "UPDATE outbox_messages SET status = 'acked', acked_at = ?, ack_result_json = ? WHERE message_id = ?",
+          )
+          .run(this.clock.now(), toJson({ accepted: a.accepted, reason: a.reason ?? null }), a.message_id);
       }
-      if (m.method === 'task.start' && m.run_id && m.status !== 'expired') {
-        if (a.accepted) this.acceptRun(projectId, harnessId, m.run_id, a.session_ref ?? null);
-        else
-          this.declineRun(projectId, m.run_id, a.reason ?? 'declined by harness', { kind: 'harness', id: harnessId });
-      }
-      if (m.method === 'task.resume' && m.run_id && m.status !== 'expired' && a.accepted) {
-        this.resumeRun(projectId, harnessId, m.run_id);
-      }
-      this.db
-        .prepare("UPDATE outbox_messages SET status = 'acked', acked_at = ?, ack_result_json = ? WHERE message_id = ?")
-        .run(this.clock.now(), toJson({ accepted: a.accepted, reason: a.reason ?? null }), a.message_id);
       acked.push(a.message_id);
+      // An acknowledgement is not authority (review M8-R03): the harness works on a run only while
+      // it is active on it and its task's current run, which a cancel, an expiry or a reassignment
+      // made before the acknowledgement arrived has already changed.
+      if (work && a.accepted && this.isCurrentRun(projectId, harnessId, work)) current.push(a.message_id);
     }
-    return { acked, unknown };
+    return { acked, unknown, current };
+  }
+
+  /** Whether a run is active on this harness and its task's current run. */
+  private isCurrentRun(projectId: string, harnessId: string, runId: string): boolean {
+    const run = this.q.findRun(runId);
+    if (!run || run.harness_id !== harnessId || run.status !== 'ACTIVE') return false;
+    const task = this.q.task(projectId, run.task_id);
+    return task.current_run_id === runId && (task.status === 'RUNNING' || task.status === 'WAITING');
   }
 
   private acceptRun(projectId: string, harnessId: string, runId: string, sessionRef: string | null): void {

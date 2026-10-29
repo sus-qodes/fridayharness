@@ -17,10 +17,13 @@ import {
   claudeEnvironment,
   SPAWN_TOOLS,
 } from '@friday/adapter-claude';
+import { SPAWNED_AGENT_TOOLS } from '@friday/mcp-server';
 import type { TaskStartParams, TaskView } from '@friday/protocol';
+import type { DaemonClient } from '@friday/sdk';
 import { FakeClock, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
+import { answerLost, gate, interceptedBootstrap, method, notDelivered } from '../helpers/faults.js';
 
 const ws = useTestWorkspace();
 let saved: string | undefined;
@@ -42,12 +45,20 @@ interface Script {
   mcpServers?: string[];
   plugins?: string[];
   skills?: string[];
+  omitInit?: string[];
+  initAfterResult?: boolean;
   turns: Step[][];
   resume?: Step[];
 }
 
 /** A Claude Code agent working for Friday in spawn mode, its host scripted. */
-function claude(td: TestDaemon, agent: string, script: Script, opts: { harnessKey?: string; dir?: string } = {}) {
+function claude(
+  td: TestDaemon,
+  agent: string,
+  script: Script,
+  opts: { harnessKey?: string; dir?: string; bootstrap?: DaemonClient; stateDir?: string } = {},
+) {
+  const sent: string[] = [];
   const dir = opts.dir ?? path.join(ws().root, `claude-${agent}`);
   mkdirSync(dir, { recursive: true });
   const scriptFile = path.join(dir, 'script.json');
@@ -55,7 +66,12 @@ function claude(td: TestDaemon, agent: string, script: Script, opts: { harnessKe
   const log = path.join(dir, 'log.jsonl');
   const work = path.join(dir, 'work');
   const adapter = new ClaudeSpawnAdapter({
-    bootstrap: td.bootstrap,
+    bootstrap: opts.bootstrap ?? td.bootstrap,
+    // What the adapter wrote to its host, as it wrote it.
+    trace: (direction: 'send' | 'receive', line: string) => {
+      if (direction === 'send') sent.push(line);
+    },
+    ...(opts.stateDir ? { stateDir: opts.stateDir } : {}),
     projectId: td.project.project_id,
     agentKey: agent,
     role: 'backend',
@@ -87,7 +103,7 @@ function claude(td: TestDaemon, agent: string, script: Script, opts: { harnessKe
     const f = path.join(work, `${taskId}.work`);
     return existsSync(f) ? statSync(f).size : 0;
   };
-  return { adapter, entries, workDone, dir };
+  return { adapter, entries, workDone, dir, sent };
 }
 
 async function eventually<T>(fn: () => T | Promise<T>, ok: (v: T) => boolean, what: string, ms = 30_000): Promise<T> {
@@ -111,7 +127,7 @@ async function assigned(td: TestDaemon, agent: string, write: string[], summary 
 }
 
 const status = (td: TestDaemon, id: string) => td.daemon.state.q.task(td.project.project_id, id);
-const daemon = (opts: { clock?: FakeClock } = {}) =>
+const daemon = (opts: { clock?: FakeClock; extraConfig?: string } = {}) =>
   startTestDaemon(ws(), { git: true, brain: false, extensions: [claudeCodeHooks()], ...opts });
 
 describe('Claude Code in spawn mode', () => {
@@ -153,7 +169,6 @@ describe('Claude Code in spawn mode', () => {
       '--restricted': true,
       '--tools': SPAWN_TOOLS.join(','),
       '--strict-mcp-config': true,
-      '--mcp-config': JSON.stringify({ mcpServers: {} }),
       '--permission-prompts': 'none',
       '--disable-slash-commands': true,
       '--replay-user-messages': true,
@@ -220,8 +235,9 @@ describe('Claude Code in spawn mode', () => {
       (e) => e.type === 'agent.event' && (e.payload as { event_type: string }).event_type === 'host.settings',
     )?.payload as { data?: Record<string, unknown> } | undefined;
     expect(settings?.data).toMatchObject({
-      tools: [...SPAWN_TOOLS, 'StructuredOutput'],
-      mcp_servers: [],
+      // Friday's own server, which the adapter serves, adds Friday's tools and nothing else.
+      tools: [...SPAWN_TOOLS, 'StructuredOutput', ...SPAWNED_AGENT_TOOLS.map((t) => `mcp__friday__${t}`)],
+      mcp_servers: ['friday'],
       // Claude Code's own plugins are recorded and accepted; they add no tool.
       plugins: ['cc-plugin-agents-md', 'cc-plugin-telemetry', 'cc-plugin-plugin-authoring'],
       skills: [],
@@ -253,8 +269,31 @@ describe('Claude Code in spawn mode', () => {
     const rules = readFileSync(path.join(attempt, 'instructions.md'), 'utf8');
     expect(rules.startsWith(CLAUDE_SPAWN_RULES.split('\n')[0] as string)).toBe(true);
     expect(rules).toContain(id);
-    // The session has none of Friday's own tools, so its instructions name none.
-    expect(rules).not.toMatch(/friday_[a-z]+|friday:\/\//);
+    // Its instructions name only the Friday tools the session has (review M8-R06).
+    const named = new Set(rules.match(/friday_[a-z_]+/g) ?? []);
+    expect(
+      [...named].every((t) => (SPAWNED_AGENT_TOOLS as readonly string[]).includes(t)),
+      [...named].join(),
+    ).toBe(true);
+    expect(rules).not.toMatch(/friday:\/\//);
+    // Its only MCP server is Friday's own, served by the adapter on this machine, for this attempt.
+    const mcp = JSON.parse(readFileSync(path.join(attempt, 'mcp.json'), 'utf8')) as {
+      mcpServers: Record<string, { type: string; url: string; headers: Record<string, string> }>;
+    };
+    expect(Object.keys(mcp.mcpServers)).toEqual(['friday']);
+    expect(mcp.mcpServers.friday?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp\/run_/);
+    // Without the attempt's secret, or from a web page, the tools do not answer.
+    const url = mcp.mcpServers.friday?.url as string;
+    expect((await fetch(url, { method: 'POST', body: '{}' })).status).toBe(401);
+    expect(
+      (
+        await fetch(url, {
+          method: 'POST',
+          body: '{}',
+          headers: { ...mcp.mcpServers.friday?.headers, origin: 'http://evil.example' },
+        })
+      ).status,
+    ).toBe(404);
     const settings = JSON.parse(readFileSync(path.join(attempt, 'settings.json'), 'utf8')) as {
       hooks: Record<string, { matcher?: string; hooks: Record<string, unknown>[] }[]>;
     };
@@ -405,5 +444,300 @@ describe('Claude Code in spawn mode', () => {
       .filter((e) => e.flags)
       .at(-1)?.flags as Record<string, string>;
     expect(resumed['--resume']).toBe(sessionRef);
+  });
+
+  it('starts no turn for a start Friday no longer wants (review M8-R03)', async () => {
+    const td = await daemon();
+    const x = interceptedBootstrap(td);
+    const c = claude(
+      td,
+      'h-1',
+      { turns: [[{ op: 'final', status: 'completed', summary: 'x', changed_paths: [] }]] },
+      {
+        bootstrap: x.client,
+      },
+    );
+    let taskId = '';
+    const polls = gate();
+    const acked = gate();
+    const isStart = (p: Record<string, unknown>) =>
+      (p.acks as { message_id: string }[]).some((a) =>
+        c.adapter.received.some((m) => m.message_id === a.message_id && m.method === 'task.start'),
+      );
+    // Friday cancels the task just before the adapter's acknowledgement of task.start reaches it,
+    // and the adapter's later polls wait: the cancellation reaches it late.
+    x.on(method('harness.ack', isStart), async (_call, forward) => {
+      await td.operator.post(td.operator.projectPath(`/tasks/${taskId}/cancel`), { reason: 'not wanted any more' });
+      x.on(
+        method('harness.poll'),
+        async (_c, fwd) => {
+          await polls.promise;
+          return fwd();
+        },
+        Number.POSITIVE_INFINITY,
+      );
+      const res = await forward();
+      acked.open();
+      return res;
+    });
+    await c.adapter.start();
+    taskId = await assigned(td, 'h-1', ['src/**']);
+    await acked.promise;
+    const runId =
+      (c.adapter.received.find((m) => m.method === 'task.start')?.params as TaskStartParams | undefined)?.run_id ?? '';
+    const turnSent = () => c.sent.some((l) => l.includes(`Task ${taskId}`));
+    // Either the adapter starts the turn, or it gives the attempt up: whichever happens first.
+    await eventually(() => turnSent() || !c.adapter.running(runId), Boolean, 'the turn, or the attempt given up');
+    polls.open();
+    await eventually(
+      () => c.adapter.running(runId),
+      (r) => !r,
+      'the attempt ended',
+    );
+    expect(status(td, taskId).status).toBe('CANCELLED');
+    expect(turnSent(), 'what the adapter sent its host').toBe(false);
+    expect(
+      c.entries().some((e) => typeof e.received_message === 'string' && e.received_message.includes(taskId)),
+      'what the host received',
+    ).toBe(false);
+  });
+
+  it('keeps serving Friday after a poll fails, so a cancellation still stops the work (review M8-R02)', async () => {
+    const td = await daemon();
+    const x = interceptedBootstrap(td);
+    const c = claude(
+      td,
+      'h-1',
+      { turns: [[{ op: 'bash', command: 'node --test', long: true }]] },
+      { bootstrap: x.client },
+    );
+    await c.adapter.start();
+    const id = await assigned(td, 'h-1', ['src/**']);
+    await eventually(
+      () => c.workDone(id),
+      (n) => n > 0,
+      'the work',
+    );
+    const runId = status(td, id).current_run_id as string;
+    // One poll never reaches Friday; the heartbeat keeps working.
+    const failed = gate();
+    x.on(method('harness.poll'), async (call, forward) => {
+      failed.open();
+      return notDelivered(call, forward);
+    });
+    await failed.promise;
+    await td.operator.post(td.operator.projectPath(`/tasks/${id}/cancel`), { reason: 'stop it' });
+    expect(status(td, id).status).toBe('CANCELLED');
+    // The cancellation reaches the adapter, which ends the host and everything it started.
+    await eventually(
+      () => c.adapter.running(runId),
+      (r) => !r,
+      'the attempt ended',
+      15_000,
+    );
+    // Its group ends with the attempt: the writer stops growing.
+    await eventually(
+      async () => {
+        const size = c.workDone(id);
+        await new Promise((r) => setTimeout(r, 300));
+        return c.workDone(id) === size;
+      },
+      Boolean,
+      'the writer to stop',
+      10_000,
+    );
+  });
+
+  it('records a completion claim whose report failed, exactly once (review M8-R05)', async () => {
+    const td = await daemon();
+    const final = { op: 'final', status: 'completed', summary: 'done', changed_paths: [] };
+    // The first report never reaches Friday.
+    const a = interceptedBootstrap(td);
+    a.on(method('agent.result'), notDelivered);
+    const one = claude(td, 'h-1', { turns: [[final]] }, { bootstrap: a.client });
+    await one.adapter.start();
+    const first = await assigned(td, 'h-1', ['src/**']);
+    await eventually(
+      () => status(td, first).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the first claim',
+      15_000,
+    );
+    // The second is recorded, and its answer is lost on the way back.
+    const b = interceptedBootstrap(td);
+    b.on(method('agent.result'), answerLost);
+    const two = claude(td, 'h-2', { turns: [[final]] }, { bootstrap: b.client });
+    await two.adapter.start();
+    const second = await assigned(td, 'h-2', ['lib/**']);
+    await eventually(
+      () => status(td, second).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the second claim',
+      15_000,
+    );
+    await eventually(
+      () => b.calls.filter((c) => c.method === 'agent.result').length,
+      (n) => n >= 2,
+      'the retry',
+    );
+    for (const id of [first, second]) {
+      const claimed = td.daemon.state.store
+        .readByRef(td.project.project_id, 'task', id)
+        .filter((e) => e.type === 'task.completion_claimed');
+      expect(claimed, id).toHaveLength(1);
+    }
+  });
+
+  it('reports the result of a finished attempt after the adapter restarts, without a new turn (review M8-R05)', async () => {
+    const td = await daemon();
+    const stateDir = path.join(ws().root, 'adapter-state');
+    const x = interceptedBootstrap(td);
+    // Friday is unreachable for the report, and the adapter stops before it gets through.
+    const reports = gate();
+    const stopFailing = x.on(
+      method('agent.result'),
+      async (call, forward) => {
+        reports.open();
+        return notDelivered(call, forward);
+      },
+      Number.POSITIVE_INFINITY,
+    );
+    const script = { turns: [[{ op: 'final', status: 'completed', summary: 'done', changed_paths: [] }]] };
+    const one = claude(td, 'h-1', script, { bootstrap: x.client, harnessKey: 'claude-code:restart-r05', stateDir });
+    await one.adapter.start();
+    const id = await assigned(td, 'h-1', ['src/**']);
+    await reports.promise;
+    await one.adapter.crash();
+    stopFailing();
+    expect(status(td, id).status).toBe('RUNNING');
+    // The same harness comes back, with the same state folder.
+    const two = claude(td, 'h-1', script, {
+      harnessKey: 'claude-code:restart-r05',
+      stateDir,
+      dir: path.join(ws().root, 'again'),
+    });
+    await two.adapter.start();
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the claim',
+      15_000,
+    );
+    const claimed = td.daemon.state.store
+      .readByRef(td.project.project_id, 'task', id)
+      .filter((e) => e.type === 'task.completion_claimed');
+    expect(claimed).toHaveLength(1);
+    // The host was not asked to work again.
+    expect(two.sent, 'what the second adapter sent a host').toEqual([]);
+  });
+
+  it('refuses a session that started with tools Friday did not give it, whatever arrives first (review M8-R04)', async () => {
+    const td = await daemon();
+    const x = interceptedBootstrap(td);
+    // The adapter's record of the session's settings is held while the turn ends at once.
+    const held = gate();
+    x.on(
+      method('agent.event', (p) => p.event_type === 'host.settings'),
+      async (_call, forward) => {
+        await held.promise;
+        return forward();
+      },
+    );
+    const c = claude(
+      td,
+      'h-1',
+      {
+        extraTools: ['UnjudgedExtraTool'],
+        turns: [[{ op: 'final', status: 'completed', summary: 'claimed anyway', changed_paths: [] }]],
+      },
+      { bootstrap: x.client },
+    );
+    await c.adapter.start();
+    const id = await assigned(td, 'h-1', ['src/**']);
+    await eventually(
+      () => status(td, id),
+      (t) => t.status === 'READY_FOR_VERIFICATION' || t.waiting_reason === 'agent_error',
+      'the outcome',
+      15_000,
+    );
+    held.open();
+    expect(status(td, id)).toMatchObject({ status: 'WAITING', waiting_reason: 'agent_error' });
+    const claimed = td.daemon.state.store
+      .readByRef(td.project.project_id, 'task', id)
+      .filter((e) => e.type === 'task.completion_claimed');
+    expect(claimed).toHaveLength(0);
+  });
+
+  it('refuses a session that reports no tools, or a result before its report (review M8-R04)', async () => {
+    const td = await daemon();
+    const final = { op: 'final', status: 'completed', summary: 'claimed', changed_paths: [] };
+    const silent = claude(td, 'h-1', { omitInit: ['tools'], turns: [[final]] });
+    const early = claude(td, 'h-2', { initAfterResult: true, turns: [[final]] });
+    for (const c of [silent, early]) await c.adapter.start();
+    const one = await assigned(td, 'h-1', ['src/**']);
+    const two = await assigned(td, 'h-2', ['lib/**']);
+    for (const id of [one, two]) {
+      await eventually(
+        () => status(td, id),
+        (t) => t.status === 'READY_FOR_VERIFICATION' || t.waiting_reason === 'agent_error',
+        'the outcome',
+        15_000,
+      );
+      expect(status(td, id), id).toMatchObject({ status: 'WAITING', waiting_reason: 'agent_error' });
+    }
+  });
+
+  it('stops its hosts when Friday is not heard for a lease, and resumes the same run once it is (review M8-R02)', async () => {
+    const td = await daemon({ extraConfig: 'leases:\n  heartbeat_interval_ms: 1000\n  lease_ttl_ms: 2000\n' });
+    const x = interceptedBootstrap(td);
+    const c = claude(
+      td,
+      'h-1',
+      {
+        turns: [[{ op: 'bash', command: 'node --test', long: true }]],
+        resume: [{ op: 'final', status: 'completed', summary: 'resumed', changed_paths: [] }],
+      },
+      { bootstrap: x.client },
+    );
+    await c.adapter.start();
+    const id = await assigned(td, 'h-1', ['src/**']);
+    await eventually(
+      () => c.workDone(id),
+      (n) => n > 0,
+      'the work',
+    );
+    const runId = status(td, id).current_run_id as string;
+    // Friday cannot be reached for instructions for longer than a lease: no cancellation would
+    // reach this adapter, so it stops its hosts.
+    const stopFailing = x.on(method('harness.poll'), notDelivered, Number.POSITIVE_INFINITY);
+    await eventually(
+      () => c.adapter.running(runId),
+      (r) => !r,
+      'the hosts stopped',
+      15_000,
+    );
+    // Its group ends with the attempt: the writer stops growing.
+    await eventually(
+      async () => {
+        const size = c.workDone(id);
+        await new Promise((r) => setTimeout(r, 300));
+        return c.workDone(id) === size;
+      },
+      Boolean,
+      'the writer to stop',
+      10_000,
+    );
+    // Friday answers again: the adapter registers again, and Friday resumes the same run.
+    stopFailing();
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the claim after resuming',
+      20_000,
+    );
+    expect(td.daemon.state.q.findRun(runId)?.outcome).toBe('completed_claim');
+    expect(
+      c.adapter.received.some((m) => m.method === 'task.resume' && (m.params as TaskStartParams).run_id === runId),
+    ).toBe(true);
   });
 });

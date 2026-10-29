@@ -4,6 +4,8 @@ import type { ContextPacket } from '@friday/protocol';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
 import {
+  DaemonClient,
+  DaemonUnreachableError,
   findProjectRoot,
   formatSse,
   loadProject,
@@ -168,5 +170,46 @@ describe('provider endpoints (review F03)', () => {
     expect(() => setProviderEndpoint('anthropic', 'http://gateway.example.com', env)).toThrow(/https/);
     setProviderEndpoint('anthropic', null, env);
     expect(providerEndpoint('anthropic', env)).toBeUndefined();
+  });
+});
+
+describe('DaemonClient (review M8-R02)', () => {
+  it('finds a daemon started again on another port, and keeps its credential', async () => {
+    const answered: string[] = [];
+    let listening = 'http://127.0.0.1:41001';
+    const fake: typeof fetch = async (input) => {
+      const url = String(input);
+      if (!url.startsWith(listening)) throw new TypeError('fetch failed');
+      answered.push(url);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+    const bootstrap = new DaemonClient({
+      baseUrl: 'http://127.0.0.1:41001',
+      token: 't',
+      tokenClass: 'bootstrap',
+      projectId: PID,
+      fetch: fake,
+      refreshBaseUrl: () => listening,
+    });
+    const harness = bootstrap.withToken('h', 'harness');
+    expect(await harness.get('/health')).toEqual({ ok: true });
+    // The daemon starts again elsewhere: the next call finds it, as does a client made from it.
+    listening = 'http://127.0.0.1:41002';
+    expect(await harness.get('/health')).toEqual({ ok: true });
+    expect(harness.baseUrl).toBe('http://127.0.0.1:41002');
+    // Nothing listens anywhere: the failure is reported, once, without a loop.
+    listening = 'http://127.0.0.1:41003/';
+    const gone = new DaemonClient({
+      baseUrl: 'http://127.0.0.1:41002',
+      token: 't',
+      tokenClass: 'bootstrap',
+      projectId: PID,
+      fetch: async () => {
+        throw new TypeError('fetch failed');
+      },
+      refreshBaseUrl: () => listening,
+    });
+    await expect(gone.get('/health')).rejects.toBeInstanceOf(DaemonUnreachableError);
+    expect(answered).toEqual(['http://127.0.0.1:41001/health', 'http://127.0.0.1:41002/health']);
   });
 });

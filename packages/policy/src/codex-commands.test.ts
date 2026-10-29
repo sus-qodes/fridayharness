@@ -103,3 +103,49 @@ describe('commands as Codex sends them on Windows', () => {
     if (cls) expect(r.segments.map((s) => s.class)).toContain(cls);
   });
 });
+
+/**
+ * Review M8-R01: a value PowerShell only prints runs nothing, so the classifier left it out; when
+ * nothing else was left, the command passed as a read before its redirection was looked at, and
+ * `'x' > outside.txt` wrote a file outside the task's scope without a human's decision.
+ */
+const PRINTED_WRITES = [
+  "'review redirection' > outside.txt",
+  '"a printed line" > out.txt',
+  "'a b' >> out.txt",
+  "'a b' 2> err.txt",
+  "'a b' *> all.txt",
+  '$x > out.txt',
+  '$x = 1; $x > out.txt',
+  '$true > out.txt',
+  '(Get-Content a.txt) > b.txt',
+  "if ($true) { 'a b' > out.txt }",
+  'Write-Output "$(\'a b\' > out.txt)"',
+  // Found while fixing it: a numbered stream, and a quoted target, were not seen as writes either.
+  'Get-Content a.txt 2> err.txt',
+  "Get-Content a.txt > 'out file.txt'",
+];
+const PRINTED_ONLY = [
+  "'--- done'",
+  "'a b' > $null",
+  "'a b' 2>$null",
+  "'a b' *> $null",
+  "'a b' | Out-Null",
+  '"a -> b"',
+  'Get-Content x.txt 2>&1',
+];
+
+describe('what a printed value is redirected into (review M8-R01)', () => {
+  it.each(PRINTED_WRITES)('writes a file, so a human decides: %s', (c) => {
+    for (const command of [c, wrap(c)]) expect(classifyCommand(command).autonomy, command).toBe('review');
+  });
+  it.each(PRINTED_ONLY)('prints or discards, and passes: %s', (c) => {
+    for (const command of [c, wrap(c)]) expect(classifyCommand(command).autonomy, command).toBe('auto');
+  });
+  it('judges the same in the other shells', () => {
+    expect(classifyCommand('bash -lc "printf x > out.txt"').autonomy).toBe('review');
+    expect(classifyCommand('cmd /c "echo x > out.txt"').autonomy).toBe('review');
+    expect(classifyCommand('bash -lc "echo x > /dev/null"').autonomy).toBe('auto');
+    expect(classifyCommand('cmd /c "echo x >NUL"').autonomy).toBe('auto');
+  });
+});

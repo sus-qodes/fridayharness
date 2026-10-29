@@ -14,10 +14,17 @@
       "items": {
         "type": "string"
       }
+    },
+    "current": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": [
     "acked",
-    "unknown"
+    "unknown",
+    "current"
   ]
 }

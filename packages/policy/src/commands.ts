@@ -723,17 +723,31 @@ export function classifyCommand(
     // A method call runs what no rule knows: at least a human's decision.
     return { text, class: isCall(text) && RANK[table[c]] < RANK[table.unknown] ? ('unknown' as const) : c };
   });
-  if (segments.length === 0) return { class: 'read.local', autonomy: 'auto', segments };
-  let worst = segments[0] as { text: string; class: CommandClass };
+  // Judged before anything else (review M8-R01): a value PowerShell only prints runs nothing, so
+  // it leaves no segment, yet `'x' > f` writes `f`.
+  const writes = writesThroughRedirect(command);
+  if (segments.length === 0 && !writes) return { class: 'read.local', autonomy: 'auto', segments };
+  let worst: { text: string; class: CommandClass } = segments[0] ?? { text: command, class: 'read.local' };
   for (const s of segments) if (RANK[table[s.class]] > RANK[table[worst.class]]) worst = s;
-  // Redirecting output into a file writes it, whatever the command; inside a wrapper too.
-  // Output thrown away (`> $null`, `*> $null`, `>NUL`, `> /dev/null`) writes nothing.
-  const redirects = (text: string) =>
-    /(^|[^0-9&])>{1,2}\s*[^&\s]/.test(
-      text.replace(/"[^"]*"|'[^']*'/g, '').replace(/[0-9*]?>{1,2}\s*(\$null|nul|\/dev\/null)(?![\w/.\\-])/gi, ' '),
-    );
-  if ((redirects(command) || segments.some((s) => redirects(s.text))) && RANK[table[worst.class]] < RANK.review) {
-    worst = { text: command, class: 'git.mutate' };
-  }
+  if (writes && RANK[table[worst.class]] < RANK.review) worst = { text: command, class: 'git.mutate' };
   return { class: worst.class, autonomy: table[worst.class], segments };
+}
+
+/**
+ * Whether a command line writes a file through a redirection (`> f`, `>> f`, `2> f`, `*> f`,
+ * `&> f`, a quoted `f` too), at any depth: inside a shell wrapper, a block or a subexpression.
+ * Output thrown away (`> $null`, `2>$null`, `*> $null`, `>NUL`, `> /dev/null`) writes nothing,
+ * and neither does a redirection into another stream (`2>&1`, `>&2`).
+ */
+function writesThroughRedirect(command: string, depth = 0): boolean {
+  return splitSegments(command).some((s) => {
+    const bare = s
+      .replace(/"[^"]*"|'[^']*'/g, 'Q')
+      .replace(/[0-9*&]?>{1,2}\s*(\$null|nul|\/dev\/null)(?![\w/.\\-])/gi, ' ');
+    if (/>{1,2}(?!&)\s*[^\s&]/.test(bare)) return true;
+    if (depth >= 8) return false;
+    const inner = wrappedCommand(s);
+    if (inner !== null) return writesThroughRedirect(inner, depth + 1);
+    return Boolean(groupsOf(s)?.groups.some((g) => writesThroughRedirect(g, depth + 1)));
+  });
 }

@@ -115,7 +115,15 @@ export const HarnessAckParams = z.object({
     .min(1)
     .max(50),
 });
-export const HarnessAckResult = z.object({ acked: z.array(z.string()), unknown: z.array(z.string()) });
+export const HarnessAckResult = z.object({
+  acked: z.array(z.string()),
+  unknown: z.array(z.string()),
+  /**
+   * The acknowledged `task.start` and `task.resume` messages whose run is now this harness's to
+   * work on: active on it, and its task's current run. Only these start work (review M8-R03).
+   */
+  current: z.array(z.string()),
+});
 
 // ---- daemon → harness (delivered through the outbox) ---------------------------------------
 

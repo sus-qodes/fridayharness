@@ -17,6 +17,9 @@
       "path": "../../git"
     },
     {
+      "path": "../../mcp-server"
+    },
+    {
       "path": "../../protocol"
     },
     {

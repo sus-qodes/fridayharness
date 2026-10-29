@@ -7,7 +7,14 @@
  *                           are accepted, and what starting it records in the owner's configuration.
  *   FRIDAY_CLAUDE_LIVE=1    at most FRIDAY_CLAUDE_LIVE_TURNS turns (three by default) on the owner's
  *                           Claude login, on the cheapest model at its default effort, each attempt capped
- *                           by --max-budget-usd, in a throwaway copy of fixture-shop.
+ *                           by --max-budget-usd, in a throwaway copy of fixture-shop. The cases it runs
+ *                           are FRIDAY_CLAUDE_LIVE_CASES (comma-separated, `work` by default): `work`, one
+ *                           turn; `restart`, two (a crash and the same session resumed).
+ *
+ * Each case is a gate (review M8-R07): it passes only when every behaviour it names was observed,
+ * and its evidence is saved whatever happens. A case that does not pass keeps the rest of the
+ * budget: the cases after it do not start, and fail as not run, as does a case the budget cannot
+ * cover. A green run therefore means every case it selected showed what it claims.
  *
  * FRIDAY_CLAUDE_LIVE_OUT names a folder outside the repository for the results and the transcript;
  * nothing goes into the repository until a human has read it. A guard on the adapter's stream-json
@@ -31,6 +38,7 @@ import { DaemonClient } from '@friday/sdk';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli } from '../helpers/cli.js';
+import { incomplete, LiveBudget, type Verdict, verdict } from '../helpers/live-verdict.js';
 
 const MODE = process.env.FRIDAY_CLAUDE_LIVE;
 const OUT = process.env.FRIDAY_CLAUDE_LIVE_OUT;
@@ -40,6 +48,8 @@ const EFFORT = 'default';
 const CAP_USD = 0.25;
 /** Turns this run may start: the owner approves a number, and earlier runs' turns count against it. */
 const BUDGET = Number(process.env.FRIDAY_CLAUDE_LIVE_TURNS ?? 3);
+/** The live cases to run: `work` (one turn) and `restart` (two). */
+const CASES = (process.env.FRIDAY_CLAUDE_LIVE_CASES ?? 'work').split(',').map((c) => c.trim());
 
 const ws = useTestWorkspace();
 let saved: string | undefined;
@@ -332,25 +342,29 @@ describe.skipIf(!MODE)('Claude Code in spawn mode against the installed Claude C
     5 * 60_000,
   );
 
-  it.runIf(MODE === '1')(
-    'works a task with a message mid-turn, then resumes its session after a crash, in at most three turns',
+  /** One budget for the run: a case that does not pass keeps the rest of it unspent (review M8-R07). */
+  const budget = new LiveBudget(BUDGET);
+
+  it.runIf(MODE === '1' && CASES.includes('work'))(
+    'works a task in one turn: every tool call judged, a message taken mid-turn, the claim verified',
     async () => {
-      const guard = new Guard(BUDGET);
+      const refused = budget.refuse(1);
+      if (refused) expect.fail(refused);
+      const guard = new Guard(1);
       const before = claudeState();
       const s = await setup(guard);
       const results: Record<string, unknown> = {
         mode: 'live',
+        case: 'work',
         claude: s.install.version,
         model: MODEL,
         effort: EFFORT,
       };
-      const results1: Record<string, unknown> = {};
-      const results2: Record<string, unknown> = {};
-      let cl = s.adapter();
+      let v: Verdict = incomplete('the case stopped before its end');
+      const cl = s.adapter();
       try {
         await cl.start();
-
-        // Turn 1: a change in scope with its test run, then a report file; a message arrives meanwhile.
+        // A change in scope with its test run, then a report file; a message arrives meanwhile.
         const a = await s.assign(
           'Discount helper and report',
           [
@@ -375,37 +389,79 @@ describe.skipIf(!MODE)('Claude Code in spawn mode against the installed Claude C
           subject: 'one more line',
           content: 'Please also put the line `checked-by: friday-message` on the second line of backend/report.md.',
         });
-        const aEnd = await s.settle(a, 'turn 1');
+        const aEnd = await s.settle(a, 'the turn');
         const delivery = (
           await s.op.get<{ deliveries: { state: string }[] }>(s.op.projectPath(`/messages/${sent.message_id}`))
         ).deliveries.map((d) => d.state);
-        Object.assign(results1, {
+        const report = read(path.join(aRoot, 'backend', 'report.md'));
+        const discount = read(path.join(aRoot, 'backend', 'src', 'discount.ts')) !== null;
+        const verified = aEnd === 'READY_FOR_VERIFICATION' ? await s.verify(a) : null;
+        Object.assign(results, {
           task_status: aEnd,
           waiting_reason: s.task(a).waiting_reason,
           decisions: s.decisions(a),
           settings: s.eventData(a, 'host.settings'),
           usage: s.eventData(a, 'host.usage'),
           message_delivery: delivery,
-          report: read(path.join(aRoot, 'backend', 'report.md')),
-          discount_ts: read(path.join(aRoot, 'backend', 'src', 'discount.ts')) !== null,
+          report,
+          discount_ts: discount,
           result: guard.received('result').at(-1) ?? null,
           claim: s.daemon.state.q.findRun(s.task(a).current_run_id ?? '')?.claim ?? null,
+          verification: verified && {
+            status: verified.task.status,
+            checks: verified.verification.checks.map((c) => ({ name: c.name, status: c.status, summary: c.summary })),
+          },
         });
-        if (aEnd === 'READY_FOR_VERIFICATION') {
-          const v = await s.verify(a);
-          results1.verification = {
-            status: v.task.status,
-            checks: v.verification.checks.map((c) => ({ name: c.name, status: c.status, summary: c.summary })),
-          };
-        }
-        // A first turn that did not end with a claim says what to fix; the rest of the budget is kept.
-        if (aEnd !== 'READY_FOR_VERIFICATION') {
-          results2.stopped = 'turn 1 did not end with a claim; the remaining turns were not spent';
-          return;
-        }
-        if (BUDGET < 3) return;
+        v = verdict({
+          'every tool call was judged by Friday': s.decisions(a).length > 0,
+          'the message reached the running turn': delivery.includes('acknowledged'),
+          'the turn ended with a claim': aEnd === 'READY_FOR_VERIFICATION',
+          'the change is in the worktree': discount,
+          'the report holds both lines':
+            /^done$/m.test(report ?? '') && (report ?? '').includes('checked-by: friday-message'),
+          'the claim was verified': verified?.task.status === 'COMPLETED',
+        });
+      } finally {
+        await cl.close().catch(() => undefined);
+        budget.settle('work', guard.turns, v);
+        const after = claudeState();
+        Object.assign(results, {
+          verdict: v,
+          turns_started: guard.turns,
+          refused: guard.refused,
+          inits: guard
+            .received('system', 'init')
+            .map((m) => ({ model: m.model, tools: m.tools, mcp_servers: m.mcp_servers })),
+          claude_projects_added: after.projects.filter((k) => !before.projects.includes(k)),
+          claude_session_folders_added: after.sessions.filter((k) => !before.sessions.includes(k)),
+        });
+        s.save('live-work', results);
+      }
+      expect(guard.turns).toBeLessThanOrEqual(1);
+      expect(v, JSON.stringify(v)).toMatchObject({ status: 'passed' });
+    },
+    15 * 60_000,
+  );
 
-        // Turns 2 and 3: the harness dies during the slow check; its work stops; the same session resumes.
+  it.runIf(MODE === '1' && CASES.includes('restart'))(
+    'stops the work of a crashed adapter and resumes the same run in the same session, in two turns',
+    async () => {
+      const refused = budget.refuse(2);
+      if (refused) expect.fail(refused);
+      const guard = new Guard(2);
+      const before = claudeState();
+      const s = await setup(guard);
+      const results: Record<string, unknown> = {
+        mode: 'live',
+        case: 'restart',
+        claude: s.install.version,
+        model: MODEL,
+        effort: EFFORT,
+      };
+      let v: Verdict = incomplete('the case stopped before its end');
+      let cl = s.adapter();
+      try {
+        await cl.start();
         const c = await s.assign(
           'Slow report',
           [
@@ -423,50 +479,63 @@ describe.skipIf(!MODE)('Claude Code in spawn mode against the installed Claude C
           5 * 60_000,
         );
         if (running < 0) {
-          Object.assign(results2, { stopped: 'the turn ended before the slow check ran', decisions: s.decisions(c) });
-          return;
+          // The turn ended before there was work to stop: nothing is restarted, the second turn is kept.
+          Object.assign(results, { task_status: s.task(c).status, decisions: s.decisions(c) });
+          v = verdict({ 'the slow check ran while the turn went on': false });
+        } else {
+          const run1 = s.task(c).current_run_id as string;
+          const session1 = s.daemon.state.q.findRun(run1)?.session_ref ?? null;
+          await cl.crash();
+          const atCrash = size(progress);
+          await sleep(2000);
+          const after2s = size(progress);
+          await sleep(3000);
+          const after5s = size(progress);
+          await eventually(
+            () => s.task(c).status,
+            (x) => x === 'HARNESS_LOST',
+            'the lost lease',
+          );
+          const assessed = await cli(['--project', s.root, 'recover', c]);
+          cl = s.adapter();
+          await cl.start();
+          const resume = await eventually(
+            () => cl.received.find((m) => m.method === 'task.resume'),
+            (m) => Boolean(m),
+            'task.resume',
+          );
+          const resumed = resume?.params as TaskStartParams | undefined;
+          const cEnd = await s.settle(c, 'the resumed turn');
+          const report = read(path.join(cRoot, 'backend', 'report-2.md'));
+          const verified = cEnd === 'READY_FOR_VERIFICATION' ? await s.verify(c) : null;
+          Object.assign(results, {
+            progress: { atCrash, after2s, after5s },
+            recover_output: assessed.stdout.slice(0, 1500),
+            run: { before: run1, resumed: resumed?.run_id ?? null },
+            session: { before: session1, resumed: resumed?.session_ref ?? null },
+            task_status: cEnd,
+            decisions: s.decisions(c),
+            report,
+            result: guard.received('result').at(-1) ?? null,
+            verification: verified && { status: verified.task.status },
+          });
+          v = verdict({
+            'the slow check ran while the turn went on': true,
+            'its work stopped with the adapter': after5s === after2s,
+            'recovery recommended reconnecting': /reconnect/.test(assessed.stdout),
+            'the same run was resumed': resumed?.run_id === run1,
+            'the same session was resumed': session1 !== null && resumed?.session_ref === session1,
+            'the resumed turn ended with a claim': cEnd === 'READY_FOR_VERIFICATION',
+            'the report holds its line': /report:/.test(report ?? ''),
+            'the claim was verified': verified?.task.status === 'COMPLETED',
+          });
         }
-        const run1 = s.task(c).current_run_id as string;
-        const session1 = s.daemon.state.q.findRun(run1)?.session_ref ?? null;
-        await cl.crash();
-        const atCrash = size(progress);
-        await sleep(2000);
-        const after2s = size(progress);
-        await sleep(3000);
-        const after5s = size(progress);
-        await eventually(
-          () => s.task(c).status,
-          (x) => x === 'HARNESS_LOST',
-          'the lost lease',
-        );
-        const assessed = await cli(['--project', s.root, 'recover', c]);
-        cl = s.adapter();
-        await cl.start();
-        const resume = await eventually(
-          () => cl.received.find((m) => m.method === 'task.resume'),
-          (m) => Boolean(m),
-          'task.resume',
-        );
-        const cEnd = await s.settle(c, 'turn 3');
-        Object.assign(results2, {
-          progress: { atCrash, after2s, after5s },
-          work_stopped: after5s === after2s,
-          recommended_reconnect: /reconnect/.test(assessed.stdout),
-          same_run: (resume?.params as TaskStartParams | undefined)?.run_id === run1,
-          session_before: session1,
-          session_resumed: (resume?.params as TaskStartParams | undefined)?.session_ref ?? null,
-          task_status: cEnd,
-          decisions: s.decisions(c),
-          report: read(path.join(cRoot, 'backend', 'report-2.md')),
-          result: guard.received('result').at(-1) ?? null,
-        });
-        if (cEnd === 'READY_FOR_VERIFICATION') results2.verification = { status: (await s.verify(c)).task.status };
       } finally {
         await cl.close().catch(() => undefined);
+        budget.settle('restart', guard.turns, v);
         const after = claudeState();
         Object.assign(results, {
-          turn1: results1,
-          turns2_3: results2,
+          verdict: v,
           turns_started: guard.turns,
           refused: guard.refused,
           inits: guard
@@ -475,10 +544,11 @@ describe.skipIf(!MODE)('Claude Code in spawn mode against the installed Claude C
           claude_projects_added: after.projects.filter((k) => !before.projects.includes(k)),
           claude_session_folders_added: after.sessions.filter((k) => !before.sessions.includes(k)),
         });
-        s.save('live', results);
+        s.save('live-restart', results);
       }
-      expect(guard.turns).toBeLessThanOrEqual(BUDGET);
+      expect(guard.turns).toBeLessThanOrEqual(2);
+      expect(v, JSON.stringify(v)).toMatchObject({ status: 'passed' });
     },
-    25 * 60_000,
+    20 * 60_000,
   );
 });

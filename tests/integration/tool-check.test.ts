@@ -121,6 +121,37 @@ describe('tool.check', () => {
     await h.close();
   });
 
+  it('asks a human before a printed value is written into a file (review M8-R01)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const { h, start } = await running(td, 'cx-1', ['src/**']);
+    const check = (command: string) =>
+      h.client.call('tool.check', { tool: 'commandExecution', action: { kind: 'command', command } });
+    // As Claude Code's PowerShell tool passes it, and as Codex wraps it.
+    for (const command of ["'review redirection' > outside.txt", `${PS} "'review redirection' > outside.txt"`]) {
+      expect(await check(command), command).toMatchObject({ decision: 'ask', rule: 'command.git.mutate' });
+    }
+    // Printed or thrown away, it still passes.
+    expect((await check("'review redirection' > $null")).decision).toBe('allow');
+    expect((await check(`${PS} "'--- done'"`)).decision).toBe('allow');
+
+    // What the host does with Friday's answer: it runs the command only when Friday allows it.
+    if (process.platform === 'win32') {
+      const command = "'review redirection' > outside.txt";
+      const verdict = await check(command);
+      if (verdict.decision === 'allow') {
+        const { spawnSync } = await import('node:child_process');
+        spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+          cwd: start.working_directory,
+          stdio: 'ignore',
+        });
+      }
+      const { existsSync } = await import('node:fs');
+      const path = await import('node:path');
+      expect(existsSync(path.join(start.working_directory, 'outside.txt'))).toBe(false);
+    }
+    await h.close();
+  });
+
   it('refuses a write another task holds the reservation of, as the hooks do', async () => {
     const td = await startTestDaemon(ws(), {
       git: true,

@@ -107,13 +107,15 @@ async function held(session: FridaySession): Promise<{ me: MeView; task: TaskVie
 }
 
 /**
- * The 14 Friday tools (plan Appendix 3), transport-agnostic so the stdio server and the
- * Agent SDK spawn adapter (M8) share them.
+ * The Friday tools (plan Appendix 3), transport-agnostic so the stdio server and the spawn
+ * adapters (ADR-0032 §8) share them.
  */
 /** What the host can do for Friday's tools (ADR-0030 §5). */
 export interface HostUi {
   /** Asks the human to approve or reject; null when the host cannot ask or the human dismissed it. */
   ask?: (message: string) => Promise<'approve' | 'reject' | null>;
+  /** Messages for the agent reach its session as they arrive (a spawned session): there is no inbox to check. */
+  relaysMessages?: boolean;
 }
 
 /**
@@ -429,7 +431,7 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
           )
           .join(', ');
         return {
-          text: `Message ${res.message_id} queued for ${who || 'nobody'}${res.note ? ` (${res.note})` : ''}. Correlation ${res.correlation_id}.${a.mode === 'request' ? ' The answer arrives in friday_check_inbox.' : ''}`,
+          text: `Message ${res.message_id} queued for ${who || 'nobody'}${res.note ? ` (${res.note})` : ''}. Correlation ${res.correlation_id}.${a.mode === 'request' ? (host.relaysMessages ? ' The answer reaches you as a message in this session.' : ' The answer arrives in friday_check_inbox.') : ''}`,
           structured: res,
         };
       },

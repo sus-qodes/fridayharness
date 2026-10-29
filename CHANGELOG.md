@@ -2,6 +2,29 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M8a.5, the M8 readiness review
+
+A review of M8a found 7 gaps; each is closed, those that were defects with a regression that failed before the change ([disposition](docs/reviews/2026-10-15-m8-readiness-review-disposition.md)).
+
+- **Commands:**
+  - **Fix:** a value PowerShell only prints, written into a file (`'x' > f`, `$x > f`), passed as a read. A redirection into a file now needs a human's decision at every depth of a command.
+  - **Fix:** a numbered stream (`2> f`) or a quoted target was never seen as a write.
+- **Spawn adapters (Codex and Claude Code) keep serving Friday:**
+  - **Fix:** one failed poll stopped every later instruction, cancellations included, while the heartbeat kept the harness looking healthy. The loop now keeps polling.
+  - After a whole lease without hearing Friday, an adapter ends its hosts' work, and registers again once Friday answers.
+  - A daemon started again on another port is found.
+- **Fix: a start Friday no longer wants starts nothing.** Friday's answer to an acknowledgement now says which runs are current (`current`). A start cancelled, expired or reassigned before the answer ends the host prepared for it.
+- **Fix: Claude Code's startup check can no longer lose to a quick result.** It decides when the report arrives; a report that leaves out what the session runs with is refused.
+- **Fix: how an attempt ended is no longer lost.**
+  - It is kept until Friday records it, on disk with `friday harness run`, and tried with one idempotency key.
+  - A spawn adapter started again is told to resume its running tasks. Before, it was told only about tasks Friday had already judged lost.
+- **Friday's tools in spawned sessions.** Codex and Claude Code sessions that Friday starts can now reach the agents whose work relates to theirs, answer them with facts, ask Friday for context and permissions, and have a declared operation run (`friday_communicate`, `friday_request_context`, `friday_request_permission`, `friday_run_operation`).
+  - Codex gets them as client-served tools (experimental in 0.162.1).
+  - Claude Code gets them from an MCP server the adapter serves, its only one.
+  - Messages reaching a session say their id, so it can answer.
+- **Live checks are gates.** A live check passes only when every behaviour it names was observed. A case it did not run fails as not run, and one that fails keeps the rest of the approved turns. Claude's live cases are selected with `FRIDAY_CLAUDE_LIVE_CASES` (`work`, `restart`).
+- **The live MVP script** starts with a checklist that calls no model: the Codex sandbox, fixed models and spending, a hand-written plan, and what to record.
+
 ## Unreleased — M8a, a second host
 
 - **M8a.1, one judgment for every host** (ADR-0032):

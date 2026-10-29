@@ -1,7 +1,8 @@
 // A scripted stand-in for `codex app-server` (protocol v2 as recorded in M3.5 against Codex
 // 0.162.1). It speaks JSON-RPC over stdio like the real one and plays a script for each turn:
 // agent messages, commands and file changes that ask for approval, writes that do not, reroutes,
-// questions and delegation. An approved long command starts a real process that writes to a work
+// questions, delegation, and calls of the client's own tools (`friday`: Friday's tools, review
+// M8-R06; "$lastMessageId" in its arguments is the newest message steered in). An approved long command starts a real process that writes to a work
 // file, so a test can prove what Friday allowed, declined and stopped. It never calls a model.
 //
 // Environment:
@@ -43,6 +44,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const steers = [];
 let steerWaiter = null;
 let item = 0;
+/** A tool's arguments, with "$lastMessageId" as the id of the newest message steered in. */
+const fill = (v) => {
+  if (v === '$lastMessageId') return /message (msg_[0-9a-z]+)/i.exec(steers.at(-1) ?? '')?.[1] ?? '';
+  if (Array.isArray(v)) return v.map(fill);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fill(x)]));
+  return v;
+};
 
 const WRAP =
   process.platform === 'win32'
@@ -125,8 +133,20 @@ async function play(steps, thread, turnId) {
       log({ userInput: r });
     } else if (s.op === 'delegate') {
       notify('item/started', { threadId: thread.id, turnId, item: { type: 'collabAgentToolCall', id: `collab-${++item}`, tool: 'spawn_agent' } });
+    } else if (s.op === 'friday') {
+      // One of Friday's tools, which the client serves (dynamic tools, experimental in 0.162.1).
+      const r = await ask('item/tool/call', {
+        threadId: thread.id,
+        turnId,
+        callId: `call-${++item}`,
+        tool: s.tool,
+        namespace: null,
+        arguments: fill(s.args ?? {}),
+      });
+      log({ toolCall: s.tool, success: r?.success ?? null, text: r?.contentItems?.[0]?.text ?? null });
     } else if (s.op === 'waitSteer') {
-      if (!steers.length) await new Promise((r) => { steerWaiter = r; });
+      // Until the count-th message of the thread has been steered in (the first by default).
+      while (steers.length < (s.count ?? 1)) await new Promise((r) => { steerWaiter = r; });
     } else if (s.op === 'wait') {
       await sleep(s.ms ?? 100);
     }

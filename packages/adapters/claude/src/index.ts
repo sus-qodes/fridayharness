@@ -69,6 +69,7 @@ export {
   CLAUDE_SPAWN_RULES,
   ClaudeSpawnAdapter,
   type ClaudeSpawnOptions,
+  FRIDAY_SERVER,
   SPAWN_TOOLS,
   STRUCTURED_OUTPUT,
 } from './spawn/adapter.js';

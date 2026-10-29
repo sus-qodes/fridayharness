@@ -23,6 +23,7 @@
     "@friday/adapter-generic": "workspace:*",
     "@friday/execution": "workspace:*",
     "@friday/git": "workspace:*",
+    "@friday/mcp-server": "workspace:*",
     "@friday/protocol": "workspace:*",
     "@friday/sdk": "workspace:*"
   },

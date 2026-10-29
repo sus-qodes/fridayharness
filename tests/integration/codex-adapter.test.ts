@@ -8,10 +8,14 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileS
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CODEX_RULES, CodexAdapter } from '@friday/adapter-codex';
+import { createDaemon } from '@friday/daemon';
+import { SPAWNED_AGENT_TOOLS } from '@friday/mcp-server';
 import type { TaskStartParams, TaskView } from '@friday/protocol';
+import { DaemonClient, loadProject } from '@friday/sdk';
 import { FakeClock, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
+import { answerLost, gate, interceptedBootstrap, method, notDelivered } from '../helpers/faults.js';
 
 const ws = useTestWorkspace();
 let saved: string | undefined;
@@ -44,7 +48,13 @@ interface Script {
 }
 
 /** A Codex agent working for Friday, its host scripted. */
-function codex(td: TestDaemon, agent: string, script: Script, opts: { harnessKey?: string; dir?: string } = {}) {
+function codex(
+  td: TestDaemon,
+  agent: string,
+  script: Script,
+  opts: { harnessKey?: string; dir?: string; bootstrap?: DaemonClient; stateDir?: string } = {},
+) {
+  const sent: string[] = [];
   const dir = opts.dir ?? path.join(ws().root, `codex-${agent}`);
   mkdirSync(dir, { recursive: true });
   const scriptFile = path.join(dir, 'script.json');
@@ -52,7 +62,12 @@ function codex(td: TestDaemon, agent: string, script: Script, opts: { harnessKey
   const log = path.join(dir, 'log.jsonl');
   const work = path.join(dir, 'work');
   const adapter = new CodexAdapter({
-    bootstrap: td.bootstrap,
+    bootstrap: opts.bootstrap ?? td.bootstrap,
+    // What the adapter wrote to its host, as it wrote it.
+    trace: (direction: 'send' | 'receive', line: string) => {
+      if (direction === 'send') sent.push(line);
+    },
+    ...(opts.stateDir ? { stateDir: opts.stateDir } : {}),
     projectId: td.project.project_id,
     agentKey: agent,
     role: 'backend',
@@ -75,7 +90,7 @@ function codex(td: TestDaemon, agent: string, script: Script, opts: { harnessKey
     const f = path.join(work, `${taskId}.work`);
     return existsSync(f) ? statSync(f).size : 0;
   };
-  return { adapter, entries, workDone, dir };
+  return { adapter, entries, workDone, dir, sent };
 }
 
 async function eventually<T>(fn: () => T | Promise<T>, ok: (v: T) => boolean, what: string, ms = 30_000): Promise<T> {
@@ -139,8 +154,18 @@ describe('the Codex adapter', () => {
     expect(path.resolve(String(started.cwd))).toBe(path.resolve(root));
     expect(String(started.developerInstructions)).toContain(CODEX_RULES.split('\n')[0]);
     expect(String(started.developerInstructions)).toContain(id);
-    // Codex has none of Friday's own tools, so its instructions name none (the M8a live check).
-    expect(String(started.developerInstructions)).not.toMatch(/friday_[a-z]+|friday:\/\//);
+    // Its instructions name only the Friday tools the thread has (the M8a live check, review M8-R06).
+    const named = new Set(String(started.developerInstructions).match(/friday_[a-z_]+/g) ?? []);
+    expect(
+      [...named].every((t) => (SPAWNED_AGENT_TOOLS as readonly string[]).includes(t)),
+      [...named].join(),
+    ).toBe(true);
+    expect(String(started.developerInstructions)).not.toMatch(/friday:\/\//);
+    // ...and those tools are the thread's, served by the adapter.
+    expect((started.dynamicTools as { name: string }[]).map((t) => t.name)).toEqual([...SPAWNED_AGENT_TOOLS]);
+    expect(c.entries().find((e) => e.request === 'initialize')?.params).toMatchObject({
+      capabilities: { experimentalApi: true },
+    });
     expect(String(started.developerInstructions)).toContain("Finish as the instructions from Friday's adapter");
     // Nothing of the host's own that Friday cannot judge: the checkout, and the main checkout Codex
     // keys a worktree's trust by, are untrusted for the thread (the repository's Codex files do not
@@ -353,5 +378,296 @@ describe('the Codex adapter', () => {
     );
     const resumed = second.entries().find((e) => e.request === 'thread/resume')?.params as { threadId: string };
     expect(resumed.threadId).toBe(sessionRef);
+  });
+
+  it('starts no turn for a start Friday no longer wants (review M8-R03)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const x = interceptedBootstrap(td);
+    const c = codex(
+      td,
+      'h-1',
+      { turns: [[{ op: 'final', status: 'completed', summary: 'x', changed_paths: [] }]] },
+      {
+        bootstrap: x.client,
+      },
+    );
+    let taskId = '';
+    const polls = gate();
+    const acked = gate();
+    const isStart = (p: Record<string, unknown>) =>
+      (p.acks as { message_id: string }[]).some((a) =>
+        c.adapter.received.some((m) => m.message_id === a.message_id && m.method === 'task.start'),
+      );
+    // Friday cancels the task just before the adapter's acknowledgement of task.start reaches it,
+    // and the adapter's later polls wait: the cancellation reaches it late.
+    x.on(method('harness.ack', isStart), async (_call, forward) => {
+      await td.operator.post(td.operator.projectPath(`/tasks/${taskId}/cancel`), { reason: 'not wanted any more' });
+      x.on(
+        method('harness.poll'),
+        async (_c, fwd) => {
+          await polls.promise;
+          return fwd();
+        },
+        Number.POSITIVE_INFINITY,
+      );
+      const res = await forward();
+      acked.open();
+      return res;
+    });
+    await c.adapter.start();
+    taskId = await assigned(td, 'h-1', ['src/**']);
+    await acked.promise;
+    const runId =
+      (c.adapter.received.find((m) => m.method === 'task.start')?.params as TaskStartParams | undefined)?.run_id ?? '';
+    const turnSent = () => c.sent.some((l) => l.includes('"method":"turn/start"'));
+    // Either the adapter starts the turn, or it gives the attempt up: whichever happens first.
+    await eventually(() => turnSent() || !c.adapter.running(runId), Boolean, 'the turn, or the attempt given up');
+    polls.open();
+    await eventually(
+      () => c.adapter.running(runId),
+      (r) => !r,
+      'the attempt ended',
+    );
+    expect(status(td, taskId).status).toBe('CANCELLED');
+    expect(turnSent(), 'what the adapter sent its host').toBe(false);
+    expect(
+      c.entries().some((e) => e.request === 'turn/start'),
+      'what the host received',
+    ).toBe(false);
+  });
+
+  it('keeps serving Friday after a poll fails, so a cancellation still stops the work (review M8-R02)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const x = interceptedBootstrap(td);
+    const c = codex(
+      td,
+      'h-1',
+      { turns: [[{ op: 'command', command: 'node --test', long: true }]] },
+      { bootstrap: x.client },
+    );
+    await c.adapter.start();
+    const id = await assigned(td, 'h-1', ['src/**']);
+    await eventually(
+      () => c.workDone(id),
+      (n) => n > 0,
+      'the work',
+    );
+    const runId = status(td, id).current_run_id as string;
+    // One poll never reaches Friday; the heartbeat keeps working.
+    const failed = gate();
+    x.on(method('harness.poll'), async (call, forward) => {
+      failed.open();
+      return notDelivered(call, forward);
+    });
+    await failed.promise;
+    await td.operator.post(td.operator.projectPath(`/tasks/${id}/cancel`), { reason: 'stop it' });
+    expect(status(td, id).status).toBe('CANCELLED');
+    // The cancellation reaches the adapter, which ends the host and everything it started.
+    await eventually(
+      () => c.adapter.running(runId),
+      (r) => !r,
+      'the attempt ended',
+      15_000,
+    );
+    // Its group ends with the attempt: the writer stops growing.
+    await eventually(
+      async () => {
+        const size = c.workDone(id);
+        await new Promise((r) => setTimeout(r, 300));
+        return c.workDone(id) === size;
+      },
+      Boolean,
+      'the writer to stop',
+      10_000,
+    );
+  });
+
+  it('records a completion claim whose report failed, exactly once (review M8-R05)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const final = { op: 'final', status: 'completed', summary: 'done', changed_paths: [] };
+    // The first report never reaches Friday.
+    const a = interceptedBootstrap(td);
+    a.on(method('agent.result'), notDelivered);
+    const one = codex(td, 'h-1', { turns: [[final]] }, { bootstrap: a.client });
+    await one.adapter.start();
+    const first = await assigned(td, 'h-1', ['src/**']);
+    await eventually(
+      () => status(td, first).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the first claim',
+      15_000,
+    );
+    // The second is recorded, and its answer is lost on the way back.
+    const b = interceptedBootstrap(td);
+    b.on(method('agent.result'), answerLost);
+    const two = codex(td, 'h-2', { turns: [[final]] }, { bootstrap: b.client });
+    await two.adapter.start();
+    const second = await assigned(td, 'h-2', ['lib/**']);
+    await eventually(
+      () => status(td, second).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the second claim',
+      15_000,
+    );
+    await eventually(
+      () => b.calls.filter((c) => c.method === 'agent.result').length,
+      (n) => n >= 2,
+      'the retry',
+    );
+    for (const id of [first, second]) {
+      const claimed = td.daemon.state.store
+        .readByRef(td.project.project_id, 'task', id)
+        .filter((e) => e.type === 'task.completion_claimed');
+      expect(claimed, id).toHaveLength(1);
+    }
+  });
+
+  it('reports the result of a finished attempt after the adapter restarts, without a new turn (review M8-R05)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const stateDir = path.join(ws().root, 'adapter-state');
+    const x = interceptedBootstrap(td);
+    // Friday is unreachable for the report, and the adapter stops before it gets through.
+    const reports = gate();
+    const stopFailing = x.on(
+      method('agent.result'),
+      async (call, forward) => {
+        reports.open();
+        return notDelivered(call, forward);
+      },
+      Number.POSITIVE_INFINITY,
+    );
+    const script = { turns: [[{ op: 'final', status: 'completed', summary: 'done', changed_paths: [] }]] };
+    const one = codex(td, 'h-1', script, { bootstrap: x.client, harnessKey: 'codex:restart-r05', stateDir });
+    await one.adapter.start();
+    const id = await assigned(td, 'h-1', ['src/**']);
+    await reports.promise;
+    await one.adapter.crash();
+    stopFailing();
+    expect(status(td, id).status).toBe('RUNNING');
+    // The same harness comes back, with the same state folder.
+    const two = codex(td, 'h-1', script, {
+      harnessKey: 'codex:restart-r05',
+      stateDir,
+      dir: path.join(ws().root, 'again'),
+    });
+    await two.adapter.start();
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the claim',
+      15_000,
+    );
+    const claimed = td.daemon.state.store
+      .readByRef(td.project.project_id, 'task', id)
+      .filter((e) => e.type === 'task.completion_claimed');
+    expect(claimed).toHaveLength(1);
+    // The host was not asked to work again.
+    expect(two.sent, 'what the second adapter sent a host').toEqual([]);
+  });
+
+  it('stops its hosts when Friday is not heard for a lease, and resumes the same run once it is (review M8-R02)', async () => {
+    const td = await startTestDaemon(ws(), {
+      git: true,
+      brain: false,
+      extraConfig: 'leases:\n  heartbeat_interval_ms: 1000\n  lease_ttl_ms: 2000\n',
+    });
+    const x = interceptedBootstrap(td);
+    const c = codex(
+      td,
+      'h-1',
+      {
+        turns: [[{ op: 'command', command: 'node --test', long: true }]],
+        resume: [{ op: 'final', status: 'completed', summary: 'resumed', changed_paths: [] }],
+      },
+      { bootstrap: x.client },
+    );
+    await c.adapter.start();
+    const id = await assigned(td, 'h-1', ['src/**']);
+    await eventually(
+      () => c.workDone(id),
+      (n) => n > 0,
+      'the work',
+    );
+    const runId = status(td, id).current_run_id as string;
+    // Friday cannot be reached for instructions for longer than a lease: no cancellation would
+    // reach this adapter, so it stops its hosts.
+    const stopFailing = x.on(method('harness.poll'), notDelivered, Number.POSITIVE_INFINITY);
+    await eventually(
+      () => c.adapter.running(runId),
+      (r) => !r,
+      'the hosts stopped',
+      15_000,
+    );
+    // Its group ends with the attempt: the writer stops growing.
+    await eventually(
+      async () => {
+        const size = c.workDone(id);
+        await new Promise((r) => setTimeout(r, 300));
+        return c.workDone(id) === size;
+      },
+      Boolean,
+      'the writer to stop',
+      10_000,
+    );
+    // Friday answers again: the adapter registers again, and Friday resumes the same run.
+    stopFailing();
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the claim after resuming',
+      20_000,
+    );
+    expect(td.daemon.state.q.findRun(runId)?.outcome).toBe('completed_claim');
+    expect(
+      c.adapter.received.some((m) => m.method === 'task.resume' && (m.params as TaskStartParams).run_id === runId),
+    ).toBe(true);
+  });
+
+  it('finds Friday started again on another port, and still stops the work it is told to (review M8-R02)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    // As `friday harness run` makes it: from the project's discovery files.
+    const bootstrap = DaemonClient.forProject(loadProject(ws().projectDir), 'bootstrap');
+    const c = codex(td, 'h-1', { turns: [[{ op: 'command', command: 'node --test', long: true }]] }, { bootstrap });
+    await c.adapter.start();
+    const id = await assigned(td, 'h-1', ['src/**']);
+    await eventually(
+      () => c.workDone(id),
+      (n) => n > 0,
+      'the work',
+    );
+    const runId = status(td, id).current_run_id as string;
+    await td.daemon.close('started again');
+    const again = await createDaemon({
+      projectRoot: ws().projectDir,
+      stateDir: ws().stateDir,
+      tickMs: 0,
+      pollIntervalMs: 25,
+      logToFile: true,
+    });
+    ws().track({ close: () => again.close('test cleanup') });
+    const operator = new DaemonClient({
+      baseUrl: again.url,
+      token: again.tokens.operator,
+      tokenClass: 'operator',
+      projectId: again.project.project_id,
+    });
+    await operator.post(operator.projectPath(`/tasks/${id}/cancel`), { reason: 'stop it' });
+    await eventually(
+      () => c.adapter.running(runId),
+      (r) => !r,
+      'the attempt ended',
+      20_000,
+    );
+    // Its group ends with the attempt: the writer stops growing.
+    await eventually(
+      async () => {
+        const size = c.workDone(id);
+        await new Promise((r) => setTimeout(r, 300));
+        return c.workDone(id) === size;
+      },
+      Boolean,
+      'the writer to stop',
+      10_000,
+    );
   });
 });

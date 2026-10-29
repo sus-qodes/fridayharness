@@ -1,3 +1,4 @@
+import path from 'node:path';
 import {
   bundledHookPath,
   ClaudeSpawnAdapter,
@@ -7,7 +8,7 @@ import {
   SPAWN_MIN,
 } from '@friday/adapter-claude';
 import { CodexAdapter, type CodexSandbox, codexDoctor, findCodex, hostEnvironment } from '@friday/adapter-codex';
-import { DaemonClient } from '@friday/sdk';
+import { DaemonClient, type ProjectRef, privateDirFor } from '@friday/sdk';
 import { type Command, Option } from 'commander';
 import { type GlobalOptions, out, project, UsageError } from './context.js';
 import { renderDoctor } from './doctor.js';
@@ -22,6 +23,14 @@ interface SpawnRunOptions {
   serviceTier?: string;
   windowsSandbox?: 'elevated' | 'unelevated';
   maxBudgetUsd?: string;
+}
+
+/**
+ * An adapter's own folder in the project's private state folder: how an attempt ended waits there
+ * until Friday records it, across restarts of the adapter (ADR-0032 §1, review M8-R05).
+ */
+function adapterState(ref: ProjectRef, vendor: string, agentKey: string): string {
+  return path.join(privateDirFor(ref), 'adapters', `${vendor}-${agentKey.replace(/[^A-Za-z0-9_.-]/g, '_')}`);
 }
 
 /** A spending cap given on the command line, in dollars. */
@@ -71,6 +80,7 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
         projectId: ref.project_id,
         agentKey,
         role: o.role,
+        stateDir: adapterState(ref, 'codex', agentKey),
         host: {
           command: install.binary,
           args: ['app-server'],
@@ -117,6 +127,7 @@ async function runClaudeSpawn(g: () => GlobalOptions, o: SpawnRunOptions): Promi
     projectId: ref.project_id,
     agentKey,
     role: o.role,
+    stateDir: adapterState(ref, 'claude-code', agentKey),
     host: { command: install.binary, ...(install.version ? { version: install.version } : {}) },
     hostEnv: claudeEnvironment(),
     hook: { command: process.execPath, args: [bundledHookPath()] },

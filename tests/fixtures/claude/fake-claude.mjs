@@ -3,11 +3,16 @@
 // hook launcher for each tool call as Claude Code runs a settings file's hooks (exec form, input on
 // standard input), acts on the decision, and ends the turn with a result whose structured output
 // follows the schema it was given. An allowed long command starts a real process that writes to a
-// work file, so a test can prove what Friday stopped. It never calls a model.
+// work file, so a test can prove what Friday stopped. It connects to the HTTP MCP servers of its
+// `--mcp-config` with the MCP SDK's client, lists their tools as Claude Code does, and calls
+// Friday's (`friday` steps; "$lastMessageId" in their arguments is the newest message taken in).
+// It never calls a model.
 //
 // Environment:
 //   FAKE_CLAUDE_SCRIPT  a JSON file: { model?, extraTools?: string[], mcpServers?: string[],
-//                       plugins?: string[], skills?: string[], turns: Step[][], resume?: Step[] }
+//                       plugins?: string[], skills?: string[], omitInit?: string[] (fields left out of
+//                       the startup report), initAfterResult?: true (the report after the result),
+//                       turns: Step[][], resume?: Step[] }
 //   FAKE_CLAUDE_LOG     a JSON-lines file of what it was given and what it did
 //   FAKE_CLAUDE_WORK    a folder: <task>.work files grow while a long command runs;
 //                       session-<id>.json remembers each session, so --resume can find it
@@ -15,6 +20,8 @@ import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const script = JSON.parse(readFileSync(process.env.FAKE_CLAUDE_SCRIPT, 'utf8'));
 const logFile = process.env.FAKE_CLAUDE_LOG;
@@ -60,6 +67,37 @@ const tools = String(flags['--tools'] ?? '')
   .filter(Boolean);
 const cwd = process.cwd();
 const model = flags['--model'] ?? script.model ?? 'claude-fake';
+
+// ---- MCP servers: those of --mcp-config (a file or JSON), connected as Claude Code connects them --
+const mcpConfig = (() => {
+  const v = String(flags['--mcp-config'] ?? '');
+  if (!v) return { mcpServers: {} };
+  try {
+    return JSON.parse(v.trim().startsWith('{') ? v : readFileSync(v, 'utf8'));
+  } catch {
+    return { mcpServers: {} };
+  }
+})();
+const mcp = {};
+for (const [name, cfg] of Object.entries(mcpConfig.mcpServers ?? {})) {
+  if (cfg?.type !== 'http') continue;
+  const client = new Client({ name: 'fake-claude', version: '2.1.300' });
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(cfg.url), { requestInit: { headers: cfg.headers ?? {} } }));
+    mcp[name] = { client, tools: (await client.listTools()).tools.map((t) => t.name) };
+  } catch (e) {
+    mcp[name] = { client: null, tools: [], error: String(e) };
+  }
+}
+log({ mcp: Object.fromEntries(Object.entries(mcp).map(([k, v]) => [k, v.error ?? v.tools])) });
+let lastReceived = '';
+/** A tool's arguments, with "$lastMessageId" as the id of the newest message taken in. */
+const fill = (v) => {
+  if (v === '$lastMessageId') return /message (msg_[0-9a-z]+)/i.exec(lastReceived)?.[1] ?? '';
+  if (Array.isArray(v)) return v.map(fill);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fill(x)]));
+  return v;
+};
 
 const send = (msg) => process.stdout.write(`${JSON.stringify({ session_id: sessionId, ...msg })}\n`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -116,8 +154,12 @@ async function decide(toolName, toolInput) {
       if (decision === 'deny') break;
     }
   }
-  // No hook allowed it and no prompt can be answered: reads pass, the rest is refused.
-  if (decision === null) decision = ['Read', 'Glob', 'Grep'].includes(toolName) ? 'allow' : 'deny';
+  // No hook decided: the settings' permission rules (a server-level `mcp__<server>` rule covers its
+  // tools); reads pass; nothing else can prompt, so the rest is refused.
+  const allowRule = (settings.permissions?.allow ?? []).some(
+    (r) => r === toolName || (/^mcp__[^_]+$/.test(r) && toolName.startsWith(`${r}__`)),
+  );
+  if (decision === null) decision = allowRule || ['Read', 'Glob', 'Grep'].includes(toolName) ? 'allow' : 'deny';
   if (decision === 'ask') decision = 'deny';
   log({ hook: 'PreToolUse', tool: toolName, input: toolInput, decision, reason });
   return { decision, reason };
@@ -175,7 +217,8 @@ const textOf = (msg) => {
 const take = (msg) => {
   // `--replay-user-messages`: a message taken into the conversation comes back, with its uuid.
   if (flags['--replay-user-messages']) send({ type: 'user', uuid: msg.uuid, message: msg.message, parent_tool_use_id: null, isReplay: true });
-  log({ received_message: textOf(msg) });
+  lastReceived = textOf(msg);
+  log({ received_message: lastReceived });
 };
 
 async function play(steps) {
@@ -203,6 +246,15 @@ async function play(steps) {
     } else if (s.op === 'tool') {
       // Any other tool, as a session that has it would call it.
       await tool(s.name, s.input ?? {}, () => 'ok');
+    } else if (s.op === 'friday') {
+      // One of Friday's tools, through the MCP server the adapter serves (review M8-R06).
+      const args = fill(s.args ?? {});
+      await tool(`mcp__friday__${s.tool}`, args, async () => {
+        const r = await mcp.friday.client.callTool({ name: s.tool, arguments: args });
+        const text = r.content?.[0]?.text ?? '';
+        log({ toolCall: s.tool, success: !r.isError, text });
+        return text;
+      });
     } else if (s.op === 'message') {
       send({ type: 'assistant', message: { role: 'assistant', model, content: [{ type: 'text', text: s.text }] }, parent_tool_use_id: null });
     } else if (s.op === 'waitMessage') {
@@ -250,13 +302,21 @@ const text = textOf(first);
 const task = /task_[0-9a-z]{26}/i.exec(text)?.[0];
 if (task) session.task = task;
 const resumed = /Continue the task where you left off/.test(text);
-send({
+const init = {
   type: 'system',
   subtype: 'init',
   cwd,
   model,
-  tools: [...tools, ...(flags['--json-schema'] ? ['StructuredOutput'] : []), ...(script.extraTools ?? [])],
-  mcp_servers: (script.mcpServers ?? []).map((name) => ({ name, status: 'connected' })),
+  tools: [
+    ...tools,
+    ...(flags['--json-schema'] ? ['StructuredOutput'] : []),
+    ...Object.entries(mcp).flatMap(([server, v]) => v.tools.map((t) => `mcp__${server}__${t}`)),
+    ...(script.extraTools ?? []),
+  ],
+  mcp_servers: [
+    ...Object.entries(mcp).map(([name, v]) => ({ name, status: v.client ? 'connected' : 'failed' })),
+    ...(script.mcpServers ?? []).map((name) => ({ name, status: 'connected' })),
+  ],
   // Claude Code's built-in plugins load in a restricted session too (2.1.300).
   plugins: [
     ...['cc-plugin-agents-md', 'cc-plugin-telemetry', 'cc-plugin-plugin-authoring'].map((name) => ({
@@ -270,12 +330,16 @@ send({
   permissionMode: 'default',
   claude_code_version: '2.1.300',
   apiKeySource: 'none',
-});
+};
+// A host whose report lacks fields, or comes late, as a test asks for (review M8-R04).
+for (const k of script.omitInit ?? []) delete init[k];
+if (!script.initAfterResult) send(init);
 take(first);
 const steps = resumed ? (script.resume ?? []) : (script.turns[session.turns] ?? []);
 session.turns += 1;
 save();
 await play(steps);
+if (script.initAfterResult) send(init);
 // After the result, Claude Code waits for more input; closing it ends the session.
 await new Promise((r) => {
   const check = () => (inputClosed ? r() : setTimeout(check, 50));

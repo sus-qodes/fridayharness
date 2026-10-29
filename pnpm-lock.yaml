@@ -333,6 +333,9 @@ importers:
       '@friday/git':
         specifier: workspace:*
         version: link:../../git
+      '@friday/mcp-server':
+        specifier: workspace:*
+        version: link:../../mcp-server
       '@friday/protocol':
         specifier: workspace:*
         version: link:../../protocol

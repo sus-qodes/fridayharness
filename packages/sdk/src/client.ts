@@ -35,6 +35,11 @@ export interface DaemonClientOptions {
   timeoutMs?: number;
   /** Re-reads the token after a 401 (the daemon rotates tokens on restart). */
   refreshToken?: () => string | undefined;
+  /**
+   * Re-reads where the daemon listens after a connection fails: a daemon started again listens on
+   * another port when none is configured (review M8-R02).
+   */
+  refreshBaseUrl?: () => string | undefined;
   clientName?: string;
 }
 
@@ -42,24 +47,31 @@ let rpcCounter = 0;
 
 /** HTTP and JSON-RPC client for one project's daemon. Never logs or echoes its token. */
 export class DaemonClient {
-  readonly baseUrl: string;
   readonly tokenClass: TokenClass;
   readonly projectId: string;
+  #baseUrl: string;
   #token: string;
   readonly #fetch: typeof fetch;
   readonly #timeoutMs: number;
   readonly #refresh: (() => string | undefined) | undefined;
+  readonly #refreshBase: (() => string | undefined) | undefined;
   readonly #clientName: string;
 
   constructor(opts: DaemonClientOptions) {
-    this.baseUrl = opts.baseUrl.replace(/\/+$/, '');
+    this.#baseUrl = opts.baseUrl.replace(/\/+$/, '');
     this.tokenClass = opts.tokenClass;
     this.projectId = opts.projectId;
     this.#token = opts.token;
     this.#fetch = opts.fetch ?? fetch;
     this.#timeoutMs = opts.timeoutMs ?? 15_000;
     this.#refresh = opts.refreshToken;
+    this.#refreshBase = opts.refreshBaseUrl;
     this.#clientName = opts.clientName ?? 'friday-sdk';
+  }
+
+  /** Where the daemon listens, as last discovered. */
+  get baseUrl(): string {
+    return this.#baseUrl;
   }
 
   /** Client for a local project using the operator (CLI) or bootstrap (MCP server, hooks) token. */
@@ -81,6 +93,7 @@ export class DaemonClient {
       tokenClass,
       projectId: ref.project_id,
       refreshToken: () => readToken(ref, tokenClass),
+      refreshBaseUrl: () => readDiscovery(ref)?.url,
       ...opts,
     });
   }
@@ -88,13 +101,16 @@ export class DaemonClient {
   /** Same daemon, different credential (e.g. the harness token issued at registration). */
   withToken(token: string, tokenClass: TokenClass): DaemonClient {
     return new DaemonClient({
-      baseUrl: this.baseUrl,
+      baseUrl: this.#baseUrl,
       token,
       tokenClass,
       projectId: this.projectId,
       fetch: this.#fetch,
       timeoutMs: this.#timeoutMs,
       clientName: this.#clientName,
+      // The daemon's address may move; a credential it issued is still its own (harness tokens
+      // outlive a daemon restart).
+      ...(this.#refreshBase ? { refreshBaseUrl: this.#refreshBase } : {}),
     });
   }
 
@@ -103,7 +119,7 @@ export class DaemonClient {
   }
 
   private url(path: string, query?: RequestOptions['query']): string {
-    const u = new URL(this.baseUrl + path);
+    const u = new URL(this.#baseUrl + path);
     for (const [k, v] of Object.entries(query ?? {})) {
       if (v === undefined) continue;
       if (Array.isArray(v)) for (const item of v) u.searchParams.append(k, item);
@@ -120,7 +136,13 @@ export class DaemonClient {
     };
   }
 
-  async raw(method: string, path: string, body?: unknown, opts: RequestOptions = {}): Promise<Response> {
+  async raw(
+    method: string,
+    path: string,
+    body?: unknown,
+    opts: RequestOptions = {},
+    rediscovered = false,
+  ): Promise<Response> {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? this.#timeoutMs);
     const signal = opts.signal ? AbortSignal.any([opts.signal, ctrl.signal]) : ctrl.signal;
@@ -138,7 +160,14 @@ export class DaemonClient {
         throw new DaemonUnreachableError(`request to the Friday daemon timed out (${method} ${path})`, { cause: e });
       }
       if (opts.signal?.aborted) throw e;
-      throw new DaemonUnreachableError(`cannot reach the Friday daemon at ${this.baseUrl}; is "friday run" running?`, {
+      // Nothing listens here any more: a daemon started again may listen elsewhere.
+      const moved = rediscovered ? undefined : this.#refreshBase?.()?.replace(/\/+$/, '');
+      if (moved && moved !== this.#baseUrl) {
+        this.#baseUrl = moved;
+        clearTimeout(timer);
+        return this.raw(method, path, body, opts, true);
+      }
+      throw new DaemonUnreachableError(`cannot reach the Friday daemon at ${this.#baseUrl}; is "friday run" running?`, {
         cause: e,
       });
     } finally {

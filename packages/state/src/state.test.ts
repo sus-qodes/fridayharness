@@ -435,3 +435,74 @@ describe('tokens, approvals and observations', () => {
     expectError(() => state.recordObservation(PROJECT, human, 'task.completed', {}), 'COS-1000');
   });
 });
+
+describe('what an acknowledgement makes current (review M8-R03, R05)', () => {
+  const startFor = (key: string, agent: string) => {
+    const reg = register(key, { mode: 'spawn', agent });
+    const task = state.createTask(PROJECT, human, { summary: `for ${agent}`, ready: true });
+    state.assignTask(PROJECT, human, task.task_id, agent);
+    const [msg] = state.pollOutbox(PROJECT, reg.harness_id);
+    return { reg, task, id: msg?.message_id as string };
+  };
+  const ack = (reg: { harness_id: string }, id: string) =>
+    state.ackOutbox(PROJECT, reg.harness_id, [{ message_id: id, accepted: true }]);
+
+  it('an accepted start is current, and stays so when the same acknowledgement is read again', () => {
+    const { reg, id } = startFor('a', 'dev-1');
+    expect(ack(reg, id)).toMatchObject({ acked: [id], current: [id] });
+    expect(ack(reg, id)).toMatchObject({ acked: [id], current: [id] });
+  });
+
+  it('a start Friday no longer wants is acknowledged, and is not current', () => {
+    // Cancelled before the acknowledgement arrived.
+    const one = startFor('a', 'dev-1');
+    state.cancelTask(PROJECT, human, one.task.task_id, 'not wanted');
+    expect(ack(one.reg, one.id)).toMatchObject({ acked: [one.id], current: [] });
+    // Released (its delivery expired) and given to another agent.
+    const two = startFor('b', 'dev-2');
+    state.releaseTask(PROJECT, human, two.task.task_id, 'someone else');
+    register('c', { mode: 'spawn', agent: 'dev-3' });
+    state.assignTask(PROJECT, human, two.task.task_id, 'dev-3');
+    expect(ack(two.reg, two.id)).toMatchObject({ acked: [two.id], current: [] });
+    expect(state.q.task(PROJECT, two.task.task_id).status).toBe('ASSIGNED');
+  });
+
+  it('a resume Friday no longer wants is not current either', () => {
+    const { reg, task, id } = startFor('a', 'dev-1');
+    ack(reg, id);
+    clock.advance(31_000);
+    state.tick(PROJECT);
+    register('a', { mode: 'spawn', agent: 'dev-1' });
+    const [resume] = state.pollOutbox(PROJECT, reg.harness_id);
+    expect(resume?.method).toBe('task.resume');
+    state.releaseTask(PROJECT, human, task.task_id, 'reassigned while the harness was away');
+    expect(ack(reg, resume?.message_id as string).current).toEqual([]);
+  });
+
+  it('a spawn harness that registers again is told to resume what it holds as running, not what waits for a human', () => {
+    const running = startFor('a', 'dev-1');
+    ack(running.reg, running.id);
+    const blocked = startFor('b', 'dev-2');
+    ack(blocked.reg, blocked.id);
+    const run = state.q.task(PROJECT, blocked.task.task_id).current_run_id as string;
+    state.submitResult(PROJECT, callerOf(blocked.reg), {
+      idempotency_key: 'blocked-1',
+      task_id: blocked.task.task_id,
+      run_id: run,
+      status: 'blocked',
+      summary: 'needs a decision',
+      changed_paths: [],
+      checks: [],
+      notes: [],
+      risks: [],
+    });
+    // Both adapters start again before their leases run out.
+    register('a', { mode: 'spawn', agent: 'dev-1' });
+    register('b', { mode: 'spawn', agent: 'dev-2' });
+    const [resume] = state.pollOutbox(PROJECT, running.reg.harness_id);
+    expect(resume).toMatchObject({ method: 'task.resume', params: { task_id: running.task.task_id } });
+    expect(ack(running.reg, resume?.message_id as string).current).toEqual([resume?.message_id]);
+    expect(state.q.task(PROJECT, running.task.task_id).status).toBe('RUNNING');
+    expect(state.pollOutbox(PROJECT, blocked.reg.harness_id)).toEqual([]);
+  });
+});

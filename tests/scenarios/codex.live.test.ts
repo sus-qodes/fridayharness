@@ -14,6 +14,10 @@
  *
  * A guard sits on the adapter's protocol trace: a turn past the budget, or on another model,
  * effort or tier, is refused before it is sent, and so is a thread on another tier.
+ *
+ * The case is a gate (review M8-R07): it passes only when every behaviour its plan names was
+ * observed, and its evidence is saved whatever happens. A run that stops early to keep the budget
+ * fails with what it did not show; a plan the approved turns cannot cover fails as not run.
  */
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -27,6 +31,7 @@ import { DaemonClient } from '@friday/sdk';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli } from '../helpers/cli.js';
+import { incomplete, type Verdict, verdict } from '../helpers/live-verdict.js';
 
 const MODE = process.env.FRIDAY_CODEX_LIVE;
 const OUT = process.env.FRIDAY_CODEX_LIVE_OUT;
@@ -344,6 +349,9 @@ describe.skipIf(!MODE)('the Codex adapter against the real Codex app-server', ()
   it.runIf(MODE === '1')(
     'works a task end to end, takes a message mid-turn, and resumes its thread after a crash, in at most six turns',
     async () => {
+      // A plan the approved turns cannot cover is not run: it fails, as not run, before any turn.
+      const need = PLAN === 'steer' ? 1 : 2;
+      if (BUDGET < need) expect.fail(`not run: the ${PLAN} plan needs ${need} turn(s), and ${BUDGET} are approved`);
       const guard = new Guard(BUDGET);
       const before = codexConfig();
       const s = await setup(guard);
@@ -371,79 +379,171 @@ describe.skipIf(!MODE)('the Codex adapter against the real Codex app-server', ()
           8 * 60_000,
         );
       let cx = s.adapter();
+      let v: Verdict = incomplete('the case stopped before its end');
       try {
-        await cx.start();
-        // Turn 1: a slow check, then a file with its result. A message arrives while the check runs
-        // and is steered into the turn; then the harness dies, and its work must stop with it.
-        const c = await s.assign(
-          'Slow report',
-          [
-            // In one process: Codex's unelevated Windows sandbox lets no command start another (live turn 5).
-            'Run the slow report check with `node --test --test-isolation=none backend/checks/slow-report.check.mjs` (it takes about 20 seconds).',
-            'Then write the line of its output that starts with "report:" into backend/report.md.',
-          ].join(' '),
-          ['backend/report.md holds the report line'],
-        );
-        const cRoot = await s.rootOf(c);
-        const progress = path.join(cRoot, 'backend', 'slow.progress');
-        const ended = () => ['READY_FOR_VERIFICATION', 'WAITING', 'CANCELLED'].includes(s.task(c).status);
-        const running = await eventually(
-          () => size(progress) || (ended() ? -1 : 0),
-          (n) => n >= 3 || n < 0,
-          'the slow check to run',
-          8 * 60_000,
-        );
-        const commands = () =>
-          guard
-            .notes('item/completed')
-            .map((p) => p.item as { type?: string; command?: string; exitCode?: number; status?: string })
-            .filter((i) => i?.type === 'commandExecution')
-            .map((i) => ({ command: i.command, status: i.status, exitCode: i.exitCode }));
-        const approvals = () =>
-          guard.lines
-            .filter((l) => l.dir === 'receive' && /requestApproval$/.test(l.msg.method ?? ''))
-            .map((l) => ({ method: l.msg.method, command: l.msg.params?.command ?? null }));
-        const answers = () =>
-          guard.lines
-            .filter((l) => l.dir === 'send' && l.msg.result && 'decision' in (l.msg.result as object))
-            .map((l) => (l.msg.result as { decision: string }).decision);
-        if (running < 0) {
+        // Every way through ends with what was observed (review M8-R07); the evidence is saved below.
+        v = await (async (): Promise<Verdict> => {
+          await cx.start();
+          // Turn 1: a slow check, then a file with its result. A message arrives while the check runs
+          // and is steered into the turn; then the harness dies, and its work must stop with it.
+          const c = await s.assign(
+            'Slow report',
+            [
+              // In one process: Codex's unelevated Windows sandbox lets no command start another (live turn 5).
+              'Run the slow report check with `node --test --test-isolation=none backend/checks/slow-report.check.mjs` (it takes about 20 seconds).',
+              'Then write the line of its output that starts with "report:" into backend/report.md.',
+            ].join(' '),
+            ['backend/report.md holds the report line'],
+          );
+          const cRoot = await s.rootOf(c);
+          const progress = path.join(cRoot, 'backend', 'slow.progress');
+          const ended = () => ['READY_FOR_VERIFICATION', 'WAITING', 'CANCELLED'].includes(s.task(c).status);
+          const running = await eventually(
+            () => size(progress) || (ended() ? -1 : 0),
+            (n) => n >= 3 || n < 0,
+            'the slow check to run',
+            8 * 60_000,
+          );
+          const commands = () =>
+            guard
+              .notes('item/completed')
+              .map((p) => p.item as { type?: string; command?: string; exitCode?: number; status?: string })
+              .filter((i) => i?.type === 'commandExecution')
+              .map((i) => ({ command: i.command, status: i.status, exitCode: i.exitCode }));
+          const approvals = () =>
+            guard.lines
+              .filter((l) => l.dir === 'receive' && /requestApproval$/.test(l.msg.method ?? ''))
+              .map((l) => ({ method: l.msg.method, command: l.msg.params?.command ?? null }));
+          const answers = () =>
+            guard.lines
+              .filter((l) => l.dir === 'send' && l.msg.result && 'decision' in (l.msg.result as object))
+              .map((l) => (l.msg.result as { decision: string }).decision);
+          if (running < 0) {
+            results.turn1 = {
+              task_status: s.task(c).status,
+              approvals: approvals(),
+              answers: answers(),
+              commands: commands(),
+              final_message: finals().at(-1) ?? null,
+            };
+            results.stopped = 'the turn ended before the slow check ran; the remaining turn was not spent';
+            return verdict({ 'the slow check ran while the turn went on': false });
+          }
+          const sent = await s.op.post<{ message_id: string }>(s.op.projectPath('/messages'), {
+            to: 'cx-1',
+            mode: 'notification',
+            subject: 'one more line',
+            content: 'Please also put the line `checked-by: friday-steer` on the second line of backend/report.md.',
+          });
+          const delivery = () =>
+            s.op
+              .get<{ deliveries: { state: string }[] }>(s.op.projectPath(`/messages/${sent.message_id}`))
+              .then((m) => m.deliveries.map((d) => d.state));
+          const acked = await eventually(
+            delivery,
+            (d) => d.includes('acknowledged') || ended(),
+            'the steer',
+            60_000,
+          ).catch(() => null);
+          const steers = guard.sent('turn/steer');
+          const run1 = s.task(c).current_run_id as string;
+          const thread1 = guard.sent('thread/start').at(-1);
+          const threadId = (guard.answer(thread1 as Msg)?.result?.thread as { id?: string } | undefined)?.id;
+          const turn1Running = !ended();
+          if (PLAN === 'steer') {
+            // One turn: the message reaches the running turn, and the turn ends with a claim.
+            const end = await settle(c, 'turn 1');
+            results.turn1 = {
+              task_status: end,
+              waiting_reason: s.task(c).waiting_reason,
+              approvals: approvals(),
+              answers: answers(),
+              commands: commands(),
+              file_changes: guard
+                .notes('item/completed')
+                .map((p) => p.item as { type?: string; status?: string; changes?: { path?: string }[] })
+                .filter((i) => i?.type === 'fileChange')
+                .map((i) => ({ status: i.status, paths: (i.changes ?? []).map((x) => x.path) })),
+              unmediated: s.events(c, 'host.unmediated_write').map((e) => (e.payload as { data: unknown }).data),
+              settings: s.events(c, 'host.settings').map((e) => (e.payload as { data: unknown }).data),
+              steered: steers.length,
+              steer_answer: steers[0] ? (guard.answer(steers[0])?.result ?? guard.answer(steers[0])) : null,
+              delivery: acked,
+              still_running_when_steered: turn1Running,
+              report: read(path.join(cRoot, 'backend', 'report.md')),
+              final_message: finals().at(-1) ?? null,
+              claim: s.daemon.state.q.findRun(s.task(c).current_run_id ?? '')?.claim ?? null,
+            };
+            const verified = end === 'READY_FOR_VERIFICATION' ? await verify(c) : null;
+            if (verified) {
+              results.turn1_verification = {
+                status: verified.task.status,
+                checks: verified.verification.checks.map((x) => ({
+                  name: x.name,
+                  status: x.status,
+                  summary: x.summary,
+                })),
+              };
+            }
+            const report = read(path.join(cRoot, 'backend', 'report.md')) ?? '';
+            return verdict({
+              'the slow check ran while the turn went on': true,
+              'Friday answered its approvals': answers().includes('accept'),
+              'the message reached the running turn': steers.length > 0 && Boolean(acked?.includes('acknowledged')),
+              'the turn ended with a claim': end === 'READY_FOR_VERIFICATION',
+              'the report holds both lines': /^report:/m.test(report) && report.includes('checked-by: friday-steer'),
+              'the claim was verified': verified?.task.status === 'COMPLETED',
+            });
+          }
+          await cx.crash();
+          const atCrash = size(progress);
+          await sleep(2000);
+          const after2s = size(progress);
+          await sleep(3000);
+          const after5s = size(progress);
           results.turn1 = {
-            task_status: s.task(c).status,
             approvals: approvals(),
             answers: answers(),
             commands: commands(),
-            final_message: finals().at(-1) ?? null,
+            settings: s.events(c, 'host.settings').map((e) => (e.payload as { data: unknown }).data),
+            steered: steers.length,
+            steer_answer: steers[0] ? (guard.answer(steers[0])?.result ?? guard.answer(steers[0])) : null,
+            delivery: acked,
+            still_running_at_crash: turn1Running,
+            progress: { atCrash, after2s, after5s },
+            work_stopped: after5s === after2s,
           };
-          results.stopped = 'the turn ended before the slow check ran; the remaining turn was not spent';
-          return;
-        }
-        const sent = await s.op.post<{ message_id: string }>(s.op.projectPath('/messages'), {
-          to: 'cx-1',
-          mode: 'notification',
-          subject: 'one more line',
-          content: 'Please also put the line `checked-by: friday-steer` on the second line of backend/report.md.',
-        });
-        const delivery = () =>
-          s.op
-            .get<{ deliveries: { state: string }[] }>(s.op.projectPath(`/messages/${sent.message_id}`))
-            .then((m) => m.deliveries.map((d) => d.state));
-        const acked = await eventually(
-          delivery,
-          (d) => d.includes('acknowledged') || ended(),
-          'the steer',
-          60_000,
-        ).catch(() => null);
-        const steers = guard.sent('turn/steer');
-        const run1 = s.task(c).current_run_id as string;
-        const thread1 = guard.sent('thread/start').at(-1);
-        const threadId = (guard.answer(thread1 as Msg)?.result?.thread as { id?: string } | undefined)?.id;
-        const turn1Running = !ended();
-        if (PLAN === 'steer') {
-          // One turn: the message reaches the running turn, and the turn ends with a claim.
-          const end = await settle(c, 'turn 1');
-          results.turn1 = {
-            task_status: end,
+          if (!turn1Running) {
+            results.stopped = 'the turn ended before the crash; the remaining turn was not spent';
+            return verdict({ 'the turn still ran when the adapter crashed': false });
+          }
+
+          // Turn 2: Friday judges the harness lost, recovery recommends reconnecting, and the restarted
+          // adapter resumes the same run in the same thread.
+          await eventually(
+            () => s.task(c).status,
+            (x) => x === 'HARNESS_LOST',
+            'the lost lease',
+          );
+          const assessed = await cli(['--project', s.root, 'recover', c]);
+          cx = s.adapter();
+          await cx.start();
+          const resume = await eventually(
+            () => cx.received.find((m) => m.method === 'task.resume'),
+            (m) => Boolean(m),
+            'task.resume',
+          );
+          const cEnd = await settle(c, 'turn 2');
+          const resumed = guard.sent('thread/resume')[0];
+          results.turn2 = {
+            recommended_reconnect: /reconnect/.test(assessed.stdout),
+            recover_output: assessed.stdout.slice(0, 1500),
+            same_run: (resume?.params as TaskStartParams | undefined)?.run_id === run1,
+            session_ref: (resume?.params as TaskStartParams | undefined)?.session_ref ?? null,
+            thread_started: threadId ?? null,
+            thread_resumed: (resumed?.params as { threadId?: string } | undefined)?.threadId ?? null,
+            resume_answer: resumed ? (guard.answer(resumed)?.result ? 'ok' : guard.answer(resumed)) : null,
+            task_status: cEnd,
             waiting_reason: s.task(c).waiting_reason,
             approvals: approvals(),
             answers: answers(),
@@ -454,94 +554,35 @@ describe.skipIf(!MODE)('the Codex adapter against the real Codex app-server', ()
               .filter((i) => i?.type === 'fileChange')
               .map((i) => ({ status: i.status, paths: (i.changes ?? []).map((x) => x.path) })),
             unmediated: s.events(c, 'host.unmediated_write').map((e) => (e.payload as { data: unknown }).data),
-            settings: s.events(c, 'host.settings').map((e) => (e.payload as { data: unknown }).data),
-            steered: steers.length,
-            steer_answer: steers[0] ? (guard.answer(steers[0])?.result ?? guard.answer(steers[0])) : null,
-            delivery: acked,
-            still_running_when_steered: turn1Running,
             report: read(path.join(cRoot, 'backend', 'report.md')),
             final_message: finals().at(-1) ?? null,
             claim: s.daemon.state.q.findRun(s.task(c).current_run_id ?? '')?.claim ?? null,
           };
-          if (end === 'READY_FOR_VERIFICATION') {
-            const v = await verify(c);
-            results.turn1_verification = {
-              status: v.task.status,
-              checks: v.verification.checks.map((x) => ({ name: x.name, status: x.status, summary: x.summary })),
+          const verified = cEnd === 'READY_FOR_VERIFICATION' ? await verify(c) : null;
+          if (verified) {
+            results.turn2_verification = {
+              status: verified.task.status,
+              checks: verified.verification.checks.map((x) => ({ name: x.name, status: x.status, summary: x.summary })),
             };
           }
-          return;
-        }
-        await cx.crash();
-        const atCrash = size(progress);
-        await sleep(2000);
-        const after2s = size(progress);
-        await sleep(3000);
-        const after5s = size(progress);
-        results.turn1 = {
-          approvals: approvals(),
-          answers: answers(),
-          commands: commands(),
-          settings: s.events(c, 'host.settings').map((e) => (e.payload as { data: unknown }).data),
-          steered: steers.length,
-          steer_answer: steers[0] ? (guard.answer(steers[0])?.result ?? guard.answer(steers[0])) : null,
-          delivery: acked,
-          still_running_at_crash: turn1Running,
-          progress: { atCrash, after2s, after5s },
-          work_stopped: after5s === after2s,
-        };
-        if (!turn1Running) {
-          results.stopped = 'the turn ended before the crash; the remaining turn was not spent';
-          return;
-        }
-
-        // Turn 2: Friday judges the harness lost, recovery recommends reconnecting, and the restarted
-        // adapter resumes the same run in the same thread.
-        await eventually(
-          () => s.task(c).status,
-          (x) => x === 'HARNESS_LOST',
-          'the lost lease',
-        );
-        const assessed = await cli(['--project', s.root, 'recover', c]);
-        cx = s.adapter();
-        await cx.start();
-        const resume = await eventually(
-          () => cx.received.find((m) => m.method === 'task.resume'),
-          (m) => Boolean(m),
-          'task.resume',
-        );
-        const cEnd = await settle(c, 'turn 2');
-        const resumed = guard.sent('thread/resume')[0];
-        results.turn2 = {
-          recommended_reconnect: /reconnect/.test(assessed.stdout),
-          recover_output: assessed.stdout.slice(0, 1500),
-          same_run: (resume?.params as TaskStartParams | undefined)?.run_id === run1,
-          session_ref: (resume?.params as TaskStartParams | undefined)?.session_ref ?? null,
-          thread_started: threadId ?? null,
-          thread_resumed: (resumed?.params as { threadId?: string } | undefined)?.threadId ?? null,
-          resume_answer: resumed ? (guard.answer(resumed)?.result ? 'ok' : guard.answer(resumed)) : null,
-          task_status: cEnd,
-          waiting_reason: s.task(c).waiting_reason,
-          approvals: approvals(),
-          answers: answers(),
-          commands: commands(),
-          file_changes: guard
-            .notes('item/completed')
-            .map((p) => p.item as { type?: string; status?: string; changes?: { path?: string }[] })
-            .filter((i) => i?.type === 'fileChange')
-            .map((i) => ({ status: i.status, paths: (i.changes ?? []).map((x) => x.path) })),
-          unmediated: s.events(c, 'host.unmediated_write').map((e) => (e.payload as { data: unknown }).data),
-          report: read(path.join(cRoot, 'backend', 'report.md')),
-          final_message: finals().at(-1) ?? null,
-          claim: s.daemon.state.q.findRun(s.task(c).current_run_id ?? '')?.claim ?? null,
-        };
-        if (cEnd === 'READY_FOR_VERIFICATION') {
-          const v = await verify(c);
-          results.turn2_verification = {
-            status: v.task.status,
-            checks: v.verification.checks.map((x) => ({ name: x.name, status: x.status, summary: x.summary })),
+          const turn2 = results.turn2 as {
+            same_run: boolean;
+            thread_resumed: string | null;
+            recommended_reconnect: boolean;
           };
-        }
+          return verdict({
+            'the slow check ran while the turn went on': true,
+            'the message reached the running turn': steers.length > 0 && Boolean(acked?.includes('acknowledged')),
+            'the turn still ran when the adapter crashed': true,
+            'its work stopped with the adapter': after5s === after2s,
+            'recovery recommended reconnecting': turn2.recommended_reconnect,
+            'the same run was resumed': turn2.same_run,
+            'the same thread was resumed': Boolean(threadId) && turn2.thread_resumed === threadId,
+            'the resumed turn ended with a claim': cEnd === 'READY_FOR_VERIFICATION',
+            'the report holds its line': /^report:/m.test(read(path.join(cRoot, 'backend', 'report.md')) ?? ''),
+            'the claim was verified': verified?.task.status === 'COMPLETED',
+          });
+        })();
       } finally {
         await cx.close().catch(() => undefined);
         const after = codexConfig();
@@ -564,11 +605,13 @@ describe.skipIf(!MODE)('the Codex adapter against the real Codex app-server', ()
         results.codex_config_changed = before.sha !== after.sha;
         results.codex_config_sections_added = after.sections.filter((x) => !before.sections.includes(x));
         results.mcp_servers_started = guard.notes('mcpServer/startupStatus/updated');
+        results.verdict = v;
         s.save('live', results);
       }
       expect(guard.turns).toBeLessThanOrEqual(BUDGET);
       expect(results.codex_config_sections_added).toEqual([]);
       expect(results.mcp_servers_started).toEqual([]);
+      expect(v, JSON.stringify(v)).toMatchObject({ status: 'passed' });
     },
     25 * 60_000,
   );
