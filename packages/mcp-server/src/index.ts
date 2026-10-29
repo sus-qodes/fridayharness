@@ -19,10 +19,7 @@ export {
   callTool,
   createToolServer,
   SPAWNED_AGENT_TOOLS,
-  type SpawnedAgentTool,
   spawnedAgentTools,
-  spawnedAgentToolsFor,
-  spawnedToolsRule,
   toolInputSchema,
 } from './spawned.js';
 export { createFridayTools, type FridayTool, type HostUi, type ToolResult } from './tools.js';

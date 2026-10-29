@@ -394,10 +394,6 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   // team scopes of the effective policy as it stands at that moment, so a tightened policy applies
   // to the next plan without a restart.
   state.planBounds = () => ({ teams: currentPolicy().teams });
-  // What each agent's work costs, for a rework that escalates to a stronger agent (plan M13.3).
-  state.costClassOf = (task, agentId) => routing.fitFor(task, agentId)?.cost_class ?? null;
-  // A rework continues a session only under the policy its packet was compiled under (plan M13.2).
-  state.policyVersion = () => currentPolicy().version ?? null;
   // Every check's and operation's process tree is a group that ends with it (review F07).
   const groups = new ProcessGroups(env);
   // Set once the execution gateway exists: a task's operations stop before its worktree is reused.

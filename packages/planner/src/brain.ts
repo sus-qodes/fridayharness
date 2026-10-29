@@ -1,6 +1,5 @@
 import {
   type Actor,
-  type CostClass,
   FridayError,
   type GoalView,
   isFridayError,
@@ -8,7 +7,6 @@ import {
   type TaskView,
 } from '@friday/protocol';
 import type { BrainJob, BrainJobInput, FridayState } from '@friday/state';
-import { consolidatePlan } from './consolidate.js';
 import { type DelegationCandidate, delegate } from './delegate.js';
 import { buildEscalation, type EscalationReason } from './escalate.js';
 import {
@@ -85,10 +83,7 @@ export interface BrainDeps {
    * (ADR-0031 §9); without it, delegation ignores models. `blocked`: routing does not let the task
    * start on that agent's harness, and why (review F01).
    */
-  modelFit?: (
-    task: TaskView,
-    agentId: string,
-  ) => { fit: number; cost: number; cost_class?: CostClass | null; blocked?: string } | null;
+  modelFit?: (task: TaskView, agentId: string) => { fit: number; cost: number; blocked?: string } | null;
   /**
    * Whether routing has what it waits for to route a task (Laya's answer, or that Laya did not
    * answer within its deadline; review F11). A task that is not ready waits; other tasks go on.
@@ -776,15 +771,7 @@ export class MasterBrain {
     ) {
       return { status: 'done', result: `discarded: the goal changed while planning (${now.status})` };
     }
-    // A small goal is one task (plan M13.1): serial pieces become one, under the ceiling of M12.2.
-    // A plan asked for with a human's feedback is proposed as the model wrote it: the feedback may
-    // be how the human wants the work split.
-    const teams = state.planBounds?.().teams ?? {};
-    const d = feedback
-      ? outcome.draft
-      : consolidatePlan(outcome.draft, {
-          teamRoles: new Set(Object.keys(teams).filter((r) => (teams[r]?.length ?? 0) > 0)),
-        }).draft;
+    const d = outcome.draft;
     const v = state.proposePlan(
       projectId,
       MASTER_BRAIN,
@@ -1206,18 +1193,12 @@ export class MasterBrain {
         // Otherwise it waits for that agent; automatic reservations expire (review F08).
         const mine = candidates.find((x) => x.c.agent_key === task.reserved_for_agent_key);
         if (mine?.spawn && mine.free) {
-          try {
-            const r = state.delegateTask(projectId, MASTER_BRAIN, task.task_id, {
-              agent_key: mine.c.agent_key,
-              reason: 'reserved for this agent',
-              scores: [],
-            });
-            out.push(`${task.task_id}: ${r.mode} to ${mine.c.agent_key}`);
-          } catch (e) {
-            // The agent's route blocks the task: the state recorded it, and the other READY tasks
-            // are still delegated (review of M13).
-            if (!isFridayError(e, 'routing_blocked')) throw e;
-          }
+          const r = state.delegateTask(projectId, MASTER_BRAIN, task.task_id, {
+            agent_key: mine.c.agent_key,
+            reason: 'reserved for this agent',
+            scores: [],
+          });
+          out.push(`${task.task_id}: ${r.mode} to ${mine.c.agent_key}`);
         }
         continue;
       }
@@ -1239,14 +1220,8 @@ export class MasterBrain {
           goal_id: task.goal_id,
           role: task.role ?? 'developer',
           write: task.scope?.write ?? [],
-          kind: task.kind,
-          risk_level: task.risk_level,
         },
-        open.map(({ x, fit }) =>
-          fit
-            ? { ...x.c, model_fit: fit.fit, cost: fit.cost, ...(fit.cost_class ? { cost_class: fit.cost_class } : {}) }
-            : x.c,
-        ),
+        open.map(({ x, fit }) => (fit ? { ...x.c, model_fit: fit.fit, cost: fit.cost } : x.c)),
         running,
       );
       let r: ReturnType<typeof state.delegateTask>;

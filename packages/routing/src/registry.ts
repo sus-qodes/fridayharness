@@ -40,11 +40,6 @@ export const ModelRecordInput = z
       .nullable()
       .default(null),
     latency_ms: z.number().int().positive().nullable().default(null),
-    /**
-     * What an agent running it costs (plan M13.3): `free`, `cheap` or `standard`. Unset: `free` for a
-     * local model, `standard` otherwise (`modelCostClass`).
-     */
-    cost_class: z.enum(['free', 'cheap', 'standard']).nullable().default(null),
     capabilities: Capabilities.default({}),
     notes: z.string().max(500).nullable().default(null),
   })
@@ -54,13 +49,6 @@ export type ModelRecord = z.output<typeof ModelRecordInput> & {
   /** Where its numbers come from: Friday's priors, or the project's own record. */
   source: 'seed' | 'project';
 };
-
-/** A model's cost class: as recorded, else `free` for a local model, else `standard`; `standard` when unknown. */
-export function modelCostClass(
-  m: Pick<ModelRecord, 'cost_class' | 'local'> | null | undefined,
-): 'free' | 'cheap' | 'standard' {
-  return m?.cost_class ?? (m?.local ? 'free' : 'standard');
-}
 
 const GuideClass = z
   .object({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadGuide, mergeModels, modelCostClass, plannerLocalModel } from './registry.js';
+import { loadGuide, mergeModels, plannerLocalModel } from './registry.js';
 
 describe("the Master Brain's local model in the registry (plan M12.1)", () => {
   it('is listed as a local model with no harness vendor when the planner is a local server', () => {
@@ -25,23 +25,5 @@ describe("the Master Brain's local model in the registry (plan M12.1)", () => {
     });
     expect(own.filter((m) => m.id === 'qwen2.5:7b')).toHaveLength(1);
     expect(own.find((m) => m.id === 'qwen2.5:7b')).toMatchObject({ provider: 'ollama', vendors: ['october'] });
-  });
-});
-
-describe('cost classes in the registry (plan M13.3)', () => {
-  it('records Haiku as cheap, a local model as free and anything else as standard', () => {
-    const models = mergeModels(loadGuide().models, [{ id: 'qwen-coder', local: true }], null);
-    const of = (id: string) => modelCostClass(models.find((m) => m.id === id));
-    expect(of('claude-haiku-5-5')).toBe('cheap');
-    expect(of('qwen-coder')).toBe('free');
-    expect(of('claude-opus-5-5')).toBe('standard');
-    expect(modelCostClass(undefined)).toBe('standard');
-    // A project's record says its own class.
-    const own = mergeModels(
-      loadGuide().models,
-      [{ id: 'gpt-5.6-luna', vendors: ['codex'], cost_class: 'cheap' }],
-      null,
-    );
-    expect(modelCostClass(own.find((m) => m.id === 'gpt-5.6-luna'))).toBe('cheap');
   });
 });

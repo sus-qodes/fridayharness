@@ -17,10 +17,6 @@
  *                              the whole run by FRIDAY_TOKEN_BASELINE_TURNS turns (six by default);
  *                              verification by the project's own tests.
  *
- *   FRIDAY_TOKEN_BASELINE_REWORK=resume|fresh (with =1)  the rework variant (plan M13.2): the backend
- *                              task alone, its first claim failed by a human with one fixed note and
- *                              reworked by the same agent, in the first session or a new one.
- *
  * FRIDAY_TOKEN_BASELINE_OUT names a folder outside the repository for the results: the usage report
  * (`friday usage --goal <id> --json`), each agent's stream-json transcript, the events, the hosts, the
  * verifications and a verdict (`baselineFiles` in tests/helpers/token-baseline.ts). The evidence is
@@ -42,7 +38,7 @@ import {
 } from '@friday/adapter-claude';
 import { materializeFixtureShop } from '@friday/cli';
 import { createDaemon, type Daemon } from '@friday/daemon';
-import type { HarnessView, TaskStartParams, TaskView, UsageReport, VerificationView } from '@friday/protocol';
+import type { HarnessView, TaskView, UsageReport, VerificationView } from '@friday/protocol';
 import { DaemonClient } from '@friday/sdk';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -75,11 +71,6 @@ const OUT = process.env.FRIDAY_TOKEN_BASELINE_OUT;
 const TURNS = Number(process.env.FRIDAY_TOKEN_BASELINE_TURNS ?? 6);
 /** Haiku keeps its default effort: one a model does not take would cost a turn. */
 const EFFORT = 'default';
-/** The rework variant (plan M13.2): `resume` or `fresh`; unset runs the baseline itself. */
-const REWORK = process.env.FRIDAY_TOKEN_BASELINE_REWORK;
-/** What the human's refusal says in both rework variants: one small, concrete addition. */
-const REWORK_NOTE =
-  'redeemGiftCard must also refuse a card whose balance amount is not a whole number of minor units: throw CheckoutError for it, and add a test for that case.';
 
 if (!MODE) {
   console.info('token baseline: skipped, FRIDAY_TOKEN_BASELINE is not set (dry or 1; see docs/measurements/README.md)');
@@ -162,7 +153,7 @@ describe.skipIf(!MODE)('the token baseline: the gift-card goal on two spawned Cl
     const traces = new Map<string, SessionTrace>();
     const logs = new Map<string, string[]>();
     /** A spawned Claude Code agent of one role, its sessions traced under the run's turn budget. */
-    const adapter = (agent: BaselineAgent, extra: { resumeSessions?: boolean } = {}) => {
+    const adapter = (agent: BaselineAgent) => {
       const trace = new SessionTrace(agent.key, turns);
       traces.set(agent.key, trace);
       const log: string[] = [];
@@ -180,7 +171,6 @@ describe.skipIf(!MODE)('the token baseline: the gift-card goal on two spawned Cl
         workDir: path.join(ws().root, 'attempts', agent.key),
         log: (m) => log.push(`${new Date().toISOString()} ${m}`),
         trace: trace.trace,
-        ...extra,
       });
       ws().track({ close: () => a.close() });
       return a;
@@ -203,16 +193,13 @@ describe.skipIf(!MODE)('the token baseline: the gift-card goal on two spawned Cl
             (e.payload as { data?: unknown; message?: unknown }).data ?? (e.payload as { message?: unknown }).message,
         );
     /** The goal with no planner, the plan from the fixture, approved: the two tasks, READY. */
-    const proposePlan = async (
-      planFile: string = BASELINE_PLAN_FILE,
-      agents: readonly BaselineAgent[] = BASELINE_AGENTS,
-    ) => {
+    const proposePlan = async () => {
       const created = await fridayJson<GoalDetail>('goal', 'create', BASELINE_GOAL, '--no-plan');
       const goalId = created.goal.goal_id;
-      await fridayJson('plan', 'propose', '--goal', goalId, '--file', planFile);
+      await fridayJson('plan', 'propose', '--goal', goalId, '--file', BASELINE_PLAN_FILE);
       await fridayJson('plan', 'approve', '--goal', goalId);
       const detail = () => fridayJson<GoalDetail>('goal', 'show', goalId);
-      const expected = expectedAttempts((await detail()).active?.tasks ?? [], agents);
+      const expected = expectedAttempts((await detail()).active?.tasks ?? []);
       return { goalId, expected, detail };
     };
     /** The Master Brain's delegation, run until every task has left READY (an agent's harness must be live first). */
@@ -297,7 +284,6 @@ describe.skipIf(!MODE)('the token baseline: the gift-card goal on two spawned Cl
       daemon,
       adapter,
       friday,
-      fridayJson,
       task,
       eventData,
       proposePlan,
@@ -398,118 +384,7 @@ describe.skipIf(!MODE)('the token baseline: the gift-card goal on two spawned Cl
   /** One budget for the run: the live case needs a turn per task, and a failure keeps the rest unspent. */
   const budget = new LiveBudget(TURNS);
 
-  /**
-   * The rework variant (plan M13.2): the backend task alone; its first claim, whatever its checks
-   * say, is failed by a human with one fixed note and reworked by the same agent, whose second
-   * attempt either continues the first session (`resume`) or starts a new one (`fresh`). The two
-   * variants differ only in that, so the second attempt's figures compare the two.
-   */
-  it.runIf(MODE === '1' && Boolean(REWORK))(
-    'reworks a refused claim of the backend task in the same session or a new one, and records both attempts',
-    async () => {
-      if (REWORK !== 'resume' && REWORK !== 'fresh') throw new Error('FRIDAY_TOKEN_BASELINE_REWORK is resume or fresh');
-      const refused = budget.refuse(2);
-      if (refused) expect.fail(refused);
-      const turns = new TurnBudget(TURNS);
-      const before = claudeState();
-      const s = await setup(turns);
-      const backend = BASELINE_AGENTS.find((a) => a.key === 'be-1') as BaselineAgent;
-      const planFile = path.join(ws().root, 'rework-plan.json');
-      writeFileSync(planFile, JSON.stringify({ ...s.plan, tasks: s.plan.tasks.filter((t) => t.key === backend.task) }));
-      const results: Record<string, unknown> = {
-        mode: `live-rework-${REWORK}`,
-        claude: s.install.version,
-        model: BASELINE_MODEL,
-        effort: EFFORT,
-        cap_usd: BASELINE_CAP_USD,
-        approved_turns: TURNS,
-        note: REWORK_NOTE,
-        started_at: new Date().toISOString(),
-      };
-      let v: Verdict = incomplete('the run stopped before its end');
-      let goalId: string | null = null;
-      let evidence: Awaited<ReturnType<typeof s.evidence>> | null = null;
-      const verifications: Record<string, Verified | null> = {};
-      const a = s.adapter(backend, { resumeSessions: REWORK === 'resume' });
-      try {
-        const proposed = await s.proposePlan(planFile, [backend]);
-        goalId = proposed.goalId;
-        const { expected } = proposed;
-        const [e] = expected;
-        if (!e || expected.length !== 1) throw new Error('the rework plan has one task');
-        Object.assign(results, { goal_id: goalId, tasks: expected });
-        await a.start();
-        await s.delegate(expected);
-        const first = await s.settle(e.task_id, 'the first attempt');
-        if (first !== 'READY_FOR_VERIFICATION') throw new Error(`the first attempt ended ${first}, not with a claim`);
-        // A human refuses the claim with the same note in both variants, before any check runs (a
-        // verified task is COMPLETED and can no longer be refused), and sends the task back.
-        verifications.attempt1 = await s.fridayJson<Verified>(
-          'verify',
-          e.task_id,
-          '--result',
-          'failed',
-          '--note',
-          REWORK_NOTE,
-        );
-        await s.fridayJson('task', 'rework', e.task_id, '--reason', REWORK_NOTE);
-        await s.delegate(expected);
-        const second = await s.settle(e.task_id, 'the rework');
-        verifications.attempt2 = second === 'READY_FOR_VERIFICATION' ? await s.verify(e.task_id) : null;
-        const runs = s.daemon.state.q.runs(e.task_id);
-        const start2 = a.received.filter((m) => m.method === 'task.start').at(-1)?.params as
-          | TaskStartParams
-          | undefined;
-        Object.assign(results, {
-          runs: runs.map((r) => ({ attempt: r.attempt, session_ref: r.session_ref, status: r.status })),
-          continued: runs.length === 2 && runs[0]?.session_ref === runs[1]?.session_ref,
-          continue_session: start2?.continue_session ?? null,
-          verifications: Object.fromEntries(
-            Object.entries(verifications).map(([k, x]) => [
-              k,
-              x && {
-                status: x.task.status,
-                checks: x.verification.checks.map((c) => ({ name: c.name, status: c.status, summary: c.summary })),
-              },
-            ]),
-          ),
-        });
-        evidence = await s.evidence(goalId);
-        results.sessions = s.sessions();
-        const report = evidence.values.report;
-        if (!report) throw new Error(`the usage report could not be read: ${evidence.failures.report}`);
-        const rows = report.rows.filter((r) => r.task_id === e.task_id).sort((x, y) => x.attempt - y.attempt);
-        v = verdict({
-          'two attempts of the backend task, both by be-1':
-            rows.length === 2 && rows.every((r) => r.agent_key === 'be-1'),
-          'both attempts reported their usage': rows.every((r) => r.host.reported),
-          'the rework was verified': rows[1]?.verification?.status === 'PASSED',
-          [REWORK === 'resume' ? 'the rework continued the first session' : 'the rework started a new session']:
-            REWORK === 'resume' ? results.continued === true : results.continued === false,
-        });
-      } finally {
-        evidence ??= goalId ? await s.evidence(goalId) : null;
-        await a.close().catch(() => undefined);
-        budget.settle('rework', turns.turns, v);
-        const after = claudeState();
-        Object.assign(results, {
-          turns_started: turns.turns,
-          refused: turns.refused,
-          evidence_failures: evidence?.failures ?? {},
-          claude_projects_added: after.projects.filter((k) => !before.projects.includes(k)),
-          claude_session_folders_added: after.sessions.filter((k) => !before.sessions.includes(k)),
-          ended_at: new Date().toISOString(),
-        });
-        s.save(results, v, { ...evidence?.values, verifications });
-        if (evidence?.values.table) console.log(`\n${evidence.values.table}\nSaved under ${OUT}`);
-      }
-      expect(turns.turns).toBeLessThanOrEqual(TURNS);
-      expect(v, JSON.stringify(v)).toMatchObject({ status: 'passed' });
-    },
-    60 * 60_000,
-  );
-
-  it.runIf(MODE === '1' && !REWORK)(
+  it.runIf(MODE === '1')(
     'runs the gift-card goal on two spawned sessions, verifies both tasks, and records every usage row complete',
     async () => {
       const refused = budget.refuse(BASELINE_AGENTS.length);

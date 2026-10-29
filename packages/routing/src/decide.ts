@@ -201,7 +201,6 @@ export function decideRoute(input: RouteInput): RoutingDecision {
           context_tokens: null,
           price: null,
           latency_ms: null,
-          cost_class: null,
           capabilities: {},
           notes: 'declared by the harness; not in the registry',
           source: 'project',

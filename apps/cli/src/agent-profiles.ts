@@ -15,8 +15,6 @@ const MAX_PROFILES = 32;
 export const AGENT_KEY = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const ROLE = /^[a-z][a-z0-9_-]{0,31}$/;
 const WORD = /^[a-z][a-z0-9-]{1,15}$/;
-/** A model id as a registry or a local server names one (`qwen2.5:7b`): no leading `-`, so it never becomes an option. */
-const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/;
 /** The hosts a remembered agent may name. */
 const PROFILE_HOSTS: readonly AgentHostName[] = ['claude-code', 'codex', 'cursor', 'gemini'];
 
@@ -32,28 +30,13 @@ export function validateOptions(host: AgentHostName, raw: unknown): AgentOptions
   };
   // The Cursor CLI and Gemini CLI take none of these: their models come from routing too.
   if (host === 'cursor' || host === 'gemini') {
-    for (const k of ['effort', 'max_budget_usd', 'sandbox', 'windows_sandbox', 'service_tier', 'cost_class', 'models'])
+    for (const k of ['effort', 'max_budget_usd', 'sandbox', 'windows_sandbox', 'service_tier'])
       if (o[k] !== undefined) bad(k);
     return out;
   }
   if (o.effort !== undefined) {
     if (typeof o.effort !== 'string' || !WORD.test(o.effort)) bad('effort');
     out.effort = o.effort as string;
-  }
-  if (o.cost_class !== undefined) {
-    if (o.cost_class !== 'free' && o.cost_class !== 'cheap' && o.cost_class !== 'standard') bad('cost_class');
-    out.cost_class = o.cost_class as AgentOptions['cost_class'];
-  }
-  if (o.models !== undefined) {
-    const ms = o.models;
-    if (
-      !Array.isArray(ms) ||
-      ms.length === 0 ||
-      ms.length > 8 ||
-      !ms.every((m) => typeof m === 'string' && MODEL.test(m))
-    )
-      bad('models');
-    out.models = [...(ms as string[])];
   }
   if (host === 'claude-code') {
     const budget = o.max_budget_usd ?? 1;
@@ -81,8 +64,6 @@ export function validateOptions(host: AgentHostName, raw: unknown): AgentOptions
 export function optionFlags(host: AgentHostName, o: AgentOptions): string[] {
   const flags: string[] = [];
   if (o.effort) flags.push(`--effort=${o.effort}`);
-  if (o.cost_class) flags.push(`--cost-class=${o.cost_class}`);
-  if (o.models?.length) flags.push(`--models=${o.models.join(',')}`);
   if (host === 'claude-code' && o.max_budget_usd !== undefined) flags.push(`--max-budget-usd=${o.max_budget_usd}`);
   if (host === 'codex') {
     if (o.sandbox) flags.push(`--sandbox=${o.sandbox}`);

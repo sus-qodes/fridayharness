@@ -65,18 +65,6 @@
         "null"
       ]
     },
-    "continue_session": {
-      "default": null,
-      "anyOf": [
-        {
-          "type": "string",
-          "maxLength": 200
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
     "note": {
       "default": null,
       "anyOf": [

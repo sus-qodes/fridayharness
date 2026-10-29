@@ -14,6 +14,7 @@
     "@friday/adapter-cursor": "workspace:*",
     "@friday/adapter-gemini": "workspace:*",
     "@friday/adapter-generic": "workspace:*",
+    "@friday/adapter-opencode": "workspace:*",
     "@friday/cli": "workspace:*",
     "@friday/code-graph": "workspace:*",
     "@friday/context": "workspace:*",

@@ -3,15 +3,7 @@
  * the usage record a thread's token counts become, and the environment its host gets.
  */
 import { describe, expect, it } from 'vitest';
-import {
-  codexHostUsage,
-  FINAL_SCHEMA,
-  hostEnvironment,
-  JsonRpcLines,
-  MethodNotFound,
-  parseFinal,
-  STRICT_FINAL_SCHEMA,
-} from './index.js';
+import { codexHostUsage, hostEnvironment, JsonRpcLines, MethodNotFound, parseFinal } from './index.js';
 
 describe('JSON-RPC over lines', () => {
   it('matches answers to requests, answers the server, and fails open requests when the server goes', async () => {
@@ -61,43 +53,16 @@ describe('JSON-RPC over lines', () => {
 
 describe('the final message', () => {
   it('reads the output schema, and takes prose as a summary', () => {
-    expect(parseFinal(JSON.stringify({ status: 'blocked', summary: 's', blocked_reason: 'needs a key' }))).toEqual({
-      status: 'blocked',
-      summary: 's',
-      blocked_reason: 'needs a key',
-    });
+    expect(
+      parseFinal(JSON.stringify({ status: 'blocked', summary: 's', changed_paths: [], blocked_reason: 'needs a key' })),
+    ).toEqual({ status: 'blocked', summary: 's', changed_paths: [], blocked_reason: 'needs a key' });
     expect(parseFinal('  I changed src/a.ts.  ')).toEqual({
       status: 'completed',
       summary: 'I changed src/a.ts.',
+      changed_paths: [],
       blocked_reason: '',
     });
     expect(parseFinal(JSON.stringify({ status: 'done' })).status).toBe('completed');
-  });
-
-  it('asks only for what Friday cannot read from the worktree (plan M13.4)', () => {
-    // Codex's structured output is strict: every field required, nothing else.
-    expect(STRICT_FINAL_SCHEMA.required).toEqual(['status', 'summary', 'blocked_reason']);
-    expect(STRICT_FINAL_SCHEMA.additionalProperties).toBe(false);
-    // A host that refuses an answer that does not fit requires only the status, and takes extra fields.
-    expect(FINAL_SCHEMA.required).toEqual(['status']);
-    expect('additionalProperties' in FINAL_SCHEMA).toBe(false);
-    expect(Object.keys(FINAL_SCHEMA.properties)).not.toContain('changed_paths');
-  });
-
-  it("keeps the model's summary and cuts another parameter's markup out of it (CC-35)", () => {
-    expect(
-      parseFinal({ status: 'completed', summary: 'Added the module.</summary> <parameter name="changed_paths">["a"]' }),
-    ).toEqual({ status: 'completed', summary: 'Added the module.', blocked_reason: '' });
-    // No summary at all: the session's last text stands in for it.
-    expect(parseFinal({ status: 'completed' }, ' I added backend/src/a.ts. ').summary).toBe(
-      'I added backend/src/a.ts.',
-    );
-    // An extra field is ignored, never an error.
-    expect(parseFinal({ status: 'completed', summary: 's', changed_paths: ['x'] })).toEqual({
-      status: 'completed',
-      summary: 's',
-      blocked_reason: '',
-    });
   });
 });
 

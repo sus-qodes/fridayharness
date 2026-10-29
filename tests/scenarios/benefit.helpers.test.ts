@@ -6,13 +6,12 @@
  */
 import { cpSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { consolidatePlan, validatePlanDraft } from '@friday/planner';
+import { validatePlanDraft } from '@friday/planner';
 import { useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
 import {
   judgeTree,
   loadBenefitPlan,
-  oneTaskPlan,
   parseTap,
   plainOnePrompt,
   plainTwoPrompt,
@@ -20,7 +19,7 @@ import {
   TASK_CHECKS,
 } from '../helpers/benefit.js';
 import { REPO_ROOT } from '../helpers/cli.js';
-import { loadBaselinePlan, type TraceLine } from '../helpers/token-baseline.js';
+import type { TraceLine } from '../helpers/token-baseline.js';
 
 const ws = useTestWorkspace();
 
@@ -76,20 +75,6 @@ describe('the benefit comparison, offline', () => {
     expect(plan.tasks[1]?.depends_on).toEqual(['giftcard-frontend']);
     const v = validatePlanDraft(plan);
     expect(v.errors).toEqual([]);
-  });
-
-  it('merges into one task for the friday-one arm, and keeps the baseline two parallel tasks apart (plan M13.1)', () => {
-    const { plan, merged } = oneTaskPlan(loadBenefitPlan());
-    expect(merged).toEqual(['giftcard-frontend', 'discount-backend']);
-    expect(plan.tasks).toHaveLength(1);
-    expect(validatePlanDraft(plan).errors).toEqual([]);
-    // The one task carries both tasks' text, criteria and scopes, so it asks for the same work.
-    for (const t of loadBenefitPlan().tasks) {
-      expect(plan.tasks[0]?.description).toContain(t.description);
-      for (const c of t.acceptance_criteria) expect(plan.tasks[0]?.acceptance_criteria).toContain(c);
-    }
-    expect(plan.tasks[0]?.scope.write).toEqual(['shared/src/api.ts', 'frontend/**', 'backend/**']);
-    expect(consolidatePlan(loadBaselinePlan()).merged).toBeNull();
   });
 
   it('gives every arm the same task text', () => {

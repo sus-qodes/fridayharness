@@ -362,8 +362,7 @@ export function buildProgram(): Command {
     ready: 'make a PROPOSED task READY',
     release: 'give an assigned or running task back (it becomes READY)',
     cancel: 'cancel a task',
-    rework:
-      'send a FAILED task back for rework (READY, offered first to a stronger agent of its role, else to the agent that did it)',
+    rework: 'send a FAILED task back for rework (READY, offered first to the agent that did it)',
     unreserve: 'let any agent take a READY task that is reserved for one agent',
   } as const;
   for (const action of ['ready', 'release', 'cancel', 'rework', 'unreserve'] as const) {

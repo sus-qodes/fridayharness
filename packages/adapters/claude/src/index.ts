@@ -105,7 +105,6 @@ export {
   CLAUDE_SPAWN_RULES,
   ClaudeSpawnAdapter,
   type ClaudeSpawnOptions,
-  claudeSpawnRules,
   FRIDAY_SERVER,
   SPAWN_TOOLS,
   STRUCTURED_OUTPUT,

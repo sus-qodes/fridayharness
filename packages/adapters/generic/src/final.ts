@@ -1,78 +1,51 @@
 /**
- * How a spawn adapter's host ends a run attempt (ADR-0032 §9): a final message the adapter turns
- * into a completion claim, a blocked result or, when the host could not finish, an error. It asks
- * only for what Friday cannot read elsewhere (plan M13.4): the changed paths come from the
- * worktree, never from the model.
- */
-const FINAL_PROPERTIES = {
-  status: { type: 'string', enum: ['completed', 'blocked'] },
-  summary: { type: 'string' },
-  blocked_reason: { type: 'string' },
-} as const;
-
-/**
- * The schema a host enforces by refusing an answer that does not fit (Claude Code's `--json-schema`):
- * only `status` is required and extra fields are accepted, so no missing or added field makes the
- * host refuse an answer and the model try again (LESSONS CC-35).
+ * How a spawn adapter's host ends a run attempt (ADR-0032 §9): a final message in this schema,
+ * which the host enforces (Codex's `outputSchema`, Claude Code's `--json-schema`). The adapter
+ * turns it into a completion claim, a blocked result or, when the host could not finish, an error.
  */
 export const FINAL_SCHEMA = {
   type: 'object',
-  properties: FINAL_PROPERTIES,
-  required: ['status'],
-} as const;
-
-/**
- * The schema for a host whose structured output is strict (Codex's `outputSchema`): every field
- * required and nothing else, as strict output demands. The host cannot produce an answer that does
- * not fit, so nothing is ever refused.
- */
-export const STRICT_FINAL_SCHEMA = {
-  type: 'object',
-  properties: FINAL_PROPERTIES,
-  required: ['status', 'summary', 'blocked_reason'],
+  properties: {
+    status: { type: 'string', enum: ['completed', 'blocked'] },
+    summary: { type: 'string' },
+    changed_paths: { type: 'array', items: { type: 'string' } },
+    blocked_reason: { type: 'string' },
+  },
+  required: ['status', 'summary', 'changed_paths', 'blocked_reason'],
   additionalProperties: false,
 } as const;
 
 export interface Final {
   status: 'completed' | 'blocked';
   summary: string;
+  changed_paths: string[];
   blocked_reason: string;
 }
 
-/**
- * A summary as the model meant it: when a model writes the next parameter of its answer inside
- * the summary's text (`…</summary> <parameter name="…">…`), the text is cut there (CC-35).
- */
-export function cleanSummary(s: string): string {
-  const cut = s.search(/<\/summary>|<parameter name=/);
-  return (cut >= 0 ? s.slice(0, cut) : s).trim();
-}
-
-/**
- * The final message, from its text or its parsed value; prose counts as a summary. `fallback` is
- * the session's last text, the summary when the answer gives none.
- */
-export function parseFinal(message: unknown, fallback = ''): Final {
+/** The final message, as the schema asks, from its text or its parsed value; prose counts as a summary. */
+export function parseFinal(message: unknown): Final {
   let v: unknown = message;
   if (typeof message === 'string') {
     try {
       v = JSON.parse(message);
     } catch {
       // not JSON: the model answered in prose
-      return { status: 'completed', summary: cleanSummary(message) || fallback.trim(), blocked_reason: '' };
+      return { status: 'completed', summary: message.trim(), changed_paths: [], blocked_reason: '' };
     }
   }
   const o = (v ?? {}) as Partial<Final>;
   if (o.status === 'completed' || o.status === 'blocked') {
     return {
       status: o.status,
-      summary: (typeof o.summary === 'string' ? cleanSummary(o.summary) : '') || fallback.trim(),
-      blocked_reason: typeof o.blocked_reason === 'string' ? o.blocked_reason.trim() : '',
+      summary: typeof o.summary === 'string' ? o.summary : '',
+      changed_paths: Array.isArray(o.changed_paths) ? o.changed_paths.filter((x) => typeof x === 'string') : [],
+      blocked_reason: typeof o.blocked_reason === 'string' ? o.blocked_reason : '',
     };
   }
   return {
     status: 'completed',
-    summary: (typeof message === 'string' ? cleanSummary(message) : '') || fallback.trim(),
+    summary: typeof message === 'string' ? message.trim() : '',
+    changed_paths: [],
     blocked_reason: '',
   };
 }

@@ -58,22 +58,6 @@ describe('agent options (plan M9 §5.9)', () => {
     expect(optionFlags('claude-code', { max_budget_usd: 2 })).toEqual(['--max-budget-usd=2']);
   });
 
-  it("carry an agent's cost class and models for Claude Code and Codex, never a leading dash (plan M13.3)", () => {
-    expect(validateOptions('claude-code', { cost_class: 'cheap', models: ['claude-haiku-5-5'] })).toEqual({
-      max_budget_usd: 1,
-      cost_class: 'cheap',
-      models: ['claude-haiku-5-5'],
-    });
-    expect(optionFlags('codex', { cost_class: 'free', models: ['gpt-5.6-luna', 'local-1'] })).toEqual([
-      '--cost-class=free',
-      '--models=gpt-5.6-luna,local-1',
-    ]);
-    for (const bad of [{ cost_class: 'premium' }, { models: ['--model=x'] }, { models: [] }, { models: 'claude' }]) {
-      expect(() => validateOptions('claude-code', bad), JSON.stringify(bad)).toThrow();
-    }
-    expect(() => validateOptions('gemini', { cost_class: 'cheap' })).toThrow();
-  });
-
   it('give the Cursor CLI and Gemini CLI none, and refuse any (plan M8b)', () => {
     for (const host of ['cursor', 'gemini'] as const) {
       expect(validateOptions(host, {}), host).toEqual({});

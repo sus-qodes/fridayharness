@@ -7,9 +7,7 @@
  *   plain-two  two Claude Code sessions at once in the same folder, one task each;
  *   friday     Friday: the same tasks planned, given to two spawned Claude Code agents in their own
  *              worktrees, each claim verified by the project's tests, a refused claim sent back once,
- *              verified work integrated into the goal's branch;
- *   friday-one Friday with the plan its Master Brain proposes for this goal (plan M13.1): the two
- *              tasks run one after another, so they are one task, done by one spawned agent.
+ *              verified work integrated into the goal's branch.
  *
  * It runs only when the owner allows it, never in CI:
  *
@@ -18,7 +16,7 @@
  *   FRIDAY_BENEFIT_OUT         a folder outside the repository for every arm's figures, transcripts
  *                              and verdict, and the summary;
  *   FRIDAY_BENEFIT_RUNS        how many times each arm runs (2);
- *   FRIDAY_BENEFIT_ARMS        which arms, comma-separated (all four);
+ *   FRIDAY_BENEFIT_ARMS        which arms, comma-separated (all three);
  *   FRIDAY_BENEFIT_TURNS       the turns all runs together may start (16): a session's first message
  *                              past it is refused before it is written.
  *
@@ -47,7 +45,6 @@ import {
   type BenefitArm,
   judgeTree,
   loadBenefitPlan,
-  oneTaskPlan,
   plainArgs,
   plainOnePrompt,
   plainTwoPrompt,
@@ -223,12 +220,8 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
         );
       };
 
-      const withFriday = async (run: number, arm: 'friday' | 'friday-one') => {
-        const root = await fresh(`r${run}-${arm === 'friday' ? 'fr' : 'fr1'}`);
-        // friday-one proposes the plan the Master Brain proposes for this goal: one task (plan M13.1).
-        const one = arm === 'friday-one' ? oneTaskPlan(plan) : null;
-        const planFile = one ? path.join(ws().root, `r${run}-one-plan.json`) : BENEFIT_PLAN_FILE;
-        if (one) writeFileSync(planFile, JSON.stringify(one.plan, null, 2));
+      const withFriday = async (run: number) => {
+        const root = await fresh(`r${run}-fr`);
         appendFileSync(path.join(root, '.friday', 'config.yaml'), baselineConfig(BASELINE_MODEL));
         await deterministicGit(root, { startEpoch: 1_767_300_000 }).commitAll('the comparison configuration');
         const daemon: Daemon = await createDaemon({
@@ -261,7 +254,7 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
             hostEnv: { ...env, FRIDAY_STATE_DIR: ws().stateDir },
             hook: { command: process.execPath, args: [bundledHookPath()] },
             maxBudgetUsd: BASELINE_CAP_USD,
-            workDir: path.join(ws().root, `r${run}-${arm}-attempts`, agent.key),
+            workDir: path.join(ws().root, `r${run}-attempts`, agent.key),
             trace: trace.trace,
           });
         });
@@ -282,7 +275,7 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
         try {
           const created = await fridayJson<GoalDetail>('goal', 'create', plan.objective, '--no-plan');
           goalId = created.goal.goal_id;
-          await fridayJson('plan', 'propose', '--goal', goalId, '--file', planFile);
+          await fridayJson('plan', 'propose', '--goal', goalId, '--file', BENEFIT_PLAN_FILE);
           await fridayJson('plan', 'approve', '--goal', goalId);
           const detail = await fridayJson<GoalDetail>('goal', 'show', goalId);
           const ids = (detail.active?.tasks ?? []).map((t) => ({ key: t.key, id: t.task_id as string }));
@@ -335,7 +328,7 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
         }
         const seconds = Math.round((Date.now() - started) / 1000);
         // The final code is the goal branch; without it, nothing of the goal was integrated.
-        const judgeDir = path.join(ws().root, `r${run}-${arm}-goal`);
+        const judgeDir = path.join(ws().root, `r${run}-fr-goal`);
         const g = deterministicGit(root);
         const branch = `friday/goal-${goalId}`;
         const hasBranch = (await g.exitCode(['rev-parse', '--verify', '--quiet', branch])) === 0;
@@ -355,14 +348,12 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
             t.key,
           ]) ?? [],
         );
-        const done = [...keyOf.entries()]
+        const completed = [...keyOf.entries()]
           .filter(([id]) => id && daemon.state.q.task(pid, id).status === 'COMPLETED')
           .map(([, key]) => key);
-        // The merged task claims the work of every task it holds.
-        const completed = one ? done.flatMap((k) => (k === one.merged[0] ? one.merged : [k])) : done;
         record(
           {
-            arm,
+            arm: 'friday',
             run,
             seconds,
             sessions,
@@ -373,7 +364,7 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
             refused_claims: refused,
             reworks: reworked.size,
           },
-          path.join(OUT, `run${run}-${arm}`),
+          path.join(OUT, `run${run}-friday`),
           transcripts,
           {
             'usage.json': report ?? {},
@@ -390,7 +381,7 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
           for (const arm of ARMS) {
             if (arm === 'plain-one') await plainOne(run);
             if (arm === 'plain-two') await plainTwo(run);
-            if (arm === 'friday' || arm === 'friday-one') await withFriday(run, arm);
+            if (arm === 'friday') await withFriday(run);
           }
         }
       } finally {

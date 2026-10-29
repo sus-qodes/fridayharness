@@ -50,17 +50,10 @@ for (let i = 0; i < argv.length; i += 1) {
   }
 }
 log({ args: argv, flags });
-// The instructions as the session was given them, so a test can compare two attempts' (plan M13.2).
-if (flags['--append-system-prompt-file']) log({ instructions: readFileSync(flags['--append-system-prompt-file'], 'utf8') });
 const sessionId = flags['--resume'] ?? flags['--session-id'];
 const sessionFile = path.join(workDir, `session-${sessionId}.json`);
-if (flags['--resume'] && (!existsSync(sessionFile) || script.refuseResume)) {
+if (flags['--resume'] && !existsSync(sessionFile)) {
   process.stderr.write(`No conversation found with session ID: ${sessionId}\n`);
-  process.exit(1);
-}
-// A host that keeps a session it will not resume, and will not start another under its id.
-if (flags['--session-id'] && existsSync(sessionFile) && script.refuseReuse) {
-  process.stderr.write(`Error: Session ID ${sessionId} is already in use.\n`);
   process.exit(1);
 }
 const session = existsSync(sessionFile)
@@ -270,26 +263,12 @@ async function play(steps) {
     } else if (s.op === 'wait') {
       await sleep(s.ms ?? 100);
     } else if (s.op === 'final') {
-      // The fields the step gives (`omit` leaves the default summary out, `extra` adds fields).
       const structured = {
         status: s.status ?? 'completed',
-        ...(s.omit?.includes('summary') ? {} : { summary: s.summary ?? 'done' }),
-        ...(s.changed_paths ? { changed_paths: s.changed_paths } : {}),
-        ...(s.blocked_reason !== undefined ? { blocked_reason: s.blocked_reason } : {}),
-        ...(s.extra ?? {}),
+        summary: s.summary ?? 'done',
+        changed_paths: s.changed_paths ?? [],
+        blocked_reason: s.blocked_reason ?? '',
       };
-      // Claude Code refuses an answer that does not fit the schema it was given: a required field
-      // missing, or a field the schema closes out (LESSONS CC-35).
-      if (flags['--json-schema']) {
-        const schema = JSON.parse(flags['--json-schema']);
-        const missing = (schema.required ?? []).filter((k) => !(k in structured));
-        const extra = schema.additionalProperties === false ? Object.keys(structured).filter((k) => !(k in (schema.properties ?? {}))) : [];
-        if (missing.length || extra.length) {
-          log({ refusedFinal: { missing, extra } });
-          send({ type: 'result', subtype: 'error_max_structured_output_retries', is_error: true, num_turns: 1, total_cost_usd: 0, usage: {}, result: `the structured output did not fit the schema (missing ${missing.join(', ') || 'none'}; not allowed ${extra.join(', ') || 'none'})` });
-          return;
-        }
-      }
       // With `--json-schema` the final answer comes back through the StructuredOutput tool, judged
       // by the hooks like any tool call (2.1.300, live check).
       if (flags['--json-schema'] && !(await tool('StructuredOutput', structured, () => 'ok'))) {
