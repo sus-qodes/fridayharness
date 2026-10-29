@@ -10,6 +10,8 @@ export interface RunOptions {
   input?: string;
   /** Exit codes that are answers, not failures (for example 1 from `rev-parse --verify --quiet`). */
   okCodes?: number[];
+  /** Extra environment (a commit identity, for example). */
+  env?: Record<string, string>;
 }
 
 export interface RunResult {
@@ -32,7 +34,7 @@ export function runGit(root: string, args: string[], opts: RunOptions = {}): Pro
       child = spawn('git', full, {
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
-        env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat' },
+        env: { ...process.env, ...opts.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat' },
       });
     } catch (e) {
       reject(new FridayError('context_unavailable', `git could not be started: ${(e as Error).message}`));

@@ -1,4 +1,4 @@
-import { allocateWorktree, GitRoot, removeWorktree, worktreesDir } from '@friday/git';
+import { allocateWorktree, GitRoot, goalBranch, removeWorktree, resolveCommit, worktreesDir } from '@friday/git';
 import type { Actor, WorktreeView } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
@@ -27,6 +27,16 @@ export class WorkspaceManager {
     return this.opts.project.project_id;
   }
 
+  /**
+   * Where a task's new branch starts (ADR-0025 §4): a goal's task starts from the goal branch, which
+   * holds its completed dependencies' integrated work; any other task from the main checkout's HEAD.
+   */
+  private async baseFor(taskId: string): Promise<string | undefined> {
+    const goalId = this.opts.state.q.findTask(this.pid, taskId)?.goal_id;
+    if (!goalId) return undefined;
+    return (await resolveCommit(this.opts.project.root, `refs/heads/${goalBranch(goalId)}`)) ?? undefined;
+  }
+
   /** Prepares every run still waiting for its worktree (after a restart, or a failed attempt). */
   async sweep(): Promise<void> {
     for (const run of this.opts.state.runsAwaitingWorkspace(this.pid)) await this.prepare(run.run_id);
@@ -45,6 +55,7 @@ export class WorkspaceManager {
         worktreesDir: this.dir,
         taskId: run.task_id,
         project: { project_id: project.project_id, name: project.name },
+        ...(await this.baseFor(run.task_id).then((base) => (base ? { base } : {}))),
       });
       state.workspaceReady(this.pid, runId, alloc);
       logger.info('task worktree ready', {
@@ -78,6 +89,7 @@ export class WorkspaceManager {
       mainRoot: project.root,
       worktreesDir: this.dir,
       taskId,
+      ...(await this.baseFor(taskId).then((base) => (base ? { base } : {}))),
       project: { project_id: project.project_id, name: project.name },
     });
     const worktree = state.recordWorktree(this.pid, actor, taskId, alloc);

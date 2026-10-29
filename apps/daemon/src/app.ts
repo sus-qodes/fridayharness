@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { patternsOverlap } from '@friday/policy';
 import {
   type Actor,
   API_VERSION,
@@ -29,11 +30,12 @@ import {
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
-import { ZodError } from 'zod';
+import { ZodError, z } from 'zod';
 import type { BrainHandle } from './brain.js';
 import { escalationView, mountBrainRoutes } from './brain-routes.js';
 import type { CompileInput, ContextService } from './context.js';
 import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
+import type { IntegrationManager } from './integration.js';
 import type { Logger } from './log.js';
 import { type AuthInfo, callerFor, dispatchRpc } from './rpc.js';
 import { statusPageHtml } from './ui.js';
@@ -64,6 +66,8 @@ export interface AppDeps {
   context: ContextService;
   /** Task worktrees (M5a). */
   workspaces?: WorkspaceManager;
+  /** Integration into goal branches (M5c). */
+  integration?: IntegrationManager;
 }
 
 type Env = { Variables: { auth: AuthInfo; requestId: string } };
@@ -727,6 +731,62 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.post(`${P}/tasks/:tid/worktree`, allow(...OPERATOR), async (c) =>
     c.json(await workspaces().forTask(c.req.param('tid'), HUMAN), 201),
   );
+
+  // Integration into goal branches (M5c, ADR-0025).
+  app.get(`${P}/integrations`, allow(...OPERATOR), (c) =>
+    c.json({
+      integrations: deps.state.q.integrations(pid, {
+        ...(c.req.query('goal') ? { goal_id: c.req.query('goal') as string } : {}),
+        ...(c.req.query('task') ? { task_id: c.req.query('task') as string } : {}),
+      }),
+    }),
+  );
+  app.post(`${P}/tasks/:tid/integrate`, allow(...OPERATOR), async (c) => {
+    if (!deps.integration) throw new FridayError('capability_unsupported', 'this daemon integrates no task branches');
+    const task = deps.state.q.task(pid, c.req.param('tid'));
+    if (task.status !== 'COMPLETED' || !task.goal_id) {
+      throw new FridayError(
+        'invalid_request',
+        `only a completed task of a goal is integrated; ${task.task_id} is ${task.status}${task.goal_id ? '' : ' without a goal'}`,
+      );
+    }
+    return c.json({ integration: await deps.integration.integrate(task.task_id, HUMAN) });
+  });
+
+  // File reservations (M5c, ADR-0025).
+  app.get(`${P}/file-reservations`, allow(...OPERATOR), (c) =>
+    c.json({
+      mode: project.config.reservations.mode,
+      required: project.config.reservations.required,
+      reservations: deps.state.q.fileReservations(pid, c.req.query('all') === 'true' ? undefined : ['active']),
+    }),
+  );
+  app.post(`${P}/file-reservations`, allow(...OPERATOR), async (c) => {
+    const body = z
+      .object({ task_id: z.string().min(1), pattern: z.string().min(1), note: z.string().max(500).optional() })
+      .parse(await c.req.json());
+    const [reservation] = deps.state.reserveFiles(
+      pid,
+      HUMAN,
+      body.task_id,
+      [body.pattern],
+      'human',
+      patternsOverlap,
+      body.note,
+    );
+    return c.json({ reservation }, 201);
+  });
+  app.post(`${P}/file-reservations/:rid/release`, allow(...OPERATOR), async (c) => {
+    const body = z.object({ note: z.string().max(500).optional() }).parse(await c.req.json().catch(() => ({})));
+    return c.json({
+      reservation: deps.state.releaseFileReservation(
+        pid,
+        HUMAN,
+        c.req.param('rid'),
+        body.note ?? 'released by a human',
+      ),
+    });
+  });
 
   // Code graph (M4b, ADR-0020).
   const graphService = (): GraphService => {

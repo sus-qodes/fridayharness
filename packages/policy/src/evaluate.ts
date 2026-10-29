@@ -40,6 +40,12 @@ export interface PolicyInput {
   /** True when a human granted this capability/target and the grant has not expired. */
   approved?: (capability: string, target: string) => boolean;
   autonomy?: Partial<Record<CommandClass, Autonomy>>;
+  /**
+   * Conflict-prone files (ADR-0025 §1): a write under a `required` pattern needs the task to hold
+   * that pattern's reservation, which the write takes when it is free; `held` are the reservations
+   * other tasks hold.
+   */
+  reservations?: { required: readonly string[]; held: readonly { pattern: string; task_id: string }[] };
 }
 
 export type Decision = 'allow' | 'deny' | 'ask';
@@ -54,6 +60,10 @@ export interface PolicyResult {
   /** Project-relative targets the decision applied to. */
   targets: string[];
   enforcement_level: 'L1';
+  /** An allowed write under these `required` patterns: the task must take their reservations. */
+  reserve?: string[];
+  /** A write denied because another task holds the reservation. */
+  reserved_by?: { pattern: string; task_id: string };
 }
 
 const r = (decision: Decision, rule: string, reason: string, extra: Partial<PolicyResult> = {}): PolicyResult => ({
@@ -233,20 +243,31 @@ export function evaluate(input: PolicyInput): PolicyResult {
       }
     }
     const scope = task.scope?.write ?? [];
-    if (scope.length === 0) continue;
-    if (matchesAny(rel, scope, windows)) continue;
-    if (input.approved?.('fs.write', rel)) continue;
-    return r(
-      'deny',
-      'write.outside_scope',
-      `${rel} is outside the scope of ${task.task_id} (${scope.join(', ')}). ${HOW_TO_ASK}`,
-      { targets },
-    );
+    const inScope = scope.length === 0 || matchesAny(rel, scope, windows) || input.approved?.('fs.write', rel);
+    if (!inScope) {
+      return r(
+        'deny',
+        'write.outside_scope',
+        `${rel} is outside the scope of ${task.task_id} (${scope.join(', ')}). ${HOW_TO_ASK}`,
+        { targets },
+      );
+    }
+    const holder = input.reservations?.held.find((h) => matchesAny(rel, [h.pattern], windows));
+    if (holder) {
+      return r(
+        'deny',
+        'write.reserved',
+        `${rel} is reserved by ${holder.task_id} (${holder.pattern}) until that task's work is integrated. Wait for it, or coordinate through friday_communicate.`,
+        { targets, reserved_by: { pattern: holder.pattern, task_id: holder.task_id } },
+      );
+    }
   }
+  const required = input.reservations?.required ?? [];
+  const reserve = [...new Set(locations.flatMap((rel) => required.filter((p) => matchesAny(rel, [p], windows))))];
   return r(
     'allow',
     task.scope?.write.length ? 'write.in_scope' : 'write.no_scope',
     task.scope?.write.length ? 'inside the task scope.' : 'the task declares no write scope.',
-    { targets },
+    { targets, ...(reserve.length ? { reserve } : {}) },
   );
 }

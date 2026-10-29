@@ -137,10 +137,19 @@ describe('M2 gate on fixture-shop', () => {
     const shown = await friday('goal', 'show');
     for (const s of ['plan', 'v2 PROPOSED', 'rework subscribe-page', 'Question for a human', 'friday answer'])
       expect(shown.stdout).toContain(s);
-    // Meanwhile the backend line continues: webhooks became READY and went to be-1.
-    expect((await detail()).active?.tasks.find((t) => t.key === 'stripe-webhooks')).toMatchObject({
-      agent_key: 'be-1',
-    });
+    // Meanwhile the backend line continues: once the billing work is in the goal branch (ADR-0025),
+    // webhooks become READY and go to be-1.
+    await until(
+      detail,
+      (d) => d.active?.tasks.find((t) => t.key === 'stripe-webhooks')?.agent_key === 'be-1',
+      'webhooks to go to be-1 after the billing work was integrated',
+    );
+    const integrations = await operator.get<{ integrations: { task_id: string; status: string }[] }>(
+      operator.projectPath('/integrations'),
+    );
+    expect(integrations.integrations).toEqual([
+      expect.objectContaining({ task_id: task('billing-service').task_id, status: 'integrated' }),
+    ]);
 
     const stop = await friday('daemon', 'stop');
     expect(stop.code).toBe(0);

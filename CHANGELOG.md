@@ -21,6 +21,14 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - A verification cut short by a daemon restart no longer leaves the task stuck in VERIFYING: it returns to READY_FOR_VERIFICATION.
   - `friday verify` and `friday task inspect` show the verified code and every finding.
   - Decision: ADR-0024.
+- **M5c, conflict-prone files and goal branches:**
+  - **File reservations.** Files listed in `reservations.required` (lockfiles, migrations, shared contracts) are changed by one task at a time. The first write through Friday's hooks reserves them for its task; a write from another task is refused, naming the holder, and recorded as an ownership conflict. Runs without hooks are checked the same way when they are verified. A reservation ends when its task's work is integrated or the task is cancelled, and expires when the task stands still for 30 minutes (`reservations.ttl_ms`). `friday reserve <pattern> --task <task>`, `friday reservations`, `friday reservations release <id>`.
+  - **Goal branches.** Each goal gets a branch `friday/goal-<goal>`. When one of its tasks completes, Friday commits the verified work on the task branch (in the agent's name, never yours), then brings it into the goal branch: a fast-forward when the branch has not moved, otherwise a merge that is verified again in Friday's own checkout before the branch moves. A conflict or a failing merged revision leaves the goal branch as it was and asks you. Your main checkout and your own branches are never touched; you land the goal branch yourself (`git merge friday/goal-<goal>`).
+  - **Dependencies see integrated work.** A task that depends on others starts only once their work is in the goal branch, and its worktree starts from it.
+  - **A goal completes** only when the work of all its tasks is integrated.
+  - `friday integrations [--goal <goal>]` lists every attempt; `friday integrate <task>` tries again after you resolved a problem.
+  - Fix: an attach session started in a task worktree now records the worktree's base commit, so verification sees what it committed.
+  - Decision: ADR-0025.
 
 ## Unreleased — M4 context engine
 

@@ -119,6 +119,55 @@ export const WorktreeView = z.object({
 });
 export type WorktreeView = z.infer<typeof WorktreeView>;
 
+/**
+ * An exclusive reservation of conflict-prone files for one task (ADR-0025 §1): a lockfile, a
+ * migration folder, a shared contract. Not to be confused with a READY task reserved for an agent.
+ */
+export const FileReservationView = z.object({
+  reservation_id: z.string(),
+  task_id: z.string(),
+  /** A project-relative path or glob, as configured in `reservations.required` or given by a human. */
+  pattern: z.string(),
+  status: z.enum(['active', 'released', 'expired']),
+  /** Taken by a write through Friday's hooks, at verification, or by a human. */
+  via: z.enum(['write', 'verification', 'human']),
+  acquired_at: z.string(),
+  ended_at: z.string().nullable(),
+  note: z.string().nullable(),
+});
+export type FileReservationView = z.infer<typeof FileReservationView>;
+
+/**
+ * One attempt to bring a verified task branch into its goal branch (ADR-0025 §2–§5). The goal
+ * branch only ever moves to a merge whose checks passed.
+ */
+export const IntegrationView = z.object({
+  integration_id: z.string(),
+  goal_id: z.string(),
+  task_id: z.string(),
+  status: z.enum(['integrated', 'conflicted', 'failed', 'not_needed']),
+  /** The goal branch, `friday/goal-<goal_id>`. */
+  branch: z.string().nullable(),
+  /** The task branch commit that was integrated (the verified work). */
+  task_commit: z.string().nullable(),
+  /** The goal branch before, and after when integrated. */
+  base_commit: z.string().nullable(),
+  merged_commit: z.string().nullable(),
+  conflicts: z.array(z.string()),
+  checks: z.array(
+    z.object({
+      name: z.string(),
+      status: z.string(),
+      exit_code: z.number().int().nullable(),
+      artifact_ref: z.string().nullable(),
+      summary: z.string().nullable(),
+    }),
+  ),
+  summary: z.string().nullable(),
+  created_at: z.string(),
+});
+export type IntegrationView = z.infer<typeof IntegrationView>;
+
 export const HarnessView = z.object({
   harness_id: z.string(),
   harness_key: z.string(),

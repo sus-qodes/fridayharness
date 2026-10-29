@@ -20,6 +20,7 @@ The architecture is called **ContextOS** in the original specification.
 - **M4** compiles the context each agent receives: the code as it is in the agent's checkout (uncommitted work included), the files related through a code graph (imports, consumers, tests, shared contracts), and project memory with its authority, within a budget and explained by `friday context explain`.
 - **M5a** gives each task its own git worktree: agents working in parallel no longer share a checkout, a session started in a task's worktree works on that task only, and worktrees holding uncommitted work are kept.
 - **M5b** verifies a task in the checkout it worked in, at a recorded revision: Friday's own checks (changes against the task's scope and claim, credentials in the code) run before the project's checks for that kind of task, related tests first, and a verification whose code changed while it ran judges nothing.
+- **M5c** serializes changes to conflict-prone files with file reservations, and brings each goal's verified task branches together in a goal branch, verifying the merged code before the branch moves; dependent tasks start from that integrated work, and you land the goal branch yourself.
 
 See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 

@@ -30,6 +30,7 @@ import {
   type ContextPacket,
   type EnforcementLevel,
   type EnforcementStatus,
+  type FileReservationView,
   FridayError,
   GoalCreateRequest,
   type GoalView,
@@ -37,6 +38,7 @@ import {
   type HarnessStatus,
   type HarnessView,
   type InboxItem,
+  type IntegrationView,
   negotiateProtocolVersion,
   type OutboundMessage,
   type PlanStatus,
@@ -99,6 +101,11 @@ export interface StateConfig {
   worktreeMode: 'per_task' | 'off';
   /** How long a run may wait for its worktree before it is declined. */
   workspaceTimeoutMs: number;
+  /**
+   * File reservations (ADR-0025): how long a reservation outlives its task standing still (READY
+   * again, or its harness lost) before it expires and others may take the files.
+   */
+  fileReservationTtlMs: number;
 }
 
 export const DEFAULT_STATE_CONFIG: StateConfig = {
@@ -122,6 +129,7 @@ export const DEFAULT_STATE_CONFIG: StateConfig = {
   maxOpenPerRecipient: 50,
   worktreeMode: 'off',
   workspaceTimeoutMs: 10 * 60 * 1000,
+  fileReservationTtlMs: 30 * 60 * 1000,
 };
 
 /** Who sends a message (ADR-0017 §4). Agents are identified by their harness token, never by the request. */
@@ -352,6 +360,7 @@ const OBSERVATION_TYPES = new Set([
   'daemon.started',
   'daemon.stopped',
   'scope.violation',
+  'ownership.conflict',
 ]);
 
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
@@ -471,7 +480,42 @@ export class FridayState {
     const runRef = (changes.current_run_id as string | undefined) ?? task.current_run_id;
     if (runRef) refs.push({ kind: 'run', id: runRef });
     ctx.emit({ type: tr.event, actor, payload: { task_id: task.task_id, transition, changes }, refs });
+    const awaitsIntegration = tr.to === 'COMPLETED' && this.awaitsIntegration(task);
+    if ((tr.to === 'COMPLETED' && !awaitsIntegration) || tr.to === 'CANCELLED' || tr.to === 'ABANDONED') {
+      this.endFileReservations(ctx, task.task_id, 'released', `the task was ${tr.to.toLowerCase()}`);
+    }
     return this.q.task(ctx.project_id, task.task_id);
+  }
+
+  /**
+   * A goal's task that worked on its own task branch is not done when it completes: its verified
+   * work still has to reach the goal branch (ADR-0025 §2).
+   */
+  awaitsIntegration(task: TaskView): boolean {
+    return Boolean(task.goal_id && this.q.worktreeForTask(task.task_id));
+  }
+
+  /** Ends every active file reservation a task holds, inside the caller's transaction. */
+  private endFileReservations(
+    ctx: CommandContext,
+    taskId: string,
+    status: 'released' | 'expired',
+    note: string,
+  ): string[] {
+    const ended: string[] = [];
+    for (const r of this.q.fileReservations(ctx.project_id, ['active'])) {
+      if (r.task_id !== taskId) continue;
+      ctx.emit({
+        type: 'file.reservation_ended',
+        payload: { reservation_id: r.reservation_id, task_id: taskId, pattern: r.pattern, status, note },
+        refs: [
+          { kind: 'reservation', id: r.reservation_id },
+          { kind: 'task', id: taskId },
+        ],
+      });
+      ended.push(r.reservation_id);
+    }
+    return ended;
   }
 
   private updateTaskFields(ctx: CommandContext, taskId: string, changes: Record<string, unknown>): TaskView {
@@ -487,7 +531,14 @@ export class FridayState {
   private workspaceFor(ctx: CommandContext, projectId: string, task: TaskView, harness: HarnessRecord): Workspace {
     const root = this.q.project(projectId)?.root_path ?? '.';
     if (harness.attach_mode !== 'spawn') {
-      return { execution_root: harness.host_cwd ?? root, base_commit: null, branch_ref: null, workspace: 'ready' };
+      // A session in a task worktree works from that worktree's base (verification diffs against it).
+      const tree = harness.host_cwd ? this.q.worktreeAt(projectId, harness.host_cwd) : undefined;
+      return {
+        execution_root: harness.host_cwd ?? root,
+        base_commit: tree?.base_commit ?? null,
+        branch_ref: tree?.branch ?? null,
+        workspace: 'ready',
+      };
     }
     if (this.config.worktreeMode !== 'per_task') {
       return { execution_root: root, base_commit: null, branch_ref: null, workspace: 'ready' };
@@ -1648,8 +1699,13 @@ export class FridayState {
   private readyWithin(ctx: CommandContext, projectId: string, goalId: string): TaskView[] {
     const out: TaskView[] = [];
     for (const t of this.q.goalTasks(projectId, goalId)) {
-      if (t.status === 'PROPOSED' && this.q.openDependencies(t.task_id).length === 0)
-        out.push(this.moveTask(ctx, t, 'task.ready'));
+      // A dependency counts once its work is where the dependent will start from: integrated into the
+      // goal branch when it worked on a task branch (ADR-0025 §4).
+      const ready =
+        t.status === 'PROPOSED' &&
+        this.q.openDependencies(t.task_id).length === 0 &&
+        this.q.dependencies(t.task_id).every((d) => this.integratedWork(projectId, d));
+      if (ready) out.push(this.moveTask(ctx, t, 'task.ready'));
     }
     return out;
   }
@@ -1670,15 +1726,27 @@ export class FridayState {
     });
   }
 
-  /** Completes the goal and its active plan once every task is COMPLETED (cancelled ones aside). */
+  /**
+   * A task's work is where its goal needs it: integrated into the goal branch, or it needed no
+   * integration because it did not work on a task branch (ADR-0025 §4).
+   */
+  integratedWork(projectId: string, taskId: string): boolean {
+    return (
+      !this.q.worktrees(projectId).some((w) => w.task_id === taskId) ||
+      ['integrated', 'not_needed'].includes(this.q.latestIntegration(projectId, taskId)?.status ?? '')
+    );
+  }
+
+  /** Completes the goal and its active plan once every task is COMPLETED and integrated (cancelled ones aside). */
   completeGoalIfDone(projectId: string, actor: Actor, goalId: string): GoalView | null {
     const goal = this.q.goal(projectId, goalId);
     if (goal.status !== 'ACTIVE' || !goal.plan_id) return null;
     const active = this.q.latestPlanVersion(goal.plan_id, ['ACTIVE']);
     const tasks = this.q.goalTasks(projectId, goalId);
     const done =
-      tasks.every((t) => t.status === 'COMPLETED' || t.status === 'CANCELLED') &&
-      tasks.some((t) => t.status === 'COMPLETED');
+      tasks.every(
+        (t) => (t.status === 'COMPLETED' && this.integratedWork(projectId, t.task_id)) || t.status === 'CANCELLED',
+      ) && tasks.some((t) => t.status === 'COMPLETED');
     if (!active || !done) return null;
     return this.exec({ name: 'goal.complete', project_id: projectId, actor, params: { goalId } }, (ctx) => {
       this.movePlan(ctx, active, 'COMPLETED', 'all tasks completed');
@@ -1686,7 +1754,7 @@ export class FridayState {
         type: 'goal.status_changed',
         payload: {
           goal_id: goalId,
-          transition: { from: 'ACTIVE', to: 'COMPLETED', trigger: 'all tasks completed' },
+          transition: { from: 'ACTIVE', to: 'COMPLETED', trigger: 'all tasks completed and integrated' },
           changes: { completed_at: ctx.now },
         },
         refs: [{ kind: 'goal', id: goalId }],
@@ -2430,6 +2498,8 @@ export class FridayState {
     terminated: string[];
     declined: string[];
     unreserved: string[];
+    /** File reservations that expired (ADR-0025). */
+    files_released: string[];
     messages_expired: string[];
     messages_escalated: string[];
     /** Replies recovered for answers recorded without one, and those that could not be sent. */
@@ -2452,6 +2522,7 @@ export class FridayState {
       terminated: [] as string[],
       declined: [] as string[],
       unreserved: [] as string[],
+      files_released: [] as string[],
       messages_expired: [] as string[],
       messages_escalated: [] as string[],
       messages_replied: [] as string[],
@@ -2545,6 +2616,7 @@ export class FridayState {
       }
     }
     out.unreserved.push(...this.expireReservations(projectId, this.clock.now()));
+    out.files_released.push(...this.expireFileReservations(projectId, this.clock.now()));
     const timeouts = this.expireMessages(projectId, this.clock.now());
     out.messages_expired.push(...timeouts.expired);
     out.messages_escalated.push(...timeouts.escalated);
@@ -2855,6 +2927,177 @@ export class FridayState {
         ],
       });
     });
+  }
+
+  // ================================================================ file reservations
+
+  /**
+   * Exclusive reservations of conflict-prone files for a task (ADR-0025 §1). A pattern the task
+   * already holds is kept; one that `overlaps` a pattern another task holds refuses the whole
+   * request with COS-8002, naming the holder. The check and the reservation are one transaction.
+   */
+  reserveFiles(
+    projectId: string,
+    actor: Actor,
+    taskId: string,
+    patterns: readonly string[],
+    via: FileReservationView['via'],
+    overlaps: (a: string, b: string) => boolean,
+    note?: string,
+  ): FileReservationView[] {
+    return this.exec(
+      { name: 'file.reserve', project_id: projectId, actor, params: { taskId, patterns, via } },
+      (ctx) => {
+        const task = this.q.task(projectId, taskId);
+        if (['COMPLETED', 'CANCELLED', 'ABANDONED'].includes(task.status)) {
+          throw new FridayError('invalid_state_transition', `${taskId} is ${task.status}; it cannot reserve files`);
+        }
+        const active = this.q.fileReservations(projectId, ['active']);
+        const ids: string[] = [];
+        for (const pattern of [...new Set(patterns.map(normalizePath))]) {
+          const mine = active.find((r) => r.task_id === taskId && r.pattern === pattern);
+          if (mine) {
+            ids.push(mine.reservation_id);
+            continue;
+          }
+          const other = active.find((r) => r.task_id !== taskId && overlaps(r.pattern, pattern));
+          if (other) {
+            throw new FridayError(
+              'reservation_conflict',
+              `${pattern} overlaps ${other.pattern}, which ${other.task_id} has held reserved since ${other.acquired_at}`,
+              { holder_task_id: other.task_id, reservation_id: other.reservation_id, pattern: other.pattern },
+            );
+          }
+          const reservation_id = this.ids.next('res');
+          ctx.emit({
+            type: 'file.reserved',
+            payload: { reservation: { reservation_id, task_id: taskId, pattern, via, note: note ?? null } },
+            refs: [
+              { kind: 'reservation', id: reservation_id },
+              { kind: 'task', id: taskId },
+            ],
+          });
+          ids.push(reservation_id);
+        }
+        return ids.map((id) => this.q.fileReservation(id) as FileReservationView);
+      },
+    );
+  }
+
+  /**
+   * The outcome of integrating a task into its goal branch (ADR-0025 §2–§5). A conflict or a failed
+   * check of the merged revision asks a human (or the Master Brain's next plan) in the same
+   * transaction; whatever the outcome, the task's file reservations end with it.
+   */
+  recordIntegration(
+    projectId: string,
+    actor: Actor,
+    rec: Omit<IntegrationView, 'integration_id' | 'created_at'>,
+  ): IntegrationView {
+    return this.exec(
+      { name: 'integration.record', project_id: projectId, actor, params: { task: rec.task_id, status: rec.status } },
+      (ctx) => {
+        const integration_id = this.ids.next('int');
+        const type =
+          rec.status === 'integrated'
+            ? 'integration.completed'
+            : rec.status === 'not_needed'
+              ? 'integration.not_needed'
+              : `integration.${rec.status}`;
+        ctx.emit({
+          type,
+          payload: { integration: { integration_id, ...rec } },
+          refs: [
+            { kind: 'integration', id: integration_id },
+            { kind: 'goal', id: rec.goal_id },
+            { kind: 'task', id: rec.task_id },
+          ],
+        });
+        if (rec.status === 'conflicted' || rec.status === 'failed') {
+          this.escalationWithin(ctx, {
+            kind: rec.status === 'conflicted' ? 'integration_conflict' : 'integration_failed',
+            goal_id: rec.goal_id,
+            task_id: rec.task_id,
+            question:
+              rec.status === 'conflicted'
+                ? `The verified work of ${rec.task_id} conflicts with ${rec.branch} in ${rec.conflicts.length} file(s): ${rec.conflicts.slice(0, 10).join(', ')}. How should it be resolved?`
+                : `${rec.task_id} could not be integrated into ${rec.branch ?? 'its goal branch'}: ${rec.summary ?? 'unknown reason'}. What now?`,
+            options: [
+              `resolve it on ${rec.branch ?? 'the goal branch'}, then run "friday integrate ${rec.task_id}"`,
+              'plan a task that resolves it',
+              'cancel the goal',
+            ],
+            details: { integration_id, conflicts: rec.conflicts, summary: rec.summary },
+          });
+        }
+        this.endFileReservations(ctx, rec.task_id, 'released', `integration ${rec.status.replace('_', ' ')}`);
+        return this.q.integrations(projectId, { task_id: rec.task_id }).at(-1) as IntegrationView;
+      },
+    );
+  }
+
+  /** A human ends a reservation early (`friday reservations release`). */
+  releaseFileReservation(projectId: string, actor: Actor, reservationId: string, note: string): FileReservationView {
+    return this.exec({ name: 'file.release', project_id: projectId, actor, params: { reservationId } }, (ctx) => {
+      const r = this.q.fileReservation(reservationId);
+      if (!r) throw new FridayError('invalid_request', `reservation ${reservationId} not found`);
+      if (r.status !== 'active') return r;
+      ctx.emit({
+        type: 'file.reservation_ended',
+        payload: { reservation_id: reservationId, task_id: r.task_id, pattern: r.pattern, status: 'released', note },
+        refs: [
+          { kind: 'reservation', id: reservationId },
+          { kind: 'task', id: r.task_id },
+        ],
+      });
+      return this.q.fileReservation(reservationId) as FileReservationView;
+    });
+  }
+
+  /**
+   * Reservations whose task has stood still (READY again, failed, or its harness lost) for longer than the
+   * TTL expire, so a dead session cannot hold conflict-prone files forever (ADR-0025 §1).
+   */
+  private expireFileReservations(projectId: string, now: string): string[] {
+    const nowMs = Date.parse(now);
+    const ended: string[] = [];
+    const stalled = new Map<string, string>();
+    for (const r of this.q.fileReservations(projectId, ['active'])) {
+      if (!stalled.has(r.task_id)) {
+        const t = this.q.findTask(projectId, r.task_id);
+        const still = t && ['READY', 'HARNESS_LOST', 'PROPOSED', 'FAILED'].includes(t.status);
+        stalled.set(
+          r.task_id,
+          still && nowMs - Date.parse(t.updated_at) > this.config.fileReservationTtlMs ? t.status : '',
+        );
+      }
+      const status = stalled.get(r.task_id);
+      if (!status) continue;
+      this.exec({ name: 'file.expire', project_id: projectId, actor: SYSTEM, params: { task: r.task_id } }, (ctx) => {
+        ended.push(
+          ...this.endFileReservations(
+            ctx,
+            r.task_id,
+            'expired',
+            `the task has been ${status} for more than ${Math.round(this.config.fileReservationTtlMs / 60_000)} min`,
+          ),
+        );
+      });
+      stalled.set(r.task_id, '');
+    }
+    return ended;
+  }
+
+  /** A write was refused because another task holds the files (audit; the hook already denied it). */
+  ownershipConflict(
+    projectId: string,
+    actor: Actor,
+    detail: { task_id: string | null; targets: string[]; holder_task_id: string; pattern: string; tool?: string },
+  ): void {
+    this.recordObservation(projectId, actor, 'ownership.conflict', detail, [
+      ...(detail.task_id ? [{ kind: 'task' as const, id: detail.task_id }] : []),
+      { kind: 'task' as const, id: detail.holder_task_id },
+    ]);
   }
 
   private startParams(projectId: string, task: TaskView, run: RunView, role: string): TaskStartParams {

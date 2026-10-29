@@ -7,8 +7,9 @@ import {
   evaluate,
   type OtherWriter,
   type PolicyResult,
+  patternsOverlap,
 } from '@friday/policy';
-import { type Actor, FridayError, HarnessRegisterParams, type TaskView } from '@friday/protocol';
+import { type Actor, FridayError, HarnessRegisterParams, isFridayError, type TaskView } from '@friday/protocol';
 import { renderContextMarkdown } from '@friday/sdk';
 import type { HarnessRecord } from '@friday/state';
 import type { Hono } from 'hono';
@@ -186,14 +187,42 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           if (!action) return c.json({ ok: true, hook_output: null });
           const task = heldTask(agent?.agent_id);
           const root = executionRoot(harness, task);
-          const result: PolicyResult = evaluate({
+          // Conflict-prone files (ADR-0025): what other tasks hold, and what a first write takes.
+          const reservations =
+            action.kind === 'write' && task && project.config.reservations.mode !== 'off'
+              ? {
+                  required: project.config.reservations.required,
+                  held: state.q
+                    .fileReservations(pid, ['active'])
+                    .filter((r) => r.task_id !== task.task_id)
+                    .map((r) => ({ pattern: r.pattern, task_id: r.task_id })),
+                }
+              : undefined;
+          let result: PolicyResult = evaluate({
             action,
             ctx: { projectRoot: root, mainRoot: project.root, stateDir: path.dirname(path.dirname(ctx.privateDir)) },
             task: task ? { task_id: task.task_id, status: task.status, scope: task.scope, kind: task.kind } : null,
             otherWriters: action.kind === 'write' ? otherWriters(agent?.agent_id, root) : [],
             approved: (capability, target) => state.q.grantedApproval(pid, capability, target, state.clock.now()),
             autonomy: project.config.autonomy as Partial<Record<CommandClass, Autonomy>>,
+            ...(reservations ? { reservations } : {}),
           });
+          if (result.decision === 'allow' && result.reserve?.length && task) {
+            try {
+              state.reserveFiles(pid, actor, task.task_id, result.reserve, 'write', patternsOverlap);
+            } catch (e) {
+              // Another task took the files between the check and now: refuse like any held file.
+              if (!isFridayError(e) || e.errorName !== 'reservation_conflict') throw e;
+              const d = (e.details ?? {}) as { holder_task_id?: string; pattern?: string };
+              result = {
+                ...result,
+                decision: 'deny',
+                rule: 'write.reserved',
+                reason: `${e.message}. Wait for it, or coordinate through friday_communicate.`,
+                reserved_by: { task_id: d.holder_task_id ?? 'another task', pattern: d.pattern ?? '' },
+              };
+            }
+          }
           state.recordObservation(
             pid,
             actor,
@@ -222,6 +251,15 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
               { tool: toolName, targets: result.targets, rule: result.rule, task_id: task?.task_id ?? null },
               refs(task),
             );
+          }
+          if (result.rule === 'write.reserved' && result.reserved_by) {
+            state.ownershipConflict(pid, actor, {
+              task_id: task?.task_id ?? null,
+              targets: result.targets,
+              holder_task_id: result.reserved_by.task_id,
+              pattern: result.reserved_by.pattern,
+              tool: toolName,
+            });
           }
           if (result.decision === 'allow') return c.json({ ok: true, hook_output: null });
           return c.json({

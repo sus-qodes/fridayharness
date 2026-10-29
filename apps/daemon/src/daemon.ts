@@ -23,6 +23,7 @@ import { buildApp } from './app.js';
 import { type BrainHandle, createMasterBrain } from './brain.js';
 import { type CompileInput, createContextService } from './context.js';
 import { GraphService } from './graph-service.js';
+import { IntegrationManager } from './integration.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
 import { runVerification } from './verify.js';
 import { WorkspaceManager } from './workspaces.js';
@@ -161,6 +162,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     blockingReplyMs: project.config.communication.blocking_reply_ms,
     maxOpenPerRecipient: project.config.communication.max_open_per_recipient,
     worktreeMode,
+    fileReservationTtlMs: project.config.reservations.ttl_ms,
     ...opts.state,
   };
 
@@ -221,6 +223,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   const graph = new GraphService({ root: project.root, cacheDir: path.join(fridayDir, 'graph') });
   // Task worktrees: prepared as soon as a run needs one, released when its task ends (ADR-0023).
   const workspaces = new WorkspaceManager({ state, project, logger, env });
+  // A completed goal task's verified work goes to its goal branch before its worktree is released (ADR-0025).
+  const integration = new IntegrationManager({ state, project, logger, workspaces });
   const stopWorkspaces = state.transport.subscribe(
     { project_id: project.project_id, types: ['run.created', 'task.cancelled', 'task.completed'] },
     (e) => {
@@ -230,15 +234,19 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
         return;
       }
       const taskId = (e.payload as { task_id?: string }).task_id;
-      if (taskId) {
-        void workspaces
-          .release(taskId, e.type === 'task.completed' ? 'the task completed' : 'the task was cancelled')
-          .catch((err) =>
-            logger.warn('releasing a task worktree failed', { task_id: taskId, message: (err as Error).message }),
-          );
-      }
+      if (!taskId) return;
+      const done =
+        e.type === 'task.completed'
+          ? integration.completed(taskId)
+          : workspaces.release(taskId, 'the task was cancelled');
+      void Promise.resolve(done).catch((err) =>
+        logger.warn('finishing a task worktree failed', { task_id: taskId, message: (err as Error).message }),
+      );
     },
   );
+  void integration
+    .sweep()
+    .catch((err) => logger.warn('integrating completed tasks failed', { message: (err as Error).message }));
   // The per-user state folder (it holds every project's private folder): never gathered into context.
   const context = createContextService({ state, project, graph, stateDir: path.dirname(path.dirname(privateDir)) });
   const ctx: DaemonContext = {
@@ -293,6 +301,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     graph,
     context,
     workspaces,
+    integration,
   });
   for (const ext of opts.extensions ?? []) ext(app as unknown as Hono, ctx);
 

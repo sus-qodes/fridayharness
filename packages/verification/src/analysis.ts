@@ -147,6 +147,44 @@ export function analyzeDiff(input: DiffInput): Finding[] {
   return findings;
 }
 
+/**
+ * Conflict-prone files in a task's changes (ADR-0025 §1): a change to a file another task holds
+ * fails; the `required` patterns the changes fall under that the task does not hold yet are the
+ * ones it takes now (a spawn run has no hooks to take them at its first write).
+ */
+export function checkReservations(input: {
+  changed: readonly string[];
+  required: readonly string[];
+  /** Reservations other tasks hold. */
+  held: readonly { pattern: string; task_id: string }[];
+  /** Patterns this task holds. */
+  mine: readonly string[];
+  matches: (path: string, pattern: string) => boolean;
+}): { findings: Finding[]; acquire: string[] } {
+  const conflicts: string[] = [];
+  const paths: string[] = [];
+  for (const p of input.changed) {
+    const holder = input.held.find((h) => input.matches(p, h.pattern));
+    if (!holder) continue;
+    conflicts.push(`${p} (held by ${holder.task_id} as ${holder.pattern})`);
+    paths.push(p);
+  }
+  const findings: Finding[] = conflicts.length
+    ? [
+        {
+          rule: 'diff.reserved',
+          severity: 'fail',
+          message: `changed files another task holds reserved: ${show(conflicts)}. That work must be integrated first; then rebase this task's work on it.`,
+          paths: listed(paths),
+        },
+      ]
+    : [];
+  const acquire = [...new Set(input.changed.flatMap((p) => input.required.filter((r) => input.matches(p, r))))].filter(
+    (r) => !input.mine.includes(r),
+  );
+  return { findings, acquire };
+}
+
 /** A configured check, as far as selection is concerned. */
 export interface SelectableCheck {
   name: string;

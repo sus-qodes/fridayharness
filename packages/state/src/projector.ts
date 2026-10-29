@@ -211,6 +211,57 @@ export class StateProjector implements Projector {
           .prepare('UPDATE verification_runs SET status = ?, ended_at = ?, summary = ? WHERE verification_id = ?')
           .run(str(p.status), e.occurred_at, opt(p.summary), str(p.verification_id));
         return;
+      case 'file.reserved': {
+        const r = p.reservation as Payload;
+        this.db
+          .prepare(
+            `INSERT INTO file_reservations (reservation_id, project_id, task_id, pattern, status, via, acquired_at, note)
+             VALUES (?, ?, ?, ?, 'active', ?, ?, ?)`,
+          )
+          .run(
+            str(r.reservation_id),
+            e.project_id,
+            str(r.task_id),
+            str(r.pattern),
+            str(r.via),
+            e.occurred_at,
+            opt(r.note),
+          );
+        return;
+      }
+      case 'integration.completed':
+      case 'integration.conflicted':
+      case 'integration.failed':
+      case 'integration.not_needed': {
+        const i = p.integration as Payload;
+        this.db
+          .prepare(
+            `INSERT INTO integrations (integration_id, project_id, goal_id, task_id, status, branch, task_commit,
+               base_commit, merged_commit, conflicts_json, checks_json, summary, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            str(i.integration_id),
+            e.project_id,
+            str(i.goal_id),
+            str(i.task_id),
+            str(i.status),
+            opt(i.branch),
+            opt(i.task_commit),
+            opt(i.base_commit),
+            opt(i.merged_commit),
+            toJson(i.conflicts ?? []),
+            toJson(i.checks ?? []),
+            opt(i.summary),
+            e.occurred_at,
+          );
+        return;
+      }
+      case 'file.reservation_ended':
+        this.db
+          .prepare('UPDATE file_reservations SET status = ?, ended_at = ?, note = ? WHERE reservation_id = ?')
+          .run(str(p.status), e.occurred_at, opt(p.note), str(p.reservation_id));
+        return;
       case 'verification.interrupted':
         this.db
           .prepare(

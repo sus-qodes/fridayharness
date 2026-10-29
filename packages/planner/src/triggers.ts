@@ -134,6 +134,18 @@ export function triggersFor(e: TriggerEvent, f: TriggerFacts): BrainAction[] {
       if (!goal_id) return [];
       return [{ kind: 'ready_dependents', task_id }, { kind: 'check_goal', goal_id }, { kind: 'delegate' }];
     }
+    // A task's verified work reached its goal branch (ADR-0025): its dependents may start from it,
+    // and the goal may be done.
+    case 'integration.completed':
+    case 'integration.not_needed': {
+      const i = p.integration as { task_id?: string; goal_id?: string } | undefined;
+      if (!i?.task_id || !i.goal_id) return [];
+      return [
+        { kind: 'ready_dependents', task_id: i.task_id },
+        { kind: 'check_goal', goal_id: i.goal_id },
+        { kind: 'delegate' },
+      ];
+    }
     case 'task.failed': {
       const task_id = String(p.task_id);
       const goal_id = f.goalOf(task_id);

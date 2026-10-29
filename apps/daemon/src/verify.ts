@@ -2,10 +2,11 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { findCredentials } from '@friday/events';
 import { GitRoot } from '@friday/git';
-import { matchesAny, sensitiveClassOf } from '@friday/policy';
-import { type Actor, FridayError, type RunView, type VerificationFinding } from '@friday/protocol';
+import { matchesAny, patternsOverlap, sensitiveClassOf } from '@friday/policy';
+import { type Actor, FridayError, isFridayError, type RunView, type VerificationFinding } from '@friday/protocol';
 import {
   analyzeDiff,
+  checkReservations,
   type Finding,
   ownChanges,
   relatedTests,
@@ -131,6 +132,26 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
         message: `the verified code includes ${before.files} uncommitted change(s); integration needs them committed`,
         paths: before.paths.slice(0, 20),
       });
+    }
+    // Conflict-prone files (ADR-0025): a change to what another task holds fails; free ones are taken.
+    if (since && project.config.reservations.mode !== 'off') {
+      const active = state.q.fileReservations(pid, ['active']);
+      const res = checkReservations({
+        changed: [...new Set(changes.flatMap((c) => (c.origPath ? [c.path, c.origPath] : [c.path])))],
+        required: project.config.reservations.required,
+        held: active.filter((r) => r.task_id !== taskId),
+        mine: active.filter((r) => r.task_id === taskId).map((r) => r.pattern),
+        matches: (p, pattern) => matchesAny(p, [pattern]),
+      });
+      findings.push(...res.findings);
+      if (!res.findings.length && res.acquire.length) {
+        try {
+          state.reserveFiles(pid, actor, taskId, res.acquire, 'verification', patternsOverlap);
+        } catch (e) {
+          if (!isFridayError(e, 'reservation_conflict')) throw e;
+          findings.push({ rule: 'diff.reserved', severity: 'fail', message: e.message, paths: [] });
+        }
+      }
     }
     let related: string[] = [];
     const graph = since ? await ctx.graph.graph(root).catch(() => null) : null;

@@ -31,8 +31,10 @@ export const RefKind = z.enum([
   'message',
   // M4: scoped memory.
   'memory',
-  // M5: task worktrees.
+  // M5: task worktrees, file reservations.
   'worktree',
+  'reservation',
+  'integration',
 ]);
 export type RefKind = z.infer<typeof RefKind>;
 
@@ -114,6 +116,15 @@ export const EVENT_TYPES = [
   'worktree.allocated',
   'worktree.released',
   'worktree.removed',
+  // M5c: file reservations (ADR-0025).
+  'file.reserved',
+  'file.reservation_ended',
+  'ownership.conflict',
+  // M5c: integration into goal branches (ADR-0025).
+  'integration.completed',
+  'integration.conflicted',
+  'integration.failed',
+  'integration.not_needed',
   'memory.superseded',
   'memory.approved',
   'memory.retracted',

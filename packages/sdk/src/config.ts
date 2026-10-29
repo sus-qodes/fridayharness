@@ -120,8 +120,16 @@ export const FridayConfig = z
         checks: z.array(Check).default([]),
       })
       .prefault({}),
+    /**
+     * Conflict-prone files (ADR-0025): writing under a `required` pattern takes an exclusive
+     * reservation for the task; `ttl_ms` is how long it outlives a task that stands still.
+     */
     reservations: z
-      .object({ mode: z.enum(['hybrid', 'off']).default('hybrid'), required: z.array(z.string()).default([]) })
+      .object({
+        mode: z.enum(['hybrid', 'off']).default('hybrid'),
+        required: z.array(z.string()).default([]),
+        ttl_ms: z.number().int().min(60_000).default(1_800_000),
+      })
       .prefault({}),
     /**
      * Task worktrees (ADR-0023). `per_task`: each spawn-mode run works in its task's own checkout

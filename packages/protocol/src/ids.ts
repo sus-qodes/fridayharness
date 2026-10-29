@@ -44,8 +44,9 @@ export const ID_PREFIXES = [
   'corr',
   // M3c: snapshots of the domain tables.
   'snap',
-  // M5: task worktrees.
+  // M5: task worktrees, integrations.
   'wt',
+  'int',
 ] as const;
 export type IdPrefix = (typeof ID_PREFIXES)[number];
 export type Id<P extends IdPrefix = IdPrefix> = `${P}_${string}`;

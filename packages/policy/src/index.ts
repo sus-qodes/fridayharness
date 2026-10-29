@@ -32,6 +32,7 @@ export {
   isInside,
   matchesAny,
   type PathContext,
+  patternsOverlap,
   realDirectory,
 } from './paths.js';
 export {

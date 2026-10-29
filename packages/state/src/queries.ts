@@ -3,9 +3,11 @@ import {
   type AgentView,
   type AssignmentView,
   type ContextPacket,
+  type FileReservationView,
   FridayError,
   type GoalView,
   type HarnessView,
+  type IntegrationView,
   type MessageView,
   type ModelCallView,
   type PlanVersionView,
@@ -106,6 +108,14 @@ export class Queries {
         `SELECT d.depends_on_task_id AS id FROM task_dependencies d LEFT JOIN tasks t ON t.task_id = d.depends_on_task_id
          WHERE d.task_id = ? AND (t.status IS NULL OR t.status <> 'COMPLETED')`,
       )
+      .all<{ id: string }>(taskId)
+      .map((r) => r.id);
+  }
+
+  /** Every task this one depends on. */
+  dependencies(taskId: string): string[] {
+    return this.db
+      .prepare('SELECT depends_on_task_id AS id FROM task_dependencies WHERE task_id = ?')
       .all<{ id: string }>(taskId)
       .map((r) => r.id);
   }
@@ -297,6 +307,53 @@ export class Queries {
       .prepare('SELECT * FROM worktrees WHERE project_id = ? ORDER BY created_at DESC, worktree_id DESC')
       .all<WorktreeView>(projectId);
     return statuses ? rows.filter((w) => statuses.includes(w.status)) : rows;
+  }
+
+  /** Integration attempts, oldest first; for one goal or one task (ADR-0025). */
+  integrations(projectId: string, filter: { goal_id?: string; task_id?: string } = {}): IntegrationView[] {
+    return this.db
+      .prepare('SELECT * FROM integrations WHERE project_id = ? ORDER BY created_at, rowid')
+      .all<Record<string, unknown>>(projectId)
+      .filter(
+        (r) => (!filter.goal_id || r.goal_id === filter.goal_id) && (!filter.task_id || r.task_id === filter.task_id),
+      )
+      .map((r) => ({
+        integration_id: String(r.integration_id),
+        goal_id: String(r.goal_id),
+        task_id: String(r.task_id),
+        status: r.status as IntegrationView['status'],
+        branch: (r.branch as string | null) ?? null,
+        task_commit: (r.task_commit as string | null) ?? null,
+        base_commit: (r.base_commit as string | null) ?? null,
+        merged_commit: (r.merged_commit as string | null) ?? null,
+        conflicts: JSON.parse(String(r.conflicts_json ?? '[]')) as string[],
+        checks: JSON.parse(String(r.checks_json ?? '[]')) as IntegrationView['checks'],
+        summary: (r.summary as string | null) ?? null,
+        created_at: String(r.created_at),
+      }));
+  }
+
+  /** The latest integration attempt of a task, if any. */
+  latestIntegration(projectId: string, taskId: string): IntegrationView | undefined {
+    return this.integrations(projectId, { task_id: taskId }).at(-1);
+  }
+
+  /** File reservations of the project, oldest first (ADR-0025). */
+  fileReservations(projectId: string, statuses?: FileReservationView['status'][]): FileReservationView[] {
+    const rows = this.db
+      .prepare('SELECT * FROM file_reservations WHERE project_id = ? ORDER BY acquired_at, reservation_id')
+      .all<FileReservationView & { project_id?: string }>(projectId)
+      .map(({ project_id: _p, ...r }) => r as FileReservationView);
+    return statuses ? rows.filter((r) => statuses.includes(r.status)) : rows;
+  }
+
+  fileReservation(reservationId: string): FileReservationView | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM file_reservations WHERE reservation_id = ?')
+      .get<FileReservationView & { project_id?: string }>(reservationId);
+    if (!row) return undefined;
+    const { project_id: _p, ...r } = row;
+    return r as FileReservationView;
   }
 
   /** The task's worktree that still holds its work (active or preserved), if any. */

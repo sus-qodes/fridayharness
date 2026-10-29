@@ -624,6 +624,54 @@ ALTER TABLE verification_checks ADD COLUMN details_json TEXT;
   },
 ];
 
+/** M5c: exclusive reservations of conflict-prone files (ADR-0025). */
+export const RESERVATION_MIGRATIONS: Migration[] = [
+  {
+    version: 12,
+    name: 'file_reservations',
+    up: `
+CREATE TABLE file_reservations (
+  reservation_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  pattern TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('active', 'released', 'expired')),
+  via TEXT NOT NULL,
+  acquired_at TEXT NOT NULL,
+  ended_at TEXT,
+  note TEXT
+);
+CREATE INDEX ix_file_reservations ON file_reservations(project_id, status, task_id);
+`,
+  },
+];
+
+/** M5c: verified task branches brought into their goal branch (ADR-0025). */
+export const INTEGRATION_MIGRATIONS: Migration[] = [
+  {
+    version: 13,
+    name: 'integrations',
+    up: `
+CREATE TABLE integrations (
+  integration_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  goal_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('integrated', 'conflicted', 'failed', 'not_needed')),
+  branch TEXT,
+  task_commit TEXT,
+  base_commit TEXT,
+  merged_commit TEXT,
+  conflicts_json TEXT NOT NULL DEFAULT '[]',
+  checks_json TEXT NOT NULL DEFAULT '[]',
+  summary TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_integrations ON integrations(project_id, goal_id, task_id);
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -636,10 +684,14 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...CONTEXT_MIGRATIONS,
   ...WORKTREE_MIGRATIONS,
   ...VERIFICATION_MIGRATIONS,
+  ...RESERVATION_MIGRATIONS,
+  ...INTEGRATION_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */
 export const DOMAIN_TABLES = [
+  'integrations',
+  'file_reservations',
   'worktrees',
   'memory_links',
   'memories',

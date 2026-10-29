@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ALLOW_SECRET_MARKER,
   analyzeDiff,
+  checkReservations,
   type DiffInput,
   ownChanges,
   relatedTests,
@@ -150,5 +151,34 @@ describe('the credential scan', () => {
     expect(findings[0]?.message).toContain('src/config.ts:2 (aws_key)');
     expect(findings[0]?.message).not.toContain('very-secret');
     expect(scanCredentials([{ path: 'src/clean.ts', text: 'export {};\n' }], find)).toEqual([]);
+  });
+});
+
+describe('conflict-prone files at verification', () => {
+  const matches = (p: string, pattern: string) =>
+    pattern.endsWith('/**') ? p.startsWith(pattern.slice(0, -2)) : p === pattern;
+
+  it('fails a change to what another task holds, and takes the free patterns the changes need', () => {
+    const required = ['pnpm-lock.yaml', 'migrations/**'];
+    const held = [{ pattern: 'migrations/**', task_id: 'task_b' }];
+    const conflict = checkReservations({
+      changed: ['migrations/0008.sql', 'src/a.ts'],
+      required,
+      held,
+      mine: [],
+      matches,
+    });
+    expect(conflict.findings.map((f) => [f.rule, f.severity, f.paths])).toEqual([
+      ['diff.reserved', 'fail', ['migrations/0008.sql']],
+    ]);
+    expect(conflict.findings[0]?.message).toContain('task_b');
+    const free = checkReservations({
+      changed: ['pnpm-lock.yaml', 'migrations/0008.sql', 'src/a.ts'],
+      required,
+      held: [],
+      mine: ['migrations/**'],
+      matches,
+    });
+    expect(free).toEqual({ findings: [], acquire: ['pnpm-lock.yaml'] });
   });
 });

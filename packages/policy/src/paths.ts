@@ -158,6 +158,20 @@ export function matchesAny(relative: string, globs: readonly string[], windows =
   return m(relative);
 }
 
+/**
+ * Two reservation patterns may name the same file (ADR-0025): two paths when they are equal, a
+ * path and a glob when the glob matches the path, two globs when their fixed prefixes overlap.
+ */
+export function patternsOverlap(a: string, b: string, windows = WIN): boolean {
+  const glob = /[*?[{]/;
+  const norm = (p: string) => p.replaceAll('\\', '/').replace(/^\.\//, '');
+  const [ga, gb] = [glob.test(a), glob.test(b)];
+  if (!ga && !gb) return windows ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
+  if (!ga) return matchesAny(norm(a), [b], windows);
+  if (!gb) return matchesAny(norm(b), [a], windows);
+  return globsOverlap([a], [b]);
+}
+
 /** Two glob lists may touch the same file (conservative: equal prefixes or wildcards overlap). */
 export function globsOverlap(a: readonly string[], b: readonly string[]): boolean {
   if (a.length === 0 || b.length === 0) return true;

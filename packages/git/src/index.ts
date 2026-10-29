@@ -6,6 +6,20 @@
 export const PACKAGE_NAME = '@friday/git';
 
 export {
+  agentIdentity,
+  type CommitIdentity,
+  checkoutForVerification,
+  commitAll,
+  commitTree,
+  FRIDAY_IDENTITY,
+  goalBranch,
+  isAncestor,
+  type MergeResult,
+  mergeCommits,
+  moveRef,
+  resolveCommit,
+} from './integrate.js';
+export {
   type ChangedPath,
   type DiffEntry,
   GitRoot,
