@@ -80,6 +80,32 @@ describe('capabilities', () => {
     );
   });
 
+  it('refuses a request beyond the ceiling of the task instead of asking a human (plan M12.2)', () => {
+    // A plan task of the frontend role: its role's team scope is its ceiling, whoever holds it.
+    const bounded = { ...task, ceiling: [{ source: 'policies/teams.yaml', write: ['frontend/**'] }] };
+    const beyond = evaluateCapability({ capability: 'file.write', target: 'backend/prices.ts', task: bounded, ctx });
+    expect(beyond).toMatchObject({ decision: 'deny', rule: 'capability.above_ceiling' });
+    expect(beyond.reason).toContain('frontend/**');
+    expect(beyond.reason).toContain('policies/teams.yaml');
+    // Inside the ceiling a path outside the task's scope is still a human's to grant.
+    const inside = { ...bounded, scope: { write: ['frontend/src/pricing/**'], read: [] } };
+    expect(
+      evaluateCapability({ capability: 'file.write', target: 'frontend/shared/theme.ts', task: inside, ctx }),
+    ).toMatchObject({ decision: 'review', rule: 'capability.outside_scope' });
+    // Reading is not bounded by the ceiling; a task without a role has none beyond its own scope.
+    expect(evaluateCapability({ capability: 'file.read', target: 'backend/prices.ts', task: bounded, ctx }).rule).toBe(
+      'capability.outside_scope',
+    );
+    expect(
+      evaluateCapability({
+        capability: 'file.write',
+        target: 'backend/prices.ts',
+        task: { ...task, ceiling: [] },
+        ctx,
+      }),
+    ).toMatchObject({ decision: 'review', rule: 'capability.outside_scope' });
+  });
+
   it('never approves a raw secret, and lets a project change autonomy and risk', () => {
     const secret = evaluateCapability({ capability: 'secret.resolve', target: 'STRIPE_KEY', task, ctx });
     expect(secret.decision).toBe('deny');

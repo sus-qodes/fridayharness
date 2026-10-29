@@ -1,4 +1,4 @@
-import type { GoalDiff } from '@friday/protocol';
+import type { GoalDiff, GoalSummary } from '@friday/protocol';
 import { describe, expect, it } from 'vitest';
 import { makeContext } from '../test/context.js';
 import { makeGoal, makeSnapshot } from '../test/fixtures.js';
@@ -137,6 +137,63 @@ describe('landing', () => {
     expect(buttonBy(m.el, 'Copy the merge command').disabled).toBe(true);
     expect(m.el.textContent).toContain('⟨U+200B⟩');
     m.destroy();
+  });
+
+  it('lists what Friday did for the goal, one row per fact (plan M12.7)', async () => {
+    const summary: GoalSummary = {
+      tasks: { total: 3, verified: 3 },
+      claims_refused: 1,
+      reworked: 1,
+      held_for_human: 2,
+      refused_by_policy: 0,
+      sessions_lost: 1,
+      sessions_recovered: 1,
+      hosts: { attempts: 3, reported: 2, tokens: 184_321, tokens_reporters: 2, cost_usd: 0.42, cost_reporters: 2 },
+      planning: { calls: 1, cost_usd: 0.03, unknown_cost_calls: 0 },
+    };
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ goals: [makeGoal({ status: 'COMPLETED' })] }),
+      answers: { [`GET /goals/${GID}/diff`]: diff(), [`GET /goals/${GID}`]: { summary } },
+    });
+    const m = landModal(ctx, { kind: 'land', id: GID }, () => undefined);
+    expect(m.el.textContent).toContain('Reading what Friday did…');
+    await flush();
+    // The diff, which the dialog is for, is asked first.
+    expect(ctx.transport.calls.map((c) => c.path.split('?')[0]?.split('/').at(-1))).toEqual(['diff', GID]);
+    const dl = m.el.querySelector('dl[data-role="did"]') as HTMLElement;
+    const dds = Array.from(dl.querySelectorAll('dd'));
+    expect(Array.from(dl.querySelectorAll('dt')).map((dt, i) => [dt.textContent, dds[i]?.textContent])).toEqual([
+      ['Tasks verified', '3 of 3'],
+      ['Claims refused by the checks', '1, reworked'],
+      ['Actions held for you', '2'],
+      ['Actions refused by policy', 'none'],
+      ['Sessions lost', '1, recovered'],
+      ['Hosts reported', '184k tokens, $0.42 (2 of 3 attempts)'],
+      ["Friday's planning", '1 call, $0.03'],
+    ]);
+    expect(m.el.textContent).toContain('What Friday did');
+    m.destroy();
+  });
+
+  it('says when nothing is on record for the goal, and when the summary cannot be read', async () => {
+    const nothing = makeContext({ answers: { [`GET /goals/${GID}/diff`]: diff() } });
+    const m1 = landModal(nothing, { kind: 'land', id: GID }, () => undefined);
+    await flush();
+    expect(m1.el.textContent).toContain('Nothing on record for this goal yet.');
+    m1.destroy();
+    const failing = makeContext({
+      answers: {
+        [`GET /goals/${GID}/diff`]: diff(),
+        [`GET /goals/${GID}`]: () => {
+          throw new Error(HOSTILE);
+        },
+      },
+    });
+    const m2 = landModal(failing, { kind: 'land', id: GID }, () => undefined);
+    await flush();
+    expect(m2.el.textContent).toContain(`Could not read what Friday did: ${HOSTILE}`);
+    expect(m2.el.querySelector('img')).toBeNull();
+    m2.destroy();
   });
 
   it('says when the goal is not completed yet, and when the branch cannot be read', async () => {

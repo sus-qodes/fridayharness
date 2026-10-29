@@ -19,7 +19,14 @@ import { CodexAdapter } from '@friday/adapter-codex';
 import { materializeFixtureShop } from '@friday/cli';
 import { createDaemon, type Daemon } from '@friday/daemon';
 import { runGit } from '@friday/git';
-import type { IntegrationView, TaskStartParams, TaskView, UsageReport, VerificationView } from '@friday/protocol';
+import type {
+  GoalSummary,
+  IntegrationView,
+  TaskStartParams,
+  TaskView,
+  UsageReport,
+  VerificationView,
+} from '@friday/protocol';
 import { DaemonClient } from '@friday/sdk';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -169,6 +176,8 @@ interface GoalDetail {
   goal: { goal_id: string; status: string };
   proposed: { tasks: { key: string; role: string | null }[] } | null;
   active: { tasks: { key: string; task_id: string | null; status: string | null; agent_key?: string | null }[] } | null;
+  /** What Friday did for the goal, from its records (plan M12.7). */
+  summary: GoalSummary;
 }
 
 /** The Codex adapter, its host scripted; started again on the same folder, it is the same harness. */
@@ -680,5 +689,35 @@ describe('the MVP demonstration (Part 12 §18)', () => {
       cost_usd: null,
       tool_calls: contract.tool_calls.total + serviceRow.tool_calls.total,
     });
+
+    // 18. What Friday did for the goal (plan M12.7), counted from the records above: every task
+    // verified at its first claim; the write outside Claude Code's scope refused by policy; the
+    // Codex session lost and resumed; the tokens the one host that counted them reported, from one
+    // of three attempts, and no cost since no host named one; the planner's calls for the plan.
+    const did = (await detail()).summary;
+    expect(did).toMatchObject({
+      tasks: { total: 3, verified: 3 },
+      claims_refused: 0,
+      reworked: 0,
+      held_for_human: 0,
+      refused_by_policy: 1,
+      sessions_lost: 1,
+      sessions_recovered: 1,
+      hosts: {
+        attempts: 3,
+        reported: 1,
+        tokens: Number(counted.inputTokens) + Number(counted.outputTokens),
+        tokens_reporters: 1,
+        cost_usd: null,
+        cost_reporters: 0,
+      },
+    });
+    expect(did.planning.calls).toBeGreaterThanOrEqual(1);
+    const line = await friday('goal', 'show', goal.goal_id);
+    expect(line.code, line.stderr).toBe(0);
+    expect(line.stdout).toContain('tasks verified: 3 of 3');
+    expect(line.stdout).toContain('actions refused by policy: 1');
+    expect(line.stdout).toContain('sessions lost: 1, recovered');
+    expect(line.stdout).toMatch(/hosts reported: \S+ tokens \(1 of 3 attempts\)\r?\n/);
   });
 });

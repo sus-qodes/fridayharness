@@ -119,16 +119,18 @@ export const McpSettings = z
  * A literal loopback address only: a name may resolve to an IPv6 address a service listening on
  * IPv4 does not answer (plan E.3).
  */
-const LoopbackUrl = z
-  .string()
-  .url()
-  .refine((u) => {
-    try {
-      return ['127.0.0.1', '[::1]'].includes(new URL(u).hostname);
-    } catch {
-      return false;
-    }
-  }, 'Laya must run on this machine: use http://127.0.0.1:<port>');
+const loopbackUrl = (message: string) =>
+  z
+    .string()
+    .url()
+    .refine((u) => {
+      try {
+        return ['127.0.0.1', '[::1]'].includes(new URL(u).hostname);
+      } catch {
+        return false;
+      }
+    }, message);
+const LoopbackUrl = loopbackUrl('Laya must run on this machine: use http://127.0.0.1:<port>');
 
 /** Model routing (ADR-0031). */
 export const RoutingSettings = z
@@ -232,12 +234,35 @@ const Provider = z
   .passthrough();
 export type ProviderConfig = z.infer<typeof Provider>;
 
+/**
+ * The model server on this machine for `master_brain.provider: local` (plan M12.1): an
+ * OpenAI-compatible chat endpoint such as Ollama (port 11434) or LM Studio (port 1234). Nothing
+ * leaves the machine, so no key, no consent and no budget applies. The address is loopback only,
+ * as Laya's (review F09), which is why the tracked file may name it: at most it points Friday at
+ * another port of this machine, never at a place a key could be sent.
+ */
+const LocalProvider = Provider.extend({
+  base_url: loopbackUrl(
+    'a local model server must run on this machine: use http://127.0.0.1:<port>/v1 or http://[::1]:<port>/v1',
+  ).default('http://127.0.0.1:11434/v1'),
+  /** The environment variable holding the key the local server wants, when it wants one; most want none. */
+  api_key_env: z
+    .string()
+    .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'api_key_env must be the name of an environment variable')
+    .optional(),
+});
+export type LocalProviderConfig = z.infer<typeof LocalProvider>;
+
 /** The Master Brain (M2, ADR-0013). */
 const MasterBrainConfig = z
   .object({
-    /** `none`: plans are written by humans (`friday plan propose`); `fake`: scripted answers for tests and demos. */
-    provider: z.enum(['anthropic', 'fake', 'none']).default('anthropic'),
-    /** `auto` is the default planning model, claude-opus-5-5. */
+    /**
+     * `local`: an OpenAI-compatible server on this machine (`providers.local.base_url`), the model
+     * named in `model`; `none`: plans are written by humans (`friday plan propose`); `fake`:
+     * scripted answers for tests and demos.
+     */
+    provider: z.enum(['anthropic', 'local', 'fake', 'none']).default('anthropic'),
+    /** `auto` is the default planning model, claude-opus-5-5. Provider `local` needs the model's name on the server. */
     model: z.string().min(1).default('auto'),
     effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
     max_tokens: z.number().int().min(1000).max(21_000).default(16_000),
@@ -353,7 +378,11 @@ export const FridayConfig = z
       })
       .passthrough()
       .prefault({}),
-    providers: z.record(z.string(), Provider).default({}),
+    /** Model providers by name; `local` always has its defaults, so provider `local` works with no block at all. */
+    providers: z
+      .object({ local: LocalProvider.prefault({}) })
+      .catchall(Provider)
+      .prefault({}),
     master_brain: MasterBrainConfig,
     /** Operations Friday runs for agents with stored secrets (ADR-0029); they wait for trust. */
     operations: Operations.default({}),
@@ -555,13 +584,15 @@ verification:
 # project allows remote calls here AND you allowed it on your machine ("friday brain allow-remote");
 # store the key with "friday secrets set anthropic".
 master_brain:
-  provider: anthropic   # anthropic | fake | none (none: you write plans with "friday plan propose")
-  model: auto           # claude-opus-5-5
+  provider: anthropic   # anthropic | local | fake | none (none: you write plans with "friday plan propose")
+  model: auto           # claude-opus-5-5; for provider local, the model's name on your server (qwen2.5:7b)
   auto_approve: false   # a human approves each plan version with "friday plan approve"
 
 providers:
   anthropic:
     allow_remote: false   # model calls leave this machine only when you set this to true
     daily_budget_usd: 5
+  # local:                # provider local: an OpenAI-compatible server on this machine; no key, nothing leaves it
+  #   base_url: http://127.0.0.1:11434/v1   # Ollama; LM Studio serves at http://127.0.0.1:1234/v1
 `;
 }

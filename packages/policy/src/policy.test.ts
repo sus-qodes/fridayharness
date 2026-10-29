@@ -237,6 +237,96 @@ describe('evaluate', () => {
     expect(res.decision).toBe('allow');
   });
 
+  it("judges the ceiling by the task's role when it is given, and the agent's team scope stays approvable", () => {
+    // A frontend plan task given to a backend agent (a human reassigned it): the task's own role
+    // is its ceiling, and the agent's team scope only tightens, path by path.
+    const task: PolicyTask = {
+      ...running(['frontend/src/pricing/**']),
+      teams: [{ source: 'policies/teams.yaml', write: ['backend/**'] }],
+      ceiling: [{ source: 'policies/teams.yaml', write: ['frontend/**'] }],
+    };
+    const approvedAll = () => true;
+    const write = (p: string, approved?: () => boolean) =>
+      evaluate({ ctx: WIN, task, action: { tool: 'Edit', kind: 'write', paths: [p] }, approved });
+    // backend/db.ts is inside the agent's team scope, but beyond the task's ceiling: no approval reaches it.
+    expect(write('backend/db.ts', approvedAll)).toMatchObject({ decision: 'deny', rule: 'write.above_ceiling' });
+    // A path inside the task's scope is outside the agent's team scope: approvable, as ADR-0028 says.
+    expect(write('frontend/src/pricing/x.ts').rule).toBe('write.outside_team_scope');
+    expect(write('frontend/src/pricing/x.ts', approvedAll).decision).toBe('allow');
+    // A task no role bounds (an empty ceiling) has none beyond its scope: the team scope is approvable.
+    const unbounded: PolicyTask = { ...task, ceiling: [] };
+    expect(
+      evaluate({ ctx: WIN, task: unbounded, action: { tool: 'Edit', kind: 'write', paths: ['shared/x.ts'] } }).rule,
+    ).toBe('write.outside_scope');
+    expect(
+      evaluate({
+        ctx: WIN,
+        task: unbounded,
+        action: { tool: 'Edit', kind: 'write', paths: ['shared/x.ts'] },
+        approved: approvedAll,
+      }).decision,
+    ).toBe('allow');
+  });
+
+  it('refuses a write beyond the ceiling of the task, approved or not (plan M12.2)', () => {
+    // A plan task of the frontend role, cut to its team's scope; the team scope is its ceiling.
+    const team = { source: 'policies/teams.yaml', write: ['frontend/**'] };
+    const task: PolicyTask = { ...running(['frontend/src/pricing/**']), teams: [team] };
+    const approvedAll = () => true;
+    const res = evaluate({
+      ctx: WIN,
+      task,
+      action: { tool: 'Edit', kind: 'write', paths: ['backend/x.ts'] },
+      approved: approvedAll,
+    });
+    expect(res).toMatchObject({ decision: 'deny', rule: 'write.above_ceiling', targets: ['backend/x.ts'] });
+    // The reason names the ceiling and its source, and does not send the agent to ask.
+    expect(res.reason).toContain('frontend/**');
+    expect(res.reason).toContain('policies/teams.yaml');
+    expect(res.reason).not.toContain('friday_request_permission');
+    expect(res.relied_on).toBeUndefined();
+    // Inside the ceiling the task can still be widened path by path (ADR-0028): a path outside
+    // the task's scope but inside the team's is approvable, and so is a team-scope exception
+    // inside the task's scope.
+    expect(
+      evaluate({
+        ctx: WIN,
+        task,
+        action: { tool: 'Edit', kind: 'write', paths: ['frontend/src/other.ts'] },
+        approved: approvedAll,
+      }),
+    ).toMatchObject({ decision: 'allow', relied_on: [{ capability: 'file.write', target: 'frontend/src/other.ts' }] });
+    expect(
+      evaluate({
+        ctx: WIN,
+        task,
+        action: { tool: 'Edit', kind: 'write', paths: ['frontend/src/other.ts'] },
+      }).rule,
+    ).toBe('write.outside_scope');
+    const wide: PolicyTask = { ...running(['**']), teams: [team] };
+    expect(
+      evaluate({ ctx: WIN, task: wide, action: { tool: 'Edit', kind: 'write', paths: ['backend/x.ts'] } }).rule,
+    ).toBe('write.outside_team_scope');
+    expect(
+      evaluate({
+        ctx: WIN,
+        task: wide,
+        action: { tool: 'Edit', kind: 'write', paths: ['backend/x.ts'] },
+        approved: approvedAll,
+      }).decision,
+    ).toBe('allow');
+    // A role without a team scope, or a task without a scope, has no ceiling beyond today's rules.
+    expect(write(['backend/x.ts'], { approved: approvedAll }).decision).toBe('allow');
+    expect(
+      evaluate({
+        ctx: WIN,
+        task: { ...running([]), teams: [team] },
+        action: { tool: 'Edit', kind: 'write', paths: ['backend/x.ts'] },
+        approved: approvedAll,
+      }).decision,
+    ).toBe('allow');
+  });
+
   it('asks when the agent holds no task, denies when the task is not running', () => {
     expect(evaluate({ ctx: WIN, task: null, action: { tool: 'Write', kind: 'write', paths: ['a.ts'] } }).decision).toBe(
       'ask',

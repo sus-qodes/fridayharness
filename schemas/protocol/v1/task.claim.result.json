@@ -543,6 +543,13 @@
           "type": "null"
         }
       ]
+    },
+    "note": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

@@ -227,6 +227,45 @@ describe('Claude Code hook routes', () => {
     expect(eventsOf(r.td, 'context.compiled').length).toBeGreaterThanOrEqual(1);
   });
 
+  it('SessionStart of a resumed session carries the handoff summary of the earlier attempt (plan M12.3)', async () => {
+    const r = await rig();
+    const mcp = await mcpSession(r.td);
+    const task = await createTask(r.td, ['src/**']);
+    // Attempt 1 records progress and hands the task back; the same agent takes it as attempt 2.
+    const first = await mcp.claim({ task_id: task.task_id });
+    await mcp.call('task.update', {
+      task_id: task.task_id,
+      run_id: first.run_id,
+      note: 'wrote the discount module; the tests are next',
+    });
+    await mcp.call('task.release', {
+      task_id: task.task_id,
+      run_id: first.run_id,
+      reason: 'handoff',
+      note: 'tests next',
+    });
+    const second = await mcp.claim({ task_id: task.task_id });
+    expect(second.attempt).toBe(2);
+    // The session starts again on the task (Claude Code's `resume`): its SessionStart packet holds
+    // the fixed summary of what attempt 1 did, decided and left, within the hook's budget.
+    const res = await r.hook('SessionStart', hookFixture('session-start', r.vars, { source: 'resume' }), {
+      claudePid: CLAUDE_PID,
+      agentKey: 'dev-1',
+    });
+    expect(res.status).toBe(200);
+    const ctx = (res.body.hook_output as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput
+      .additionalContext;
+    expect(ctx).toContain(`task="${task.task_id}"`);
+    expect(ctx).toContain('## Progress so far');
+    expect(ctx).toContain(`Handoff: attempt 1 of ${task.task_id}, for attempt 2.`);
+    for (const label of ['Goal:', 'Done so far:', 'Checked:', 'Decided:', 'Next:', 'Files:']) {
+      expect(ctx, label).toContain(label);
+    }
+    expect(ctx).toContain('wrote the discount module');
+    expect(ctx).toContain('Next: wrote the discount module; the tests are next');
+    expect(ctx.length).toBeLessThanOrEqual(9000);
+  });
+
   it('SessionStart before the MCP server registers creates the harness the MCP server then reuses', async () => {
     const r = await rig();
     const res = await r.hook('SessionStart', hookFixture('session-start', r.vars), {

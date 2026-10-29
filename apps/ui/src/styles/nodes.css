@@ -683,6 +683,13 @@
   font-size: var(--text-caption);
 }
 
+/* What Friday did for the goal: one line under the card's body, the rows in its tooltip. */
+.nd-goal-did {
+  font-size: var(--text-caption);
+  color: var(--color-slate-400);
+  margin: 0;
+}
+
 /* ---- agent pod ------------------------------------------------------------------------------- */
 .nd-pod {
   border-radius: 14px;

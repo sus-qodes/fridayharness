@@ -182,6 +182,8 @@ export const TaskClaimResult = z.object({
     .object({ model: z.string().nullable(), binding: z.boolean(), reason: z.string() })
     .nullable()
     .default(null),
+  /** Why no context came with the claim, when `context` is null: the task is still the agent's. */
+  note: z.string().nullable().default(null),
 });
 
 export const TaskUpdateParams = z.object({

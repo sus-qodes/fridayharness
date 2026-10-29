@@ -32,7 +32,7 @@ import { existingTasks, proposalFromDraft, proposalFromReplan } from './proposal
 import type { ModelRequest, PlannerModel } from './providers/types.js';
 import { draftJsonSchema, type NeedsHuman } from './schemas.js';
 import { type BrainAction, failureAction, type TriggerFacts, triggersFor } from './triggers.js';
-import { type ExistingTask, validateReplanDraft } from './validate.js';
+import { type ExistingTask, type PlanTaskBounder, validateReplanDraft } from './validate.js';
 
 /** The Master Brain acts under its own identity in the event log. */
 export const MASTER_BRAIN: Actor = { kind: 'master_brain', id: 'master-brain' };
@@ -515,6 +515,15 @@ export class MasterBrain {
     return steps;
   }
 
+  /**
+   * The ceiling on a plan's tasks (plan M12.2), as the state applies it when a plan is proposed:
+   * given to the planner's checks so a task beyond its role's scope is a validation error the
+   * model repairs in its one repair attempt, not a refusal after the call and job retries (B31).
+   */
+  #bound(): PlanTaskBounder {
+    return (t) => this.#deps.state.boundPlanTask(t);
+  }
+
   #facts(): TriggerFacts {
     const { state, projectId, settings } = this.#deps;
     return {
@@ -743,7 +752,9 @@ export class MasterBrain {
         schemaName: 'plan',
         maxTokens: settings.maxTokens,
       },
-      parsePlanDraft,
+      // The ceiling of each task's role (plan M12.2) is checked with the draft, so the model hears
+      // a refusal in its repair attempt instead of the state refusing the proposal after the call.
+      (output) => parsePlanDraft(output, this.#bound()),
       PROMPT_VERSIONS.plan,
     );
     const callId = this.#recordCalls(outcome.calls, goalId, goal.plan_id);
@@ -837,7 +848,7 @@ export class MasterBrain {
         schemaName: 'replan',
         maxTokens: settings.maxTokens,
       },
-      parseReplanDraft(existing),
+      parseReplanDraft(existing, this.#bound()),
       PROMPT_VERSIONS.replan,
     );
     const callId = this.#recordCalls(outcome.calls, goalId, goal.plan_id);
@@ -858,6 +869,7 @@ export class MasterBrain {
     const check = validateReplanDraft(
       d,
       existingTasks(nowActive, (id) => state.q.findTask(projectId, id)),
+      this.#bound(),
     );
     if (!check.ok) return { status: 'retry', result: `stale: ${check.errors.slice(0, 3).join('; ')}` };
     if (!force && state.q.planVersions(nowGoal.plan_id as string).some((v) => v.status === 'PROPOSED')) {

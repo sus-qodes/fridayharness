@@ -644,6 +644,12 @@ importers:
       '@friday/cli':
         specifier: workspace:*
         version: link:../apps/cli
+      '@friday/code-graph':
+        specifier: workspace:*
+        version: link:../packages/code-graph
+      '@friday/context':
+        specifier: workspace:*
+        version: link:../packages/context
       '@friday/core':
         specifier: workspace:*
         version: link:../packages/core

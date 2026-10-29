@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import type { GoalView, PlanTaskView, PlanVersionView } from '@friday/protocol';
+import type { GoalSummary, GoalView, PlanTaskView, PlanVersionView } from '@friday/protocol';
 import {
   approveProvider,
   credentialsDir,
@@ -46,9 +46,77 @@ interface GoalDetail {
   proposed: LiveVersion | null;
   escalations: EscalationRow[];
   model_calls: { count: number; cost_usd: number };
+  /** What Friday did for the goal, from its records (plan M12.7). */
+  summary: GoalSummary;
 }
 
 const usd = (n: number) => `$${n.toFixed(n < 0.1 ? 4 : 2)}`;
+const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/** 184321 → "184k", 1840 → "1.8k", 184 → "184". */
+const compact = (n: number) =>
+  Math.abs(n) < 1000
+    ? String(n)
+    : Math.abs(n) < 1_000_000
+      ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`
+      : `${(n / 1_000_000).toFixed(1)}M`;
+
+/**
+ * What Friday did for the goal, one row per fact, in words a person reads (plan M12.7). Every row
+ * is a count from Friday's own records, so a zero is a fact ("none"); only a figure nobody reported
+ * is left out: a goal whose hosts reported nothing has no token figure, and a goal whose plan a
+ * human wrote has no planning row. Empty when the goal has no work on record yet.
+ */
+export function goalSummaryLines(s: GoalSummary): string[] {
+  if (s.tasks.total === 0 && s.hosts.attempts === 0 && s.planning.calls === 0) return [];
+  const none = (n: number, words: string) => (n === 0 ? 'none' : words);
+  const rows: [string, string][] = [
+    ['tasks verified', `${s.tasks.verified} of ${s.tasks.total}`],
+    [
+      'claims refused by the checks',
+      none(
+        s.claims_refused,
+        `${s.claims_refused}${
+          s.reworked === 0 ? '' : s.reworked === s.claims_refused ? ', reworked' : `, ${s.reworked} reworked`
+        }`,
+      ),
+    ],
+    ['actions held for you', none(s.held_for_human, String(s.held_for_human))],
+    ['actions refused by policy', none(s.refused_by_policy, String(s.refused_by_policy))],
+    [
+      'sessions lost',
+      none(
+        s.sessions_lost,
+        `${s.sessions_lost}${
+          s.sessions_recovered === 0
+            ? ''
+            : s.sessions_recovered === s.sessions_lost
+              ? ', recovered'
+              : `, ${s.sessions_recovered} recovered`
+        }`,
+      ),
+    ],
+  ];
+  if (s.hosts.attempts > 0) rows.push(['hosts reported', hostsWords(s.hosts)]);
+  if (s.planning.calls > 0) {
+    rows.push([
+      "Friday's planning",
+      `${count(s.planning.calls, 'call')}${s.planning.cost_usd === null ? '' : `, ${usd(s.planning.cost_usd)}`}`,
+    ]);
+  }
+  return rows.map(([k, v]) => `  ${k}: ${v}`);
+}
+
+/** "184k tokens, $0.42 (2 of 2 attempts)"; the cost gets its own count when fewer hosts named one. */
+function hostsWords(h: GoalSummary['hosts']): string {
+  const of = (n: number) => `(${n} of ${count(h.attempts, 'attempt')})`;
+  if (h.tokens === null && h.cost_usd === null) return `nothing ${of(0)}`;
+  const parts: string[] = [];
+  if (h.tokens !== null) parts.push(`${compact(h.tokens)} tokens`);
+  if (h.cost_usd !== null) parts.push(usd(h.cost_usd));
+  const same = h.tokens === null || h.cost_usd === null || h.tokens_reporters === h.cost_reporters;
+  if (same) return `${parts.join(', ')} ${of(h.tokens !== null ? h.tokens_reporters : h.cost_reporters)}`;
+  return `${compact(h.tokens as number)} tokens ${of(h.tokens_reporters)}, ${usd(h.cost_usd as number)} ${of(h.cost_reporters)}`;
+}
 
 export function renderPlan(v: LiveVersion): string {
   const keyOf = new Map(v.tasks.filter((t) => t.task_id).map((t) => [t.task_id as string, t.key]));
@@ -70,8 +138,10 @@ export function renderPlan(v: LiveVersion): string {
       maxWidth: 60,
     }),
   ];
-  for (const t of v.tasks.filter((x) => x.note && (x.change === 'rework' || x.change === 'drop'))) {
-    lines.push(`  ${t.change} ${t.key}: ${clip(t.note as string, 160)}`);
+  // A reworked or dropped task says why; a new task's note is the ceiling cut (plan M12.2), which
+  // the reviewer reads before approving.
+  for (const t of v.tasks.filter((x) => x.note && x.change !== 'keep')) {
+    lines.push(`  ${t.change} ${t.key}: ${clip(t.note as string, 200)}`);
   }
   if (v.needs_human) lines.push(`  Question for a human: ${v.needs_human.question}`);
   return lines.join('\n');
@@ -110,7 +180,9 @@ function renderGoal(d: GoalDetail): string {
   if (d.versions.length) {
     lines.push(`  versions: ${d.versions.map((v) => `v${v.version} ${v.status}`).join(', ')}`);
   }
-  if (d.model_calls.count) lines.push(`  model calls: ${d.model_calls.count}, ${usd(d.model_calls.cost_usd)}`);
+  const did = d.summary ? goalSummaryLines(d.summary) : [];
+  if (did.length) lines.push('What Friday did:', ...did);
+  else if (d.model_calls.count) lines.push(`  model calls: ${d.model_calls.count}, ${usd(d.model_calls.cost_usd)}`);
   if (d.active) lines.push('', renderPlan(d.active));
   if (d.proposed)
     lines.push(
@@ -427,12 +499,15 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
                   ? 'allowed (the project asks for them and you allowed them here)'
                   : 'the project asks for them; allow them on this machine with "friday brain allow-remote"'
           }`,
-          s.remote ? `Endpoint: ${s.endpoint}` : '',
+          s.remote ? `Endpoint: ${s.endpoint}` : s.endpoint ? `Local server: ${s.endpoint}` : '',
           s.ignored_base_url ? `Ignored: providers.anthropic.base_url (${s.ignored_base_url}) in config.yaml` : '',
           `API key: ${s.key}`,
           `Plans need your approval: ${s.auto_approve ? 'no (auto_approve)' : 'yes'}`,
           `Escalates after ${s.escalate_after_failures} verification failures; at most ${s.max_replans} revisions per goal`,
-          `Spent today: ${usd(Number(s.spent_today_usd))} of ${usd(Number(s.daily_budget_usd))}`,
+          // A model on this machine costs nothing and has no budget: the figure is null, never $0 (B31).
+          s.daily_budget_usd === null
+            ? `Spent today: ${usd(Number(s.spent_today_usd))}; budget: none (the model runs on this machine)`
+            : `Spent today: ${usd(Number(s.spent_today_usd))} of ${usd(Number(s.daily_budget_usd))}`,
           `Events read: ${s.cursor} of ${s.head}`,
         ]
           .filter(Boolean)

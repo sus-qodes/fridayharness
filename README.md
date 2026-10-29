@@ -73,22 +73,28 @@ See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 | [docs/reviews/](docs/reviews/) | External reviews of the plan and the project, and how each finding was handled |
 | [docs/frontend/](docs/frontend/) | The interface: its plan, where it deviates from the [design handoff](docs/frontend-handoff/), and its lessons |
 
-## Use the interface
+## Quickstart
 
-Once per machine, in a terminal (PowerShell) in the Friday repository:
+Friday needs Node 22.18 or newer and Git; nothing else of Friday has to be on the machine.
 
-```powershell
-pnpm install; pnpm build
-node apps\cli\bin\friday.mjs setup
-```
-
-Once per project, in the project's folder (a git repository with at least one commit):
+**Install Friday once per machine.** The archive `friday-<version>.tgz` is not published yet: build it from this repository, then install it with npm.
 
 ```powershell
-node C:\friday\apps\cli\bin\friday.mjs init --shortcut
+pnpm install; pnpm pack:release                   # writes dist-release\friday-0.1.0.tgz
+npm install -g .\dist-release\friday-0.1.0.tgz    # the friday command, on your PATH
 ```
 
-This creates `.friday/config.yaml` and `.friday/.gitignore` (commit both) and a desktop shortcut "Friday - <project>". Every day after that, double-click the shortcut: it starts Friday if it is not running and opens the Studio in your browser, already signed in. From the Studio:
+`pnpm pack:release` builds every package, bundles the `friday` command (the daemon runs inside it) and the `friday-mcp` server with every workspace package inlined, declares the third-party packages npm installs with them (among them `better-sqlite3`, whose prebuilt binary npm fetches), includes the Studio bundle and the hook launcher, packs the archive, then installs it into a temporary folder and runs `friday --version`, `friday setup` and `friday start` in a fresh repository there before it reports the archive good. Nothing is published.
+
+**Start Friday in your repository.** In a folder that is a git repository (`git init` makes one; no commit is needed yet):
+
+```powershell
+friday start
+```
+
+It makes the folder a Friday project when it is not one yet (`.friday/config.yaml` and `.friday/.gitignore`; commit both), starts Friday hidden when it is not running (its output goes to `.friday/logs/daemon-console.log`), and opens the Studio in your browser, already signed in; it prints what it did, in three lines at most. A folder that is not a git repository is refused with the command that makes it one. Every day after that, `friday start` again, or double-click the shortcut `friday shortcut` creates. `friday start --desktop` opens the desktop app instead when it is installed on this machine and otherwise says where to get it; `friday start --no-open` prints the Studio's address instead of opening anything.
+
+To attach a Claude Code session running in VS Code, run `friday setup` once per machine first: it records where Friday is installed, for the hooks and the MCP launcher ([docs/integration/claude-code.md](docs/integration/claude-code.md)). From the Studio:
 - **Agents** (dock): start Claude Code or Codex for this project, or set up Claude Code in VS Code.
 - **New goal**: describe what you want; write the plan yourself, or let the Master Brain plan it once a provider key is set up (Settings → Planner says how).
 - When an agent needs you, the request appears in full under **Waiting for you** at the right, and the Notch at the top of the page shows how many wait; decide it there (a high-risk request asks you to hold the button), and the agent carries on in its run.
@@ -96,9 +102,11 @@ This creates `.friday/config.yaml` and `.friday/.gitignore` (commit both) and a 
 
 A sign-in link works once, for a minute; a browser session lasts until Friday stops or restarts, at most 12 hours. `friday ui` opens it again from a terminal. See [docs/frontend/README.md](docs/frontend/README.md).
 
-**The desktop app (Windows)** floats the Notch over your editor and keeps the Studio in its own window, with a tray icon; it starts Friday for the project when it is not running, and holds no credential in its pages. It is built with Rust's per-user toolchain (no administrator rights; the steps are in [apps/desktop/README.md](apps/desktop/README.md)), then started with `apps\desktop\src-tauri\target\release\friday-desktop.exe --project <the project's folder>`.
+**The desktop app (Windows)** floats the Notch over your editor and keeps the Studio in its own window, with a tray icon; it starts Friday for the project when it is not running, and holds no credential in its pages. It is built with Rust's per-user toolchain (no administrator rights; the steps and the state of its installer are in [apps/desktop/README.md](apps/desktop/README.md)), then started with `friday start --desktop` or with `apps\desktop\src-tauri\target\release\friday-desktop.exe --project <the project's folder>`. `friday start --desktop` finds the app at the path in `FRIDAY_DESKTOP`, in the checkout named by `FRIDAY_HOME` or the one the `friday` command runs from, or in `%LOCALAPPDATA%\Programs\Friday` and `%LOCALAPPDATA%\Friday`.
 
 ## Try it (Windows, PowerShell)
+
+With Friday installed from the archive, `friday` is on your PATH; in a source checkout, define the function below instead.
 
 ```powershell
 # In the Friday repository
@@ -131,7 +139,7 @@ friday secrets set anthropic                   # paste your Anthropic API key (h
 friday brain allow-remote --budget 5           # this clone may use your key, at most $5 a day
 friday goal create "Add Stripe subscriptions, keep one-time checkout working, add tests"
 friday plan approve                            # tasks are created and handed to agents
-friday goal show                               # live plan; revisions and questions appear here
+friday goal show                               # live plan; revisions, questions and "What Friday did" appear here
 friday escalations                             # questions only you can answer: friday answer <id> "..."
 ```
 
@@ -150,6 +158,7 @@ pnpm lint                       # Biome
 pnpm test                       # every package and suite, via Turbo
 pnpm test:all                   # every Vitest project in one run
 pnpm check:portability          # LF, file modes, no shell scripts, no localhost literal
+pnpm pack:release               # the install archive, dist-release/friday-<version>.tgz, built, packed and checked
 ```
 
 Set `FRIDAY_TEST_TMP` to a short directory (for example `C:\t`) if your temp path is longer than about 70 characters.

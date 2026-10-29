@@ -135,7 +135,7 @@ describe('friday harness doctor claude-code', () => {
     const r = await doctor(claude('2.1.296'), {});
     expect(r.checks.find((c) => c.id === 'cc.mcp')).toMatchObject({
       status: 'ok',
-      message: expect.stringContaining('17 friday tools'),
+      message: expect.stringContaining('19 friday tools'),
     });
   });
 });

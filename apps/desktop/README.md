@@ -90,6 +90,35 @@ cargo build --release
 
 On MSVC, `WebView2Loader.dll` is linked statically and is not needed beside the exe; `windres` is not needed (the Windows SDK's `rc.exe` is used).
 
+### The installer
+
+`friday start --desktop` opens the shell when it is on the machine, looking in this order: the path in `FRIDAY_DESKTOP`; `<FRIDAY_HOME>\apps\desktop\src-tauri\target\release\friday-desktop.exe`; the same path in the checkout the `friday` command runs from; `%LOCALAPPDATA%\Programs\Friday\Friday.exe`; `%LOCALAPPDATA%\Friday\Friday.exe`. When none exists it says so and points here, and the Studio stays reachable in the browser.
+
+No installer has been produced yet: `cargo build --release` (above) gives the exe with `WebView2Loader.dll`, and `Tauri.toml` has `bundle.active = false`. Producing one on this machine (state on 2026-10-18) needs:
+
+1. The Tauri CLI, which is not installed (`cargo tauri` answers "no such command"). It installs per user, without administrator rights, and compiles for about 15 minutes:
+
+   ```powershell
+   $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:LOCALAPPDATA\Programs\winlibs\mingw64\bin;$env:PATH"
+   $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "$env:USERPROFILE\.rustup\toolchains\stable-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained\x86_64-w64-mingw32-gcc.exe"
+   New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Programs\ktmw32" | Out-Null
+   Copy-Item "$env:LOCALAPPDATA\Programs\winlibs\mingw64\x86_64-w64-mingw32\lib\libktmw32.a" "$env:LOCALAPPDATA\Programs\ktmw32\"
+   $env:RUSTFLAGS = "-L native=$env:LOCALAPPDATA\Programs\ktmw32"
+   cargo install tauri-cli --version "^2" --locked
+   ```
+
+   Without the `RUSTFLAGS` line the link of `cargo-tauri.exe` fails with `ld: cannot find -lktmw32`: Rust's self-contained MinGW, the linker route 2 uses, has no `libktmw32.a`, and WinLibs has one. Only that file goes on the search path, so no other C runtime object of WinLibs is mixed in. On this machine the first install compiled tauri-cli 2.12.3 up to that link error; the second, with the library, was still compiling when this was written.
+
+2. Then, in `apps\desktop\src-tauri`, with the route 2 variables set and `apps/ui/dist` built, bundling switched on for this one build (the file keeps `active = false`):
+
+   ```powershell
+   cargo tauri build --config '{"bundle":{"active":true,"targets":["nsis"]}}'
+   ```
+
+   Tauri writes bundles under `target\release\bundle\`; its NSIS bundler fetches NSIS per user on first use. Not run here yet, so the installer's name and size are not recorded.
+
+3. Before an installer is handed out, where it puts the app has to be checked: Friday's private state folder is `%LOCALAPPDATA%\Friday` (`install.json`, `projects\`), and the app must not be installed into it.
+
 ## Running
 
 ```powershell

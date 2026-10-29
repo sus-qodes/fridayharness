@@ -30,8 +30,18 @@ export interface PolicyTask {
   scope: TaskScope | null;
   /** Review and research tasks without a write scope are read-only (ADR-0013). */
   kind?: string;
-  /** The team scopes of the agent's role (ADR-0028): a write must fall inside each. */
+  /**
+   * The team scopes of the agent's role (ADR-0028): a write must fall inside each, and a human
+   * may approve a path outside them one at a time. Without `ceiling`, they are the ceiling too.
+   */
   teams?: readonly { source: string; write: readonly string[] }[];
+  /**
+   * The ceiling of the task (plan M12.2): the team scopes of the task's own role, what delegated
+   * it. A path outside the task's scope and outside one of these is beyond what delegated the
+   * task, and no approval reaches it. Empty for a task no role bounds (one a human created); the
+   * state cuts a plan task to the same scopes when the plan is made.
+   */
+  ceiling?: readonly { source: string; write: readonly string[] }[];
 }
 
 export interface OtherWriter {
@@ -182,6 +192,28 @@ export function readKeptFromAgents(
 ): boolean {
   if (!denyRead.length || !matchesAny(rel, denyRead, windows)) return false;
   return !approved?.(rel);
+}
+
+/**
+ * The ceiling on a task's writes (plan M12.2): a task never holds more authority than what
+ * delegated it. A plan task is cut to the scopes the project declares for its role when it is
+ * made, so its scope lies inside them; a human may still widen it path by path (an exact-path
+ * approval) up to that ceiling, and a team scope may yield inside the task's scope the same way
+ * (ADR-0028). A path outside the task's scope and outside a team scope of the role is beyond
+ * both, and no approval lifts it. The role is the task's own (`ceiling`); a caller that knows
+ * only the agent's team scopes passes those as `teams`, and they bound the task the same way.
+ * Returns the team scope that is the ceiling, or null when the path is inside the task's scope,
+ * the role has no team scope, or the task declares no scope.
+ */
+export function aboveCeiling(
+  rel: string,
+  task: Pick<PolicyTask, 'scope' | 'teams' | 'ceiling'>,
+  windows?: boolean,
+): { source: string; write: readonly string[] } | null {
+  const scope = task.scope?.write ?? [];
+  if (scope.length === 0 || matchesAny(rel, scope, windows)) return null;
+  const layers = task.ceiling ?? task.teams ?? [];
+  return layers.find((t) => t.write.length > 0 && !matchesAny(rel, t.write, windows)) ?? null;
 }
 
 /**
@@ -361,6 +393,16 @@ export function evaluate(input: PolicyInput): PolicyResult {
       }
     }
     const scope = task.scope?.write ?? [];
+    // The ceiling (plan M12.2) is judged before any approval: nothing lifts it.
+    const ceiling = aboveCeiling(rel, task, windows);
+    if (ceiling) {
+      return r(
+        'deny',
+        'write.above_ceiling',
+        `${rel} is outside the scope of ${task.task_id} (${scope.join(', ')}) and outside the ${ceiling.source} scope of your role (${ceiling.write.join(', ')}). That scope is the ceiling of this task: no approval reaches beyond it. Work inside your scope, or tell the human the task needs another role or a wider team scope.`,
+        { targets },
+      );
+    }
     let inScope = scope.length === 0 || matchesAny(rel, scope, windows);
     if (!inScope && input.approved?.('file.write', rel)) {
       inScope = true;

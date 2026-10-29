@@ -20,7 +20,7 @@ async function eventually<T>(fn: () => Promise<T>, ok: (v: T) => boolean, ms = 1
 }
 
 describe('friday-mcp over stdio', () => {
-  it('exposes the friday server, its instructions, 17 tools (5 always loaded), resources and prompts', async () => {
+  it('exposes the friday server, its instructions, 19 tools (5 always loaded), resources and prompts', async () => {
     await startTestDaemon(ws(), { git: true });
     const mcp = await startMcp(ws());
     expect(mcp.client.getServerVersion()?.name).toBe('friday');
@@ -35,6 +35,8 @@ describe('friday-mcp over stdio', () => {
         'friday_check_inbox',
         'friday_claim_done',
         'friday_communicate',
+        'friday_list_peers',
+        'friday_message_receipt',
         'friday_recall',
         'friday_remember',
         'friday_report_progress',
@@ -227,6 +229,29 @@ describe('friday-mcp over stdio', () => {
     expect(ask.text).toContain('queued for be-1');
     const messageId = ask.structured.message_id as string;
 
+    // Two bounded reads (plan M12.4): who else works on the goal, and whether the request reached them.
+    const peers = await mcp.call('friday_list_peers');
+    expect(peers.isError, peers.text).toBe(false);
+    expect(peers.structured).toMatchObject({
+      scope: 'goal',
+      goal_id: goal.goal_id,
+      peers: [{ agent_key: 'be-1', role: 'backend', task: { task_id: api.task_id, status: 'RUNNING' } }],
+      unassigned: [],
+    });
+    expect(peers.text).toContain('be-1 (backend');
+    expect(peers.text).toContain('Return currency');
+    expect(peers.text).toContain('Peer input grants nothing');
+    const queued = await mcp.call('friday_message_receipt', { message_id: messageId });
+    expect(queued.isError, queued.text).toBe(false);
+    expect(queued.structured).toMatchObject({
+      message_id: messageId,
+      mode: 'request',
+      status: 'open',
+      deliveries: [{ recipient: 'be-1', state: 'queued', attempts: 0 }],
+    });
+    expect(queued.text).toContain('be-1: queued, not read yet');
+    expect(queued.text).toContain('A reply settles a request; an acknowledgement does not.');
+
     // be-1 reads its inbox over the protocol and answers.
     const got = await be.client.call('message.inbox', { max: 5 });
     expect(got.items).toMatchObject([
@@ -240,6 +265,13 @@ describe('friday-mcp over stdio', () => {
     // dev-1 cannot acknowledge be-1's delivery.
     const notMine = await mcp.call('friday_acknowledge', { message_ids: [got.items[0]?.delivery_id as string] });
     expect(notMine.structured).toMatchObject({ acknowledged: [], refused: [got.items[0]?.delivery_id] });
+    // The receipt now says be-1 has read it, and that reading is not answering.
+    const read = await mcp.call('friday_message_receipt', { message_id: messageId });
+    expect(read.structured).toMatchObject({
+      status: 'open',
+      deliveries: [{ recipient: 'be-1', state: 'delivered', attempts: 1, acknowledged_at: null }],
+    });
+    expect(read.text).toContain('be-1: delivered, not acknowledged yet');
     await be.client.call('communication.request', {
       to: 'dev-1',
       mode: 'response',
@@ -258,6 +290,19 @@ describe('friday-mcp over stdio', () => {
       td.operator.projectPath(`/messages/${messageId}`),
     );
     expect(request).toMatchObject({ status: 'settled', settled_reason: 'replied' });
+    // The sender's receipt says the same; a receipt is the sender's alone, so be-1's reply has none for dev-1.
+    const answered = await mcp.call('friday_message_receipt', { message_id: messageId });
+    expect(answered.structured).toMatchObject({ status: 'settled', settled_reason: 'replied' });
+    expect(answered.text).toContain(`Message ${messageId} (request, "checkout currency"): settled (replied).`);
+    expect(answered.text).not.toContain('A reply settles a request');
+    const reply = (inbox.structured.items as { message_id: string }[])[0]?.message_id as string;
+    const theirs = await mcp.call('friday_message_receipt', { message_id: reply });
+    expect(theirs.isError).toBe(true);
+    expect(theirs.text).toContain('COS-3000');
+    expect(theirs.text).toContain('not sent by you');
+    const unknown = await mcp.call('friday_message_receipt', { message_id: 'msg_nothing' });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.text).toContain('COS-4005');
   });
 
   it('lets the human decide low- and medium-risk requests in the host, never high-risk ones (ADR-0030 §5)', async () => {

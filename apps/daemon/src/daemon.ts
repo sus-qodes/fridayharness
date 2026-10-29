@@ -146,9 +146,12 @@ function stateSettings(cfg: FridayConfig): Partial<StateConfig> {
   };
 }
 
-/** The routing registry a configuration gives: Friday's priors and the project's models; throws on a bad record. */
+/**
+ * The routing registry a configuration gives: Friday's priors, the project's models and, when the
+ * Master Brain plans on this machine, its local model (plan M12.1); throws on a bad record.
+ */
 function routingRegistry(cfg: FridayConfig): ModelRecord[] {
-  return mergeModels(loadGuide().models, cfg.routing.models as ModelRecordInput[]);
+  return mergeModels(loadGuide().models, cfg.routing.models as ModelRecordInput[], cfg.master_brain);
 }
 
 /**
@@ -387,6 +390,10 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     configs.current();
     return policies.current();
   };
+  // The ceiling on delegated work (plan M12.2): every plan proposed or approved is bounded by the
+  // team scopes of the effective policy as it stands at that moment, so a tightened policy applies
+  // to the next plan without a restart.
+  state.planBounds = () => ({ teams: currentPolicy().teams });
   // Every check's and operation's process tree is a group that ends with it (review F07).
   const groups = new ProcessGroups(env);
   // Set once the execution gateway exists: a task's operations stop before its worktree is reused.

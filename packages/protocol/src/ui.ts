@@ -162,7 +162,8 @@ export interface BrainStatusView {
   auto_approve: boolean;
   escalate_after_failures: number;
   max_replans: number;
-  daily_budget_usd: number;
+  /** Null when the planner costs nothing (a model on this machine): no budget applies. */
+  daily_budget_usd: number | null;
   spent_today_usd: number;
   cursor: number;
   head: number;

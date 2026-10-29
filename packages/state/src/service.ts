@@ -346,6 +346,92 @@ export interface PlanApproval {
   readied: TaskView[];
 }
 
+/**
+ * The ceiling on a plan's tasks (plan M12.2): per agent role, the write scopes the project's
+ * policy declares for it (ADR-0028 team scopes, one layer per source). A plan task of that role
+ * holds no more than lies inside every layer.
+ */
+export interface PlanBounds {
+  teams: Readonly<Record<string, readonly { source: string; write: readonly string[] }[]>>;
+}
+
+/** One plan task after the ceiling was applied (`FridayState.boundPlanTask`). */
+export interface BoundedPlanTask {
+  /** The write scope the task holds: as written, or cut to the ceiling. */
+  write: string[];
+  /** Why it was cut, for the human who reviews the plan; null when nothing changed. */
+  note: string | null;
+  /** Why it cannot be held at all; null when it can. */
+  refused: string | null;
+}
+
+const GLOB_CHARS = /[*?[{]/;
+
+/**
+ * A project-relative glob as a list of segments, a trailing slash read as "everything under"
+ * (as the hooks read it). Backslashes and a leading `./` are tolerated, never produced by a plan.
+ */
+function globSegments(glob: string): string[] {
+  const g = glob.replaceAll('\\', '/').replace(/^\.\//, '');
+  return (g.endsWith('/') ? `${g}**` : g).split('/').filter((s) => s.length > 0);
+}
+
+/** One glob segment as a regular expression over one path segment, case folded. */
+function segmentPattern(segment: string): RegExp {
+  const source = segment
+    .split(/(\*|\?)/)
+    .map((part) => (part === '*' ? '[^/]*' : part === '?' ? '[^/]' : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    .join('');
+  return new RegExp(`^${source}$`, 'i');
+}
+
+/**
+ * Whether every path `inner` can name is also named by `outer`, judged segment by segment: `**`
+ * in the outer glob stands for any run of segments, `*` and `?` for parts of one segment, and a
+ * literal segment for itself (case folded, since the hooks fold case on Windows). An inner `**`
+ * is inside only an outer `**`; an inner wildcard segment only an outer `*`, `**` or the same
+ * text. Conservative: when it cannot tell, the answer is no, and the hooks still judge the write.
+ */
+function globInside(inner: string, outer: string): boolean {
+  const a = globSegments(inner);
+  const b = globSegments(outer);
+  const fits = (i: number, j: number): boolean => {
+    if (j === b.length) return i === a.length;
+    const o = b[j] as string;
+    if (o === '**') {
+      // Zero or more inner segments, then the rest of the outer glob.
+      for (let k = i; k <= a.length; k += 1) if (fits(k, j + 1)) return true;
+      return false;
+    }
+    if (i === a.length) return false;
+    const s = a[i] as string;
+    if (s === '**') return false;
+    if (s.toLowerCase() === o.toLowerCase()) return fits(i + 1, j + 1);
+    if (o === '*') return fits(i + 1, j + 1);
+    if (GLOB_CHARS.test(s)) return false;
+    return GLOB_CHARS.test(o) && segmentPattern(o).test(s) ? fits(i + 1, j + 1) : false;
+  };
+  return fits(0, 0);
+}
+
+/**
+ * The part of a write scope that lies inside a ceiling: each glob kept when a ceiling glob
+ * contains it, replaced by the ceiling globs it contains when it is wider, dropped otherwise.
+ */
+function boundWriteScope(write: readonly string[], ceiling: readonly string[]): { write: string[]; changed: boolean } {
+  const out: string[] = [];
+  let changed = false;
+  for (const g of write) {
+    if (ceiling.some((c) => globInside(g, c))) {
+      out.push(g);
+      continue;
+    }
+    changed = true;
+    for (const c of ceiling) if (globInside(c, g)) out.push(c);
+  }
+  return { write: [...new Set(out)], changed };
+}
+
 /** A model request as recorded in `model.called` (plan B28): never the prompt or the answer. */
 export interface ModelCallInput {
   goal_id: string | null;
@@ -2471,8 +2557,49 @@ export class FridayState {
   }
 
   /**
+   * The ceiling on delegated work (plan M12.2): what the project's policy declares for each agent
+   * role (`teams.<role>.write`, every source). The daemon sets it from the effective policy; it is
+   * read again at every proposal and approval, so a tightened policy applies to the next plan.
+   * Without it, plan tasks are recorded as the planner wrote them.
+   */
+  planBounds: (() => PlanBounds) | null = null;
+
+  /**
+   * Bounds one plan task by the ceiling of its role (plan M12.2): a task never holds more
+   * authority than what delegated it. Its write scope is cut to what lies inside the role's
+   * declared scopes, with a note a human reads in the plan; a task with nothing left inside is
+   * refused. Read scopes are not authority to change anything and stay as written. The hooks
+   * remain the final judge of every write, so a glob this cut keeps is still judged at use.
+   */
+  boundPlanTask(task: { key: string; kind: string; role: string; write: readonly string[] }): BoundedPlanTask {
+    const layers = this.planBounds?.().teams[task.role] ?? [];
+    let write = [...task.write];
+    const notes: string[] = [];
+    for (const layer of layers) {
+      if (!layer.write.length) continue;
+      const bounded = boundWriteScope(write, layer.write);
+      if (bounded.changed && write.length > 0 && bounded.write.length === 0) {
+        return {
+          write,
+          note: null,
+          refused: `task "${task.key}" (role ${task.role}) would write ${write.join(', ')}, outside the project's scope for that role (${layer.write.join(', ')}, from ${layer.source}), and nothing of it lies inside: narrow the task's scope.write or give it another role`,
+        };
+      }
+      if (bounded.changed) {
+        notes.push(
+          `scope.write cut to the project's scope for role ${task.role}: ${bounded.write.join(', ')} (the plan asked for ${write.join(', ')}; ${layer.source})`,
+        );
+        write = bounded.write;
+      }
+    }
+    return { write, note: notes.length ? notes.join('; ') : null, refused: null };
+  }
+
+  /**
    * Records a plan version as PROPOSED. The planner validated it (or a human wrote it and the
-   * CLI validated it); this only checks that kept, reworked and dropped tasks belong to the goal.
+   * CLI validated it); this checks that kept, reworked and dropped tasks belong to the goal, and
+   * bounds every new task by the ceiling of its role (plan M12.2), so the version a human reviews
+   * already shows the scope the task will hold, with a note where it was cut.
    */
   proposePlan(projectId: string, actor: Actor, goalId: string, proposal: PlanProposal): PlanVersionView {
     return this.exec(
@@ -2504,6 +2631,19 @@ export class FridayState {
             );
           }
         }
+        // The ceiling (plan M12.2): a new task is recorded with the scope it will hold. A task with
+        // nothing inside its role's scope refuses the whole proposal, with the task and the ceiling named.
+        const tasks = proposal.tasks.map((t) => {
+          if (t.change !== 'new') return t;
+          const b = this.boundPlanTask({ key: t.key, kind: t.kind, role: t.role, write: t.scope.write });
+          if (b.refused) throw new FridayError('invalid_request', `the plan exceeds its ceiling: ${b.refused}`);
+          if (!b.note) return t;
+          return {
+            ...t,
+            scope: { write: b.write, read: t.scope.read },
+            note: t.note ? `${t.note}; ${b.note}` : b.note,
+          };
+        });
         // One proposal waits for a decision at a time.
         for (const v of versions.filter((x) => x.status === 'PROPOSED')) {
           this.movePlan(ctx, v, 'SUPERSEDED', `replaced by version ${version}`);
@@ -2522,7 +2662,7 @@ export class FridayState {
               trigger: proposal.trigger,
               model_call_id: proposal.model_call_id ?? null,
               prompt_version: proposal.prompt_version ?? null,
-              tasks: proposal.tasks,
+              tasks,
             },
           },
           refs: [
@@ -2578,6 +2718,20 @@ export class FridayState {
       }
       const active = this.q.latestPlanVersion(planId, ['ACTIVE']);
       this.assertPlanFresh(projectId, v, active?.version ?? null);
+      // The ceiling again (plan M12.2): the policy may have tightened since the version was proposed,
+      // and a task is materialized with the scope it may hold now, or the approval is refused.
+      const bounded = new Map<string, BoundedPlanTask>();
+      for (const t of v.tasks) {
+        if (t.change !== 'new') continue;
+        const b = this.boundPlanTask({ key: t.key, kind: t.kind, role: t.role, write: t.scope.write });
+        if (b.refused) {
+          throw new FridayError(
+            'plan_outdated',
+            `plan ${planId} v${version} exceeds its ceiling under the project's policy as it is now: ${b.refused}. Reject it ("friday plan reject") and ask for a new one ("friday goal replan").`,
+          );
+        }
+        bounded.set(t.key, b);
+      }
       if (active) this.movePlan(ctx, active, 'SUPERSEDED', `superseded by version ${version}`);
       this.movePlan(ctx, v, 'ACTIVE', 'approved', note);
 
@@ -2589,6 +2743,8 @@ export class FridayState {
         idOfKey.set(t.key, task_id);
         const dependencies = t.depends_on.map((d) => idOfKey.get(d) ?? d);
         for (const dep of dependencies) this.q.task(projectId, dep);
+        const bound = bounded.get(t.key);
+        const scope = bound?.note ? { write: bound.write, read: t.scope.read } : t.scope;
         ctx.emit({
           type: 'task.created',
           payload: {
@@ -2605,7 +2761,7 @@ export class FridayState {
               acceptance_criteria: t.acceptance_criteria,
               priority: t.priority,
               risk_level: t.risk_level,
-              scope: t.scope,
+              scope,
               dependencies,
               reserved_for_agent_key: null,
               created_by: ctx.actor,
@@ -2619,7 +2775,14 @@ export class FridayState {
         });
         ctx.emit({
           type: 'plan.task_materialized',
-          payload: { plan_id: planId, version, key: t.key, task_id },
+          payload: {
+            plan_id: planId,
+            version,
+            key: t.key,
+            task_id,
+            // Cut at approval, after the version was proposed: what the task holds and why.
+            ...(bound?.note ? { bounded: { write: bound.write, note: bound.note } } : {}),
+          },
           refs: [
             { kind: 'plan', id: planId },
             { kind: 'task', id: task_id },

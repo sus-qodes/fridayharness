@@ -35,7 +35,8 @@ export class RoutingService {
     const guide = loadGuide();
     const r = deps.project.config.routing;
     this.guideVersion = guide.version;
-    this.models = mergeModels(guide.models, r.models as ModelRecordInput[]);
+    // The Master Brain's local model is in the registry too (plan M12.1), so the locality rule knows it.
+    this.models = mergeModels(guide.models, r.models as ModelRecordInput[], deps.project.config.master_brain);
     this.settings = {
       mode: r.mode,
       optimize: r.optimize,

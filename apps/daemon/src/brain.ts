@@ -9,6 +9,7 @@ import {
   ModelError,
   type ModelRequest,
   type ModelResponse,
+  OpenAICompatiblePlannerModel,
   type PlannerModel,
 } from '@friday/planner';
 import type { TaskView } from '@friday/protocol';
@@ -81,6 +82,34 @@ async function anthropicKey(env: NodeJS.ProcessEnv): Promise<string | undefined>
   return (await resolveSecret('anthropic', env)) ?? (env.ANTHROPIC_API_KEY?.trim() || undefined);
 }
 
+/** What a user does when `master_brain.model` is still `auto` with a local server: there is no default model there. */
+export const LOCAL_MODEL_UNSET =
+  'master_brain.model names no model; set it to a model your local server has (for example qwen2.5:7b); "friday doctor" lists them';
+
+/**
+ * A model on this machine (`master_brain.provider: local`, plan M12.1): an OpenAI-compatible server
+ * at a loopback address from `providers.local.base_url`, restart-only like every provider setting.
+ * The model id is `master_brain.model`, read before each call; it has no default, so a call with
+ * `auto` is refused here with what to set, before anything is sent.
+ */
+class LocalPlannerModel implements PlannerModel {
+  readonly provider = 'local';
+  readonly remote = false;
+  readonly #client: OpenAICompatiblePlannerModel;
+
+  constructor(opts: { baseUrl: string; apiKey?: string }) {
+    this.#client = new OpenAICompatiblePlannerModel({
+      baseUrl: opts.baseUrl,
+      ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
+    });
+  }
+
+  complete(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+    if (request.model === 'auto') return Promise.reject(new ModelError('bad_request', LOCAL_MODEL_UNSET));
+    return this.#client.complete(request, signal);
+  }
+}
+
 export interface BrainStatus {
   provider: string;
   model: string;
@@ -89,9 +118,12 @@ export interface BrainStatus {
   allow_remote: boolean;
   /** The user allowed this clone to use their key on this machine (`friday brain allow-remote`). */
   approved_here: boolean;
-  /** Where the key is sent: the provider's own endpoint, or one set on this machine. */
+  /**
+   * Where requests go: the provider's own endpoint or one set on this machine for a remote
+   * provider; the local server's address (`providers.local.base_url`) for provider `local`.
+   */
   endpoint: string | null;
-  /** `providers.<name>.base_url` in config.yaml, which Friday ignores. */
+  /** `providers.<name>.base_url` in config.yaml, which Friday ignores for a remote provider. */
   ignored_base_url: string | null;
   /** Whether a key is stored; never the key. */
   key: 'stored' | 'environment' | 'missing' | 'not needed';
@@ -100,7 +132,8 @@ export interface BrainStatus {
   auto_approve: boolean;
   escalate_after_failures: number;
   max_replans: number;
-  daily_budget_usd: number;
+  /** The budget remote calls are held to; null when the planner is not remote, since none applies. */
+  daily_budget_usd: number | null;
   spent_today_usd: number;
   cursor: number;
   head: number;
@@ -158,7 +191,10 @@ export function createMasterBrain(input: {
       ...(refusal ? { refusal } : {}),
     };
   };
-  if (provider.base_url) {
+  // A local server's address is the one base_url the tracked file may choose: it is loopback only,
+  // and no key goes there unless the user's own environment names one.
+  const local = providerName === 'local';
+  if (provider.base_url && !local) {
     logger.warn(
       'providers.base_url in config.yaml is ignored; set an endpoint with "friday secrets set <provider> --base-url"',
       {
@@ -178,6 +214,16 @@ export function createMasterBrain(input: {
     const dir = started.fake_responses ? path.resolve(project.root, started.fake_responses) : undefined;
     if (dir && existsSync(dir)) model = FakePlannerModel.fromDirectory(dir);
     else reason = 'master_brain.fake_responses does not name a directory of scripted answers';
+  } else if (started.provider === 'local') {
+    const cfg = project.config.providers.local;
+    const apiKey = cfg.api_key_env ? env[cfg.api_key_env]?.trim() || undefined : undefined;
+    if (apiKey) state.redactor.addSecret(apiKey);
+    try {
+      model = new LocalPlannerModel({ baseUrl: cfg.base_url, ...(apiKey ? { apiKey } : {}) });
+    } catch (e) {
+      // The config schema already refuses a host name; this catches an https or credentialed address.
+      reason = (e as Error).message;
+    }
   } else {
     model = new KeyedAnthropicModel(env, {
       cacheTtl: provider.cache_ttl,
@@ -187,7 +233,8 @@ export function createMasterBrain(input: {
   }
   const modelId = () => {
     const m = current().model;
-    return m !== 'auto' ? m : started.provider === 'fake' ? 'fake-planner' : DEFAULT_PLANNER_MODEL;
+    // A local server has no default model: `auto` stays as written, and the status says what to set.
+    return m !== 'auto' || local ? m : started.provider === 'fake' ? 'fake-planner' : DEFAULT_PLANNER_MODEL;
   };
   // Read on every pass: a changed config.yaml, and a trusted (or no longer trusted) policy, apply
   // without a restart. The provider's consent and budget are restart-only, like `providers`.
@@ -255,22 +302,25 @@ export function createMasterBrain(input: {
           ? (consent.refusal ?? 'remote calls are off')
           : key === 'missing'
             ? 'no Anthropic API key: run "friday secrets set anthropic"'
-            : null);
+            : local && model && current().model === 'auto'
+              ? LOCAL_MODEL_UNSET
+              : null);
       return {
         provider: model?.provider ?? started.provider,
         model: modelId(),
         remote,
         allow_remote: provider.allow_remote,
         approved_here: Boolean(providerApproval(project, providerName === 'none' ? 'anthropic' : providerName, env)),
-        endpoint: remote ? anthropicEndpoint(env) : null,
-        ignored_base_url: provider.base_url ?? null,
+        endpoint: remote ? anthropicEndpoint(env) : local ? project.config.providers.local.base_url : null,
+        ignored_base_url: local ? null : (provider.base_url ?? null),
         key,
         planner_available: !unavailable,
         reason: unavailable,
         auto_approve: current().auto_approve,
         escalate_after_failures: current().escalate_after_failures,
         max_replans: current().max_replans,
-        daily_budget_usd: consent.dailyBudgetUsd,
+        // No budget holds a model that costs nothing: only remote calls have one (ADR-0015 §4).
+        daily_budget_usd: remote ? consent.dailyBudgetUsd : null,
         spent_today_usd: model ? state.q.modelSpend(pid, model.provider, dayStart) : 0,
         cursor: state.q.brainCursor(pid),
         head: state.store.head(pid),

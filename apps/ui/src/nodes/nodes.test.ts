@@ -1,4 +1,4 @@
-import type { SnapshotTask, UiSnapshot } from '@friday/protocol';
+import type { GoalSummary, SnapshotTask, UiSnapshot } from '@friday/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deriveBoard, type GoalGroup, type PodModel } from '../model/board.js';
 import { enforcementWords } from '../model/status.js';
@@ -18,7 +18,15 @@ import {
 } from '../test/fixtures.js';
 import { createAgentPod, type PodCardModel, podModelName, podUsage, ToolDurations, vendorLabel } from './agent-pod.js';
 import { actionButton, fingerprint, pills } from './common.js';
-import { createGoalNode, integrationText, planNeed, progressPercent } from './goal-node.js';
+import {
+  createGoalNode,
+  goalSummaryLine,
+  goalSummaryRows,
+  hostsWords,
+  integrationText,
+  planNeed,
+  progressPercent,
+} from './goal-node.js';
 import { ARM_DELAY_MS, Arming, createPlanGhost, createPlanReviewBar, planCounts, proposer } from './plan-ghost.js';
 import { createTaskNode, statText, statusColor, type TaskCardModel, taskActions, taskDuration } from './task-node.js';
 
@@ -412,6 +420,125 @@ describe('goal card', () => {
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'land', id: g.goal.goal_id });
   });
 
+  describe('what Friday did (plan M12.7)', () => {
+    const GID = 'goal_0000000000000000000000gg01';
+    /** A goal with tasks and nothing else on record; each test changes what it needs. */
+    const summary = (o: Partial<GoalSummary> = {}): GoalSummary => ({
+      tasks: { total: 4, verified: 1 },
+      claims_refused: 0,
+      reworked: 0,
+      held_for_human: 0,
+      refused_by_policy: 0,
+      sessions_lost: 0,
+      sessions_recovered: 0,
+      hosts: { attempts: 0, reported: 0, tokens: null, tokens_reporters: 0, cost_usd: null, cost_reporters: 0 },
+      planning: { calls: 0, cost_usd: null, unknown_cost_calls: 0 },
+      ...o,
+    });
+    const line = (root: Element) => root.querySelector('[data-role="did"]') as HTMLElement;
+
+    it('words the facts as the plan does, in one line and in rows', () => {
+      const s = summary({
+        tasks: { total: 3, verified: 3 },
+        claims_refused: 1,
+        reworked: 1,
+        held_for_human: 2,
+        sessions_lost: 1,
+        sessions_recovered: 1,
+        hosts: { attempts: 2, reported: 2, tokens: 184_321, tokens_reporters: 2, cost_usd: 0.42, cost_reporters: 2 },
+      });
+      expect(goalSummaryLine(s)).toBe(
+        '3 of 3 tasks verified · 1 claim refused by the checks, reworked · 2 actions held for you · 1 session recovered · hosts reported 184k tokens, $0.42 (2 of 2 attempts)',
+      );
+      expect(goalSummaryRows(s)).toEqual([
+        { label: 'Tasks verified', value: '3 of 3' },
+        { label: 'Claims refused by the checks', value: '1, reworked' },
+        { label: 'Actions held for you', value: '2' },
+        { label: 'Actions refused by policy', value: 'none' },
+        { label: 'Sessions lost', value: '1, recovered' },
+        { label: 'Hosts reported', value: '184k tokens, $0.42 (2 of 2 attempts)' },
+      ]);
+      // Fewer reworked or recovered than refused or lost, and a planning cost.
+      expect(
+        goalSummaryLine(
+          summary({
+            claims_refused: 2,
+            reworked: 1,
+            sessions_lost: 2,
+            sessions_recovered: 1,
+            refused_by_policy: 1,
+            planning: { calls: 2, cost_usd: 0.03, unknown_cost_calls: 0 },
+          }),
+        ),
+      ).toBe(
+        '1 of 4 tasks verified · 2 claims refused by the checks, 1 reworked · 1 action refused by policy · 1 of 2 sessions recovered · Friday planned in 2 calls, $0.03',
+      );
+    });
+
+    it('never writes 0 for what nobody reported: no token figure without a report, a cost with its own count', () => {
+      // Three attempts, none reported: the line has no token figure; the rows say so.
+      const none = summary({
+        hosts: { attempts: 3, reported: 0, tokens: null, tokens_reporters: 0, cost_usd: null, cost_reporters: 0 },
+      });
+      expect(goalSummaryLine(none)).toBe('1 of 4 tasks verified');
+      expect(goalSummaryRows(none)).toContainEqual({ label: 'Hosts reported', value: 'nothing (0 of 3 attempts)' });
+      // One of three counted tokens and named no cost.
+      expect(
+        hostsWords({ attempts: 3, reported: 1, tokens: 1234, tokens_reporters: 1, cost_usd: null, cost_reporters: 0 }),
+      ).toBe('1.2k tokens (1 of 3 attempts)');
+      // Both counted tokens, one named a cost.
+      expect(
+        hostsWords({ attempts: 2, reported: 2, tokens: 5000, tokens_reporters: 2, cost_usd: 0.1, cost_reporters: 1 }),
+      ).toBe('5.0k tokens (2 of 2 attempts), $0.10 (1 of 2 attempts)');
+      // A goal without work has no line and no rows.
+      const idle = summary({ tasks: { total: 0, verified: 0 } });
+      expect(goalSummaryLine(idle)).toBeNull();
+      expect(goalSummaryRows(idle)).toEqual([]);
+    });
+
+    it('shows the line on the card once the goal has tasks, reads it again when a task changes, and not for a goal without tasks', async () => {
+      const s = summary({ tasks: { total: 4, verified: 1 }, claims_refused: 1, reworked: 1 });
+      const ctx = makeContext({ answers: { [`GET /goals/${GID}`]: { summary: s } } });
+      const node = createGoalNode(ctx, { group: group() });
+      // Hidden until the answer arrives: nothing is shown that is not on record.
+      expect(line(node.el).hidden).toBe(true);
+      await flush();
+      expect(line(node.el).hidden).toBe(false);
+      expect(line(node.el).textContent).toBe('1 of 4 tasks verified · 1 claim refused by the checks, reworked');
+      expect(line(node.el).title).toContain('Actions refused by policy: none');
+      expect(line(node.el).title).not.toContain('tokens');
+      expectNoMarkup(node.el);
+      // The same board again reads nothing new.
+      node.update({ group: group() });
+      await flush();
+      expect(ctx.transport.to('GET', `/goals/${GID}`)).toHaveLength(1);
+      // A task of the goal changed: the line is read again.
+      const scenario = makeScenario();
+      ctx.board({
+        ...scenario,
+        tasks: scenario.tasks.map((t) => (t.plan_key === 'api' ? { ...t, status: 'FAILED' as const } : t)),
+      });
+      node.update({ group: group() });
+      await flush();
+      expect(ctx.transport.to('GET', `/goals/${GID}`)).toHaveLength(2);
+      node.destroy();
+
+      // A goal without tasks asks for nothing and shows nothing.
+      const quiet = makeContext({ answers: { [`GET /goals/${GID}`]: { summary: s } } });
+      const empty = createGoalNode(quiet, {
+        group: group({
+          goal: makeGoal({ status: 'OPEN', plan_id: null }),
+          active: null,
+          taskIds: [],
+          progress: { total: 0, completed: 0 },
+        }),
+      });
+      await flush();
+      expect(quiet.transport.to('GET', `/goals/${GID}`)).toHaveLength(0);
+      expect(line(empty.el).hidden).toBe(true);
+    });
+  });
+
   describe('an open goal without a plan (review R1)', () => {
     const GID = 'goal_0000000000000000000000gg01';
     const unplanned = () =>
@@ -752,6 +879,42 @@ describe('proposed plan', () => {
     expect(second.el.textContent).toContain('Rework of task_b');
     click(actionOf(second.el, 'review'));
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'plan-review', id: goal.goal_id });
+  });
+
+  it("shows a new task's note, the ceiling cut, beside its scope (plan M12.2)", () => {
+    const ctx = makeContext();
+    const cut = `scope.write cut to the project's scope for role frontend: frontend/** (the plan asked for **; policies/teams.yaml)`;
+    const board = deriveBoard(
+      (() => {
+        const s = makeScenario();
+        const p = s.plans[goal.goal_id];
+        if (p) {
+          p.proposed = {
+            ...plan,
+            tasks: [
+              makePlanTask({
+                key: 'page',
+                change: 'new',
+                role: 'frontend',
+                scope: { write: ['frontend/**'], read: [] },
+                note: cut,
+              }),
+              makePlanTask({ key: 'api', change: 'new', note: null }),
+            ],
+          };
+        }
+        return s;
+      })(),
+    );
+    const [withNote, without] = [...board.ghosts.values()];
+    const shown = createPlanGhost(ctx, { ghost: withNote as never });
+    const foot = shown.el.querySelector('.nd-ghost-note') as HTMLElement;
+    expect(foot.textContent).toContain('Proposed in plan v2: scope.write cut to');
+    expect(foot.title).toBe(cut);
+    expect(shown.el.textContent).toContain('frontend/**');
+    const plain = createPlanGhost(ctx, { ghost: without as never });
+    expect(plain.el.querySelector('.nd-ghost-note')?.textContent).toBe('Proposed in plan v2');
+    expect(plain.el.querySelector('.nd-ghost-note')?.hasAttribute('title')).toBe(false);
   });
 
   it('counts changes and names who proposed', () => {

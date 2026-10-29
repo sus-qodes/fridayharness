@@ -31,6 +31,7 @@ import { restoreProject } from './restore.js';
 import { registerLayaCommands, registerRoutingCommands } from './routing.js';
 import { runDaemon } from './run.js';
 import { createShortcut } from './shortcut.js';
+import { registerStartCommand } from './start.js';
 import { FRIDAY_DIR_GITIGNORE } from './templates.js';
 import { registerUsageCommands } from './usage.js';
 import { registerWorktreeCommands } from './worktrees.js';
@@ -131,7 +132,7 @@ export function buildProgram(): Command {
           `  ${path.relative(process.cwd(), configPath) || configPath}  (commit this)`,
           '  .friday/.gitignore  (commit this; it keeps runtime files out of git)',
           ...shortcuts.map((f) => `  shortcut: ${f}`),
-          shortcuts.length ? 'Next: double-click the shortcut' : 'Next: friday ui --start (or friday shortcut)',
+          shortcuts.length ? 'Next: double-click the shortcut' : 'Next: friday start (or friday shortcut)',
         ].join('\n'),
       );
     });
@@ -835,6 +836,7 @@ export function buildProgram(): Command {
   registerLayaCommands(program, g);
   registerUsageCommands(program, g);
   registerMemoryCommands(program, g);
+  registerStartCommand(program, g);
   for (const plugin of commandPlugins) plugin(program);
   return program;
 }

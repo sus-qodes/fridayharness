@@ -29,6 +29,7 @@ export {
 } from './commands.js';
 export {
   type ActionKind,
+  aboveCeiling,
   type Decision,
   evaluate,
   evaluateSensitive,
