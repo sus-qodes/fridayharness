@@ -3,6 +3,7 @@ import type { Server } from 'node:http';
 import path from 'node:path';
 import type { Clock, IdGenerator } from '@friday/core';
 import { closeDatabase, openDatabase } from '@friday/db';
+import type { ExecutionProfile } from '@friday/execution';
 import { GitRoot } from '@friday/git';
 import type { PlannerModel } from '@friday/planner';
 import { type Actor, API_VERSION, type ContextPacket, FridayError, PROTOCOL_VERSIONS } from '@friday/protocol';
@@ -22,9 +23,11 @@ import type { Hono } from 'hono';
 import { buildApp } from './app.js';
 import { type BrainHandle, createMasterBrain } from './brain.js';
 import { type CompileInput, createContextService } from './context.js';
+import { profileCache } from './execution.js';
 import { GraphService } from './graph-service.js';
 import { IntegrationManager } from './integration.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
+import { OperationManager } from './operations.js';
 import { type EffectivePolicy, loadEffectivePolicy, writePolicyTrust } from './policy.js';
 import { RecoveryManager } from './recovery.js';
 import { runVerification } from './verify.js';
@@ -76,6 +79,8 @@ export interface DaemonContext {
   policy: () => EffectivePolicy;
   /** Reads the policy files and this clone's trust again. */
   reloadPolicy: () => EffectivePolicy;
+  /** The execution profile checks and operations run in (ADR-0029 §4). */
+  profile: () => ExecutionProfile;
 }
 
 export interface Daemon extends DaemonContext {
@@ -88,6 +93,8 @@ export interface Daemon extends DaemonContext {
   brain: BrainHandle | undefined;
   /** Recovery of lost and failed attempts (M5d, ADR-0026). */
   recovery: RecoveryManager;
+  /** The execution gateway (M6c, ADR-0029). */
+  operations: OperationManager;
   close(reason?: string): Promise<void>;
   /** Resolves when the daemon has fully stopped (after close or an admin shutdown). */
   closed: Promise<void>;
@@ -235,8 +242,12 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   const graph = new GraphService({ root: project.root, cacheDir: path.join(fridayDir, 'graph') });
   // Task worktrees: prepared as soon as a run needs one, released when its task ends (ADR-0023).
   const workspaces = new WorkspaceManager({ state, project, logger, env });
+  // Checks and operations run in the execution profile of the effective policy (ADR-0029 §4).
+  const stateRoot = path.dirname(path.dirname(privateDir));
+  const profileOf = profileCache({ forbiddenRoots: () => [project.root, workspaces.dir], stateDir: stateRoot, env });
+  const profile = () => profileOf(policy);
   // A completed goal task's verified work goes to its goal branch before its worktree is released (ADR-0025).
-  const integration = new IntegrationManager({ state, project, logger, workspaces });
+  const integration = new IntegrationManager({ state, project, logger, workspaces, profile });
   const stopWorkspaces = state.transport.subscribe(
     { project_id: project.project_id, types: ['run.created', 'task.cancelled', 'task.completed'] },
     (e) => {
@@ -294,6 +305,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       });
       return policy;
     },
+    profile,
   };
   for (const e of policy.errors) logger.error('policy file not applied', e);
   if (!policy.trusted) logger.warn('policy settings wait for "friday policy trust"', { loosening: policy.loosening });
@@ -304,6 +316,31 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     ctx.verifying,
   )) {
     logger.warn('verification interrupted at start', { verification_id: id });
+  }
+  // The execution gateway (ADR-0029): operations a project declared, run with stored secrets.
+  const operations = new OperationManager({ state, project, logger, policy: () => policy, profile, env });
+  for (const id of operations.sweep()) logger.warn('operation interrupted at start', { operation_run_id: id });
+  // Automatic verification, once this clone trusted it (ADR-0029 §6): a claim is verified at once.
+  const verify = (taskId: string, actor: Actor) => (opts.verify ?? runVerification)(ctx, taskId, actor);
+  const AUTO: Actor = { kind: 'system', id: 'auto-verification' };
+  const autoVerify = (taskId: string) =>
+    verify(taskId, AUTO).catch((e: unknown) =>
+      logger.warn('automatic verification did not run', { task_id: taskId, message: (e as Error).message }),
+    );
+  const stopAutoVerify = state.transport.subscribe(
+    { project_id: project.project_id, types: ['task.completion_claimed'] },
+    (e) => {
+      const taskId = (e.payload as { task_id?: string }).task_id;
+      if (taskId && policy.auto_verification && project.config.verification.checks.length) void autoVerify(taskId);
+    },
+  );
+  if (policy.auto_verification && project.config.verification.checks.length) {
+    // Claims made while the daemon was down, or whose verification it interrupted.
+    void (async () => {
+      for (const t of state.q.tasks(project.project_id, { statuses: ['READY_FOR_VERIFICATION'] })) {
+        await autoVerify(t.task_id);
+      }
+    })();
   }
 
   const brain =
@@ -333,7 +370,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     },
     rotateTokens,
     streams,
-    verify: (taskId: string, actor: Actor) => (opts.verify ?? runVerification)(ctx, taskId, actor),
+    verify,
     ...(opts.pollIntervalMs ? { pollIntervalMs: opts.pollIntervalMs } : {}),
     ...(brain ? { brain } : {}),
     graph,
@@ -348,6 +385,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       writePolicyTrust(privateDir, hash, 'human');
       return ctx.reloadPolicy();
     },
+    operations,
   });
   for (const ext of opts.extensions ?? []) ext(app as unknown as Hono, ctx);
 
@@ -468,6 +506,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       if (timer) clearInterval(timer);
       clearInterval(sweep);
       stopWorkspaces();
+      stopAutoVerify();
+      operations.close();
       graph.close();
       for (const s of streams) s.abort();
       await new Promise((r) => setTimeout(r, 30));
@@ -501,5 +541,17 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     return closing;
   }
 
-  return { ...ctx, url, instanceId, tokens, app: app as unknown as Hono, tick, brain, recovery, close, closed };
+  return {
+    ...ctx,
+    url,
+    instanceId,
+    tokens,
+    app: app as unknown as Hono,
+    tick,
+    brain,
+    recovery,
+    operations,
+    close,
+    closed,
+  };
 }

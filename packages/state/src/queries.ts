@@ -1,4 +1,4 @@
-import type { SqlDatabase } from '@friday/db';
+import type { SqlDatabase, SqlValue } from '@friday/db';
 import {
   type AgentView,
   type AssignmentView,
@@ -10,6 +10,7 @@ import {
   type IntegrationView,
   type MessageView,
   type ModelCallView,
+  type OperationRunView,
   type PlanVersionView,
   type RunView,
   type TaskStatus,
@@ -341,6 +342,58 @@ export class Queries {
   /** The latest integration attempt of a task, if any. */
   latestIntegration(projectId: string, taskId: string): IntegrationView | undefined {
     return this.integrations(projectId, { task_id: taskId }).at(-1);
+  }
+
+  /** Runs of operations by the gateway (ADR-0029), newest first. */
+  operationRuns(
+    projectId: string,
+    filter: { task_id?: string; status?: OperationRunView['status']; limit?: number } = {},
+  ): OperationRunView[] {
+    const where = ['project_id = ?'];
+    const args: SqlValue[] = [projectId];
+    if (filter.task_id) {
+      where.push('task_id = ?');
+      args.push(filter.task_id);
+    }
+    if (filter.status) {
+      where.push('status = ?');
+      args.push(filter.status);
+    }
+    return this.db
+      .prepare(`SELECT * FROM operation_runs WHERE ${where.join(' AND ')} ORDER BY started_at DESC, rowid DESC LIMIT ?`)
+      .all<Record<string, unknown>>(...args, filter.limit ?? 100)
+      .map(toOperationRunView);
+  }
+
+  operationRun(operationRunId: string): OperationRunView | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM operation_runs WHERE operation_run_id = ?')
+      .get<Record<string, unknown>>(operationRunId);
+    return row ? toOperationRunView(row) : undefined;
+  }
+
+  /** A request still waiting for a human for exactly this use (so asking again opens no second one). */
+  pendingApproval(
+    projectId: string,
+    use: { capability: string; target: string; task_id: string | null; run_id: string | null; agent_id: string },
+    nowIso: string,
+  ): { approval_id: string; expires_at: string | null } | undefined {
+    return this.db
+      .prepare(
+        `SELECT approval_id, expires_at FROM approvals WHERE project_id = ? AND capability = ? AND target = ?
+           AND status = 'pending' AND requested_by_kind = 'agent' AND requested_by_id = ?
+           AND task_id IS ? AND run_id IS ? AND (expires_at IS NULL OR expires_at > ?)
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get<{ approval_id: string; expires_at: string | null }>(
+        projectId,
+        use.capability,
+        use.target,
+        use.agent_id,
+        use.task_id,
+        use.run_id,
+        nowIso,
+      );
   }
 
   /** File reservations of the project, oldest first (ADR-0025). */
@@ -753,4 +806,30 @@ export class Queries {
       for (const fct of JSON.parse(r.facts_json) as { fact: string }[]) out.push({ ...fct, source: r.source });
     return out.slice(-limit);
   }
+}
+
+function toOperationRunView(r: Record<string, unknown>): OperationRunView {
+  const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+  return {
+    operation_run_id: String(r.operation_run_id),
+    operation: String(r.operation),
+    task_id: String(r.task_id),
+    run_id: (r.run_id as string | null) ?? null,
+    agent_id: (r.agent_id as string | null) ?? null,
+    status: r.status as OperationRunView['status'],
+    binary: String(r.binary),
+    cwd: String(r.cwd),
+    credentials: JSON.parse(String(r.credentials_json ?? '[]')) as string[],
+    approval_id: (r.approval_id as string | null) ?? null,
+    risk: r.risk as OperationRunView['risk'],
+    reason: String(r.reason),
+    exit_code: num(r.exit_code),
+    timed_out: Number(r.timed_out ?? 0) === 1,
+    duration_ms: num(r.duration_ms),
+    redactions: Number(r.redactions ?? 0),
+    artifact_ref: (r.artifact_ref as string | null) ?? null,
+    summary: (r.summary as string | null) ?? null,
+    started_at: String(r.started_at),
+    ended_at: (r.ended_at as string | null) ?? null,
+  };
 }

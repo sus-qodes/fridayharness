@@ -7,13 +7,13 @@ import {
   credentialsDir,
   DaemonClient,
   FRIDAY_DIR,
+  hasSecret,
   loadProject,
   type ProjectRef,
   privateDirFor,
   providerApproval,
   providerEndpoint,
   readDiscovery,
-  readSecret,
   readToken,
   stateDir,
 } from '@friday/sdk';
@@ -220,7 +220,7 @@ export async function doctor(projectDir?: string): Promise<CheckResult[]> {
     if (mb.provider === 'anthropic') {
       const allowed = ref.config.providers.anthropic?.allow_remote ?? false;
       const approved = Boolean(providerApproval(ref, 'anthropic'));
-      const key = readSecret('anthropic') !== undefined || Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+      const key = hasSecret('anthropic') || Boolean(process.env.ANTHROPIC_API_KEY?.trim());
       const missing = !key
         ? { why: 'no Anthropic API key is stored', fix: 'friday secrets set anthropic' }
         : !allowed

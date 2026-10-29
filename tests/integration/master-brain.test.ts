@@ -430,7 +430,10 @@ describe('Anthropic provider through the daemon', () => {
     ]);
     expect(stored.code, stored.stderr).toBe(0);
     expect(stored.stdout).not.toContain(key);
-    expect((await cli(['secrets', 'list'])).stdout.trim()).toBe('anthropic');
+    // Encrypted for this user on Windows (ADR-0029 §2), a user-only file elsewhere.
+    expect((await cli(['secrets', 'list'])).stdout.trim()).toBe(
+      process.platform === 'win32' ? 'anthropic  (DPAPI)' : 'anthropic  (user-only file)',
+    );
     const replanned = await cli(['--project', dir, 'goal', 'replan', goalId]);
     expect(replanned.code, replanned.stderr).toBe(0);
     expect(replanned.stdout).toMatch(/proposed plan_\w+ v1 with 4 task/);

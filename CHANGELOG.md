@@ -17,6 +17,15 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - `friday policy show`, `friday policy trust`, `friday policy validate`. A file that does not parse applies nothing and is reported.
   - Approvals granted under a policy stop counting when it changes.
   - Decision: ADR-0028.
+- **M6c, secrets used without being handed out:**
+  - **Operations:** a project declares, under `operations:` in `.friday/config.yaml` or a policy file, the work that needs a secret: a fixed command, its variables, and the stored secrets it needs by name (`credentials: { STRIPE_SECRET_KEY: stripe-test }`). An agent runs one with `friday_run_operation`; Friday runs it with the secret and returns the outcome and the end of the output with the secret removed, in plain form and in common encodings. An agent that asks for the secret itself is refused and pointed at the operation.
+  - An operation is loosening: it applies only after `friday policy trust`, and again after any change to it. One that uses a secret needs your approval for each run by default; the request shows what the task changed since it started.
+  - **Secrets are encrypted with DPAPI** for your Windows user (`friday secrets set`); elsewhere they stay in a file only you can read. `friday secrets list` shows how each is kept.
+  - **Checks run in the execution profile:** a binary from a short list (`node`, `npm`, `pnpm`, `git`, `python`, …), never one inside the project; a minimal environment instead of yours; a time limit for the whole process tree. A check may declare its own `env`; `execution.binaries` and `execution.env_passthrough` add more, after trust. **Breaking:** a check that relied on a variable of your environment, or on a binary off the list, now fails with the reason until you declare it.
+  - **Automatic verification:** `verification.auto_on_completion: true` verifies a completion claim at once, after trust (it runs agent-written code without you).
+  - `friday operations`, `friday operations runs`, `friday operations show <run>`.
+  - **Fix:** the memory search index named a column the memory table does not have; searches worked, but rebuilding or reading the index failed (migration v16).
+  - Decision: ADR-0029.
 
 ## Unreleased — M5 verification, recovery, worktrees
 

@@ -35,6 +35,8 @@ export const RefKind = z.enum([
   'worktree',
   'reservation',
   'integration',
+  // M6c: runs of operations by the gateway.
+  'operation',
 ]);
 export type RefKind = z.infer<typeof RefKind>;
 
@@ -130,6 +132,10 @@ export const EVENT_TYPES = [
   // M6a: bound approvals (ADR-0027).
   'approval.used',
   'approval.revoked',
+  // M6c: operations run by the gateway (ADR-0029).
+  'operation.started',
+  'operation.finished',
+  'operation.interrupted',
   'memory.superseded',
   'memory.approved',
   'memory.retracted',

@@ -25,6 +25,7 @@
     "@friday/core": "workspace:*",
     "@friday/db": "workspace:*",
     "@friday/events": "workspace:*",
+    "@friday/execution": "workspace:*",
     "@friday/git": "workspace:*",
     "@friday/planner": "workspace:*",
     "@friday/policy": "workspace:*",

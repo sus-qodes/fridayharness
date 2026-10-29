@@ -20,7 +20,7 @@ async function eventually<T>(fn: () => Promise<T>, ok: (v: T) => boolean, ms = 1
 }
 
 describe('friday-mcp over stdio', () => {
-  it('exposes the friday server, its instructions, 16 tools (5 always loaded), resources and prompts', async () => {
+  it('exposes the friday server, its instructions, 17 tools (5 always loaded), resources and prompts', async () => {
     await startTestDaemon(ws(), { git: true });
     const mcp = await startMcp(ws());
     expect(mcp.client.getServerVersion()?.name).toBe('friday');
@@ -40,6 +40,7 @@ describe('friday-mcp over stdio', () => {
         'friday_report_progress',
         'friday_request_context',
         'friday_request_permission',
+        'friday_run_operation',
         'friday_session_bind',
         'friday_task_claim',
         'friday_task_current',

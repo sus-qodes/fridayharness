@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@friday/core": "workspace:*",
+    "@friday/execution": "workspace:*",
     "@friday/protocol": "workspace:*"
   },
   "devDependencies": {

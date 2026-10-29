@@ -1,0 +1,95 @@
+{
+  "$id": "urn:friday:protocol:v1:operation.run:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "approval_required",
+        "denied",
+        "unavailable",
+        "running",
+        "passed",
+        "failed",
+        "interrupted"
+      ]
+    },
+    "operation": {
+      "type": "string"
+    },
+    "operation_run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "approval_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "exit_code": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "timed_out": {
+      "type": "boolean"
+    },
+    "duration_ms": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "output": {
+      "type": "string"
+    },
+    "output_truncated": {
+      "type": "boolean"
+    },
+    "artifact_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "redactions": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "status",
+    "operation",
+    "operation_run_id",
+    "approval_id",
+    "reason",
+    "exit_code",
+    "timed_out",
+    "duration_ms",
+    "output",
+    "output_truncated",
+    "artifact_ref",
+    "redactions"
+  ]
+}

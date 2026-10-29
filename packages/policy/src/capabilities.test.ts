@@ -85,4 +85,10 @@ describe('capabilities', () => {
       'low',
     ]);
   });
+
+  it('runs a declared operation by its own risk: low at once, otherwise after a human (ADR-0029 §3)', () => {
+    expect(judge('operation.run', 'stripe-test', { risk: { 'operation.run': 'high' } })).toEqual(['review', 'high']);
+    expect(judge('operation.run', 'lint', { risk: { 'operation.run': 'low' } })).toEqual(['allow', 'low']);
+    expect(judge('operation.run', 'lint')).toEqual(['review', 'medium']);
+  });
 });

@@ -168,6 +168,37 @@ export const IntegrationView = z.object({
 });
 export type IntegrationView = z.infer<typeof IntegrationView>;
 
+/**
+ * One run of an operation by Friday's gateway (ADR-0029): the credential names it used, never
+ * their values, and the outcome. The sanitized output is an artifact.
+ */
+export const OperationRunView = z.object({
+  operation_run_id: z.string(),
+  operation: z.string(),
+  task_id: z.string(),
+  run_id: z.string().nullable(),
+  agent_id: z.string().nullable(),
+  status: z.enum(['running', 'passed', 'failed', 'interrupted']),
+  /** The resolved binary, an absolute path. */
+  binary: z.string(),
+  cwd: z.string(),
+  /** Names of the stored secrets the run received. */
+  credentials: z.array(z.string()),
+  approval_id: z.string().nullable(),
+  risk: z.enum(['low', 'medium', 'high']),
+  reason: z.string(),
+  exit_code: z.number().int().nullable(),
+  timed_out: z.boolean(),
+  duration_ms: z.number().int().nullable(),
+  /** Occurrences of a credential removed from the output. */
+  redactions: z.number().int(),
+  artifact_ref: z.string().nullable(),
+  summary: z.string().nullable(),
+  started_at: z.string(),
+  ended_at: z.string().nullable(),
+});
+export type OperationRunView = z.infer<typeof OperationRunView>;
+
 export const RecoveryAction = z.enum(['reconnect', 'reassign', 'restart', 'needs_human', 'cancel']);
 export type RecoveryAction = z.infer<typeof RecoveryAction>;
 

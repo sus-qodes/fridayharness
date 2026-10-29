@@ -25,6 +25,7 @@ import {
 import { type ProjectRef, policyVersion } from '@friday/sdk';
 import type { Caller, FridayState } from '@friday/state';
 import type { CompileInput } from './context.js';
+import type { OperationManager } from './operations.js';
 
 export interface AuthInfo {
   token_class: TokenClass;
@@ -42,6 +43,8 @@ export interface RpcDeps {
   stateDir?: string;
   /** The project's effective policy (ADR-0028). */
   policy?: () => ProjectPolicy;
+  /** The execution gateway (ADR-0029). */
+  operations?: OperationManager;
 }
 
 function issuesOf(err: { issues: { path: PropertyKey[]; message: string }[] }) {
@@ -56,6 +59,11 @@ export function callerFor(state: FridayState, projectId: string, harnessId: stri
     bound ?? (harness.requested_agent_key ? state.q.agentByKey(projectId, harness.requested_agent_key) : undefined);
   if (!agent) throw new FridayError('agent_not_found', 'no agent is attached to this session');
   return { harness_id: harnessId, agent_id: agent.agent_id };
+}
+
+function gateway(deps: RpcDeps): OperationManager {
+  if (!deps.operations) throw new FridayError('capability_unsupported', 'this daemon runs no operations');
+  return deps.operations;
 }
 
 /** Handles one JSON-RPC request to /protocol/v1/rpc. Errors become JSON-RPC error objects. */
@@ -295,7 +303,14 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
               risk: effective?.risk ?? (project.config.risk as Partial<Record<Capability, Risk>>),
               ...(effective ? { deny: effective.deny } : {}),
             });
-            return { capability, decision: v.decision, risk: v.risk, reason: v.reason, policy_version: version };
+            // An agent asking for a secret is pointed at the operations that use one (Part 12 §5).
+            const ops = capability === 'secret.resolve' ? (deps.operations?.withSecrets() ?? []) : [];
+            const reason = ops.length
+              ? `${v.reason}. Friday runs these with their secrets: ${ops
+                  .map((o) => `${o.name} (${Object.keys(o.credentials).join(', ')})`)
+                  .join('; ')}; call friday_run_operation`
+              : v.reason;
+            return { capability, decision: v.decision, risk: v.risk, reason, policy_version: version };
           })()
         : {
             capability: p.action_class,
@@ -326,6 +341,16 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
     case 'human.escalation': {
       const p = METHODS[method].params.parse(raw);
       return state.requestEscalation(pid, caller(), p);
+    }
+    case 'operation.list':
+      return gateway(deps).list(caller());
+    case 'operation.run': {
+      const p = METHODS[method].params.parse(raw);
+      return gateway(deps).run(caller(), p, deps.signal);
+    }
+    case 'operation.status': {
+      const p = METHODS[method].params.parse(raw);
+      return gateway(deps).status(caller(), p.operation_run_id, p.wait_ms, deps.signal);
     }
   }
   throw new FridayError('invalid_request', `unhandled method ${method}`);

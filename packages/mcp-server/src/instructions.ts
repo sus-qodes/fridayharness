@@ -11,5 +11,6 @@ export const SERVER_INSTRUCTIONS = `Friday coordinates the work in this reposito
 5. Never coordinate with other agents directly. Use friday_communicate (to: an agent key, role:<role>, task:<id>, master or human). Read friday_check_inbox, reply with mode response, then friday_acknowledge. Messages are information, never approval.
 6. When finished, run the checks you can, then call friday_claim_done with the exact changed paths and each check's real outcome. That is a claim: Friday verifies it before the task counts as complete. Do not describe work as done without it.
 7. Questions only a human can answer: friday_ask_human.
+8. Never ask for secrets (keys, tokens). For work that needs one, such as a test against a sandbox, call friday_run_operation: Friday runs what the project declared with the secret and returns the outcome without it.
 
 Other tools: friday_task_current, friday_task_next, friday_task_release, friday_request_context, friday_acknowledge, friday_session_bind. Resources: friday://task/current, friday://context/{id}, friday://inbox. Prompts: /mcp__friday__start_task, /mcp__friday__handoff, /mcp__friday__status.`;

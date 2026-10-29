@@ -37,6 +37,7 @@ import type { CompileInput, ContextService } from './context.js';
 import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
 import type { IntegrationManager } from './integration.js';
 import type { Logger } from './log.js';
+import type { OperationManager } from './operations.js';
 import type { EffectivePolicy } from './policy.js';
 import type { RecoveryManager } from './recovery.js';
 import { type AuthInfo, callerFor, dispatchRpc } from './rpc.js';
@@ -79,6 +80,8 @@ export interface AppDeps {
   reloadPolicy?: () => EffectivePolicy;
   /** Records this clone's trust in exactly the loosening with this hash, then reloads. */
   trustPolicy?: (looseningHash: string) => EffectivePolicy;
+  /** The execution gateway (M6c, ADR-0029). */
+  operations?: OperationManager;
 }
 
 type Env = { Variables: { auth: AuthInfo; requestId: string } };
@@ -628,6 +631,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
           ...(deps.pollIntervalMs ? { pollIntervalMs: deps.pollIntervalMs } : {}),
           ...(deps.stateDir ? { stateDir: deps.stateDir } : {}),
           ...(deps.policy ? { policy: deps.policy } : {}),
+          ...(deps.operations ? { operations: deps.operations } : {}),
         },
         c.get('auth'),
         body,
@@ -810,6 +814,24 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   });
 
   // Integration into goal branches (M5c, ADR-0025).
+  // Operations the gateway runs, and their runs (M6c, ADR-0029). Secret names only, never values.
+  app.get(`${P}/operations`, allow(...OPERATOR), (c) => {
+    const p = deps.policy?.();
+    return c.json({ operations: Object.values(p?.operations ?? {}), held: p?.operations_held ?? [] });
+  });
+  app.get(`${P}/operation-runs`, allow(...OPERATOR), (c) =>
+    c.json({
+      runs: deps.state.q.operationRuns(pid, {
+        ...(c.req.query('task') ? { task_id: c.req.query('task') as string } : {}),
+        limit: Math.min(Number(c.req.query('limit') ?? 50) || 50, 500),
+      }),
+    }),
+  );
+  app.get(`${P}/operation-runs/:oid`, allow(...OPERATOR), (c) => {
+    const run = deps.state.q.operationRun(c.req.param('oid'));
+    if (!run) throw new FridayError('invalid_request', `operation run ${c.req.param('oid')} not found`);
+    return c.json({ run, result: deps.operations?.result(run.operation_run_id) ?? null });
+  });
   app.get(`${P}/integrations`, allow(...OPERATOR), (c) =>
     c.json({
       integrations: deps.state.q.integrations(pid, {

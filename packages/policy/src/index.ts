@@ -46,7 +46,17 @@ export {
   patternsOverlap,
   realDirectory,
 } from './paths.js';
-export { type Loosening, type PolicySource, type ProjectPolicy, projectPolicy } from './project-policy.js';
+export {
+  DEFAULT_BINARIES,
+  describeOperation,
+  type EffectiveOperation,
+  type Loosening,
+  type OperationDefinition,
+  operationRisk,
+  type PolicySource,
+  type ProjectPolicy,
+  projectPolicy,
+} from './project-policy.js';
 export {
   type SensitiveClass,
   type SensitiveHit,

@@ -40,6 +40,7 @@ import {
   type InboxItem,
   type IntegrationView,
   negotiateProtocolVersion,
+  type OperationRunView,
   type OutboundMessage,
   type PlanStatus,
   type PlanTaskView,
@@ -3124,6 +3125,147 @@ export class FridayState {
         return this.q.integrations(projectId, { task_id: rec.task_id }).at(-1) as IntegrationView;
       },
     );
+  }
+
+  // ================================================================ operations (M6c, ADR-0029)
+
+  /**
+   * The gateway starts an operation for the agent holding the task (ADR-0029 §3): recorded with
+   * the names of the credentials it receives and the approval it spends, in one transaction. The
+   * approval is checked again here, so a grant revoked a moment ago is not spent.
+   */
+  startOperation(
+    projectId: string,
+    caller: Caller,
+    op: {
+      operation: string;
+      task_id: string;
+      run_id: string | null;
+      binary: string;
+      cwd: string;
+      credentials: string[];
+      approval_id: string | null;
+      policy_version: string | null;
+      risk: 'low' | 'medium' | 'high';
+      reason: string;
+    },
+    opts: { idempotency_key?: string | undefined } = {},
+  ): OperationRunView {
+    const actor: Actor = { kind: 'agent', id: caller.agent_id };
+    return this.exec(
+      {
+        name: 'operation.start',
+        project_id: projectId,
+        actor,
+        idempotency_key: opts.idempotency_key,
+        params: { operation: op.operation, task_id: op.task_id, run_id: op.run_id, reason: op.reason },
+      },
+      (ctx) => {
+        const running = this.q.operationRuns(projectId, { task_id: op.task_id, status: 'running', limit: 1 })[0];
+        if (running) {
+          throw new FridayError(
+            'invalid_state_transition',
+            `${running.operation} is already running for ${op.task_id} (${running.operation_run_id}); one operation runs at a time per task`,
+          );
+        }
+        if (op.approval_id) {
+          const still = this.q.usableApproval(projectId, {
+            capability: 'operation.run',
+            target: op.operation,
+            task_id: op.task_id,
+            run_id: op.run_id,
+            agent_id: caller.agent_id,
+            policy_version: op.policy_version,
+            now: ctx.now,
+          });
+          if (still !== op.approval_id) {
+            throw new FridayError(
+              'approval_required',
+              `the approval no longer covers running ${op.operation}; ask again`,
+            );
+          }
+        }
+        const operation_run_id = this.ids.next('op');
+        const { policy_version: _v, ...recorded } = op;
+        ctx.emit({
+          type: 'operation.started',
+          payload: { operation: { operation_run_id, agent_id: caller.agent_id, ...recorded } },
+          refs: [
+            { kind: 'operation', id: operation_run_id },
+            { kind: 'task', id: op.task_id },
+            ...(op.run_id ? [{ kind: 'run' as const, id: op.run_id }] : []),
+            ...(op.approval_id ? [{ kind: 'approval' as const, id: op.approval_id }] : []),
+          ],
+        });
+        if (op.approval_id) {
+          ctx.emit({
+            type: 'approval.used',
+            payload: { approval_id: op.approval_id, tool: 'friday_run_operation', target: op.operation },
+            refs: [{ kind: 'approval', id: op.approval_id }],
+          });
+        }
+        return this.q.operationRun(operation_run_id) as OperationRunView;
+      },
+    );
+  }
+
+  /** The outcome of an operation; its sanitized output is an artifact (ADR-0029 §5). */
+  finishOperation(
+    projectId: string,
+    operationRunId: string,
+    outcome: {
+      status: 'passed' | 'failed';
+      exit_code: number | null;
+      timed_out: boolean;
+      duration_ms: number;
+      redactions: number;
+      artifact_ref: string | null;
+      summary: string;
+    },
+  ): OperationRunView {
+    const actor: Actor = { kind: 'system', id: 'gateway' };
+    return this.exec(
+      { name: 'operation.finish', project_id: projectId, actor, params: { operationRunId, status: outcome.status } },
+      (ctx) => {
+        const row = this.q.operationRun(operationRunId);
+        if (!row) throw new FridayError('invalid_request', `operation run ${operationRunId} not found`);
+        if (row.status !== 'running') return row;
+        ctx.emit({
+          type: 'operation.finished',
+          payload: { operation_run_id: operationRunId, operation: row.operation, task_id: row.task_id, ...outcome },
+          refs: [
+            { kind: 'operation', id: operationRunId },
+            { kind: 'task', id: row.task_id },
+          ],
+        });
+        return this.q.operationRun(operationRunId) as OperationRunView;
+      },
+    );
+  }
+
+  /** At start: operations still running had their runner stop with the daemon (ADR-0029 §7). */
+  interruptOrphanedOperations(projectId: string, note: string, running: ReadonlySet<string>): string[] {
+    const orphans = this.q
+      .operationRuns(projectId, { status: 'running', limit: 1000 })
+      .filter((r) => !running.has(r.operation_run_id));
+    if (!orphans.length) return [];
+    const actor: Actor = { kind: 'system', id: 'gateway' };
+    this.exec(
+      { name: 'operation.interrupt', project_id: projectId, actor, params: { count: orphans.length } },
+      (ctx) => {
+        for (const r of orphans) {
+          ctx.emit({
+            type: 'operation.interrupted',
+            payload: { operation_run_id: r.operation_run_id, operation: r.operation, task_id: r.task_id, note },
+            refs: [
+              { kind: 'operation', id: r.operation_run_id },
+              { kind: 'task', id: r.task_id },
+            ],
+          });
+        }
+      },
+    );
+    return orphans.map((r) => r.operation_run_id);
   }
 
   /** A human ends a reservation early (`friday reservations release`). */

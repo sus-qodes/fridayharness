@@ -26,6 +26,8 @@ export const CAPABILITIES = [
   'task.reassign',
   'policy.request',
   'human.escalate',
+  // M6c: an operation the project declared, run by Friday's gateway (ADR-0029).
+  'operation.run',
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 export type Risk = 'low' | 'medium' | 'high';
@@ -49,6 +51,8 @@ export const DEFAULT_RISK: Record<Capability, Risk> = {
   'task.reassign': 'high',
   'policy.request': 'high',
   'human.escalate': 'low',
+  // Each operation has its own tier (high when it uses a credential); this is the fallback.
+  'operation.run': 'medium',
 };
 
 /** The capability each command class needs. */
@@ -135,6 +139,15 @@ export function evaluateCapability(req: CapabilityRequest): CapabilityDecision {
     case 'task.reassign':
     case 'policy.request':
       return d('review', 'capability.human', `${req.capability} is decided by a human`);
+    case 'operation.run':
+      // The operation itself was declared by the project and trusted on this clone (ADR-0029 §3).
+      return risk === 'low'
+        ? d('allow', 'capability.operation', `${req.target ?? 'the operation'} runs without review (low risk)`)
+        : d(
+            'review',
+            'capability.operation',
+            `running ${req.target ?? 'the operation'} needs a human decision (${risk} risk)`,
+          );
     case 'file.read':
     case 'file.write':
     case 'file.delete': {

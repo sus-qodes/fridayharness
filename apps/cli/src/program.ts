@@ -13,6 +13,7 @@ import { registerGraphCommands } from './graph.js';
 import { registerIntegrationCommands } from './integrations.js';
 import { registerMemoryCommands } from './memory.js';
 import { registerMessageCommands } from './messages.js';
+import { registerOperationCommands } from './operations.js';
 import { clip, describeEvent, kv, shortTime, table, verificationLines } from './output.js';
 import { registerPolicyCommands } from './policy.js';
 import { registerRecoveryCommands } from './recovery.js';
@@ -732,6 +733,7 @@ export function buildProgram(): Command {
   registerIntegrationCommands(program, g);
   registerRecoveryCommands(program, g);
   registerPolicyCommands(program, g);
+  registerOperationCommands(program, g);
   registerMemoryCommands(program, g);
   for (const plugin of commandPlugins) plugin(program);
   return program;

@@ -10,12 +10,12 @@ import {
   type Finding,
   ownChanges,
   relatedTests,
-  runCheck,
   scanCredentials,
   selectChecks,
   summarizeOutcome,
 } from '@friday/verification';
 import type { DaemonContext } from './daemon.js';
+import { runCheckInProfile } from './execution.js';
 
 /** Changed files read for the credential scan: at most this many, each at most this large. */
 const SCAN_MAX_FILES = 500;
@@ -219,7 +219,9 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
           kind: check.kind,
           command: check.command,
           args,
+          root,
           cwd,
+          env: check.env,
           timeoutMs: check.timeout_ms,
           origin: 'targeted',
           files: related,
@@ -232,7 +234,9 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
         kind: check.kind,
         command: check.command,
         args: check.args,
+        root,
         cwd,
+        env: check.env,
         timeoutMs: check.timeout_ms,
         origin: 'configured',
         record: (c) => record(c, check.required),
@@ -281,7 +285,10 @@ async function runConfigured(
     kind: string;
     command: string;
     args: string[];
+    /** The checkout being verified; `cwd` stays inside it. */
+    root: string;
     cwd: string;
+    env: Record<string, string>;
     timeoutMs: number;
     origin: 'configured' | 'targeted';
     files?: string[];
@@ -289,11 +296,14 @@ async function runConfigured(
   },
 ): Promise<boolean> {
   const { state, project, logger } = ctx;
-  const outcome = await runCheck({
+  // In the execution profile (ADR-0029 §6): the checks run code an agent may have written.
+  const outcome = await runCheckInProfile(ctx.profile(), {
     name: c.name,
     command: c.command,
     args: c.args,
+    root: c.root,
     cwd: c.cwd,
+    env: c.env,
     timeoutMs: c.timeoutMs,
   });
   const artifact = state.artifacts?.storeText(

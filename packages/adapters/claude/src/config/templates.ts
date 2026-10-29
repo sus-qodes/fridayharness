@@ -1,6 +1,6 @@
 import { POST_TOOL_MATCHER, PRE_TOOL_MATCHER } from '../hooks/types.js';
 
-export const TEMPLATE_VERSION = 2;
+export const TEMPLATE_VERSION = 3;
 /**
  * Claude Code permission rule for every tool of the friday MCP server (the documented server-level form).
  * Claude Code ignores a project's `permissions.allow` until the folder is trusted, so headless runs in an
@@ -88,6 +88,9 @@ Arguments: \`/friday start\` claims the next task, \`/friday status\` summarizes
 - Report progress with \`friday_report_progress\` after each meaningful step, including the paths
   you changed. Use \`status: "blocked"\` with a note when stuck.
 - Need background? \`friday_request_context\` instead of reading broadly.
+- Work that needs a secret (an API key or token), such as a test against a sandbox: never ask
+  for the secret. \`friday_run_operation\` lists the operations the project declared and runs one
+  with its secret, returning the outcome without it; a human may have to approve each run.
 
 ## Other agents and humans
 - Never coordinate with other agents through files, comments or prose. Use \`friday_communicate\`:
@@ -128,6 +131,8 @@ export const SKILL_REFERENCE_MD = `# Friday tools reference
 | friday_communicate | message another agent, "master" or "human" through Friday |
 | friday_check_inbox / friday_acknowledge | read messages sent to you; confirm you accepted them |
 | friday_request_permission | ask a human to allow something policy blocks |
+| friday_run_operation | run a project operation that needs a secret; you get the outcome, never the secret |
+| friday_remember / friday_recall | record or search project memory within your scopes |
 | friday_claim_done | completion claim with changed paths and real check outcomes |
 | friday_ask_human | a question only a human can answer |
 | friday_session_bind | repair tool when Friday reports the session as unlinked |

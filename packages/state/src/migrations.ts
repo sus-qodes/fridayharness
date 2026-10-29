@@ -689,6 +689,71 @@ CREATE INDEX ix_approvals_use ON approvals(project_id, capability, status);
   },
 ];
 
+/** M6c: runs of operations by the execution gateway (ADR-0029). */
+export const OPERATION_MIGRATIONS: Migration[] = [
+  {
+    version: 15,
+    name: 'operation_runs',
+    up: `
+CREATE TABLE operation_runs (
+  operation_run_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  run_id TEXT,
+  agent_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('running', 'passed', 'failed', 'interrupted')),
+  binary TEXT NOT NULL,
+  cwd TEXT NOT NULL,
+  credentials_json TEXT NOT NULL DEFAULT '[]',
+  approval_id TEXT,
+  risk TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  exit_code INTEGER,
+  timed_out INTEGER NOT NULL DEFAULT 0,
+  duration_ms INTEGER,
+  redactions INTEGER NOT NULL DEFAULT 0,
+  artifact_ref TEXT,
+  summary TEXT,
+  started_at TEXT NOT NULL,
+  ended_at TEXT
+);
+CREATE INDEX ix_operation_runs ON operation_runs(project_id, task_id, status);
+`,
+  },
+];
+
+/**
+ * M6c, found while building it: the memory index of v8 named a column `tags` that `memories` does
+ * not have (`tags_json`). Searches read only the index and worked; anything reading the index's
+ * columns through the content table (a rebuild, `snippet()`, a plain SELECT) failed. Rebuilt with
+ * the content table's column names; v8 itself never changes (its checksum is recorded).
+ */
+export const MEMORY_INDEX_MIGRATIONS: Migration[] = [
+  {
+    version: 16,
+    name: 'memory_index_columns',
+    up: `
+DROP TRIGGER memories_fts_insert;
+DROP TRIGGER memories_fts_delete;
+DROP TRIGGER memories_fts_update;
+DROP TABLE memories_fts;
+CREATE VIRTUAL TABLE memories_fts USING fts5(subject, content, tags_json, content='memories', content_rowid='rowid');
+CREATE TRIGGER memories_fts_insert AFTER INSERT ON memories BEGIN
+  INSERT INTO memories_fts(rowid, subject, content, tags_json) VALUES (new.rowid, new.subject, new.content, new.tags_json);
+END;
+CREATE TRIGGER memories_fts_delete AFTER DELETE ON memories BEGIN
+  INSERT INTO memories_fts(memories_fts, rowid, subject, content, tags_json) VALUES ('delete', old.rowid, old.subject, old.content, old.tags_json);
+END;
+CREATE TRIGGER memories_fts_update AFTER UPDATE ON memories BEGIN
+  INSERT INTO memories_fts(memories_fts, rowid, subject, content, tags_json) VALUES ('delete', old.rowid, old.subject, old.content, old.tags_json);
+  INSERT INTO memories_fts(rowid, subject, content, tags_json) VALUES (new.rowid, new.subject, new.content, new.tags_json);
+END;
+INSERT INTO memories_fts(memories_fts) VALUES ('rebuild');
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -704,10 +769,13 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...RESERVATION_MIGRATIONS,
   ...INTEGRATION_MIGRATIONS,
   ...APPROVAL_MIGRATIONS,
+  ...OPERATION_MIGRATIONS,
+  ...MEMORY_INDEX_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */
 export const DOMAIN_TABLES = [
+  'operation_runs',
   'integrations',
   'file_reservations',
   'worktrees',

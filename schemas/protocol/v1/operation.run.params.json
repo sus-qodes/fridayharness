@@ -1,0 +1,53 @@
+{
+  "$id": "urn:friday:protocol:v1:operation.run:params",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocol_version": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "operation": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,47}$"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "wait_ms": {
+      "default": 20000,
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 25000
+    },
+    "reuse": {
+      "default": "once",
+      "type": "string",
+      "enum": [
+        "once",
+        "run",
+        "task"
+      ]
+    }
+  },
+  "required": [
+    "operation",
+    "reason"
+  ]
+}

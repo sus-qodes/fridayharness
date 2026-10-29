@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { ExecutionProfile } from '@friday/execution';
 import {
   agentIdentity,
   checkoutForVerification,
@@ -14,7 +15,8 @@ import {
 import type { Actor, IntegrationView } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
-import { runCheck, selectChecks, summarizeOutcome } from '@friday/verification';
+import { selectChecks, summarizeOutcome } from '@friday/verification';
+import { runCheckInProfile } from './execution.js';
 import type { Logger } from './log.js';
 import type { WorkspaceManager } from './workspaces.js';
 
@@ -38,6 +40,8 @@ export class IntegrationManager {
       project: ProjectRef;
       logger: Logger;
       workspaces: WorkspaceManager;
+      /** The execution profile the merged revision's checks run in (ADR-0029 §6). */
+      profile: () => ExecutionProfile;
     },
   ) {}
 
@@ -184,11 +188,13 @@ export class IntegrationManager {
       if (checks.length) {
         const dir = await checkoutForVerification(project.root, workspaces.dir, `goal-${goalId.slice(-8)}`, commit);
         for (const check of checks) {
-          const outcome = await runCheck({
+          const outcome = await runCheckInProfile(this.opts.profile(), {
             name: check.name,
             command: check.command,
             args: check.args,
+            root: dir,
             cwd: check.cwd ? path.resolve(dir, check.cwd) : dir,
+            env: check.env,
             timeoutMs: check.timeout_ms,
           });
           const artifact = state.artifacts?.storeText(

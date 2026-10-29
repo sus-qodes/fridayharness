@@ -8,6 +8,47 @@ import { type Autonomy, type CommandClass, DEFAULT_AUTONOMY } from './commands.j
  * repository content, so it applies only once this clone trusted exactly that loosening.
  */
 
+/**
+ * An operation a project declares (ADR-0029 §1): a fixed command Friday runs for an agent in the
+ * execution profile, with stored secrets as environment variables. The agent never sees them.
+ */
+export interface OperationDefinition {
+  description?: string;
+  command: string;
+  args: string[];
+  /** Relative to the checkout the task works in. */
+  cwd?: string;
+  env: Record<string, string>;
+  /** Environment variable name → the name of a secret in the per-user store. */
+  credentials: Record<string, string>;
+  /** Default: high when it uses a credential (spec Part 07 §7), medium otherwise. */
+  risk?: Risk;
+  timeout_ms: number;
+  /** Agent roles that may run it; empty: any agent holding a task. */
+  roles: string[];
+}
+
+export interface EffectiveOperation extends OperationDefinition {
+  name: string;
+  source: string;
+  risk: Risk;
+}
+
+/** Binaries the execution profile runs without a project adding them (ADR-0029 §4). */
+export const DEFAULT_BINARIES: readonly string[] = [
+  'node',
+  'npm',
+  'npx',
+  'pnpm',
+  'yarn',
+  'bun',
+  'deno',
+  'git',
+  'python',
+  'python3',
+  'py',
+];
+
 /** One tracked source: `config.yaml`, or a file in `.friday/policies/`. */
 export interface PolicySource {
   name: string;
@@ -20,6 +61,12 @@ export interface PolicySource {
   enforcement_required?: 'L0' | 'L1' | 'L2';
   reservations_mode?: 'hybrid' | 'off';
   auto_approve?: boolean;
+  /** Operations Friday runs for agents (ADR-0029). */
+  operations?: Record<string, OperationDefinition>;
+  /** Additions to the execution profile (ADR-0029 §4). */
+  execution?: { binaries?: string[]; env_passthrough?: string[] };
+  /** `verification.auto_on_completion` (ADR-0029 §6). */
+  auto_verification?: boolean;
 }
 
 export interface Loosening {
@@ -38,6 +85,14 @@ export interface ProjectPolicy {
   enforcement_required: 'L0' | 'L1' | 'L2';
   reservations_mode: 'hybrid' | 'off';
   auto_approve: boolean;
+  /** The operations agents may run: only what this clone trusted. */
+  operations: Record<string, EffectiveOperation>;
+  /** Operations declared but not applied, and why. */
+  operations_held: { name: string; source: string; reason: string }[];
+  /** The execution profile: the binaries it runs and the variables it passes through. */
+  execution: { binaries: string[]; env_passthrough: string[] };
+  /** Whether a completion claim starts verification without a human. */
+  auto_verification: boolean;
   /** What tracked files loosen, with where each comes from. */
   loosening: Loosening[];
   /** The hash `friday policy trust` records; null when nothing loosens. */
@@ -57,6 +112,28 @@ const DEFAULTS = { enforcement_required: 'L1' as const, reservations_mode: 'hybr
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex').slice(0, 16);
 const isAutonomy = (v: string): v is Autonomy => v in A;
 const isRisk = (v: string): v is Risk => v in R;
+const sortedEntries = (r: Record<string, string>) => Object.entries(r).sort(([a], [b]) => a.localeCompare(b));
+
+/** The risk an operation runs at. */
+export function operationRisk(d: OperationDefinition): Risk {
+  return d.risk ?? (Object.keys(d.credentials).length ? 'high' : 'medium');
+}
+
+/**
+ * Everything an operation does, on one line: what a human trusts, and what the trust hash covers
+ * (every field but the description).
+ */
+export function describeOperation(d: OperationDefinition): string {
+  const parts = [`${d.command} ${JSON.stringify(d.args)}`];
+  if (d.cwd) parts.push(`cwd ${d.cwd}`);
+  const env = sortedEntries(d.env).map(([k, v]) => `${k}=${JSON.stringify(v)}`);
+  if (env.length) parts.push(`env ${env.join(' ')}`);
+  const creds = sortedEntries(d.credentials).map(([k, v]) => `${k}=<secret ${v}>`);
+  if (creds.length) parts.push(`credentials ${creds.join(' ')}`);
+  parts.push(`risk ${operationRisk(d)}`, `timeout ${d.timeout_ms} ms`);
+  if (d.roles.length) parts.push(`roles ${[...d.roles].sort().join(',')}`);
+  return parts.join('; ');
+}
 
 export function projectPolicy(sources: readonly PolicySource[], trustedHash: string | null): ProjectPolicy {
   const loosening: Loosening[] = [];
@@ -84,8 +161,22 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     }
     if (s.auto_approve)
       loosening.push({ source: s.name, setting: 'master_brain.auto_approve', from: 'false', to: 'true' });
+    // An operation lets agents run a command as Friday, with a secret if it names one (ADR-0029 §1).
+    for (const [name, op] of Object.entries(s.operations ?? {})) {
+      loosening.push({ source: s.name, setting: `operations.${name}`, from: 'none', to: describeOperation(op) });
+    }
+    for (const b of s.execution?.binaries ?? []) {
+      if (!DEFAULT_BINARIES.includes(b))
+        loosening.push({ source: s.name, setting: 'execution.binaries', from: 'default', to: b });
+    }
+    for (const v of s.execution?.env_passthrough ?? []) {
+      loosening.push({ source: s.name, setting: 'execution.env_passthrough', from: 'none', to: v });
+    }
+    if (s.auto_verification) {
+      loosening.push({ source: s.name, setting: 'verification.auto_on_completion', from: 'false', to: 'true' });
+    }
   }
-  loosening.sort((a, b) => `${a.setting} ${a.source}`.localeCompare(`${b.setting} ${b.source}`));
+  loosening.sort((a, b) => `${a.setting} ${a.source} ${a.to}`.localeCompare(`${b.setting} ${b.source} ${b.to}`));
   const loosening_hash = loosening.length ? hash(loosening) : null;
   const trusted = loosening_hash === null || loosening_hash === trustedHash;
 
@@ -130,9 +221,55 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
       teams[role] = layers;
     }
   }
-  const effective = { autonomy, risk, deny, teams, enforcement_required, reservations_mode, auto_approve };
+
+  // Operations: only trusted ones apply, and a name two sources declare applies from neither.
+  const declared = new Map<string, { source: string; def: OperationDefinition }[]>();
+  for (const s of sources) {
+    for (const [name, def] of Object.entries(s.operations ?? {})) {
+      declared.set(name, [...(declared.get(name) ?? []), { source: s.name, def }]);
+    }
+  }
+  const operations: Record<string, EffectiveOperation> = {};
+  const operations_held: ProjectPolicy['operations_held'] = [];
+  for (const [name, decl] of [...declared].sort(([a], [b]) => a.localeCompare(b))) {
+    const first = decl[0];
+    if (!first) continue;
+    if (decl.length > 1) {
+      for (const d of decl) {
+        operations_held.push({
+          name,
+          source: d.source,
+          reason: `declared in ${decl.map((x) => x.source).join(' and ')}; rename one`,
+        });
+      }
+    } else if (!trusted) {
+      operations_held.push({ name, source: first.source, reason: 'waits for "friday policy trust"' });
+    } else {
+      operations[name] = { ...first.def, name, source: first.source, risk: operationRisk(first.def) };
+    }
+  }
+  const added = trusted ? sources.flatMap((s) => s.execution?.binaries ?? []) : [];
+  const execution = {
+    binaries: [...DEFAULT_BINARIES, ...[...new Set(added)].filter((b) => !DEFAULT_BINARIES.includes(b)).sort()],
+    env_passthrough: trusted ? [...new Set(sources.flatMap((s) => s.execution?.env_passthrough ?? []))].sort() : [],
+  };
+  const auto_verification = trusted && sources.some((s) => s.auto_verification === true);
+
+  const effective = {
+    autonomy,
+    risk,
+    deny,
+    teams,
+    enforcement_required,
+    reservations_mode,
+    auto_approve,
+    operations,
+    execution,
+    auto_verification,
+  };
   return {
     ...effective,
+    operations_held,
     loosening,
     loosening_hash,
     trusted,

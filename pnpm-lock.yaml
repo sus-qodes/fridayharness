@@ -229,6 +229,9 @@ importers:
       '@friday/events':
         specifier: workspace:*
         version: link:../../packages/events
+      '@friday/execution':
+        specifier: workspace:*
+        version: link:../../packages/execution
       '@friday/git':
         specifier: workspace:*
         version: link:../../packages/git
@@ -395,6 +398,19 @@ importers:
         specifier: workspace:*
         version: link:../../tests/support
 
+  packages/execution:
+    dependencies:
+      '@friday/events':
+        specifier: workspace:*
+        version: link:../events
+      '@friday/policy':
+        specifier: workspace:*
+        version: link:../policy
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../tests/support
+
   packages/git:
     dependencies:
       '@friday/protocol':
@@ -526,6 +542,9 @@ importers:
       '@friday/core':
         specifier: workspace:*
         version: link:../core
+      '@friday/execution':
+        specifier: workspace:*
+        version: link:../execution
       '@friday/protocol':
         specifier: workspace:*
         version: link:../protocol

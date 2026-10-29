@@ -257,6 +257,56 @@ export class StateProjector implements Projector {
           );
         return;
       }
+      case 'operation.started': {
+        const o = p.operation as Payload;
+        this.db
+          .prepare(
+            `INSERT INTO operation_runs (operation_run_id, project_id, operation, task_id, run_id, agent_id, status,
+               binary, cwd, credentials_json, approval_id, risk, reason, started_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            str(o.operation_run_id),
+            e.project_id,
+            str(o.operation),
+            str(o.task_id),
+            opt(o.run_id),
+            opt(o.agent_id),
+            str(o.binary),
+            str(o.cwd),
+            toJson(o.credentials ?? []),
+            opt(o.approval_id),
+            str(o.risk),
+            str(o.reason),
+            e.occurred_at,
+          );
+        return;
+      }
+      case 'operation.finished':
+        this.db
+          .prepare(
+            `UPDATE operation_runs SET status = ?, exit_code = ?, timed_out = ?, duration_ms = ?, redactions = ?,
+               artifact_ref = ?, summary = ?, ended_at = ? WHERE operation_run_id = ?`,
+          )
+          .run(
+            str(p.status),
+            opt(p.exit_code),
+            p.timed_out ? 1 : 0,
+            opt(p.duration_ms),
+            Number(p.redactions ?? 0),
+            opt(p.artifact_ref),
+            opt(p.summary),
+            e.occurred_at,
+            str(p.operation_run_id),
+          );
+        return;
+      case 'operation.interrupted':
+        this.db
+          .prepare(
+            "UPDATE operation_runs SET status = 'interrupted', summary = ?, ended_at = ? WHERE operation_run_id = ?",
+          )
+          .run(opt(p.note), e.occurred_at, str(p.operation_run_id));
+        return;
       case 'file.reservation_ended':
         this.db
           .prepare('UPDATE file_reservations SET status = ?, ended_at = ?, note = ? WHERE reservation_id = ?')

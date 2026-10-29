@@ -147,7 +147,8 @@ describe('method schemas', () => {
     expect(isMethodName('verification.request')).toBe(false);
     expect(isMethodName('message.inbox')).toBe(true);
     expect(isMethodName('memory.record')).toBe(true);
-    expect(Object.keys(METHODS)).toHaveLength(20);
+    expect(isMethodName('operation.run')).toBe(true);
+    expect(Object.keys(METHODS)).toHaveLength(23);
   });
 });
 

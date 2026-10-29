@@ -2,7 +2,7 @@
  * A project's own policy and the trust boundary (plan M6b, ADR-0028; spec Part 07 §3, §11).
  */
 import { describe, expect, it } from 'vitest';
-import { projectPolicy } from './index.js';
+import { DEFAULT_BINARIES, projectPolicy } from './index.js';
 
 const config = { name: 'config.yaml', autonomy: { 'git.push': 'auto', 'package.install': 'manual' } };
 const infra = {
@@ -47,6 +47,70 @@ describe('project policy', () => {
       projectPolicy([config], null).loosening_hash,
     );
     expect(strict.autonomy['git.push']).toBe('manual');
+  });
+
+  it('applies operations, profile additions and automatic verification only once trusted (ADR-0029)', () => {
+    const stripe = {
+      description: 'Stripe sandbox tests',
+      command: 'node',
+      args: ['--test', 'test/stripe.test.mjs'],
+      env: { STRIPE_MODE: 'sandbox' },
+      credentials: { STRIPE_SECRET_KEY: 'stripe-test' },
+      timeout_ms: 60_000,
+      roles: [],
+    };
+    const lint = { command: 'node', args: ['lint.mjs'], env: {}, credentials: {}, timeout_ms: 5000, roles: ['qa'] };
+    const source = {
+      name: 'config.yaml',
+      operations: { 'stripe-test': stripe, lint },
+      execution: { binaries: ['node', 'make'], env_passthrough: ['JAVA_HOME'] },
+      auto_verification: true,
+    };
+    const untrusted = projectPolicy([source], null);
+    expect(untrusted.loosening.map((l) => [l.setting, l.to])).toEqual([
+      ['execution.binaries', 'make'],
+      ['execution.env_passthrough', 'JAVA_HOME'],
+      ['operations.lint', 'node ["lint.mjs"]; risk medium; timeout 5000 ms; roles qa'],
+      [
+        'operations.stripe-test',
+        'node ["--test","test/stripe.test.mjs"]; env STRIPE_MODE="sandbox"; credentials STRIPE_SECRET_KEY=<secret stripe-test>; risk high; timeout 60000 ms',
+      ],
+      ['verification.auto_on_completion', 'true'],
+    ]);
+    expect(untrusted.operations).toEqual({});
+    expect(untrusted.operations_held.map((h) => h.name)).toEqual(['lint', 'stripe-test']);
+    expect(untrusted.execution).toEqual({ binaries: [...DEFAULT_BINARIES], env_passthrough: [] });
+    expect(untrusted.auto_verification).toBe(false);
+
+    const trusted = projectPolicy([source], untrusted.loosening_hash);
+    expect(trusted.operations['stripe-test']).toMatchObject({ source: 'config.yaml', risk: 'high' });
+    expect(trusted.operations.lint?.risk).toBe('medium');
+    expect(trusted.execution).toEqual({ binaries: [...DEFAULT_BINARIES, 'make'], env_passthrough: ['JAVA_HOME'] });
+    expect(trusted.auto_verification).toBe(true);
+
+    // A changed argument is a different operation: trusted again before it runs.
+    const changed = projectPolicy(
+      [{ ...source, operations: { 'stripe-test': { ...stripe, args: ['-e', 'print the key'] }, lint } }],
+      untrusted.loosening_hash,
+    );
+    expect(changed.trusted).toBe(false);
+    expect(changed.operations).toEqual({});
+    // The description is not part of what is trusted.
+    expect(
+      projectPolicy(
+        [{ ...source, operations: { 'stripe-test': { ...stripe, description: 'reworded' }, lint } }],
+        untrusted.loosening_hash,
+      ).trusted,
+    ).toBe(true);
+
+    // A name two sources declare applies from neither.
+    const twice = projectPolicy([source, { name: 'policies/ops.yaml', operations: { lint } }], null);
+    const both = projectPolicy([source, { name: 'policies/ops.yaml', operations: { lint } }], twice.loosening_hash);
+    expect(Object.keys(both.operations)).toEqual(['stripe-test']);
+    expect(both.operations_held.map((h) => [h.name, h.source])).toEqual([
+      ['lint', 'config.yaml'],
+      ['lint', 'policies/ops.yaml'],
+    ]);
   });
 
   it('treats lower enforcement, reservations off and auto-approved plans as loosening', () => {

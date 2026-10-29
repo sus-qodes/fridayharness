@@ -1,8 +1,84 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { FridayError, TaskKind, TaskScope } from '@friday/protocol';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+
+/**
+ * An environment variable a project may set for a check or an operation: not one the execution
+ * profile sets itself (ADR-0029 §4), and no `FRIDAY_` variable.
+ */
+const ENV_NAME =
+  /^(?!(?:PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|TEMP|TMP|TMPDIR)$)(?!FRIDAY_)[A-Za-z_][A-Za-z0-9_]{0,63}$/i;
+const ENV_NAME_MESSAGE = 'a variable name such as STRIPE_MODE (not PATH, TEMP, SystemRoot or a FRIDAY_ variable)';
+export const EnvName = z.string().regex(ENV_NAME, ENV_NAME_MESSAGE);
+/** A record keyed by variable names; Zod's own key errors do not say what is wrong. */
+const envRecord = <T extends z.ZodType>(value: T) =>
+  z.record(z.string(), value).superRefine((r, ctx) => {
+    for (const k of Object.keys(r)) {
+      if (!ENV_NAME.test(k)) ctx.addIssue({ code: 'custom', path: [k], message: `${k}: ${ENV_NAME_MESSAGE}` });
+    }
+  });
+const EnvValues = envRecord(z.string().max(2000)).default({});
+/** A path relative to the checkout, never leaving it. */
+const RelativeDir = z
+  .string()
+  .min(1)
+  .max(500)
+  .refine(
+    (p) => !path.isAbsolute(p) && !/^[\\/]/.test(p) && !p.split(/[\\/]/).includes('..'),
+    'a folder inside the checkout, relative to it',
+  );
+
+export const OPERATION_NAME = /^[a-z][a-z0-9-]{0,47}$/;
+
+/**
+ * An operation Friday runs for agents (ADR-0029 §1): a fixed command in the execution profile, with
+ * stored secrets as environment variables. Declaring one is loosening: it waits for trust.
+ */
+export const OperationSpec = z
+  .object({
+    description: z.string().max(500).optional(),
+    /** A binary name on the execution profile's list (such as `node`), or an absolute path to one. */
+    command: z
+      .string()
+      .min(1)
+      .max(500)
+      .refine((c) => !/[\\/]/.test(c) || path.isAbsolute(c), 'a binary name such as "node", or an absolute path'),
+    args: z.array(z.string().max(2000)).max(100).default([]),
+    cwd: RelativeDir.optional(),
+    env: EnvValues,
+    /** Variable name → the name of a secret stored with `friday secrets set <name>`. */
+    credentials: envRecord(
+      z.string().regex(/^[a-z][a-z0-9-]{0,31}$/, 'secret names are lowercase words such as "stripe-test"'),
+    ).default({}),
+    /** Default: high when it uses a credential, medium otherwise. */
+    risk: z.enum(['low', 'medium', 'high']).optional(),
+    timeout_ms: z.number().int().min(1000).max(3_600_000).default(120_000),
+    /** Agent roles that may run it; empty: any agent holding a task. */
+    roles: z.array(z.string().min(1).max(100)).max(20).default([]),
+  })
+  .strict();
+export type OperationSpec = z.infer<typeof OperationSpec>;
+export const Operations = z.record(
+  z.string().regex(OPERATION_NAME, 'operation names are lowercase words'),
+  OperationSpec,
+);
+
+/** Additions to the execution profile (ADR-0029 §4); both are loosening. */
+export const ExecutionSettings = z
+  .object({
+    /** Binary names the profile may run beyond Friday's defaults. */
+    binaries: z
+      .array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/, 'a binary name such as "make"'))
+      .max(50)
+      .default([]),
+    /** Variables of the daemon's environment passed to checks and operations. */
+    env_passthrough: z.array(EnvName).max(50).default([]),
+  })
+  .strict()
+  .prefault({});
 
 const Check = z.object({
   name: z.string().min(1),
@@ -12,6 +88,8 @@ const Check = z.object({
   timeout_ms: z.number().int().min(1000).max(3_600_000).default(120_000),
   /** Relative to the checkout the task worked in: its worktree, or the main checkout (ADR-0024). */
   cwd: z.string().optional(),
+  /** Plain variables for the check, on top of the execution profile's minimal environment (ADR-0029 §6). */
+  env: EnvValues,
   /** The task kinds this check applies to; empty: every kind (ADR-0024 §4). */
   task_kinds: z.array(TaskKind).default([]),
   /** false: advisory; a failure is reported and does not fail the verification. */
@@ -178,6 +256,10 @@ export const FridayConfig = z
       .prefault({}),
     providers: z.record(z.string(), Provider).default({}),
     master_brain: MasterBrainConfig,
+    /** Operations Friday runs for agents with stored secrets (ADR-0029); they wait for trust. */
+    operations: Operations.default({}),
+    /** The execution profile checks and operations run in (ADR-0029 §4). */
+    execution: ExecutionSettings,
   })
   .passthrough();
 export type FridayConfig = z.infer<typeof FridayConfig>;
@@ -249,6 +331,14 @@ scopes: {}
 verification:
   auto_on_completion: false
   checks: []
+
+# Operations Friday runs for agents with secrets the agents never see. Store a secret with
+# "friday secrets set <name>"; each operation waits for "friday policy trust" on every clone.
+#   operations:
+#     stripe-test:
+#       command: node
+#       args: ["--test", "test/stripe.integration.test.mjs"]
+#       credentials: { STRIPE_SECRET_KEY: stripe-test }
 
 # The Master Brain turns goals into plans ("friday goal create"). It calls a model only when the
 # project allows remote calls here AND you allowed it on your machine ("friday brain allow-remote");

@@ -9,8 +9,9 @@ import {
   providerEndpoint,
   removeSecret,
   revokeProvider,
+  secretProtection,
   setProviderEndpoint,
-  writeSecret,
+  storeSecret,
 } from '@friday/sdk';
 import { type Command, Option } from 'commander';
 import { parse as parseYaml } from 'yaml';
@@ -556,7 +557,8 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
           return;
         }
         const value = await readSecretInput(o.fromEnv, name);
-        writeSecret(name, value);
+        // DPAPI on Windows (ADR-0029 §2), else a file only this user can read.
+        const stored = await storeSecret(name, value);
         const chars = value.trim().length;
         let approved = false;
         try {
@@ -564,9 +566,14 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
         } catch {
           // not inside a Friday project
         }
-        out(g(), { name, stored: true, chars, dir: credentialsDir(), endpoint }, () =>
+        const how =
+          stored.protection === 'dpapi'
+            ? 'encrypted for this Windows user (DPAPI)'
+            : 'in a file only this user can read';
+        out(g(), { name, stored: true, chars, dir: credentialsDir(), endpoint, protection: stored.protection }, () =>
           [
-            `Stored the ${name} key (${chars} characters) for this user in ${credentialsDir()}; it is sent to ${endpoint}.`,
+            `Stored the ${name} key (${chars} characters) ${how}, in ${credentialsDir()}; it is sent to ${endpoint}.`,
+            stored.note ?? '',
             name === 'anthropic' && !approved
               ? 'To plan with it, the project needs providers.anthropic.allow_remote: true, and you allow each clone with "friday brain allow-remote".'
               : '',
@@ -580,8 +587,12 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
     .command('list')
     .description('names of stored keys (never their values)')
     .action(() => {
-      const names = listSecrets();
-      out(g(), names, () => (names.length ? names.join('\n') : 'No keys stored.'));
+      const rows = listSecrets().map((name) => ({ name, protection: secretProtection(name) }));
+      out(g(), rows, () =>
+        rows.length
+          ? rows.map((r) => `${r.name}  (${r.protection === 'dpapi' ? 'DPAPI' : 'user-only file'})`).join('\n')
+          : 'No keys stored.',
+      );
     });
   secrets
     .command('remove <name>')

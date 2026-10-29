@@ -442,6 +442,62 @@ export const TaskReleaseParams = z.object({
 });
 export const TaskReleaseResult = z.object({ task_status: TaskStatus });
 
+// ---- operations (M6c, ADR-0029) ---------------------------------------------------------------
+
+const OperationName = z.string().regex(/^[a-z][a-z0-9-]{0,47}$/, 'an operation name such as "stripe-test"');
+
+/** Asks Friday's gateway to run an operation the project declared, with the secrets it needs. */
+export const OperationRunParams = z.object({
+  ...Base,
+  operation: OperationName,
+  /** Default: the task this agent holds. */
+  task_id: z.string().optional(),
+  run_id: z.string().optional(),
+  /** Why it is needed; shown to the human who approves it. */
+  reason: z.string().min(1).max(1000),
+  /** How long to wait for the outcome before answering `running` (then call operation.status). */
+  wait_ms: z.number().int().min(0).max(25_000).default(20_000),
+  /** How far an approval made for this request reaches (ADR-0027). */
+  reuse: z.enum(['once', 'run', 'task']).default('once'),
+});
+export const OperationStatusParams = z.object({
+  ...Base,
+  operation_run_id: z.string().min(1),
+  wait_ms: z.number().int().min(0).max(25_000).default(20_000),
+});
+export const OperationResult = z.object({
+  status: z.enum(['approval_required', 'denied', 'unavailable', 'running', 'passed', 'failed', 'interrupted']),
+  operation: z.string(),
+  operation_run_id: z.string().nullable(),
+  approval_id: z.string().nullable(),
+  reason: z.string(),
+  exit_code: z.number().int().nullable(),
+  timed_out: z.boolean(),
+  duration_ms: z.number().int().nullable(),
+  /** The end of the output, every credential removed. */
+  output: z.string(),
+  output_truncated: z.boolean(),
+  artifact_ref: z.string().nullable(),
+  redactions: z.number().int(),
+});
+export type OperationResult = z.infer<typeof OperationResult>;
+export const OperationListParams = z.object({ ...Base });
+export const OperationListResult = z.object({
+  operations: z.array(
+    z.object({
+      name: z.string(),
+      description: z.string().nullable(),
+      risk: z.enum(['low', 'medium', 'high']),
+      needs_approval: z.boolean(),
+      /** Names of the secrets it uses (never their values). */
+      credentials: z.array(z.string()),
+      roles: z.array(z.string()),
+    }),
+  ),
+  /** Declared but not available here: not trusted on this clone, or declared twice. */
+  held: z.array(z.object({ name: z.string(), reason: z.string() })),
+});
+
 // ---- registry --------------------------------------------------------------------------------
 
 /** Harness → daemon methods served at POST /protocol/v1/rpc. */
@@ -466,6 +522,9 @@ export const METHODS = {
   'message.ack': { params: MessageAckParams, result: MessageAckResult },
   'memory.record': { params: MemoryRecordParams, result: MemoryRecordResult },
   'memory.search': { params: MemorySearchParams, result: MemorySearchResult },
+  'operation.run': { params: OperationRunParams, result: OperationResult },
+  'operation.status': { params: OperationStatusParams, result: OperationResult },
+  'operation.list': { params: OperationListParams, result: OperationListResult },
 } as const;
 
 export type MethodName = keyof typeof METHODS;

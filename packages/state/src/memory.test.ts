@@ -340,7 +340,26 @@ describe('replay', () => {
     replay(db, state.store, PROJECT, state.projector);
     expect(dump()).toEqual(before);
     expect(state.memory.search(PROJECT, H, { query: 'oauth' }).map((m) => m.memory_id)).toEqual(found);
-    // FTS5 checks its index against the content table; it throws when they disagree.
+    // FTS5 checks its index; with rank 1 also against the content table, throwing when they disagree.
     expect(() => db.prepare("INSERT INTO memories_fts(memories_fts) VALUES ('integrity-check')").run()).not.toThrow();
+    expect(() =>
+      db.prepare("INSERT INTO memories_fts(memories_fts, rank) VALUES ('integrity-check', 1)").run(),
+    ).not.toThrow();
+  });
+
+  it('keeps an index whose columns the content table has, so it can be read and rebuilt (v16)', () => {
+    state.memory.record(PROJECT, H, {
+      scope_type: 'project',
+      kind: 'decision',
+      subject: 'Auth uses OAuth device flow',
+      content: 'Sessions are refreshed by the backend.',
+      tags: ['auth'],
+    });
+    // v8 named a column `tags` that `memories` lacks: reading the index's columns failed.
+    expect(db.prepare('SELECT subject, tags_json FROM memories_fts').all()).toEqual([
+      { subject: 'Auth uses OAuth device flow', tags_json: '["auth"]' },
+    ]);
+    expect(() => db.prepare("INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')").run()).not.toThrow();
+    expect(state.memory.search(PROJECT, H, { query: 'oauth' })).toHaveLength(1);
   });
 });

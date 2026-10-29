@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
-import type { FridayConfig } from './config.js';
+import { ExecutionSettings, type FridayConfig, type OperationSpec, Operations } from './config.js';
 import { writePrivateFile } from './discovery.js';
 
 /**
@@ -24,6 +24,10 @@ export const PolicyFile = z
     deny: z.object({ write: Globs, read: Globs }).strict().prefault({}),
     /** Per agent role: a scope its agents never write outside, whatever a task allows. */
     teams: z.record(z.string(), z.object({ write: Globs, read: Globs }).strict()).default({}),
+    /** Operations Friday runs for agents with stored secrets (ADR-0029), as in config.yaml. */
+    operations: Operations.default({}),
+    /** Additions to the execution profile (ADR-0029 §4). */
+    execution: ExecutionSettings,
   })
   .strict();
 export type PolicyFile = z.infer<typeof PolicyFile>;
@@ -38,6 +42,9 @@ export interface PolicySourceData {
   enforcement_required?: 'L0' | 'L1' | 'L2';
   reservations_mode?: 'hybrid' | 'off';
   auto_approve?: boolean;
+  operations?: Record<string, OperationSpec>;
+  execution?: { binaries?: string[]; env_passthrough?: string[] };
+  auto_verification?: boolean;
 }
 
 export const POLICY_DIR = path.join('.friday', 'policies');
@@ -55,6 +62,9 @@ export function readPolicySources(
       enforcement_required: config.security.enforcement_required,
       reservations_mode: config.reservations.mode,
       auto_approve: config.master_brain.auto_approve,
+      operations: config.operations,
+      execution: config.execution,
+      auto_verification: config.verification.auto_on_completion,
     },
   ];
   const errors: { file: string; error: string }[] = [];

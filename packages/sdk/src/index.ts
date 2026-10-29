@@ -17,9 +17,13 @@ export {
 export { DaemonClient, type DaemonClientOptions, DaemonUnreachableError, type RequestOptions } from './client.js';
 export {
   type CheckConfig,
+  EnvName,
+  ExecutionSettings,
   FridayConfig,
   loadConfig,
   type MasterBrainConfig,
+  OPERATION_NAME,
+  OperationSpec,
   type ProviderConfig,
   parseConfig,
   policyVersion,
@@ -44,6 +48,7 @@ export {
   stateDir,
   writePrivateFile,
 } from './discovery.js';
+export { dpapiAvailable } from './dpapi.js';
 export {
   POLICY_DIR,
   PolicyFile,
@@ -61,5 +66,14 @@ export {
   setProviderEndpoint,
 } from './provider-trust.js';
 export { renderContextMarkdown } from './render.js';
-export { credentialsDir, listSecrets, readSecret, removeSecret, writeSecret } from './secrets.js';
+export {
+  credentialsDir,
+  hasSecret,
+  listSecrets,
+  removeSecret,
+  resolveSecret,
+  type SecretProtection,
+  secretProtection,
+  storeSecret,
+} from './secrets.js';
 export { formatSse, type SseMessage, SseParser } from './sse.js';

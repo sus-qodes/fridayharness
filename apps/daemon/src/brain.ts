@@ -10,7 +10,7 @@ import {
   type ModelResponse,
   type PlannerModel,
 } from '@friday/planner';
-import { type ProjectRef, providerApproval, providerEndpoint, readSecret, stateDir } from '@friday/sdk';
+import { hasSecret, type ProjectRef, providerApproval, providerEndpoint, resolveSecret, stateDir } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
 import { buildBrainContext } from './brain-context.js';
 import type { Logger } from './log.js';
@@ -43,8 +43,8 @@ class KeyedAnthropicModel implements PlannerModel {
     },
   ) {}
 
-  complete(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
-    const key = anthropicKey(this.env);
+  async complete(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+    const key = await anthropicKey(this.env);
     if (!key) throw new ModelError('auth', 'no Anthropic API key; run "friday secrets set anthropic"');
     const endpoint = anthropicEndpoint(this.env);
     if (!this.#client || key !== this.#key || endpoint !== this.#endpoint) {
@@ -62,8 +62,9 @@ class KeyedAnthropicModel implements PlannerModel {
   }
 }
 
-function anthropicKey(env: NodeJS.ProcessEnv): string | undefined {
-  return readSecret('anthropic', env) ?? (env.ANTHROPIC_API_KEY?.trim() || undefined);
+/** The stored key (decrypted with DPAPI on Windows, ADR-0029 §2), else the environment's. */
+async function anthropicKey(env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  return (await resolveSecret('anthropic', env)) ?? (env.ANTHROPIC_API_KEY?.trim() || undefined);
 }
 
 export interface BrainStatus {
@@ -197,7 +198,7 @@ export function createMasterBrain(input: {
     status: () => {
       const pid = project.project_id;
       const remote = model?.remote ?? false;
-      const stored = readSecret('anthropic', env) !== undefined;
+      const stored = hasSecret('anthropic', env);
       const key: BrainStatus['key'] = !remote
         ? 'not needed'
         : stored

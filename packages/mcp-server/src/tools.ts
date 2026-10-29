@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ContextPacket, InboxItem, ResultOf, TaskView } from '@friday/protocol';
+import { type ContextPacket, FridayError, type InboxItem, type ResultOf, type TaskView } from '@friday/protocol';
 import { renderContextMarkdown } from '@friday/sdk';
 import { z } from 'zod';
 import type { FridaySession, MeView } from './session.js';
@@ -25,6 +25,30 @@ const idem = (tool: string, args: unknown) =>
     .update(JSON.stringify(args ?? {}))
     .digest('hex')
     .slice(0, 32)}`;
+
+/** An operation's state as the agent reads it (ADR-0029): never a secret, only the outcome. */
+function operationText(r: ResultOf<'operation.run'>): string {
+  switch (r.status) {
+    case 'approval_required':
+      return `Running ${r.operation} needs a human's approval (${r.approval_id}). ${r.reason}. Do not run its commands another way.`;
+    case 'denied':
+    case 'unavailable':
+      return `${r.operation} cannot run: ${r.reason}.`;
+    case 'running':
+      return `${r.operation} is running (${r.operation_run_id}). ${r.reason}.`;
+    default: {
+      const head = `${r.operation} ${r.status}${r.exit_code !== null ? ` (exit ${r.exit_code})` : ''}${r.duration_ms !== null ? ` in ${r.duration_ms} ms` : ''}${r.timed_out ? ', timed out' : ''}.`;
+      const removed = r.redactions ? ` Friday removed ${r.redactions} occurrence(s) of secrets from the output.` : '';
+      const out = r.output
+        ? `
+
+Output${r.output_truncated ? ' (the end)' : ''}:
+${r.output}`
+        : '';
+      return `${head}${removed}${out}`;
+    }
+  }
+}
 
 function taskLine(t: TaskView): string {
   return `${t.task_id} [${t.status}${t.waiting_reason ? `: ${t.waiting_reason}` : ''}] ${t.summary}`;
@@ -535,6 +559,61 @@ export function createFridayTools(session: FridaySession): FridayTool[] {
               : `Not allowed: ${res.reason}. Do not try to do it another way; report the task as blocked if you cannot continue without it.`
             : `Permission request ${res.approval_id} (${res.capability ?? a.action_class}, ${res.risk ?? 'unknown'} risk) is ${res.status}. ${res.reason}. Do not retry the blocked action until it is granted.`;
         return { text, structured: res };
+      },
+    },
+    {
+      name: 'friday_run_operation',
+      title: 'Run an operation that needs a secret',
+      description:
+        'Friday never hands out secrets (API keys, tokens). For work that needs one, such as an integration test against a sandbox, the project declares operations that Friday runs for you with the secret, returning the outcome without it. No arguments: list them. name + reason: run one (if a human must approve it first, call again once approved). operation_run_id: wait for one still running.',
+      shape: {
+        name: z
+          .string()
+          .regex(/^[a-z][a-z0-9-]{0,47}$/)
+          .optional(),
+        reason: z.string().min(1).max(1000).optional(),
+        operation_run_id: z.string().optional(),
+        wait_s: z.number().int().min(0).max(25).optional(),
+        reuse: z.enum(['once', 'run', 'task']).optional(),
+      },
+      alwaysLoad: false,
+      readOnly: false,
+      handler: async (a) => {
+        const client = await session.ready();
+        const wait_ms = (typeof a.wait_s === 'number' ? a.wait_s : 20) * 1000;
+        if (typeof a.operation_run_id === 'string') {
+          const res = await client.call('operation.status', { operation_run_id: a.operation_run_id, wait_ms });
+          return { text: operationText(res), structured: res };
+        }
+        if (typeof a.name !== 'string') {
+          const list = await client.call('operation.list', {});
+          const lines = list.operations.map(
+            (o) =>
+              `- ${o.name} (${o.risk} risk${o.needs_approval ? ', a human approves each run' : ''}${o.credentials.length ? `; uses ${o.credentials.join(', ')}` : ''})${o.description ? `: ${o.description}` : ''}`,
+          );
+          const held = list.held.map((h) => `- ${h.name}: ${h.reason}`);
+          const text = [
+            lines.length
+              ? `Operations you can run:\n${lines.join('\n')}`
+              : 'The project declares no operation you can run.',
+            ...(held.length ? [`Declared but not available here:\n${held.join('\n')}`] : []),
+          ].join('\n\n');
+          return { text, structured: list };
+        }
+        if (typeof a.reason !== 'string') {
+          throw new FridayError('invalid_request', 'say why you need the operation (reason); a human may read it');
+        }
+        const me = await session.me().catch(() => undefined);
+        // No idempotency key: running the same operation again is a new run.
+        const res = await client.call('operation.run', {
+          operation: a.name,
+          reason: a.reason,
+          wait_ms,
+          ...(a.reuse ? { reuse: a.reuse as 'once' | 'run' | 'task' } : {}),
+          ...(me?.current_task ? { task_id: me.current_task.task_id } : {}),
+          ...(me?.current_run ? { run_id: me.current_run.run_id } : {}),
+        });
+        return { text: operationText(res), structured: res };
       },
     },
     {

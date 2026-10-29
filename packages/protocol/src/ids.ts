@@ -47,6 +47,8 @@ export const ID_PREFIXES = [
   // M5: task worktrees, integrations.
   'wt',
   'int',
+  // M6c: runs of operations by the gateway.
+  'op',
 ] as const;
 export type IdPrefix = (typeof ID_PREFIXES)[number];
 export type Id<P extends IdPrefix = IdPrefix> = `${P}_${string}`;
