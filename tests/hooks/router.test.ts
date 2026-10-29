@@ -446,6 +446,13 @@ describe('Claude Code hook routes', () => {
       { file_path: path.join(r.vars.projectDir, 'src', 'b.ts'), old_string: 'x', new_string: 'y' },
       { error: 'String to replace not found' },
     );
+    // A Read of the whole file, then one of a line range (M10a counts them apart).
+    await post('PostToolUse', 'Read', { file_path: path.join(r.vars.projectDir, 'src', 'a.ts') });
+    await post('PostToolUse', 'Read', {
+      file_path: path.join(r.vars.projectDir, 'src', 'a.ts'),
+      offset: 10,
+      limit: 20,
+    });
 
     const run = r.td.daemon.state.q.findRun(claim.run_id);
     expect(run?.observed_paths).toEqual(['src/a.ts']);
@@ -457,13 +464,19 @@ describe('Claude Code hook routes', () => {
           changed_paths: string[];
           summary: string;
           error: string | null;
+          read: { path: string | null; ranged: boolean } | null;
         },
     );
     expect(events.map((e) => [e.event_type, e.tool])).toEqual([
       ['tool.completed', 'Write'],
       ['tool.completed', 'Bash'],
       ['tool.failed', 'Edit'],
+      ['tool.completed', 'Read'],
+      ['tool.completed', 'Read'],
     ]);
+    expect(events[0]?.read).toBeNull();
+    expect(events[3]?.read).toEqual({ path: 'src/a.ts', ranged: false });
+    expect(events[4]?.read).toEqual({ path: 'src/a.ts', ranged: true });
     expect(events[1]?.summary).toContain('console.log(123)');
     expect(events[2]?.error).toContain('not found');
     const inspected = await r.td.operator.get<{ task: TaskView }>(r.td.operator.projectPath(`/tasks/${task.task_id}`));

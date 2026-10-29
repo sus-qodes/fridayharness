@@ -18,7 +18,12 @@ function row(o: Partial<Omit<UsageRowView, 'host'>> & { host?: Partial<UsageRowV
     model_basis: null,
     packets: { count: 0, tokens: 0, chars: null, source_tokens: 0 },
     context_requests: { count: 0, kinds: {} },
-    tool_calls: { total: 0, failed: 0, by_kind: { read: 0, edit: 0, shell: 0, web: 0, friday: 0, other: 0 } },
+    tool_calls: {
+      total: 0,
+      failed: 0,
+      by_kind: { read: 0, edit: 0, shell: 0, web: 0, friday: 0, other: 0 },
+      reads: { whole_file: 0, ranged: 0 },
+    },
     verification: null,
     started_at: '2026-10-14T10:00:00.000Z',
     ended_at: null,
@@ -70,8 +75,9 @@ describe('friday usage, the table (plan M10a)', () => {
   it('says which "-" means the host did not report and which means nothing to show', () => {
     // No packet, no verdict, no model, no agent record: four dashes the host had no part in.
     const text = renderUsage(report([row({ agent_key: null })]));
-    expect(text).toMatch(/task_\S+\s+1\s+-\s+-\s+-\s+-\s+-\s+-\s+-\s+-\s+0\/0\/0\/0\s+-/);
+    expect(text).toMatch(/task_\S+\s+1\s+-\s+-\s+-\s+-\s+-\s+-\s+-\s+-\s+0\/0\/0\/0\s+0\/0\s+-/);
     expect(text).toContain('"-" under IN, OUT, CACHE and COST: the host did not report it');
+    expect(text).toContain('READS W/R');
     expect(text).toContain(
       'elsewhere: nothing to show (no packet delivered, no verdict yet, no model named, the agent record gone)',
     );

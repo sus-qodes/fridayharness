@@ -72,6 +72,8 @@ interface EventRow {
   data_json: string | null;
   /** The session that made the call, when the recorder named it (the hooks router does). */
   harness_id: string | null;
+  /** 1 for a Read of a line range, 0 for one of the whole file, null when the record does not say. */
+  read_ranged: number | null;
 }
 
 interface RequestRow {
@@ -102,7 +104,7 @@ const ofAttempt = (harnessId: string | null, run: RunView): boolean =>
   harnessId === null || harnessId === run.harness_id;
 
 interface RunUsage {
-  tools: { total: number; failed: number; by_kind: UsageToolKinds };
+  tools: { total: number; failed: number; by_kind: UsageToolKinds; reads: { whole_file: number; ranged: number } };
   host: UsageRowView['host'];
   requests: Map<string, number>;
   packets: {
@@ -190,7 +192,8 @@ function readEvents(
                 COALESCE(json_extract(payload_json, '$.tool'), json_extract(payload_json, '$.data.tool')) AS tool,
                 CASE WHEN json_extract(payload_json, '$.event_type') = 'host.usage'
                      THEN json_extract(payload_json, '$.data') END AS data_json,
-                json_extract(payload_json, '$.harness_id') AS harness_id
+                json_extract(payload_json, '$.harness_id') AS harness_id,
+                COALESCE(json_extract(payload_json, '$.read.ranged'), json_extract(payload_json, '$.data.read.ranged')) AS read_ranged
            FROM events
           WHERE project_id = ? AND type = 'agent.event'
             AND json_extract(payload_json, '$.event_type') IN ('tool.completed', 'tool.failed', 'host.usage')
@@ -226,6 +229,12 @@ function readEvents(
       u.tools.total += 1;
       if (r.event_type === 'tool.failed') u.tools.failed += 1;
       u.tools.by_kind[toolKind(r.tool)] += 1;
+      // A Read of a line range against one of the whole file: only the hooks' record says which
+      // (`read.ranged`); a tool event without it counts for neither.
+      if (r.read_ranged !== null && r.read_ranged !== undefined) {
+        if (Number(r.read_ranged) === 1) u.tools.reads.ranged += 1;
+        else u.tools.reads.whole_file += 1;
+      }
     }
   }
 }
@@ -384,7 +393,7 @@ export function buildUsageReport(
     runs.map((r) => [
       r.run_id,
       {
-        tools: { total: 0, failed: 0, by_kind: emptyKinds() },
+        tools: { total: 0, failed: 0, by_kind: emptyKinds(), reads: { whole_file: 0, ranged: 0 } },
         host: unknownHost(),
         requests: new Map(),
         packets: { count: 0, tokens: 0, chars: null, source_tokens: 0, requestKinds: new Map() },

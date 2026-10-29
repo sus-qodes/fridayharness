@@ -21,7 +21,7 @@
  * trace refuses, before it is written, a message that would start a turn past the budget; a message
  * relayed into a running turn starts none.
  */
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -38,6 +38,7 @@ import { DaemonClient } from '@friday/sdk';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli } from '../helpers/cli.js';
+import { claudeState, type Msg, sanitize } from '../helpers/live-claude.js';
 import { incomplete, LiveBudget, type Verdict, verdict } from '../helpers/live-verdict.js';
 
 const MODE = process.env.FRIDAY_CLAUDE_LIVE;
@@ -93,8 +94,6 @@ async function eventually<T>(fn: () => T | Promise<T>, ok: (v: T) => boolean, wh
   }
 }
 
-type Msg = Record<string, unknown> & { type?: string; subtype?: string; message?: { content?: unknown } };
-
 /** Every stream-json line, and the budget: a message that would start a turn past it is refused before it is written. */
 class Guard {
   turns = 0;
@@ -127,40 +126,6 @@ class Guard {
     this.lines
       .filter((l) => l.dir === 'receive' && l.msg.type === type && (!subtype || l.msg.subtype === subtype))
       .map((l) => l.msg);
-}
-
-/** What the owner's Claude configuration records: its folders, and its session folders (names only). */
-function claudeState(): { projects: string[]; sessions: string[] } {
-  const home = os.homedir();
-  let projects: string[] = [];
-  try {
-    const json = JSON.parse(readFileSync(path.join(home, '.claude.json'), 'utf8')) as { projects?: object };
-    projects = Object.keys(json.projects ?? {});
-  } catch {
-    projects = [];
-  }
-  const dir = path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(home, '.claude'), 'projects');
-  return { projects, sessions: existsSync(dir) ? readdirSync(dir) : [] };
-}
-
-/** Machine paths and account data out of what is saved, keys included. */
-function sanitize(v: unknown, swaps: [string, string][]): unknown {
-  const clean = (s: string) => {
-    let t = s;
-    for (const [from, to] of swaps) t = t.split(from).join(to).split(from.toLowerCase()).join(to);
-    // Anthropic's request and message ids point at the owner's requests.
-    return t.replace(/\breq_[A-Za-z0-9]{8,}/g, 'req_<id>').replace(/\bmsg_[A-Za-z0-9]{8,}/g, 'msg_<id>');
-  };
-  if (typeof v === 'string') return clean(v);
-  if (Array.isArray(v)) return v.map((x) => sanitize(x, swaps));
-  if (v && typeof v === 'object') {
-    return Object.fromEntries(
-      Object.entries(v as Record<string, unknown>)
-        .filter(([k]) => !/email|account|organization|apiKeySource|rate_limit/i.test(k))
-        .map(([k, x]) => [clean(k), sanitize(x, swaps)]),
-    );
-  }
-  return v;
 }
 
 describe.skipIf(!MODE)('Claude Code in spawn mode against the installed Claude Code', () => {

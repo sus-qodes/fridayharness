@@ -53,6 +53,7 @@ export function renderUsage(report: UsageReport): string {
         'CACHE WR',
         'COST',
         'TOOLS R/E/S/F',
+        'READS W/R',
         'VERIFIED',
       ],
       report.rows.map((r) => [
@@ -67,10 +68,11 @@ export function renderUsage(report: UsageReport): string {
         dash(r.host.cache_creation_input_tokens),
         money(r.host.cost_usd),
         `${r.tool_calls.by_kind.read}/${r.tool_calls.by_kind.edit}/${r.tool_calls.by_kind.shell}/${r.tool_calls.by_kind.friday}`,
+        `${r.tool_calls.reads.whole_file}/${r.tool_calls.reads.ranged}`,
         verifiedText(r),
       ]),
     ),
-    'TOOLS: read/edit/shell/Friday calls the host reported; PACKET TOK: the delivered packets\' token budget; "-" under IN, OUT, CACHE and COST: the host did not report it; elsewhere: nothing to show (no packet delivered, no verdict yet, no model named, the agent record gone).',
+    'TOOLS: read/edit/shell/Friday calls the host reported; READS W/R: Read calls of a whole file / of a line range, as the hooks saw them; PACKET TOK: the delivered packets\' token budget; "-" under IN, OUT, CACHE and COST: the host did not report it; elsewhere: nothing to show (no packet delivered, no verdict yet, no model named, the agent record gone).',
     `${t.attempts} attempt(s), ${t.host_reported} of ${t.attempts} reported host usage: in ${total(t, 'input_tokens', dash(t.input_tokens))}, out ${total(t, 'output_tokens', dash(t.output_tokens))}, cache read ${total(t, 'cache_read_input_tokens', dash(t.cache_read_input_tokens))}, cache write ${total(t, 'cache_creation_input_tokens', dash(t.cache_creation_input_tokens))}, cost ${total(t, 'cost_usd', money(t.cost_usd))}; ${t.tool_calls} tool call(s).`,
   ];
   if (report.truncated) {

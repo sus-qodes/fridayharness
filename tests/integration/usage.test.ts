@@ -75,6 +75,12 @@ describe('friday usage (plan M10a)', () => {
       await fake.client.emitEvent({ ...ids, event_type: 'tool.completed', data: { tool } });
     }
     await fake.client.emitEvent({ ...ids, event_type: 'tool.failed', data: { tool: 'Bash', error: 'exit code 1' } });
+    // A read that names its range, the way the hooks record one (M10a counts it apart).
+    await fake.client.emitEvent({
+      ...ids,
+      event_type: 'tool.completed',
+      data: { tool: 'Read', read: { path: 'src/a.ts', ranged: true } },
+    });
     await fake.client.emitEvent({
       ...ids,
       event_type: 'host.usage',
@@ -132,7 +138,12 @@ describe('friday usage (plan M10a)', () => {
         turns: 3,
         model: 'claude-haiku-5-5',
       },
-      tool_calls: { total: 6, failed: 1, by_kind: { read: 2, edit: 1, shell: 2, web: 0, friday: 1, other: 0 } },
+      tool_calls: {
+        total: 7,
+        failed: 1,
+        by_kind: { read: 3, edit: 1, shell: 2, web: 0, friday: 1, other: 0 },
+        reads: { whole_file: 0, ranged: 1 },
+      },
       verification: { status: 'PASSED', checks_passed: 1, checks_total: 1 },
       started_at: run.accepted_at,
       ended_at: run.ended_at,
@@ -181,7 +192,7 @@ describe('friday usage (plan M10a)', () => {
       cache_read_input_tokens: 900,
       cache_creation_input_tokens: 100,
       cost_usd: 0.0123,
-      tool_calls: 6,
+      tool_calls: 7,
     });
 
     // Filters: by goal, by task; something that does not exist is the usual not-found error.
@@ -201,14 +212,14 @@ describe('friday usage (plan M10a)', () => {
     expect(text.stdout).toContain('TASK');
     expect(text.stdout).toMatch(
       new RegExp(
-        `${planned.task_id}\\s+1\\s+spawned\\s+claude-haiku-5-5\\s+${packet.budget.tokens}\\s+1200\\s+80\\s+900\\s+100\\s+\\$0\\.0123\\s+2/1/2/1\\s+PASSED 1/1`,
+        `${planned.task_id}\\s+1\\s+spawned\\s+claude-haiku-5-5\\s+${packet.budget.tokens}\\s+1200\\s+80\\s+900\\s+100\\s+\\$0\\.0123\\s+3/1/2/1\\s+0/1\\s+PASSED 1/1`,
       ),
     );
     expect(text.stdout).toMatch(
-      new RegExp(`${s.task.task_id}\\s+1\\s+${s.agent}\\s+.*\\s-\\s+-\\s+-\\s+-\\s+-\\s+0/0/0/0\\s+-$`, 'm'),
+      new RegExp(`${s.task.task_id}\\s+1\\s+${s.agent}\\s+.*\\s-\\s+-\\s+-\\s+-\\s+-\\s+0/0/0/0\\s+0/0\\s+-$`, 'm'),
     );
     expect(text.stdout).toContain(
-      '2 attempt(s), 1 of 2 reported host usage: in 1200, out 80, cache read 900, cache write 100, cost $0.0123; 6 tool call(s).',
+      '2 attempt(s), 1 of 2 reported host usage: in 1200, out 80, cache read 900, cache write 100, cost $0.0123; 7 tool call(s).',
     );
     // The legend tells a host that did not report from a column with nothing to show.
     expect(text.stdout).toContain(

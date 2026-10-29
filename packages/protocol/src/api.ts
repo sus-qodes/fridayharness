@@ -695,7 +695,16 @@ export const UsageRowView = z.object({
    */
   context_requests: z.object({ count: z.number().int(), kinds: z.record(z.string(), z.number().int()) }),
   host: UsageHostView,
-  tool_calls: z.object({ total: z.number().int(), failed: z.number().int(), by_kind: UsageToolKinds }),
+  tool_calls: z.object({
+    total: z.number().int(),
+    failed: z.number().int(),
+    by_kind: UsageToolKinds,
+    /**
+     * Read calls of a whole file against those of a line range (`offset` or `limit` asked), as
+     * the hooks recorded them; a host whose reads Friday does not see (Codex) shows 0 and 0.
+     */
+    reads: z.object({ whole_file: z.number().int(), ranged: z.number().int() }),
+  }),
   /** The attempt's latest verification; null when nothing was verified yet. */
   verification: z
     .object({ status: VerificationStatus, checks_passed: z.number().int(), checks_total: z.number().int() })

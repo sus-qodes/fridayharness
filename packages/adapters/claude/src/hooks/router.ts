@@ -238,6 +238,17 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           if (changed.length && run && run.status === 'ACTIVE') {
             state.observePaths(pid, { kind: 'harness', id: run.harness_id }, run.run_id, changed);
           }
+          // What a read looked at and whether it asked for a line range (`offset` or `limit`): the
+          // token baseline counts whole-file reads against ranged ones per attempt (plan M10a).
+          const input = (hook.tool_input as Record<string, unknown>) ?? {};
+          const asked = (v: unknown) => typeof v === 'number' || (typeof v === 'string' && /^\d+$/.test(v));
+          const read =
+            !failed && action?.kind === 'read' && action.paths?.[0]
+              ? {
+                  path: canonicalize(action.paths[0], { projectRoot: executionRoot(harness, task) }).relative ?? null,
+                  ranged: asked(input.offset) || asked(input.limit),
+                }
+              : null;
           state.recordObservation(
             pid,
             actor,
@@ -251,6 +262,7 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
               summary:
                 action?.kind === 'command' ? String(action.command).slice(0, 200) : changed.join(', ') || toolName,
               changed_paths: changed,
+              read,
               error: failed ? String(hook.error ?? '').slice(0, 500) : null,
             },
             refs(task),

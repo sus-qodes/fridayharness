@@ -1,0 +1,49 @@
+{
+  "objective": "Customers can pay part of an order with a gift card: the backend redeems the card's balance and the frontend shows the amount applied",
+  "constraints": [
+    "money stays in integer minor units with an ISO-4217 currency (DECISIONS.md ADR-001); never a float",
+    "the frontend reaches the backend only through shared/src/api.ts (ADR-002); the frontend task owns the contract change"
+  ],
+  "outcomes": [
+    "a checkout that names a gift card pays as much of its total as the card's balance covers, and no more",
+    "the checkout page shows the amount the gift card paid, and nothing when no card was used",
+    "the project's own tests pass in each task's worktree: node --test \"**/test/*.test.ts\""
+  ],
+  "summary": "Carry a gift card through the shared contract and show the amount applied in the frontend; redeem the card's balance in the checkout service. The two tasks have disjoint write scopes and no dependency on each other, so they run in parallel.",
+  "rationale": "The contract change is small and belongs to the frontend task, which already writes shared/src/api.ts. The backend task adds a self-contained redemption module beside the checkout service and reads the contract without changing it, so neither task waits for the other.",
+  "needs_human": null,
+  "tasks": [
+    {
+      "key": "giftcard-frontend",
+      "kind": "implementation",
+      "summary": "A gift card in the shared contract, and the amount applied on the checkout page",
+      "description": "In shared/src/api.ts, add an optional `giftCard` field to CheckoutRequest, typed `{ code: string }`, and an optional `giftCardApplied` field of type Money to CheckoutResponse, each with a one-line doc comment; keep every existing export as it is. Add frontend/src/gift-card.ts exporting `giftCardLine(applied: Money | undefined): string | null`: it returns null when `applied` is undefined or its amount is 0, and otherwise the text 'Gift card: -' followed by formatPrice(applied) from frontend/src/format-price.ts (so { amount: 1250, currency: 'EUR' } gives 'Gift card: -12.50 EUR'). Add frontend/test/gift-card.test.ts with node:test and node:assert/strict tests for both cases. Import types from '../../shared/src/api.ts' with the .ts extension, as the existing files do. Run the project's tests with `node --test \"**/test/*.test.ts\"` and make them pass. Do not change any file under backend/.",
+      "acceptance_criteria": [
+        "node --test passes",
+        "the gift-card line shows the amount applied, and is absent when no gift card was applied"
+      ],
+      "scope": {
+        "write": ["shared/src/api.ts", "frontend/**"],
+        "read": ["frontend/**", "shared/**"]
+      },
+      "role": "frontend",
+      "risk_level": "medium"
+    },
+    {
+      "key": "giftcard-backend",
+      "kind": "implementation",
+      "summary": "Redeem a gift card's balance against the checkout total in the checkout service",
+      "description": "Add backend/src/gift-card.ts exporting `redeemGiftCard(total: Money, card: { code: string; balance: Money }): { total: Money; applied: Money }`. It pays as much of the total as the card's balance covers: `applied.amount` is the smaller of the balance and the total, never negative, and the returned total is the original total minus the amount applied, both in the total's currency. A card whose currency differs from the total's throws CheckoutError from backend/src/checkout.service.ts. Amounts are integers in minor units (DECISIONS.md ADR-001). Add backend/test/gift-card.test.ts with node:test and node:assert/strict tests: a card that covers part of the total, a card whose balance exceeds the total (the total goes to 0 and only the total is applied), and a currency mismatch. Import types from '../../shared/src/api.ts' with the .ts extension, as the existing files do, and do not change shared/src/api.ts: the frontend task owns the contract change. Run the project's tests with `node --test \"**/test/*.test.ts\"` and make them pass. Do not change any file under frontend/ or shared/.",
+      "acceptance_criteria": [
+        "node --test passes",
+        "the amount applied never exceeds the card's balance or the order total"
+      ],
+      "scope": {
+        "write": ["backend/**"],
+        "read": ["backend/**", "shared/**"]
+      },
+      "role": "backend",
+      "risk_level": "medium"
+    }
+  ]
+}

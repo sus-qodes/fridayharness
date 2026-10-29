@@ -291,12 +291,32 @@
                   "friday",
                   "other"
                 ]
+              },
+              "reads": {
+                "type": "object",
+                "properties": {
+                  "whole_file": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "ranged": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "whole_file",
+                  "ranged"
+                ]
               }
             },
             "required": [
               "total",
               "failed",
-              "by_kind"
+              "by_kind",
+              "reads"
             ]
           },
           "verification": {

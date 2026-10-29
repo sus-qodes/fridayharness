@@ -98,7 +98,15 @@ function packet(o: {
  * A tool event as the hooks router records it (the tool name at the payload's top). The router
  * names the session that made the call (`harness_id`); a record older than that names none.
  */
-function hookTool(actorId: string, taskId: string, runId: string, tool: string, failed = false, harnessId?: string) {
+function hookTool(
+  actorId: string,
+  taskId: string,
+  runId: string,
+  tool: string,
+  failed = false,
+  harnessId?: string,
+  read?: { path: string; ranged: boolean },
+) {
   state.recordObservation(
     PROJECT,
     { kind: 'harness', id: actorId },
@@ -111,6 +119,7 @@ function hookTool(actorId: string, taskId: string, runId: string, tool: string, 
       tool,
       summary: tool,
       changed_paths: [],
+      ...(read ? { read } : {}),
       error: failed ? 'exit code 1' : null,
     },
     [
@@ -244,6 +253,7 @@ describe('the usage row (plan M10a)', () => {
       }),
     );
     hookTool(fake.harness_id, t1.task_id, runA, 'Read');
+    hookTool(fake.harness_id, t1.task_id, runA, 'Read', false, undefined, { path: 'src/a.ts', ranged: false });
     adapterEvent(fake.agent_id, t1.task_id, runA, 'tool.completed', { tool: 'Edit' });
     adapterEvent(fake.agent_id, t1.task_id, runA, 'tool.completed', { tool: 'commandExecution' });
     hookTool(fake.harness_id, t1.task_id, runA, 'Bash', true);
@@ -359,7 +369,13 @@ describe('the usage row (plan M10a)', () => {
         turns: 3,
         model: 'claude-haiku-5-5',
       },
-      tool_calls: { total: 7, failed: 1, by_kind: { read: 1, edit: 1, shell: 2, web: 1, friday: 1, other: 1 } },
+      tool_calls: {
+        total: 8,
+        failed: 1,
+        by_kind: { read: 2, edit: 1, shell: 2, web: 1, friday: 1, other: 1 },
+        // The old-style Read without the flag counts for neither kind.
+        reads: { whole_file: 1, ranged: 0 },
+      },
       verification: { status: 'PASSED', checks_passed: 1, checks_total: 2 },
       started_at: '2026-10-14T10:00:00.000Z',
       ended_at: endedA,
@@ -421,7 +437,7 @@ describe('the usage row (plan M10a)', () => {
       cache_read_input_tokens: 900,
       cache_creation_input_tokens: 100,
       cost_usd: 0.0223,
-      tool_calls: 7,
+      tool_calls: 8,
     });
 
     // Filters, and the bound on an unfiltered report.
@@ -473,7 +489,10 @@ describe('the usage row (plan M10a)', () => {
     );
     // Tool calls the hooks recorded with the attempt's run: the shadow's reads, the attempt's own
     // edit, and an older record that names no session.
-    hookTool(second.harness_id, t.task_id, run.run_id, 'Read', false, second.harness_id);
+    hookTool(second.harness_id, t.task_id, run.run_id, 'Read', false, second.harness_id, {
+      path: 'src/x.ts',
+      ranged: false,
+    });
     hookTool(second.harness_id, t.task_id, run.run_id, 'Grep', false, second.harness_id);
     hookTool(first.harness_id, t.task_id, run.run_id, 'Edit', false, first.harness_id);
     hookTool(first.harness_id, t.task_id, run.run_id, 'Bash', true);
@@ -486,7 +505,12 @@ describe('the usage row (plan M10a)', () => {
       run_id: run.run_id,
       packets: { count: 2, tokens: 350, chars: null, source_tokens: 350 },
       context_requests: { count: 1, kinds: { symbol: 1 } },
-      tool_calls: { total: 2, failed: 1, by_kind: { read: 0, edit: 1, shell: 1, web: 0, friday: 0, other: 0 } },
+      tool_calls: {
+        total: 2,
+        failed: 1,
+        by_kind: { read: 0, edit: 1, shell: 1, web: 0, friday: 0, other: 0 },
+        reads: { whole_file: 0, ranged: 0 },
+      },
     });
   });
 
@@ -505,7 +529,7 @@ describe('the usage row (plan M10a)', () => {
       agentActor,
       packet({ ...own, createdAt: clock.now(), tokens: 400, sources: [400] }),
     );
-    hookTool(cc.harness_id, t.task_id, first.run_id, 'Read', false, cc.harness_id);
+    hookTool(cc.harness_id, t.task_id, first.run_id, 'Read', false, cc.harness_id, { path: 'src/x.ts', ranged: true });
     clock.advance(1000);
     claim(caller, t.task_id, first.run_id, 'claim-1');
     verify(t.task_id, false);
@@ -542,7 +566,7 @@ describe('the usage row (plan M10a)', () => {
     ]);
     expect(report.rows[0]).toMatchObject({
       packets: { count: 2, tokens: 500, source_tokens: 500 },
-      tool_calls: { total: 1, by_kind: { read: 1, edit: 0 } },
+      tool_calls: { total: 1, by_kind: { read: 1, edit: 0 }, reads: { whole_file: 0, ranged: 1 } },
       verification: { status: 'FAILED', checks_passed: 0, checks_total: 1 },
       ended_at: endedFirst,
     });
