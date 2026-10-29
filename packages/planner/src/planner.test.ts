@@ -266,6 +266,16 @@ describe('delegation', () => {
   });
   const backendTask = { task_id: 'task_1', goal_id: 'goal_1', role: 'backend', write: ['backend/src/billing/**'] };
 
+  it('prefers the agent whose harness can run the better model for the task, at its cost (ADR-0031 §9)', () => {
+    const strong = agent('b-strong', { model_fit: 0.92, cost: 0.4 });
+    const weak = agent('a-weak', { model_fit: 0.66, cost: 0.01 });
+    const d = delegate(backendTask, [weak, strong], []);
+    expect(d.agent_key).toBe('b-strong');
+    expect(d.scores.find((s) => s.agent_key === 'b-strong')?.parts).toMatchObject({ model_fit: 0.92, cost: 0.4 });
+    // Without routing every agent scores 0 here, and the old order holds.
+    expect(delegate(backendTask, [agent('b'), agent('a')], []).agent_key).toBe('a');
+  });
+
   it('excludes unavailable agents and says why', () => {
     const scores = [
       agent('a', { harness_live: false }),

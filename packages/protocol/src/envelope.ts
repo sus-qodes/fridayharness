@@ -37,6 +37,8 @@ export const RefKind = z.enum([
   'integration',
   // M6c: runs of operations by the gateway.
   'operation',
+  // M7: routing decisions and pins.
+  'routing',
 ]);
 export type RefKind = z.infer<typeof RefKind>;
 
@@ -136,6 +138,17 @@ export const EVENT_TYPES = [
   'operation.started',
   'operation.finished',
   'operation.interrupted',
+  // M7: model routing (ADR-0031).
+  'routing.decided',
+  'routing.pinned',
+  'routing.unpinned',
+  'routing.outcome_recorded',
+  'run.model_observed',
+  'harness.model_observed',
+  // M7c: Laya (ADR-0031 §10).
+  'laya.answered',
+  'laya.calibrated',
+  'laya.unavailable',
   'memory.superseded',
   'memory.approved',
   'memory.retracted',

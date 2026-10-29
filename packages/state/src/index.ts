@@ -32,7 +32,7 @@ export {
   STATE_MIGRATIONS,
 } from './migrations.js';
 export { StateProjector } from './projector.js';
-export { type HarnessRecord, Queries } from './queries.js';
+export { type HarnessRecord, type LayaAnswerRecord, type LayaCalibrationRecord, Queries } from './queries.js';
 export {
   achievedEnforcement,
   type BrainJob,
@@ -47,6 +47,8 @@ export {
   type PlanApproval,
   type PlanProposal,
   type PlanTaskInput,
+  type RunRouter,
+  type RunRouting,
   type StateConfig,
   type TokenInfo,
   type VerificationRevision,

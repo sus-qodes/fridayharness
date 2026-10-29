@@ -49,6 +49,17 @@ describe('config', () => {
     expect(c.providers.anthropic?.allow_remote).toBe(false);
   });
 
+  it('routes in hybrid mode by default, and keeps Laya on this machine (ADR-0031 §10)', () => {
+    const c = parseConfig(renderInitialConfig(PID, 'shop'));
+    expect(c.routing).toMatchObject({ mode: 'hybrid', optimize: 'balanced', min_samples: 5 });
+    expect(c.routing.laya).toMatchObject({ enabled: false, url: 'http://127.0.0.1:8000' });
+    const laya = (url: string) => () =>
+      parseConfig(`${renderInitialConfig(PID, 'shop')}\nrouting:\n  laya:\n    enabled: true\n    url: ${url}\n`);
+    expect(laya('http://127.0.0.1:9000')).not.toThrow();
+    expect(laya('http://localhost:9000')).not.toThrow();
+    expect(laya('https://laya.example.com')).toThrow(/on this machine/);
+  });
+
   it('reports schema problems with paths', () => {
     expect(() => parseConfig('project: { id: nope }')).toThrow(/project.id/);
     expect(() => parseConfig('project: [')).toThrow(/not valid YAML/);

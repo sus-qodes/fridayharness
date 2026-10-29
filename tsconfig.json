@@ -38,6 +38,9 @@
       "path": "packages/context"
     },
     {
+      "path": "packages/routing"
+    },
+    {
       "path": "packages/planner"
     },
     {

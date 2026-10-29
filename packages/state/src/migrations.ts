@@ -754,6 +754,105 @@ INSERT INTO memories_fts(memories_fts) VALUES ('rebuild');
   },
 ];
 
+/** M7: model routing (ADR-0031): decisions, human pins, outcomes, and the models runs used. */
+export const ROUTING_MIGRATIONS: Migration[] = [
+  {
+    version: 17,
+    name: 'routing',
+    up: `
+CREATE TABLE routing_decisions (
+  decision_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  run_id TEXT,
+  harness_id TEXT,
+  model TEXT,
+  binding INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  task_class TEXT NOT NULL,
+  decision_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_routing_decisions ON routing_decisions(project_id, task_id, created_at);
+CREATE TABLE routing_pins (
+  pin_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK (scope IN ('project', 'kind', 'role', 'task')),
+  target TEXT,
+  model TEXT,
+  mode TEXT,
+  sensitive INTEGER NOT NULL DEFAULT 0,
+  needs_vision INTEGER NOT NULL DEFAULT 0,
+  until TEXT,
+  source TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+CREATE TABLE model_outcomes (
+  outcome_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  run_id TEXT,
+  model TEXT NOT NULL,
+  basis TEXT NOT NULL,
+  task_class TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'failed')),
+  attempt INTEGER NOT NULL,
+  duration_ms INTEGER,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_model_outcomes ON model_outcomes(project_id, model, task_class);
+ALTER TABLE task_runs ADD COLUMN model_requested TEXT;
+ALTER TABLE task_runs ADD COLUMN model_binding INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE task_runs ADD COLUMN routing_decision_id TEXT;
+ALTER TABLE task_runs ADD COLUMN model_observed TEXT;
+ALTER TABLE task_runs ADD COLUMN model_basis TEXT;
+ALTER TABLE harnesses ADD COLUMN observed_model TEXT;
+`,
+  },
+];
+
+/** M7c: Laya's stored answers and the thresholds fitted for it (ADR-0031 §10). */
+export const LAYA_MIGRATIONS: Migration[] = [
+  {
+    version: 18,
+    name: 'laya',
+    up: `
+CREATE TABLE laya_answers (
+  answer_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  question_id TEXT NOT NULL,
+  checkpoint TEXT NOT NULL,
+  choice TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  basis TEXT NOT NULL,
+  options INTEGER NOT NULL,
+  probabilities_json TEXT,
+  latency_ms INTEGER,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_laya_answers ON laya_answers(project_id, task_id, created_at);
+CREATE TABLE laya_calibrations (
+  calibration_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  checkpoint TEXT NOT NULL,
+  shape TEXT NOT NULL,
+  threshold REAL,
+  accuracy REAL,
+  coverage REAL NOT NULL,
+  support INTEGER NOT NULL,
+  target REAL NOT NULL,
+  source TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_laya_calibrations ON laya_calibrations(project_id, checkpoint, shape, created_at);
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -771,10 +870,17 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...APPROVAL_MIGRATIONS,
   ...OPERATION_MIGRATIONS,
   ...MEMORY_INDEX_MIGRATIONS,
+  ...ROUTING_MIGRATIONS,
+  ...LAYA_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */
 export const DOMAIN_TABLES = [
+  'laya_calibrations',
+  'laya_answers',
+  'model_outcomes',
+  'routing_decisions',
+  'routing_pins',
   'operation_runs',
   'integrations',
   'file_reservations',

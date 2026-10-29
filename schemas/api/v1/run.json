@@ -106,6 +106,38 @@
         "pending",
         "ready"
       ]
+    },
+    "model_requested": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "model_binding": {
+      "default": false,
+      "type": "boolean"
+    },
+    "routing_decision_id": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "model_observed": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "model_basis": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

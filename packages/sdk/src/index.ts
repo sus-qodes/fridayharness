@@ -29,6 +29,7 @@ export {
   type ProviderConfig,
   parseConfig,
   policyVersion,
+  RoutingSettings,
   renderInitialConfig,
 } from './config.js';
 export {

@@ -70,6 +70,11 @@ export interface RunRow {
   base_commit: string | null;
   branch_ref: string | null;
   workspace: string | null;
+  model_requested?: string | null;
+  model_binding?: number | null;
+  routing_decision_id?: string | null;
+  model_observed?: string | null;
+  model_basis?: string | null;
 }
 
 export interface HarnessRow {
@@ -170,6 +175,11 @@ export function toRunView(row: RunRow): RunView {
     base_commit: row.base_commit ?? null,
     branch_ref: row.branch_ref ?? null,
     workspace: row.workspace === 'pending' ? 'pending' : 'ready',
+    model_requested: row.model_requested ?? null,
+    model_binding: Number(row.model_binding ?? 0) === 1,
+    routing_decision_id: row.routing_decision_id ?? null,
+    model_observed: row.model_observed ?? null,
+    model_basis: row.model_basis ?? null,
   };
 }
 

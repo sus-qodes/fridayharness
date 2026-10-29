@@ -161,6 +161,11 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
               ok: true,
               hook_output: 'Friday could not identify this session yet. Call friday_whoami before editing.',
             });
+          // The model this session runs, when Claude Code reports it (ADR-0031 §7).
+          const model = typeof hook.model === 'string' ? hook.model : (hook.model as { id?: unknown } | undefined)?.id;
+          if (typeof model === 'string' && model) {
+            state.observeModel(pid, actor, { harness_id: harness.harness_id }, model, 'session_start');
+          }
           const packet = await ctx.compile(
             {
               recipient: { kind: 'agent', id: agent.agent_id, harness_id: harness.harness_id },

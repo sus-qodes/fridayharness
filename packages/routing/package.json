@@ -1,0 +1,30 @@
+{
+  "name": "@friday/routing",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Model routing: the capability registry, the routing guide, decisions, outcomes and Laya.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "model-guide.yaml"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@friday/test-support": "workspace:*"
+  }
+}

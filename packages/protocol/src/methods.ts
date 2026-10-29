@@ -130,6 +130,12 @@ export const TaskStartParams = z.object({
   git_ref: z.string().nullable(),
   acceptance_criteria: z.array(z.string()),
   policy_profile: z.string().nullable(),
+  /**
+   * The model Friday routed this run to (ADR-0031 §6). An adapter that declared
+   * `capabilities.model_control: "set"` must use it (`model_binding`); others may treat it as advice.
+   */
+  model: z.string().nullable().default(null),
+  model_binding: z.boolean().default(false),
 });
 export type TaskStartParams = z.infer<typeof TaskStartParams>;
 export const TaskCancelParams = z.object({ task_id: z.string(), run_id: z.string(), reason: z.string().optional() });
@@ -146,6 +152,11 @@ export const TaskClaimResult = z.object({
   attempt: z.number().int(),
   resumed: z.boolean(),
   context: ContextPacket.nullable(),
+  /** Friday's model suggestion for this run (ADR-0031 §6); advisory unless the harness applies models. */
+  routing: z
+    .object({ model: z.string().nullable(), binding: z.boolean(), reason: z.string() })
+    .nullable()
+    .default(null),
 });
 
 export const TaskUpdateParams = z.object({

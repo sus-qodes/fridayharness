@@ -2,6 +2,15 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M7 model routing
+
+- **Every run is routed to a model, and the reason is recorded:** your pins first (`friday routing pin` for a task, role, kind or the project, with an expiry), then hard constraints (local only, sensitive work, vision, what the harness can run), then how well each model fits what the task needs, its verified track record once it has enough results, cost and speed by `routing.optimize`, and the guide's preferences. See [docs/routing.md](docs/routing.md).
+- **Control or advice:** a harness that applies models (`model_control: set`) gets the model in `task.start`; an attached Claude Code session gets it as a suggestion when it claims the task. The model that actually ran is recorded (adapters report it; Claude Code at session start).
+- **Evidence:** each verification result counts for the model that ran, per kind of task. `friday models` shows the registry and the track records; `friday routing explain <task>` shows each decision with its candidates, constraints and fallbacks.
+- **Delegation** prefers the agent whose harness can run the better model for the task, at its cost.
+- **Laya** (optional, on this machine): asked when a task becomes ready; its choice counts only after `friday laya calibrate` fitted a threshold for its checkpoint, and routing goes on without it when it does not answer.
+- Decision: ADR-0031.
+
 ## Unreleased — M6 security
 
 - **M6a, permissions that mean one thing:**

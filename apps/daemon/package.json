@@ -30,6 +30,7 @@
     "@friday/planner": "workspace:*",
     "@friday/policy": "workspace:*",
     "@friday/protocol": "workspace:*",
+    "@friday/routing": "workspace:*",
     "@friday/sdk": "workspace:*",
     "@friday/state": "workspace:*",
     "@friday/verification": "workspace:*",

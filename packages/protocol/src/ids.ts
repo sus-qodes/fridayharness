@@ -49,6 +49,9 @@ export const ID_PREFIXES = [
   'int',
   // M6c: runs of operations by the gateway.
   'op',
+  // M7: routing pins and model outcomes (decisions use `route`).
+  'pin',
+  'oc',
 ] as const;
 export type IdPrefix = (typeof ID_PREFIXES)[number];
 export type Id<P extends IdPrefix = IdPrefix> = `${P}_${string}`;

@@ -110,10 +110,15 @@ export class FakeHarness implements ConformanceHarness {
   }
 
   /** Waits until a message with this method arrived (or times out). */
-  async waitFor(method: OutboundMessage['method'], timeoutMs = 5000): Promise<OutboundMessage> {
+  /** The first message of a method received so far (or the first matching `where`), waiting up to `timeoutMs`. */
+  async waitFor(
+    method: OutboundMessage['method'],
+    timeoutMs = 5000,
+    where: (m: OutboundMessage) => boolean = () => true,
+  ): Promise<OutboundMessage> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
-      const hit = this.received.find((m) => m.method === method);
+      const hit = this.received.find((m) => m.method === method && where(m));
       if (hit) return hit;
       if (Date.now() > deadline) throw new Error(`FakeHarness: no ${method} within ${timeoutMs} ms`);
       await new Promise((r) => setTimeout(r, 20));

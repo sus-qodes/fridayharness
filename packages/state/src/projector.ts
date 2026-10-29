@@ -257,6 +257,139 @@ export class StateProjector implements Projector {
           );
         return;
       }
+      case 'laya.answered': {
+        const a = p.answer as Payload;
+        this.db
+          .prepare(
+            `INSERT INTO laya_answers (answer_id, project_id, task_id, question_id, checkpoint, choice, confidence, basis,
+               options, probabilities_json, latency_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            str(a.answer_id),
+            e.project_id,
+            str(a.task_id),
+            str(a.question_id),
+            str(a.checkpoint),
+            str(a.choice),
+            Number(a.confidence),
+            str(a.basis),
+            Number(a.options),
+            a.probabilities ? toJson(a.probabilities) : null,
+            opt(a.latency_ms),
+            e.occurred_at,
+          );
+        return;
+      }
+      case 'laya.calibrated':
+        for (const c of (p.calibrations as Payload[]) ?? []) {
+          this.db
+            .prepare(
+              `INSERT INTO laya_calibrations (calibration_id, project_id, checkpoint, shape, threshold, accuracy, coverage,
+                 support, target, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              str(c.calibration_id),
+              e.project_id,
+              str(c.checkpoint),
+              str(c.shape),
+              opt(c.threshold),
+              opt(c.accuracy),
+              Number(c.coverage),
+              Number(c.support),
+              Number(c.target),
+              str(p.source),
+              e.occurred_at,
+            );
+        }
+        return;
+      case 'routing.decided': {
+        const d = p.decision as Payload;
+        this.db
+          .prepare(
+            `INSERT INTO routing_decisions (decision_id, project_id, task_id, run_id, harness_id, model, binding, source,
+               mode, task_class, decision_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            str(p.decision_id),
+            e.project_id,
+            str(p.task_id),
+            opt(p.run_id),
+            opt(p.harness_id),
+            opt(d.model),
+            d.binding ? 1 : 0,
+            str(d.source),
+            str(d.mode),
+            str(d.task_class),
+            toJson(d),
+            e.occurred_at,
+          );
+        if (p.run_id) {
+          this.db
+            .prepare(
+              'UPDATE task_runs SET model_requested = ?, model_binding = ?, routing_decision_id = ? WHERE run_id = ?',
+            )
+            .run(opt(d.model), d.binding ? 1 : 0, str(p.decision_id), str(p.run_id));
+        }
+        return;
+      }
+      case 'routing.pinned': {
+        const x = p.pin as Payload;
+        this.db
+          .prepare(
+            `INSERT INTO routing_pins (pin_id, project_id, scope, target, model, mode, sensitive, needs_vision, until,
+               source, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            str(x.pin_id),
+            e.project_id,
+            str(x.scope),
+            opt(x.target),
+            opt(x.model),
+            opt(x.mode),
+            x.sensitive ? 1 : 0,
+            x.needs_vision ? 1 : 0,
+            opt(x.until),
+            str(x.source),
+            opt(x.note),
+            e.occurred_at,
+          );
+        return;
+      }
+      case 'routing.unpinned':
+        this.db.prepare('UPDATE routing_pins SET revoked_at = ? WHERE pin_id = ?').run(e.occurred_at, str(p.pin_id));
+        return;
+      case 'run.model_observed':
+        this.db
+          .prepare('UPDATE task_runs SET model_observed = ?, model_basis = ? WHERE run_id = ?')
+          .run(str(p.model), opt(p.basis), str(p.run_id));
+        return;
+      case 'harness.model_observed':
+        this.db
+          .prepare('UPDATE harnesses SET observed_model = ? WHERE harness_id = ?')
+          .run(str(p.model), str(p.harness_id));
+        return;
+      case 'routing.outcome_recorded': {
+        const o = p.outcome as Payload;
+        this.db
+          .prepare(
+            `INSERT INTO model_outcomes (outcome_id, project_id, task_id, run_id, model, basis, task_class, outcome,
+               attempt, duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            str(o.outcome_id),
+            e.project_id,
+            str(o.task_id),
+            opt(o.run_id),
+            str(o.model),
+            str(o.basis),
+            str(o.task_class),
+            str(o.outcome),
+            Number(o.attempt ?? 1),
+            opt(o.duration_ms),
+            e.occurred_at,
+          );
+        return;
+      }
       case 'operation.started': {
         const o = p.operation as Payload;
         this.db

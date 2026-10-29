@@ -46,6 +46,17 @@
         "string",
         "null"
       ]
+    },
+    "model": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "model_binding": {
+      "default": false,
+      "type": "boolean"
     }
   },
   "required": [

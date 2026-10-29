@@ -198,7 +198,11 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
         },
         { kind: 'agent', id: c.agent_id },
       );
-      return { ...out, context };
+      // Friday's model suggestion for this run (ADR-0031 §6): advisory unless the harness applies it.
+      const run = state.q.findRun(out.run_id);
+      const decision = run?.routing_decision_id ? state.q.routingDecision(run.routing_decision_id) : undefined;
+      const routing = decision ? { model: decision.model, binding: decision.binding, reason: decision.reason } : null;
+      return { ...out, context, routing };
     }
     case 'task.update': {
       const p = METHODS[method].params.parse(raw);
@@ -251,6 +255,17 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
         },
         refs,
       );
+      // The model the host reports running for this run (ADR-0031 §7).
+      const reported = p.data as { model?: unknown; basis?: unknown } | undefined;
+      if (p.event_type === 'model.observed' && p.run_id && typeof reported?.model === 'string') {
+        state.observeModel(
+          pid,
+          { kind: 'harness', id: harnessId },
+          { run_id: p.run_id },
+          reported.model,
+          typeof reported.basis === 'string' ? reported.basis : 'reported',
+        );
+      }
       const paths = (p.data as { changed_paths?: unknown } | undefined)?.changed_paths;
       if (p.run_id && Array.isArray(paths)) {
         state.observePaths(

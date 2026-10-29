@@ -71,6 +71,11 @@ export interface BrainDeps {
    * fences the attempt first (ADR-0026).
    */
   lostWork?: 'release' | 'external';
+  /**
+   * How well the model routing would run on an agent's harness fits a task, and its relative cost
+   * (ADR-0031 §9); without it, delegation ignores models.
+   */
+  modelFit?: (task: TaskView, agentId: string) => { fit: number; cost: number } | null;
 }
 
 export interface BrainStep {
@@ -1153,7 +1158,11 @@ export class MasterBrain {
           role: task.role ?? 'developer',
           write: task.scope?.write ?? [],
         },
-        candidates.map((x) => x.c),
+        // The model each agent's harness would run for this task, and its cost (ADR-0031 §9).
+        candidates.map((x) => {
+          const fit = this.#deps.modelFit?.(task, x.c.agent_id);
+          return fit ? { ...x.c, model_fit: fit.fit, cost: fit.cost } : x.c;
+        }),
         running,
       );
       const r = state.delegateTask(projectId, MASTER_BRAIN, task.task_id, {

@@ -114,6 +114,52 @@ export const McpSettings = z
   .strict()
   .prefault({});
 
+/** A URL on this machine: task text never leaves it for a service a tracked file chose (ADR-0031 §10). */
+const LoopbackUrl = z
+  .string()
+  .url()
+  .refine((u) => {
+    try {
+      return ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(new URL(u).hostname);
+    } catch {
+      return false;
+    }
+  }, 'Laya must run on this machine (127.0.0.1)');
+
+/** Model routing (ADR-0031). */
+export const RoutingSettings = z
+  .object({
+    /** manual: a pinned or default model; policy: the guide; auto: Laya or the score; hybrid: pins and constraints first. */
+    mode: z.enum(['manual', 'policy', 'auto', 'hybrid']).default('hybrid'),
+    optimize: z.enum(['quality', 'balanced', 'cost', 'latency']).default('balanced'),
+    default_model: z.string().min(1).max(100).nullable().default(null),
+    must_use_local: z.boolean().default(false),
+    prefer_cheaper_if_score_delta_below: z.number().min(0).max(1).default(0.05),
+    /** When Laya's answer is not confident: the score's choice, the strongest model, a human, or no autonomous run. */
+    low_confidence: z.enum(['score', 'strongest', 'human', 'block']).default('score'),
+    /** Outcomes a model needs for a task class before they count. */
+    min_samples: z.number().int().min(1).max(1000).default(5),
+    /** Work that only runs on a model a human pinned for it. */
+    sensitive: z
+      .object({ kinds: z.array(z.string()).default([]), roles: z.array(z.string()).default([]) })
+      .strict()
+      .prefault({}),
+    /** Models the project adds to Friday's registry, or replaces by id. */
+    models: z.array(z.record(z.string(), z.unknown())).max(100).default([]),
+    laya: z
+      .object({
+        enabled: z.boolean().default(false),
+        url: LoopbackUrl.default('http://127.0.0.1:8000'),
+        /** A Laya checkpoint name; default: Laya picks. */
+        model: z.string().min(1).max(200).optional(),
+        timeout_ms: z.number().int().min(100).max(60_000).default(3000),
+      })
+      .strict()
+      .prefault({}),
+  })
+  .strict()
+  .prefault({});
+
 /** Who decides approvals where (ADR-0030 §5). */
 export const ApprovalSettings = z
   .object({
@@ -306,6 +352,8 @@ export const FridayConfig = z
     /** Third-party MCP servers' tools (ADR-0030 §3). */
     mcp: McpSettings,
     approvals: ApprovalSettings,
+    /** Model routing (ADR-0031). */
+    routing: RoutingSettings,
   })
   .passthrough();
 export type FridayConfig = z.infer<typeof FridayConfig>;

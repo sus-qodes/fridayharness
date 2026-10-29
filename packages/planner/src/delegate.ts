@@ -2,7 +2,8 @@ import { globsOverlap, matchesAny } from '@friday/policy';
 
 /**
  * Delegation policy (spec Part 03 §10): a deterministic score, not a model call.
- *   score = 3·capability_fit + 2·context_fit + 1.5·reliability + 1·locality − 0.5·cost
+ *   score = 3·capability_fit + 2·context_fit + 1.5·reliability + 1·locality + 1·model_fit − 0.5·cost
+ * `model_fit` is how well the best model the agent's harness can run fits the task (ADR-0031 §9).
  * Only available agents are eligible; ties go to the lower agent key, so the same state always
  * gives the same assignment.
  */
@@ -29,8 +30,10 @@ export interface DelegationCandidate {
   recent_paths: string[];
   /** Goals in which the agent completed a task. */
   goals_done: string[];
-  /** Relative model cost, 0 (cheapest) to 1; 0 until model routing (M7). */
+  /** Relative cost of the model routing would run for the task, 0 (cheapest or unknown) to 1 (ADR-0031 §9). */
   cost: number;
+  /** How well that model fits the task, 0 to 1; 0 when routing chose none for this harness. */
+  model_fit?: number;
 }
 
 export interface ScoreParts {
@@ -40,6 +43,7 @@ export interface ScoreParts {
   reliability: number;
   locality: number;
   conflict_risk: number;
+  model_fit: number;
   cost: number;
 }
 
@@ -57,6 +61,7 @@ export const DELEGATION_WEIGHTS = {
   context_fit: 2,
   reliability: 1.5,
   locality: 1,
+  model_fit: 1,
   cost: 0.5,
 } as const;
 
@@ -86,6 +91,7 @@ export function scoreCandidate(task: DelegationTask, c: DelegationCandidate): Ca
     reliability: round(reliability),
     locality,
     conflict_risk: 0,
+    model_fit: round(c.model_fit ?? 0),
     cost: c.cost,
   };
   const w = DELEGATION_WEIGHTS;
@@ -93,7 +99,8 @@ export function scoreCandidate(task: DelegationTask, c: DelegationCandidate): Ca
     w.capability_fit * capability_fit +
       w.context_fit * parts.context_fit +
       w.reliability * parts.reliability +
-      w.locality * locality -
+      w.locality * locality +
+      w.model_fit * parts.model_fit -
       w.cost * c.cost,
   );
   return { agent_id: c.agent_id, agent_key: c.agent_key, eligible: !why, reason: why || 'available', total, parts };

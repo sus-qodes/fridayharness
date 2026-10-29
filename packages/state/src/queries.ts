@@ -10,8 +10,11 @@ import {
   type IntegrationView,
   type MessageView,
   type ModelCallView,
+  type ModelEvidenceView,
   type OperationRunView,
   type PlanVersionView,
+  type RoutingDecisionView,
+  type RoutingPinView,
   type RunView,
   type TaskStatus,
   type TaskView,
@@ -52,6 +55,8 @@ export type HarnessRecord = HarnessView & {
   hooks_seen_at: string | null;
   /** The checkout the session runs in, as the host reported it (ADR-0023 §3). */
   host_cwd: string | null;
+  /** The model the host reported for the session (ADR-0031 §7). */
+  observed_model: string | null;
 };
 const toRecord = (row: HarnessRow): HarnessRecord => ({
   ...toHarnessView(row),
@@ -59,7 +64,34 @@ const toRecord = (row: HarnessRow): HarnessRecord => ({
   requested_agent_key: row.requested_agent_key,
   hooks_seen_at: row.hooks_seen_at ?? null,
   host_cwd: row.host_cwd ?? null,
+  observed_model: (row as { observed_model?: string | null }).observed_model ?? null,
 });
+
+/** Laya's answer to a task's routing question (ADR-0031 §10). */
+export interface LayaAnswerRecord {
+  answer_id: string;
+  task_id: string;
+  question_id: string;
+  checkpoint: string;
+  choice: string;
+  confidence: number;
+  basis: string;
+  options: number;
+  created_at: string;
+}
+
+/** A threshold fitted for one Laya checkpoint and question shape. */
+export interface LayaCalibrationRecord {
+  checkpoint: string;
+  shape: string;
+  threshold: number | null;
+  accuracy: number | null;
+  coverage: number;
+  support: number;
+  target: number;
+  source: string;
+  created_at: string;
+}
 
 const LIVE_HARNESS = "('REGISTERED','READY','BUSY','DEGRADED','RECONNECTING')";
 
@@ -342,6 +374,131 @@ export class Queries {
   /** The latest integration attempt of a task, if any. */
   latestIntegration(projectId: string, taskId: string): IntegrationView | undefined {
     return this.integrations(projectId, { task_id: taskId }).at(-1);
+  }
+
+  /** A human's routing pins (ADR-0031 §4); `now` keeps only those still in force. */
+  routingPins(projectId: string, now?: string): RoutingPinView[] {
+    return this.db
+      .prepare('SELECT * FROM routing_pins WHERE project_id = ? ORDER BY created_at, rowid')
+      .all<Record<string, unknown>>(projectId)
+      .map(toPinView)
+      .filter((p) => !now || (p.revoked_at === null && (p.until === null || p.until > now)));
+  }
+
+  routingPin(pinId: string): RoutingPinView | undefined {
+    const row = this.db.prepare('SELECT * FROM routing_pins WHERE pin_id = ?').get<Record<string, unknown>>(pinId);
+    return row ? toPinView(row) : undefined;
+  }
+
+  /** Routing decisions, newest first; for one task when given. */
+  routingDecisions(projectId: string, filter: { task_id?: string; limit?: number } = {}): RoutingDecisionView[] {
+    const rows = filter.task_id
+      ? this.db
+          .prepare(
+            'SELECT * FROM routing_decisions WHERE project_id = ? AND task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?',
+          )
+          .all<Record<string, unknown>>(projectId, filter.task_id, filter.limit ?? 50)
+      : this.db
+          .prepare('SELECT * FROM routing_decisions WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?')
+          .all<Record<string, unknown>>(projectId, filter.limit ?? 50);
+    return rows.map((r) => ({
+      ...(JSON.parse(String(r.decision_json)) as Omit<
+        RoutingDecisionView,
+        'decision_id' | 'task_id' | 'run_id' | 'harness_id' | 'created_at'
+      >),
+      decision_id: String(r.decision_id),
+      task_id: String(r.task_id),
+      run_id: (r.run_id as string | null) ?? null,
+      harness_id: (r.harness_id as string | null) ?? null,
+      created_at: String(r.created_at),
+    }));
+  }
+
+  routingDecision(decisionId: string): RoutingDecisionView | undefined {
+    const row = this.db
+      .prepare('SELECT project_id, task_id FROM routing_decisions WHERE decision_id = ?')
+      .get<{ project_id: string; task_id: string }>(decisionId);
+    if (!row) return undefined;
+    return this.routingDecisions(row.project_id, { task_id: row.task_id, limit: 1000 }).find(
+      (d) => d.decision_id === decisionId,
+    );
+  }
+
+  /** Laya's latest answer for a task (ADR-0031 §10). */
+  layaAnswer(projectId: string, taskId: string): LayaAnswerRecord | undefined {
+    const r = this.db
+      .prepare(
+        'SELECT * FROM laya_answers WHERE project_id = ? AND task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+      )
+      .get<Record<string, unknown>>(projectId, taskId);
+    return r
+      ? {
+          answer_id: String(r.answer_id),
+          task_id: String(r.task_id),
+          question_id: String(r.question_id),
+          checkpoint: String(r.checkpoint),
+          choice: String(r.choice),
+          confidence: Number(r.confidence),
+          basis: String(r.basis),
+          options: Number(r.options),
+          created_at: String(r.created_at),
+        }
+      : undefined;
+  }
+
+  /** The thresholds in force: the latest fit per checkpoint and question shape. */
+  layaCalibrations(projectId: string): LayaCalibrationRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM laya_calibrations WHERE project_id = ? ORDER BY created_at, rowid')
+      .all<Record<string, unknown>>(projectId);
+    const latest = new Map<string, LayaCalibrationRecord>();
+    for (const r of rows) {
+      latest.set(`${r.checkpoint} ${r.shape}`, {
+        checkpoint: String(r.checkpoint),
+        shape: String(r.shape),
+        threshold: r.threshold === null ? null : Number(r.threshold),
+        accuracy: r.accuracy === null ? null : Number(r.accuracy),
+        coverage: Number(r.coverage),
+        support: Number(r.support),
+        target: Number(r.target),
+        source: String(r.source),
+        created_at: String(r.created_at),
+      });
+    }
+    return [...latest.values()];
+  }
+
+  /** Measured outcomes per model and task class (ADR-0031 §8). */
+  modelEvidence(projectId: string): ModelEvidenceView[] {
+    const rows = this.db
+      .prepare('SELECT model, task_class, outcome, duration_ms FROM model_outcomes WHERE project_id = ? ORDER BY rowid')
+      .all<{ model: string; task_class: string; outcome: string; duration_ms: number | null }>(projectId);
+    const groups = new Map<
+      string,
+      { model: string; task_class: string; passed: number; failed: number; durations: number[] }
+    >();
+    for (const r of rows) {
+      const key = `${r.model} ${r.task_class}`;
+      const g = groups.get(key) ?? { model: r.model, task_class: r.task_class, passed: 0, failed: 0, durations: [] };
+      if (r.outcome === 'passed') g.passed += 1;
+      else g.failed += 1;
+      if (r.duration_ms !== null) g.durations.push(r.duration_ms);
+      groups.set(key, g);
+    }
+    return [...groups.values()]
+      .map((g) => {
+        const d = [...g.durations].sort((a, b) => a - b);
+        return {
+          model: g.model,
+          task_class: g.task_class,
+          samples: g.passed + g.failed,
+          passed: g.passed,
+          failed: g.failed,
+          reworked: 0,
+          median_duration_ms: d.length ? (d[Math.floor((d.length - 1) / 2)] ?? null) : null,
+        };
+      })
+      .sort((a, b) => a.model.localeCompare(b.model) || a.task_class.localeCompare(b.task_class));
   }
 
   /** Runs of operations by the gateway (ADR-0029), newest first. */
@@ -831,5 +988,22 @@ function toOperationRunView(r: Record<string, unknown>): OperationRunView {
     summary: (r.summary as string | null) ?? null,
     started_at: String(r.started_at),
     ended_at: (r.ended_at as string | null) ?? null,
+  };
+}
+
+function toPinView(r: Record<string, unknown>): RoutingPinView {
+  return {
+    pin_id: String(r.pin_id),
+    scope: r.scope as RoutingPinView['scope'],
+    target: (r.target as string | null) ?? null,
+    model: (r.model as string | null) ?? null,
+    mode: (r.mode as RoutingPinView['mode']) ?? null,
+    sensitive: Number(r.sensitive ?? 0) === 1,
+    needs_vision: Number(r.needs_vision ?? 0) === 1,
+    until: (r.until as string | null) ?? null,
+    source: String(r.source),
+    note: (r.note as string | null) ?? null,
+    created_at: String(r.created_at),
+    revoked_at: (r.revoked_at as string | null) ?? null,
   };
 }

@@ -259,14 +259,19 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
           idempotency_key: idem('claim', { params, t: Math.floor(Date.now() / 60_000) }),
         })) as ResultOf<'task.claim'>;
         const ctx = res.context ? renderContextMarkdown(res.context as ContextPacket, 8000) : '';
+        // Friday's model suggestion (ADR-0031 §6): this session's host chooses its own model.
+        const model = res.routing?.model
+          ? `\nModel: Friday suggests ${res.routing.model} for this task (${res.routing.reason}).`
+          : '';
         return {
-          text: `${res.resumed ? 'Resumed' : 'Claimed'} ${taskLine(res.task)} (run ${res.run_id}, attempt ${res.attempt}).\nScope: ${scopeText(res.task)}\n\n${ctx}`,
+          text: `${res.resumed ? 'Resumed' : 'Claimed'} ${taskLine(res.task)} (run ${res.run_id}, attempt ${res.attempt}).\nScope: ${scopeText(res.task)}${model}\n\n${ctx}`,
           structured: {
             task: res.task,
             run_id: res.run_id,
             attempt: res.attempt,
             resumed: res.resumed,
             context_id: res.context?.context_id ?? null,
+            routing: res.routing ?? null,
           },
         };
       },

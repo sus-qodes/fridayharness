@@ -26,10 +26,12 @@ import { type CompileInput, createContextService } from './context.js';
 import { profileCache } from './execution.js';
 import { GraphService } from './graph-service.js';
 import { IntegrationManager } from './integration.js';
+import { LayaService } from './laya.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
 import { OperationManager } from './operations.js';
 import { type EffectivePolicy, loadEffectivePolicy, writePolicyTrust } from './policy.js';
 import { RecoveryManager } from './recovery.js';
+import { RoutingService } from './routing.js';
 import { runVerification } from './verify.js';
 import { WorkspaceManager } from './workspaces.js';
 
@@ -240,6 +242,16 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   });
 
   const graph = new GraphService({ root: project.root, cacheDir: path.join(fridayDir, 'graph') });
+  // Every new run is routed in its own transaction (ADR-0031 §6): set before anything can create one.
+  const routing = new RoutingService({ state, project, logger });
+  state.setRouter(routing.router);
+  // Laya, when enabled: asked as a task becomes READY; its stored answer feeds routing (ADR-0031 §10).
+  const laya = new LayaService({ state, project, logger, routing });
+  routing.laya = (taskId) => laya.answerFor(taskId);
+  const stopLaya = state.transport.subscribe({ project_id: project.project_id, types: ['task.ready'] }, (e) => {
+    const taskId = (e.payload as { task_id?: string }).task_id;
+    if (taskId && laya.enabled) void laya.ask(taskId);
+  });
   // Task worktrees: prepared as soon as a run needs one, released when its task ends (ADR-0023).
   const workspaces = new WorkspaceManager({ state, project, logger, env });
   // Checks and operations run in the execution profile of the effective policy (ADR-0029 §4).
@@ -352,6 +364,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
           env,
           logger,
           policy: () => policy,
+          modelFit: (task, agentId) => routing.fitFor(task, agentId),
           ...(opts.brain && opts.brain.model !== undefined ? { model: opts.brain.model } : {}),
         });
 
@@ -386,6 +399,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       return ctx.reloadPolicy();
     },
     operations,
+    routing,
+    laya,
   });
   for (const ext of opts.extensions ?? []) ext(app as unknown as Hono, ctx);
 
@@ -507,6 +522,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       clearInterval(sweep);
       stopWorkspaces();
       stopAutoVerify();
+      stopLaya();
       operations.close();
       graph.close();
       for (const s of streams) s.abort();

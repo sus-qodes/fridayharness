@@ -10,6 +10,7 @@ import {
   type ModelResponse,
   type PlannerModel,
 } from '@friday/planner';
+import type { TaskView } from '@friday/protocol';
 import { hasSecret, type ProjectRef, providerApproval, providerEndpoint, resolveSecret, stateDir } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
 import { buildBrainContext } from './brain-context.js';
@@ -106,6 +107,8 @@ export function createMasterBrain(input: {
   model?: PlannerModel | null;
   /** The effective policy: whether plans are approved without a human comes from it (ADR-0028). */
   policy?: () => { auto_approve: boolean };
+  /** The model routing would run on an agent's harness for a task (ADR-0031 §9). */
+  modelFit?: (task: TaskView, agentId: string) => { fit: number; cost: number } | null;
 }): BrainHandle {
   const { state, project, env, logger } = input;
   const cfg = project.config.master_brain;
@@ -191,6 +194,7 @@ export function createMasterBrain(input: {
     log: (level, message, data) => logger[level](message, data ?? {}),
     // The daemon's recovery preserves and fences lost attempts before reassigning them (ADR-0026).
     lostWork: 'external',
+    ...(input.modelFit ? { modelFit: input.modelFit } : {}),
   });
 
   return {

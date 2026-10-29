@@ -16,6 +16,7 @@ import {
   type TokenClass,
   VerifyRequest,
 } from '@friday/protocol';
+import { fitThresholds } from '@friday/routing';
 import { FRIDAY_DIR, FRIDAY_VERSION, type ProjectRef } from '@friday/sdk';
 import {
   backupTo,
@@ -36,10 +37,12 @@ import { escalationView, mountBrainRoutes } from './brain-routes.js';
 import type { CompileInput, ContextService } from './context.js';
 import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
 import type { IntegrationManager } from './integration.js';
+import type { LayaService } from './laya.js';
 import type { Logger } from './log.js';
 import type { OperationManager } from './operations.js';
 import type { EffectivePolicy } from './policy.js';
 import type { RecoveryManager } from './recovery.js';
+import type { RoutingService } from './routing.js';
 import { type AuthInfo, callerFor, dispatchRpc } from './rpc.js';
 import { statusPageHtml } from './ui.js';
 import type { WorkspaceManager } from './workspaces.js';
@@ -82,6 +85,10 @@ export interface AppDeps {
   trustPolicy?: (looseningHash: string) => EffectivePolicy;
   /** The execution gateway (M6c, ADR-0029). */
   operations?: OperationManager;
+  /** Model routing (M7, ADR-0031). */
+  routing?: RoutingService;
+  /** Laya (M7c, ADR-0031 §10). */
+  laya?: LayaService;
 }
 
 type Env = { Variables: { auth: AuthInfo; requestId: string } };
@@ -814,6 +821,97 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   });
 
   // Integration into goal branches (M5c, ADR-0025).
+  // Model routing (M7, ADR-0031): the registry with its evidence, decisions, and human pins.
+  const routingOf = () => {
+    if (!deps.routing) throw new FridayError('capability_unsupported', 'this daemon routes no models');
+    return deps.routing;
+  };
+  app.get(`${P}/models`, allow(...OPERATOR), (c) => {
+    const r = routingOf();
+    return c.json({
+      models: r.models,
+      evidence: state.q.modelEvidence(pid),
+      settings: r.settings,
+      guide_version: r.guideVersion,
+      min_samples: r.settings.min_samples,
+    });
+  });
+  app.get(`${P}/routing/explain/:tid`, allow(...OPERATOR), (c) => {
+    const tid = c.req.param('tid');
+    return c.json({ dry_run: routingOf().explain(tid), decisions: state.q.routingDecisions(pid, { task_id: tid }) });
+  });
+  app.get(`${P}/routing/decisions`, allow(...OPERATOR), (c) =>
+    c.json({
+      decisions: state.q.routingDecisions(pid, {
+        ...(c.req.query('task') ? { task_id: c.req.query('task') as string } : {}),
+        limit: Math.min(Number(c.req.query('limit') ?? 50) || 50, 500),
+      }),
+    }),
+  );
+  app.get(`${P}/routing/pins`, allow(...OPERATOR), (c) =>
+    c.json({
+      pins: c.req.query('all') === 'true' ? state.q.routingPins(pid) : state.q.routingPins(pid, state.clock.now()),
+    }),
+  );
+  app.post(`${P}/routing/pins`, allow(...OPERATOR), async (c) => {
+    const body = z
+      .object({
+        scope: z.enum(['project', 'kind', 'role', 'task']),
+        target: z.string().min(1).max(200).nullable().default(null),
+        model: z.string().min(1).max(100).nullable().default(null),
+        mode: z.enum(['manual', 'policy', 'auto', 'hybrid']).nullable().default(null),
+        sensitive: z.boolean().default(false),
+        needs_vision: z.boolean().default(false),
+        until: z.string().datetime().nullable().default(null),
+        note: z.string().max(500).nullable().default(null),
+      })
+      .parse(await c.req.json().catch(() => ({})));
+    if (body.model && !routingOf().models.some((m) => m.id === body.model)) {
+      throw new FridayError(
+        'invalid_request',
+        `${body.model} is not in the registry; add it under routing.models in .friday/config.yaml first`,
+      );
+    }
+    return c.json({ pin: state.pinRouting(pid, HUMAN, body) }, 201);
+  });
+  app.post(`${P}/routing/pins/:pin/revoke`, allow(...OPERATOR), (c) =>
+    c.json({ pin: state.unpinRouting(pid, HUMAN, c.req.param('pin')) }),
+  );
+
+  // Laya (M7c, ADR-0031 §10): its settings, the thresholds fitted for it, and fitting new ones.
+  app.get(`${P}/laya`, allow(...OPERATOR), (c) => {
+    const cfg = project.config.routing.laya;
+    return c.json({
+      enabled: cfg.enabled,
+      url: cfg.url,
+      model: cfg.model ?? null,
+      calibrations: state.q.layaCalibrations(pid),
+    });
+  });
+  app.post(`${P}/laya/calibrate`, allow(...OPERATOR), async (c) => {
+    const body = z
+      .object({
+        records: z
+          .array(
+            z.object({
+              checkpoint: z.string().min(1).max(200),
+              options: z.number().int().min(2).max(100),
+              confidence: z.number().min(0).max(1),
+              correct: z.boolean(),
+            }),
+          )
+          .min(1)
+          .max(100_000),
+        target: z.number().min(0.5).max(1).default(0.9),
+        min_support: z.number().int().min(1).max(100_000).default(20),
+        source: z.string().max(200).default('friday laya calibrate'),
+      })
+      .parse(await c.req.json().catch(() => ({})));
+    const fitted = fitThresholds(body.records, { target: body.target, minSupport: body.min_support });
+    state.recordLayaCalibrations(pid, HUMAN, fitted, body.source);
+    return c.json({ calibrations: fitted });
+  });
+
   // Operations the gateway runs, and their runs (M6c, ADR-0029). Secret names only, never values.
   app.get(`${P}/operations`, allow(...OPERATOR), (c) => {
     const p = deps.policy?.();

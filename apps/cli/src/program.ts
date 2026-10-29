@@ -19,6 +19,7 @@ import { registerPolicyCommands } from './policy.js';
 import { registerRecoveryCommands } from './recovery.js';
 import { registerReservationCommands } from './reservations.js';
 import { restoreProject } from './restore.js';
+import { registerLayaCommands, registerRoutingCommands } from './routing.js';
 import { runDaemon } from './run.js';
 import { FRIDAY_DIR_GITIGNORE } from './templates.js';
 import { registerWorktreeCommands } from './worktrees.js';
@@ -734,6 +735,8 @@ export function buildProgram(): Command {
   registerRecoveryCommands(program, g);
   registerPolicyCommands(program, g);
   registerOperationCommands(program, g);
+  registerRoutingCommands(program, g);
+  registerLayaCommands(program, g);
   registerMemoryCommands(program, g);
   for (const plugin of commandPlugins) plugin(program);
   return program;

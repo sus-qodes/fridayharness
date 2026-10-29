@@ -102,6 +102,13 @@ export const RunView = z.object({
   branch_ref: z.string().nullable(),
   /** `pending` while Friday prepares the worktree, then `ready`. */
   workspace: z.enum(['pending', 'ready']),
+  /** The model Friday routed the run to (ADR-0031 §6); binding when the harness applies it. */
+  model_requested: z.string().nullable().default(null),
+  model_binding: z.boolean().default(false),
+  routing_decision_id: z.string().nullable().default(null),
+  /** The model the host reported running, and how it knew (ADR-0031 §7). */
+  model_observed: z.string().nullable().default(null),
+  model_basis: z.string().nullable().default(null),
 });
 export type RunView = z.infer<typeof RunView>;
 
@@ -198,6 +205,70 @@ export const OperationRunView = z.object({
   ended_at: z.string().nullable(),
 });
 export type OperationRunView = z.infer<typeof OperationRunView>;
+
+/** One routing decision (ADR-0031 §4–§6): what was chosen, why, from what, and how binding it is. */
+export const RoutingDecisionView = z.object({
+  decision_id: z.string(),
+  task_id: z.string(),
+  run_id: z.string().nullable(),
+  harness_id: z.string().nullable(),
+  mode: z.string(),
+  task_class: z.string(),
+  model: z.string().nullable(),
+  binding: z.boolean(),
+  source: z.string(),
+  reason: z.string(),
+  reason_codes: z.array(z.string()),
+  candidates: z.array(
+    z.object({
+      model: z.string(),
+      score: z.number(),
+      fit: z.number(),
+      pass_rate: z.number().nullable(),
+      samples: z.number().int(),
+      cost: z.number().nullable(),
+      reasons: z.array(z.string()),
+    }),
+  ),
+  excluded: z.array(z.object({ model: z.string(), reason: z.string() })),
+  constraints: z.array(z.string()),
+  fallback_chain: z.array(z.object({ model: z.string().nullable(), reason: z.string() })),
+  confidence: z.number().nullable(),
+  pin_id: z.string().nullable(),
+  requirements_version: z.string(),
+  guide_version: z.string(),
+  created_at: z.string(),
+});
+export type RoutingDecisionView = z.infer<typeof RoutingDecisionView>;
+
+/** A human's routing policy (spec Part 12 §11): a model or a mode for a scope, with source and expiry. */
+export const RoutingPinView = z.object({
+  pin_id: z.string(),
+  scope: z.enum(['project', 'kind', 'role', 'task']),
+  target: z.string().nullable(),
+  model: z.string().nullable(),
+  mode: z.enum(['manual', 'policy', 'auto', 'hybrid']).nullable(),
+  sensitive: z.boolean(),
+  needs_vision: z.boolean(),
+  until: z.string().nullable(),
+  source: z.string(),
+  note: z.string().nullable(),
+  created_at: z.string(),
+  revoked_at: z.string().nullable(),
+});
+export type RoutingPinView = z.infer<typeof RoutingPinView>;
+
+/** Measured outcomes of one model for one task class (ADR-0031 §8). */
+export const ModelEvidenceView = z.object({
+  model: z.string(),
+  task_class: z.string(),
+  samples: z.number().int(),
+  passed: z.number().int(),
+  failed: z.number().int(),
+  reworked: z.number().int(),
+  median_duration_ms: z.number().int().nullable(),
+});
+export type ModelEvidenceView = z.infer<typeof ModelEvidenceView>;
 
 export const RecoveryAction = z.enum(['reconnect', 'reassign', 'restart', 'needs_human', 'cancel']);
 export type RecoveryAction = z.infer<typeof RecoveryAction>;

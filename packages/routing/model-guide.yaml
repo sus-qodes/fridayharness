@@ -1,0 +1,151 @@
+# Friday's model registry priors and routing guide (ADR-0031). Human-maintained and versioned.
+#
+# Scores are PRIORS on a 0-1 scale (spec Part 08 §3: "scores are evidence, not truths"). They come from
+# each model's tier and price, not from measurement: Friday replaces them with measured outcomes per
+# task class once there are enough samples (routing.min_samples). Prices are USD per million tokens.
+version: 2026-10-14.1
+
+models:
+  - id: claude-fable-5-1
+    provider: anthropic
+    vendors: [claude-code]
+    vision: true
+    local: false
+    context_tokens: 1000000
+    price: { input: 10, output: 50 }
+    capabilities: &top
+      code_generation: 0.95
+      code_editing: 0.95
+      debugging: 0.95
+      planning: 0.95
+      architecture: 0.95
+      repo_navigation: 0.92
+      tool_use: 0.95
+      structured_output: 0.93
+      vision: 0.9
+      documentation: 0.92
+      test_generation: 0.93
+      review: 0.95
+      security_analysis: 0.94
+    notes: top tier; the most expensive
+  - id: claude-opus-5-5
+    provider: anthropic
+    vendors: [claude-code]
+    vision: true
+    local: false
+    context_tokens: 1000000
+    price: { input: 4, output: 20 }
+    capabilities:
+      code_generation: 0.92
+      code_editing: 0.92
+      debugging: 0.92
+      planning: 0.93
+      architecture: 0.93
+      repo_navigation: 0.9
+      tool_use: 0.93
+      structured_output: 0.92
+      vision: 0.88
+      documentation: 0.9
+      test_generation: 0.9
+      review: 0.92
+      security_analysis: 0.91
+    notes: high tier; Friday's default planner model
+  - id: claude-sonnet-5-5
+    provider: anthropic
+    vendors: [claude-code]
+    vision: true
+    local: false
+    context_tokens: 1000000
+    price: { input: 2, output: 10 }
+    capabilities:
+      code_generation: 0.86
+      code_editing: 0.87
+      debugging: 0.84
+      planning: 0.82
+      architecture: 0.8
+      repo_navigation: 0.85
+      tool_use: 0.87
+      structured_output: 0.86
+      vision: 0.82
+      documentation: 0.85
+      test_generation: 0.85
+      review: 0.83
+      security_analysis: 0.8
+    notes: mid tier; balanced cost and quality
+  - id: claude-haiku-5-5
+    provider: anthropic
+    vendors: [claude-code]
+    vision: true
+    local: false
+    context_tokens: 200000
+    price: { input: 0.1, output: 0.5 }
+    latency_ms: 800
+    capabilities:
+      code_generation: 0.7
+      code_editing: 0.72
+      debugging: 0.62
+      planning: 0.6
+      architecture: 0.55
+      repo_navigation: 0.7
+      tool_use: 0.75
+      structured_output: 0.78
+      vision: 0.7
+      documentation: 0.75
+      test_generation: 0.68
+      review: 0.6
+      security_analysis: 0.55
+    notes: small and fast; cheapest
+  - id: gpt-5.6-luna
+    provider: openai
+    vendors: [codex]
+    vision: true
+    local: false
+    context_tokens: 400000
+    capabilities:
+      code_generation: 0.85
+      code_editing: 0.85
+      debugging: 0.82
+      planning: 0.8
+      architecture: 0.78
+      repo_navigation: 0.85
+      tool_use: 0.85
+      structured_output: 0.84
+      vision: 0.75
+      documentation: 0.8
+      test_generation: 0.82
+      review: 0.8
+      security_analysis: 0.78
+    notes: Codex's configured model in the M3.5 spike; price unknown here, so cost does not rank it
+
+# Per task class (a task kind, or role:<role>): preferred models in order, fallbacks, models to avoid.
+classes:
+  implementation:
+    preferred: [claude-opus-5-5, claude-sonnet-5-5, gpt-5.6-luna]
+    fallback: [claude-sonnet-5-5, claude-haiku-5-5]
+    avoid: []
+    notes: editing and debugging matter most
+  verification:
+    preferred: [claude-sonnet-5-5, claude-haiku-5-5]
+    fallback: [claude-haiku-5-5]
+    avoid: []
+    notes: running and reading checks rarely needs the strongest model
+  review:
+    preferred: [claude-opus-5-5, claude-fable-5-1]
+    fallback: [claude-sonnet-5-5]
+    avoid: [claude-haiku-5-5]
+    notes: reviews need depth; a small model misses problems
+  research:
+    preferred: [claude-opus-5-5, claude-sonnet-5-5]
+    fallback: [claude-sonnet-5-5]
+    avoid: []
+    notes: repository navigation and planning
+  docs:
+    preferred: [claude-sonnet-5-5, claude-haiku-5-5]
+    fallback: [claude-haiku-5-5]
+    avoid: []
+    notes: writing clear text is cheap to do well
+  chore:
+    preferred: [claude-haiku-5-5, claude-sonnet-5-5]
+    fallback: [claude-sonnet-5-5]
+    avoid: []
+    notes: small mechanical changes

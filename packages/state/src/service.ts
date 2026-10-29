@@ -45,6 +45,7 @@ import {
   type PlanStatus,
   type PlanTaskView,
   type PlanVersionView,
+  type RoutingPinView,
   type RunStatus,
   type RunView,
   TaskCreateRequest,
@@ -65,6 +66,24 @@ import { ALL_MIGRATIONS } from './migrations.js';
 import { StateProjector } from './projector.js';
 import { type HarnessRecord, Queries } from './queries.js';
 import type { DeliveryRow, MessageRow } from './rows.js';
+
+/**
+ * The routing decision for a new run (ADR-0031 §6), made by the daemon's router in the run's
+ * transaction. `decision` is stored as given (the RoutingDecision of @friday/routing).
+ */
+export interface RunRouting {
+  decision: {
+    mode: string;
+    task_class: string;
+    model: string | null;
+    binding: boolean;
+    source: string;
+    reason: string;
+    reason_codes: string[];
+    [key: string]: unknown;
+  };
+}
+export type RunRouter = (args: { task: TaskView; harness: HarnessRecord; agent: AgentView }) => RunRouting | null;
 
 export interface StateConfig {
   heartbeatIntervalMs: number;
@@ -363,6 +382,8 @@ const OBSERVATION_TYPES = new Set([
   'scope.violation',
   'ownership.conflict',
   'recovery.performed',
+  // M7c: Laya did not answer (ADR-0031 §10).
+  'laya.unavailable',
 ]);
 
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
@@ -392,6 +413,8 @@ export class FridayState {
   readonly ids: IdGenerator;
   readonly clock: Clock;
   readonly redactor: Redactor;
+  /** The daemon's router (ADR-0031 §6). */
+  private router: RunRouter | undefined;
   readonly artifacts: ArtifactStore | undefined;
   /** The project's artifacts folder (`.friday/artifacts`); snapshots live in its `snapshots/`. */
   readonly artifactsDir: string | undefined;
@@ -580,7 +603,250 @@ export class FridayState {
         { kind: 'harness', id: harnessId },
       ],
     });
+    const harness = this.q.harness(harnessId);
+    if (harness.observed_model) {
+      // The session already said which model it runs (ADR-0031 §7).
+      ctx.emit({
+        type: 'run.model_observed',
+        payload: { run_id, task_id: task.task_id, model: harness.observed_model, basis: 'session' },
+        refs: [
+          { kind: 'run', id: run_id },
+          { kind: 'task', id: task.task_id },
+        ],
+      });
+    }
+    this.routeWithin(ctx, task, harness, agentId, run_id);
     return this.q.run(run_id);
+  }
+
+  /**
+   * The model a new run should use (ADR-0031 §6), decided by the daemon's router in the run's own
+   * transaction. Routing never stops a run: a router that fails records why, and the run goes on.
+   */
+  private routeWithin(ctx: CommandContext, task: TaskView, harness: HarnessRecord, agentId: string, runId: string) {
+    if (!this.router) return;
+    let decision: RunRouting['decision'];
+    try {
+      const r = this.router({ task, harness, agent: this.q.agent(agentId) });
+      if (!r) return;
+      decision = r.decision;
+    } catch (e) {
+      decision = {
+        mode: 'unknown',
+        task_class: task.kind,
+        model: null,
+        binding: false,
+        source: 'none',
+        reason: `routing failed: ${(e as Error).message}`.slice(0, 500),
+        reason_codes: ['router.error'],
+      };
+    }
+    ctx.emit({
+      type: 'routing.decided',
+      payload: {
+        decision_id: this.ids.next('route'),
+        task_id: task.task_id,
+        run_id: runId,
+        harness_id: harness.harness_id,
+        decision,
+      },
+      refs: [
+        { kind: 'task', id: task.task_id },
+        { kind: 'run', id: runId },
+      ],
+    });
+  }
+
+  /** Sets the daemon's router (ADR-0031 §6); without one, runs carry no model. */
+  setRouter(router: RunRouter | undefined): void {
+    this.router = router;
+  }
+
+  /** A human pins a model or a mode for a scope (spec Part 12 §11, ADR-0031 §4). */
+  pinRouting(
+    projectId: string,
+    actor: Actor,
+    p: Omit<RoutingPinView, 'pin_id' | 'source' | 'created_at' | 'revoked_at'>,
+  ): RoutingPinView {
+    if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human pins routing');
+    if (!p.model && !p.mode && !p.sensitive && !p.needs_vision) {
+      throw new FridayError('invalid_request', 'a pin names a model, a mode, or marks the work sensitive or visual');
+    }
+    if ((p.scope === 'project') !== (p.target === null)) {
+      throw new FridayError('invalid_request', 'a project pin has no target; a kind, role or task pin names one');
+    }
+    return this.exec({ name: 'routing.pin', project_id: projectId, actor, params: p }, (ctx) => {
+      if (p.until && p.until <= ctx.now) throw new FridayError('invalid_request', 'the pin would already have expired');
+      const pin_id = this.ids.next('pin');
+      // Named fields only: nothing else a caller passes reaches the record.
+      const pin = {
+        pin_id,
+        scope: p.scope,
+        target: p.target,
+        model: p.model,
+        mode: p.mode,
+        sensitive: p.sensitive,
+        needs_vision: p.needs_vision,
+        until: p.until,
+        note: p.note,
+        source: `${actor.kind}:${actor.id}`,
+      };
+      ctx.emit({
+        type: 'routing.pinned',
+        payload: { pin },
+        refs: [
+          { kind: 'routing', id: pin_id },
+          ...(p.scope === 'task' && p.target ? [{ kind: 'task' as const, id: p.target }] : []),
+        ],
+      });
+      return this.q.routingPin(pin_id) as RoutingPinView;
+    });
+  }
+
+  unpinRouting(projectId: string, actor: Actor, pinId: string): RoutingPinView {
+    if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human changes routing pins');
+    return this.exec({ name: 'routing.unpin', project_id: projectId, actor, params: { pinId } }, (ctx) => {
+      const pin = this.q.routingPin(pinId);
+      if (!pin) throw new FridayError('invalid_request', `routing pin ${pinId} not found`);
+      if (pin.revoked_at) return pin;
+      ctx.emit({ type: 'routing.unpinned', payload: { pin_id: pinId }, refs: [{ kind: 'routing', id: pinId }] });
+      return this.q.routingPin(pinId) as RoutingPinView;
+    });
+  }
+
+  /**
+   * The model a host reports running (ADR-0031 §7): for one run (an adapter), or for a session
+   * (Claude Code's SessionStart), which its later runs inherit.
+   */
+  observeModel(
+    projectId: string,
+    actor: Actor,
+    target: { run_id: string } | { harness_id: string },
+    model: string,
+    basis: string,
+  ): void {
+    const m = model.trim().slice(0, 200);
+    if (!m) return;
+    this.exec({ name: 'model.observe', project_id: projectId, actor, params: { target, model: m, basis } }, (ctx) => {
+      if ('run_id' in target) {
+        const run = this.q.run(target.run_id);
+        if (run.model_observed === m && run.model_basis === basis) return;
+        ctx.emit({
+          type: 'run.model_observed',
+          payload: { run_id: run.run_id, task_id: run.task_id, model: m, basis },
+          refs: [
+            { kind: 'run', id: run.run_id },
+            { kind: 'task', id: run.task_id },
+          ],
+        });
+        return;
+      }
+      const harness = this.q.harness(target.harness_id);
+      if (harness.observed_model === m) return;
+      ctx.emit({
+        type: 'harness.model_observed',
+        payload: { harness_id: harness.harness_id, model: m, basis },
+        refs: [{ kind: 'harness', id: harness.harness_id }],
+      });
+      // A run already under way in this session ran on it too.
+      const agent = this.q.agents(projectId).find((a) => a.harness_id === harness.harness_id);
+      const run = agent?.current_run_id ? this.q.findRun(agent.current_run_id) : undefined;
+      if (run && run.status !== 'ENDED') {
+        ctx.emit({
+          type: 'run.model_observed',
+          payload: { run_id: run.run_id, task_id: run.task_id, model: m, basis },
+          refs: [
+            { kind: 'run', id: run.run_id },
+            { kind: 'task', id: run.task_id },
+          ],
+        });
+      }
+    });
+  }
+
+  /** Laya's answer to a task's routing question, stored for the decision that comes later (ADR-0031 §10). */
+  recordLayaAnswer(
+    projectId: string,
+    answer: {
+      task_id: string;
+      question_id: string;
+      checkpoint: string;
+      choice: string;
+      confidence: number;
+      basis: string;
+      options: number;
+      probabilities: Record<string, number> | null;
+      latency_ms: number;
+    },
+  ): void {
+    const actor: Actor = { kind: 'system', id: 'laya' };
+    this.exec({ name: 'laya.answer', project_id: projectId, actor, params: { task_id: answer.task_id } }, (ctx) => {
+      ctx.emit({
+        type: 'laya.answered',
+        payload: { answer: { answer_id: this.ids.next('route'), ...answer } },
+        refs: [{ kind: 'task', id: answer.task_id }],
+      });
+    });
+  }
+
+  /** A human records thresholds fitted on labelled answers (`friday laya calibrate`). */
+  recordLayaCalibrations(
+    projectId: string,
+    actor: Actor,
+    calibrations: {
+      checkpoint: string;
+      shape: string;
+      threshold: number | null;
+      accuracy: number | null;
+      coverage: number;
+      support: number;
+      target: number;
+    }[],
+    source: string,
+  ): void {
+    if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human calibrates Laya');
+    this.exec(
+      { name: 'laya.calibrate', project_id: projectId, actor, params: { count: calibrations.length } },
+      (ctx) => {
+        ctx.emit({
+          type: 'laya.calibrated',
+          payload: {
+            source: source.slice(0, 200),
+            calibrations: calibrations.map((c) => ({ calibration_id: this.ids.next('route'), ...c })),
+          },
+        });
+      },
+    );
+  }
+
+  /** The outcome of a verified run for its model (ADR-0031 §8): what ran, else what was requested. */
+  private recordOutcome(ctx: CommandContext, task: TaskView, runId: string | null, passed: boolean): void {
+    const run = runId ? this.q.findRun(runId) : undefined;
+    const model = run?.model_observed ?? run?.model_requested;
+    if (!run || !model) return;
+    const decision = run.routing_decision_id ? this.q.routingDecision(run.routing_decision_id) : undefined;
+    const ended = run.ended_at ?? ctx.now;
+    const started = run.accepted_at ?? run.created_at;
+    ctx.emit({
+      type: 'routing.outcome_recorded',
+      payload: {
+        outcome: {
+          outcome_id: this.ids.next('oc'),
+          task_id: task.task_id,
+          run_id: run.run_id,
+          model,
+          basis: run.model_observed ? 'observed' : 'requested',
+          task_class: decision?.task_class ?? task.kind,
+          outcome: passed ? 'passed' : 'failed',
+          attempt: run.attempt,
+          duration_ms: Math.max(0, Date.parse(ended) - Date.parse(started)) || null,
+        },
+      },
+      refs: [
+        { kind: 'task', id: task.task_id },
+        { kind: 'run', id: run.run_id },
+      ],
+    });
   }
 
   private moveRun(
@@ -2157,6 +2423,7 @@ export class FridayState {
           ],
         });
         const task = this.q.task(projectId, v.task_id);
+        this.recordOutcome(ctx, task, v.run_id ?? null, passed);
         return this.moveTask(ctx, task, passed ? 'verification.pass' : 'verification.fail', {
           reason: summary.slice(0, 200),
           changes: { current_run_id: null },
@@ -3344,6 +3611,8 @@ export class FridayState {
       git_ref: run.branch_ref,
       acceptance_criteria: task.acceptance_criteria,
       policy_profile: null,
+      model: run.model_requested,
+      model_binding: run.model_binding,
     };
   }
 
