@@ -648,8 +648,9 @@ export type UsageToolKinds = z.infer<typeof UsageToolKinds>;
 
 /**
  * What the host said it spent on the attempt (its last `host.usage` event). A host that reports
- * nothing (an attached session, a Codex thread) has `reported: false` and every number null: an
- * unknown value is never written as 0.
+ * nothing (an attached session, a plain harness) has `reported: false` and every number null: an
+ * unknown value is never written as 0. `cap_usd` is Friday's, not the host's: the task's spending
+ * cap the attempt reached, shown beside the cost that reached it.
  */
 export const UsageHostView = z.object({
   reported: z.boolean(),
@@ -658,6 +659,12 @@ export const UsageHostView = z.object({
   cache_read_input_tokens: z.number().int().nullable(),
   cache_creation_input_tokens: z.number().int().nullable(),
   cost_usd: z.number().nullable(),
+  /**
+   * The task's spending cap the attempt reached (`routing.task_budget_usd`, plan M11.5, from the
+   * run's `budget.exceeded`), whether Friday then ended it or its claim still arrived; null when
+   * no cap was reached.
+   */
+  cap_usd: z.number().nullable(),
   turns: z.number().int().nullable(),
   /** The model the host named in its report. */
   model: z.string().nullable(),

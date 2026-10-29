@@ -229,7 +229,11 @@ describe('recovery limits', () => {
     expect((await taskOf(td, t.taskId)).status).toBe('READY');
 
     await td.operator.post(td.operator.projectPath(`/tasks/${t.taskId}/assign`), { agent_key: 'be-1' });
-    const again = (await t.fake.waitFor('task.start', 20_000)).params as TaskStartParams;
+    // The second start, not the first still in `received`: attempt 2's error must name attempt 2's
+    // run, since an error for an ended run is recorded and changes nothing (plan M11.5).
+    const again = (
+      await t.fake.waitFor('task.start', 20_000, (m) => (m.params as TaskStartParams).run_id !== t.start.run_id)
+    ).params as TaskStartParams;
     await eventually(
       () => taskOf(td, t.taskId),
       (x) => x.status === 'RUNNING',

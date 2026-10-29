@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import {
   AnthropicPlannerModel,
+  type BrainSettings,
   DEFAULT_PLANNER_MODEL,
   FakePlannerModel,
   MasterBrain,
@@ -11,7 +12,15 @@ import {
   type PlannerModel,
 } from '@friday/planner';
 import type { TaskView } from '@friday/protocol';
-import { hasSecret, type ProjectRef, providerApproval, providerEndpoint, resolveSecret, stateDir } from '@friday/sdk';
+import {
+  hasSecret,
+  type MasterBrainConfig,
+  type ProjectRef,
+  providerApproval,
+  providerEndpoint,
+  resolveSecret,
+  stateDir,
+} from '@friday/sdk';
 import type { FridayState } from '@friday/state';
 import { buildBrainContext } from './brain-context.js';
 import type { Logger } from './log.js';
@@ -34,11 +43,13 @@ class KeyedAnthropicModel implements PlannerModel {
   #client: AnthropicPlannerModel | undefined;
   #key: string | undefined;
   #endpoint: string | undefined;
+  #effort: MasterBrainConfig['effort'];
 
   constructor(
     private readonly env: NodeJS.ProcessEnv,
     private readonly opts: {
-      effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+      /** `master_brain.effort` as config.yaml has it now: read before every call (plan M11.2). */
+      effort: () => MasterBrainConfig['effort'];
       cacheTtl: '5m' | '1h';
       onKey: (key: string) => void;
     },
@@ -48,15 +59,17 @@ class KeyedAnthropicModel implements PlannerModel {
     const key = await anthropicKey(this.env);
     if (!key) throw new ModelError('auth', 'no Anthropic API key; run "friday secrets set anthropic"');
     const endpoint = anthropicEndpoint(this.env);
-    if (!this.#client || key !== this.#key || endpoint !== this.#endpoint) {
+    const effort = this.opts.effort();
+    if (!this.#client || key !== this.#key || endpoint !== this.#endpoint || effort !== this.#effort) {
       this.#key = key;
       this.#endpoint = endpoint;
+      this.#effort = effort;
       this.opts.onKey(key);
       this.#client = new AnthropicPlannerModel({
         apiKey: key,
         baseURL: endpoint,
         cacheTtl: this.opts.cacheTtl,
-        ...(this.opts.effort ? { effort: this.opts.effort } : {}),
+        ...(effort ? { effort } : {}),
       });
     }
     return this.#client.complete(request, signal);
@@ -98,7 +111,13 @@ export interface BrainHandle {
   status(): BrainStatus;
 }
 
-/** Builds the Master Brain from `.friday/config.yaml` (ADR-0013). `model` overrides the provider (tests). */
+/**
+ * Builds the Master Brain from `.friday/config.yaml` (ADR-0013). `model` overrides the provider
+ * (tests). The provider and its scripted answers are taken here, since the planner is built on
+ * them (`master_brain.provider` and `fake_responses` need a restart, plan M11.2); the model, its
+ * effort and token limit, the escalation and replan limits and `auto_approve` are read from
+ * `project.config` at each use, so a changed config.yaml applies to the next planning call.
+ */
 export function createMasterBrain(input: {
   state: FridayState;
   project: ProjectRef;
@@ -113,8 +132,11 @@ export function createMasterBrain(input: {
   routingReady?: (task: TaskView) => boolean;
 }): BrainHandle {
   const { state, project, env, logger } = input;
-  const cfg = project.config.master_brain;
-  const providerName = cfg.provider === 'none' ? 'none' : cfg.provider;
+  /** The provider Friday started with (restart-only). */
+  const started = project.config.master_brain;
+  /** `master_brain` as config.yaml has it now: `project.config` is replaced when the file is read again. */
+  const current = () => project.config.master_brain;
+  const providerName = started.provider === 'none' ? 'none' : started.provider;
   const provider = project.config.providers[providerName] ?? {
     allow_remote: false,
     daily_budget_usd: 5,
@@ -150,33 +172,45 @@ export function createMasterBrain(input: {
   if (input.model !== undefined) {
     model = input.model;
     if (!model) reason = 'no planner is configured';
-  } else if (cfg.provider === 'none') {
+  } else if (started.provider === 'none') {
     reason = 'master_brain.provider is "none"';
-  } else if (cfg.provider === 'fake') {
-    const dir = cfg.fake_responses ? path.resolve(project.root, cfg.fake_responses) : undefined;
+  } else if (started.provider === 'fake') {
+    const dir = started.fake_responses ? path.resolve(project.root, started.fake_responses) : undefined;
     if (dir && existsSync(dir)) model = FakePlannerModel.fromDirectory(dir);
     else reason = 'master_brain.fake_responses does not name a directory of scripted answers';
   } else {
     model = new KeyedAnthropicModel(env, {
       cacheTtl: provider.cache_ttl,
-      ...(cfg.effort ? { effort: cfg.effort } : {}),
+      effort: () => current().effort,
       onKey: (key) => state.redactor.addSecret(key),
     });
   }
-  const modelId = cfg.model !== 'auto' ? cfg.model : cfg.provider === 'fake' ? 'fake-planner' : DEFAULT_PLANNER_MODEL;
-  const settings = {
-    model: modelId,
-    maxTokens: cfg.max_tokens,
-    autoApprove: input.policy ? input.policy().auto_approve : cfg.auto_approve,
-    escalateAfterFailures: cfg.escalate_after_failures,
-    maxReplans: cfg.max_replans,
+  const modelId = () => {
+    const m = current().model;
+    return m !== 'auto' ? m : started.provider === 'fake' ? 'fake-planner' : DEFAULT_PLANNER_MODEL;
+  };
+  // Read on every pass: a changed config.yaml, and a trusted (or no longer trusted) policy, apply
+  // without a restart. The provider's consent and budget are restart-only, like `providers`.
+  const settings: BrainSettings = {
+    get model() {
+      return modelId();
+    },
+    get maxTokens() {
+      return current().max_tokens;
+    },
+    get autoApprove() {
+      return input.policy ? input.policy().auto_approve : current().auto_approve;
+    },
+    get escalateAfterFailures() {
+      return current().escalate_after_failures;
+    },
+    get maxReplans() {
+      return current().max_replans;
+    },
     allowRemote: provider.allow_remote,
     dailyBudgetUsd: provider.daily_budget_usd,
     ...(provider.prices ? { prices: provider.prices } : {}),
   };
-  // Read on every pass, so a trusted (or no longer trusted) policy applies without a restart.
-  if (input.policy)
-    Object.defineProperty(settings, 'autoApprove', { get: () => input.policy?.().auto_approve ?? false });
   const brain = new MasterBrain({
     state,
     projectId: project.project_id,
@@ -223,8 +257,8 @@ export function createMasterBrain(input: {
             ? 'no Anthropic API key: run "friday secrets set anthropic"'
             : null);
       return {
-        provider: model?.provider ?? cfg.provider,
-        model: modelId,
+        provider: model?.provider ?? started.provider,
+        model: modelId(),
         remote,
         allow_remote: provider.allow_remote,
         approved_here: Boolean(providerApproval(project, providerName === 'none' ? 'anthropic' : providerName, env)),
@@ -233,9 +267,9 @@ export function createMasterBrain(input: {
         key,
         planner_available: !unavailable,
         reason: unavailable,
-        auto_approve: cfg.auto_approve,
-        escalate_after_failures: cfg.escalate_after_failures,
-        max_replans: cfg.max_replans,
+        auto_approve: current().auto_approve,
+        escalate_after_failures: current().escalate_after_failures,
+        max_replans: current().max_replans,
         daily_budget_usd: consent.dailyBudgetUsd,
         spent_today_usd: model ? state.q.modelSpend(pid, model.provider, dayStart) : 0,
         cursor: state.q.brainCursor(pid),

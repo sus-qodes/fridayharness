@@ -4,6 +4,7 @@ import {
   FINAL_SCHEMA,
   type GenericHarnessClient,
   type HarnessDescriptor,
+  type KeptEvent,
   parseFinal,
   type Registration,
   relayedMessage,
@@ -81,6 +82,15 @@ interface Attempt {
   asked: Set<string>;
   changed: Set<string>;
   lastMessage: string;
+  /** The model the thread reported, the last reroute included: the usage record names it. */
+  model: string | null;
+  /** The turns this adapter started in the thread for this attempt. */
+  turns: number;
+  /**
+   * The `total` of the newest `thread/tokenUsage/updated` the host sent: its count of the thread's
+   * tokens so far, which the attempt's usage record reads when its turn ends (plan M11.4).
+   */
+  usage: Record<string, unknown> | null;
   /** Friday's tools for this attempt, served to the thread as client tools (review M8-R06). */
   tools: FridayTool[];
   stopping: boolean;
@@ -101,6 +111,35 @@ interface OpenedThread {
 }
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+/** A number the host reported, or null: what a host did not report is unknown, never zero. */
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/**
+ * What the thread cost, as the token baseline reads it (plan M10a, `host.usage`, in the shape the
+ * Claude spawn adapter reports): from the `total` of the host's last `thread/tokenUsage/updated`,
+ * its own count of the thread's tokens so far. Its `inputTokens` is the whole prompt of every
+ * response, the part read from the cache included, which `cachedInputTokens` counts again on its
+ * own; `cacheWriteInputTokens` is what was written into the cache. Every count is null when the
+ * host did not report it, never 0. The app-server names no cost, so `cost_usd` is null. The turns
+ * are those this adapter started in the thread; the model is the one the thread reported, the last
+ * reroute included.
+ */
+export function codexHostUsage(
+  total: Record<string, unknown> | null,
+  turns: number,
+  model: string | null,
+): Record<string, unknown> {
+  const t = total ?? {};
+  return {
+    cost_usd: null,
+    input_tokens: num(t.inputTokens),
+    output_tokens: num(t.outputTokens),
+    cache_read_input_tokens: num(t.cachedInputTokens),
+    cache_creation_input_tokens: num(t.cacheWriteInputTokens),
+    turns,
+    model,
+  };
+}
 
 /**
  * Every spelling Codex may key a folder's trust by: the checkout and the main checkout of its
@@ -294,6 +333,9 @@ export class CodexAdapter {
       asked: new Set(),
       changed: new Set(),
       lastMessage: '',
+      model: null,
+      turns: 0,
+      usage: null,
       tools: spawnedAgentTools({
         client: () => this.client,
         agentKey: this.opts.agentKey,
@@ -349,6 +391,7 @@ export class CodexAdapter {
     const threadId = str(opened.thread?.id);
     if (!threadId) throw new Error('the host returned no thread');
     a.threadId = threadId;
+    a.model = str(opened.model) ?? null;
     await this.#confirmSettings(a, opened, host.servers);
     if (str(opened.model)) await this.#event(a, 'model.observed', { model: opened.model, basis: 'reported' });
     if (opened.multiAgentMode !== undefined && opened.multiAgentMode !== 'explicitRequestOnly') {
@@ -460,13 +503,22 @@ export class CodexAdapter {
               ? ['', 'Acceptance criteria:', ...p.acceptance_criteria.map((c) => `- ${c}`)]
               : []),
           ].join('\n');
-    const started = await a.rpc.request<{ turn?: { id?: string } }>('turn/start', {
-      threadId: a.threadId,
-      input: [{ type: 'text', text, text_elements: [] }],
-      ...(p.model ? { model: p.model } : {}),
-      ...(this.opts.effort ? { effort: this.opts.effort } : {}),
-      outputSchema: FINAL_SCHEMA,
-    });
+    // The turn counts from the moment the host is asked for it: a turn that ends at once (a failed
+    // one) is heard before the answer to this request is handled, and its usage record counts it.
+    a.turns += 1;
+    const started = await a.rpc
+      .request<{ turn?: { id?: string } }>('turn/start', {
+        threadId: a.threadId,
+        input: [{ type: 'text', text, text_elements: [] }],
+        ...(p.model ? { model: p.model } : {}),
+        ...(this.opts.effort ? { effort: this.opts.effort } : {}),
+        outputSchema: FINAL_SCHEMA,
+      })
+      .catch((e: Error) => {
+        // The host refused the turn: none ran.
+        a.turns -= 1;
+        throw e;
+      });
     a.turnId = str(started.turn?.id) ?? null;
   }
 
@@ -542,7 +594,16 @@ export class CodexAdapter {
       a.lastMessage = String(item.text ?? '');
       return;
     }
+    if (method === 'thread/tokenUsage/updated') {
+      // The host's own count of the thread's tokens so far (`total`; `last` is the newest model
+      // response's share), sent after every response and, as recorded in 0.162.1, before the turn
+      // ends: the newest one is what the attempt spent when its turn ends (plan M11.4).
+      const total = (p.tokenUsage as { total?: unknown } | undefined)?.total;
+      if (total && typeof total === 'object') a.usage = total as Record<string, unknown>;
+      return;
+    }
     if (method === 'model/rerouted') {
+      a.model = str(p.toModel) ?? a.model;
       void this.#event(a, 'model.observed', { model: p.toModel, basis: 'rerouted', from: p.fromModel ?? null });
       return;
     }
@@ -604,17 +665,25 @@ export class CodexAdapter {
     if (a.done || a.stopping) return;
     a.done = true;
     const ids = { task_id: a.taskId, run_id: a.runId };
-    // Kept until Friday records it, whatever happens to this adapter meanwhile (review M8-R05).
+    // Kept until Friday records it, whatever happens to this adapter meanwhile (review M8-R05),
+    // together with what the turn cost, whatever it ended as (plan M11.4): the usage row of the
+    // token baseline reads that per run, and a report lost to an outage at the end of a turn would
+    // show a verified attempt as one whose host said nothing (LESSONS D-54).
     const reports = this.#link.reports;
+    const spent = this.#spent(a);
     if (turn.status === 'completed') {
       const final = parseFinal(a.lastMessage);
       if (final.status === 'blocked') {
-        void reports.report('result', {
-          ...ids,
-          status: 'blocked',
-          summary: final.summary.slice(0, 2000) || 'blocked',
-          blocked_reason: (final.blocked_reason || final.summary || 'blocked').slice(0, 1000),
-        });
+        void reports.report(
+          'result',
+          {
+            ...ids,
+            status: 'blocked',
+            summary: final.summary.slice(0, 2000) || 'blocked',
+            blocked_reason: (final.blocked_reason || final.summary || 'blocked').slice(0, 1000),
+          },
+          spent,
+        );
       } else {
         const changed = new Set([...a.changed, ...final.changed_paths.map((x) => this.#rel(a, x))]);
         try {
@@ -622,35 +691,56 @@ export class CodexAdapter {
         } catch {
           // the worktree's own changes are optional evidence; verification reads them itself
         }
-        void reports.report('result', {
-          ...ids,
-          status: 'completed_claim',
-          summary: final.summary.slice(0, 2000) || 'done',
-          changed_paths: [...changed].slice(0, 200),
-          checks: [],
-        });
+        void reports.report(
+          'result',
+          {
+            ...ids,
+            status: 'completed_claim',
+            summary: final.summary.slice(0, 2000) || 'done',
+            changed_paths: [...changed].slice(0, 200),
+            checks: [],
+          },
+          spent,
+        );
       }
     } else {
-      void reports.report('error', {
-        ...ids,
-        message: `the Codex turn ${turn.status ?? 'ended'}: ${turn.error?.message ?? 'no reason given'}`.slice(0, 2000),
-        // The attempt is over (its host ends below): Friday's recovery decides what follows.
-        fatal: true,
-      });
+      void reports.report(
+        'error',
+        {
+          ...ids,
+          message: `the Codex turn ${turn.status ?? 'ended'}: ${turn.error?.message ?? 'no reason given'}`.slice(
+            0,
+            2000,
+          ),
+          // The attempt is over (its host ends below): Friday's recovery decides what follows.
+          fatal: true,
+        },
+        spent,
+      );
     }
     await this.#end(a.runId);
+  }
+
+  /** What the attempt spent, to travel with the report of how it ended: the host's last count. */
+  #spent(a: Attempt): { events: KeptEvent[] } {
+    return { events: [{ event_type: 'host.usage', data: codexHostUsage(a.usage, a.turns, a.model) }] };
   }
 
   /** The host ended without the turn ending: an agent error Friday's recovery handles. */
   async #lost(a: Attempt, why: string): Promise<void> {
     if (a.done || a.stopping) return;
     a.done = true;
-    void this.#link.reports.report('error', {
-      task_id: a.taskId,
-      run_id: a.runId,
-      message: `Codex stopped: ${why}`.slice(0, 2000),
-      fatal: true,
-    });
+    void this.#link.reports.report(
+      'error',
+      {
+        task_id: a.taskId,
+        run_id: a.runId,
+        message: `Codex stopped: ${why}`.slice(0, 2000),
+        fatal: true,
+      },
+      // Once a turn ran, what the host had counted by the time it stopped was spent all the same.
+      a.turns > 0 ? this.#spent(a) : {},
+    );
     await this.#end(a.runId);
   }
 

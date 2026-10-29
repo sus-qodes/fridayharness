@@ -1,9 +1,9 @@
 /**
  * The Codex adapter's pure parts (ADR-0032): the JSON-RPC line client, the turn's final message,
- * and the environment its host gets.
+ * the usage record a thread's token counts become, and the environment its host gets.
  */
 import { describe, expect, it } from 'vitest';
-import { hostEnvironment, JsonRpcLines, MethodNotFound, parseFinal } from './index.js';
+import { codexHostUsage, hostEnvironment, JsonRpcLines, MethodNotFound, parseFinal } from './index.js';
 
 describe('JSON-RPC over lines', () => {
   it('matches answers to requests, answers the server, and fails open requests when the server goes', async () => {
@@ -63,6 +63,51 @@ describe('the final message', () => {
       blocked_reason: '',
     });
     expect(parseFinal(JSON.stringify({ status: 'done' })).status).toBe('completed');
+  });
+});
+
+describe('the usage record (plan M11.4)', () => {
+  it("reads the thread's last token count into the shape every host's usage is recorded in", () => {
+    // The `total` of the sixth and last `thread/tokenUsage/updated` of the recorded live turn
+    // (0.162.1, tests/fixtures/codex/v0.162.1/live-adapter-transcript.jsonl): the thread's count so
+    // far, in which `inputTokens` holds the whole prompt, the cached part included.
+    const total = {
+      totalTokens: 64866,
+      inputTokens: 64178,
+      cachedInputTokens: 39936,
+      cacheWriteInputTokens: 0,
+      outputTokens: 688,
+      reasoningOutputTokens: 70,
+    };
+    expect(codexHostUsage(total, 1, 'gpt-5.6-luna')).toEqual({
+      cost_usd: null,
+      input_tokens: 64178,
+      output_tokens: 688,
+      cache_read_input_tokens: 39936,
+      cache_creation_input_tokens: 0,
+      turns: 1,
+      model: 'gpt-5.6-luna',
+    });
+    // A host that sent no count: every count unknown, never 0; the turn and the model still known.
+    expect(codexHostUsage(null, 1, 'gpt-5.6-luna')).toEqual({
+      cost_usd: null,
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+      turns: 1,
+      model: 'gpt-5.6-luna',
+    });
+    // A count that is not a finite number is unknown too.
+    expect(codexHostUsage({ inputTokens: '12', outputTokens: Number.NaN, cachedInputTokens: 3 }, 2, null)).toEqual({
+      cost_usd: null,
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_input_tokens: 3,
+      cache_creation_input_tokens: null,
+      turns: 2,
+      model: null,
+    });
   });
 });
 

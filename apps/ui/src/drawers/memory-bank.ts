@@ -4,6 +4,10 @@
  * scope filter), authority badges with human-approved decisions pinned first, a recency bar from the
  * result's weight and the authority's half-life, and the memories that need review with Approve and
  * Retract. Memory text is written by agents: shown as text, review items with visible marks.
+ *
+ * Opened for the review (`request.tab === 'review'`: the rail's "N memories need review" row and the
+ * Notch's notice), the drawer scrolls to the Needs review section once its list has loaded, and says
+ * so when nothing needs review any more; opened any other way it starts at the search.
  */
 import type { MemoryHit } from '../api/client.js';
 import { hasHidden, visible } from '../model/text.js';
@@ -48,13 +52,16 @@ function pinIcon(): SVGSVGElement {
   );
 }
 
-export function createMemoryBank(ctx: AppContext, _request: DrawerRequest): Component & { title: string } {
+export function createMemoryBank(ctx: AppContext, request: DrawerRequest): Component & { title: string } {
   let destroyed = false;
   let results: MemoryHit[] = [];
   let reviewItems: MemoryHit[] = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
   let token = 0;
   const filter = { kind: '', scope: '' };
+  /** Opened from a row that promised memories to review: that section is what the person came for. */
+  const openedForReview = request.tab === 'review';
+  let shownReview = false;
 
   const search = h('input', {
     class: 'input dr-mem-search',
@@ -206,7 +213,8 @@ export function createMemoryBank(ctx: AppContext, _request: DrawerRequest): Comp
 
   function renderReview(): void {
     if (!reviewItems.length) {
-      replace(review);
+      // Opened for the review, the section says so: the row that led here promised items.
+      replace(review, openedForReview ? empty('No memory needs review now.') : null);
       return;
     }
     replace(
@@ -243,8 +251,20 @@ export function createMemoryBank(ctx: AppContext, _request: DrawerRequest): Comp
       reviewItems = r.memories ?? [];
       renderReview();
     } catch (e) {
-      if (!destroyed) replace(review, errorNote('Could not read the memories that need review', e));
+      if (destroyed) return;
+      replace(review, errorNote('Could not read the memories that need review', e));
     }
+    showReview();
+  }
+
+  /**
+   * Opened for the review: once the section has its content (the list, the line that nothing needs
+   * review, or the error), scroll it into view. Once only: a re-read after Approve keeps the place.
+   */
+  function showReview(): void {
+    if (!openedForReview || shownReview) return;
+    shownReview = true;
+    if (typeof review.scrollIntoView === 'function') review.scrollIntoView({ block: 'start' });
   }
 
   async function approve(m: MemoryHit): Promise<void> {

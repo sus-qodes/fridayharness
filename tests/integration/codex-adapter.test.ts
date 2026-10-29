@@ -115,6 +115,39 @@ async function assigned(td: TestDaemon, agent: string, write: string[], summary 
 
 const status = (td: TestDaemon, id: string) => td.daemon.state.q.task(td.project.project_id, id);
 
+/** The `host.usage` records of a task's attempts, as Friday kept them (plan M11.4). */
+const usageEvents = (td: TestDaemon, id: string) =>
+  td.daemon.state.store
+    .readByRef(td.project.project_id, 'task', id)
+    .filter((e) => e.type === 'agent.event' && (e.payload as { event_type: string }).event_type === 'host.usage')
+    .map((e) => {
+      const p = e.payload as { run_id?: string; data?: Record<string, unknown> };
+      return { run_id: p.run_id, data: p.data };
+    });
+
+/** The model the thread reports: the one Friday routed the run to, else the scripted host's own. */
+const threadModel = (c: ReturnType<typeof codex>) =>
+  (c.adapter.received.find((m) => m.method === 'task.start')?.params as TaskStartParams | undefined)?.model ??
+  'gpt-fake';
+
+/** The host's last count of the thread's tokens (`total`), as the scripted app-server logged it. */
+const lastTotal = (c: ReturnType<typeof codex>) =>
+  c
+    .entries()
+    .filter((e) => e.tokenUsage)
+    .at(-1)?.tokenUsage as Record<string, number> | undefined;
+
+/** The usage record every host's spend is recorded in, from the host's count (none: unknown, never 0). */
+const usageFrom = (total: Record<string, number> | undefined, model: string) => ({
+  cost_usd: null,
+  input_tokens: total?.inputTokens ?? null,
+  output_tokens: total?.outputTokens ?? null,
+  cache_read_input_tokens: total?.cachedInputTokens ?? null,
+  cache_creation_input_tokens: total?.cacheWriteInputTokens ?? null,
+  turns: 1,
+  model,
+});
+
 describe('the Codex adapter', () => {
   it("pins Friday's settings on its threads, answers approvals by Friday's policy, and claims the work", async () => {
     const td = await startTestDaemon(ws(), { git: true, brain: false });
@@ -241,6 +274,19 @@ describe('the Codex adapter', () => {
       [routed ?? 'gpt-fake', 'reported'],
       ['gpt-fake-mini', 'rerouted'],
     ]);
+    // What the thread cost (plan M11.4): the `total` of the host's last token count (one per model
+    // response, the last before the turn ended), the turn this adapter ran, and the model the
+    // thread reported last (the reroute), recorded once with the claim against the run that spent
+    // it; the app-server names no cost.
+    const total = lastTotal(c);
+    expect(total?.inputTokens).toBeGreaterThan(0);
+    expect(c.entries().filter((e) => e.tokenUsage).length).toBeGreaterThan(1);
+    expect(usageEvents(td, id)).toEqual([{ run_id: run?.run_id, data: usageFrom(total, 'gpt-fake-mini') }]);
+    // ...and the attempt's usage row shows a host that reported, in full.
+    expect(td.daemon.state.q.usageReport(pid, { taskId: id }).rows[0]?.host).toMatchObject({
+      reported: true,
+      ...usageFrom(total, 'gpt-fake-mini'),
+    });
     // The attempt's host ended with the attempt.
     expect(c.adapter.running(run?.run_id as string)).toBe(false);
   });
@@ -301,6 +347,23 @@ describe('the Codex adapter', () => {
       'the agent error',
     );
     expect(status(td, two).waiting_reason).toBe('agent_error');
+    // Both attempts record what they cost with their report (plan M11.4): the blocked turn the
+    // host's last count; the failed one, whose model never answered, every count unknown, never 0,
+    // and the turn and the model all the same.
+    const counted = lastTotal(blocked);
+    expect(counted?.inputTokens).toBeGreaterThan(0);
+    expect(usageEvents(td, one).map((e) => e.data)).toEqual([usageFrom(counted, threadModel(blocked))]);
+    expect(usageEvents(td, two).map((e) => e.data)).toEqual([usageFrom(undefined, threadModel(failing))]);
+    expect(td.daemon.state.q.usageReport(td.project.project_id, { taskId: two }).rows[0]?.host).toMatchObject({
+      reported: true,
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+      cost_usd: null,
+      turns: 1,
+      model: threadModel(failing),
+    });
   });
 
   it('steers a message for its agent into the running turn, and acknowledges it', async () => {
@@ -520,6 +583,54 @@ describe('the Codex adapter', () => {
         .filter((e) => e.type === 'task.completion_claimed');
       expect(claimed, id).toHaveLength(1);
     }
+  });
+
+  it("keeps the host's count of what the turn cost with the result until Friday records both (plan M11.4, review M8-R05)", async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const pid = td.project.project_id;
+    const x = interceptedBootstrap(td);
+    // Friday is out of reach the moment the turn ends: the usage record does not get through.
+    x.on(
+      method('agent.event', (p) => p.event_type === 'host.usage'),
+      notDelivered,
+    );
+    const c = codex(
+      td,
+      'h-1',
+      { turns: [[{ op: 'final', status: 'completed', summary: 'done', changed_paths: [] }]] },
+      { bootstrap: x.client },
+    );
+    await c.adapter.start();
+    const id = await assigned(td, 'h-1', ['src/**']);
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the claim',
+      15_000,
+    );
+    // The record was tried again and recorded, once, before the claim it belongs with.
+    const events = td.daemon.state.store.readByRef(pid, 'task', id);
+    const usage = events.filter(
+      (e) => e.type === 'agent.event' && (e.payload as { event_type: string }).event_type === 'host.usage',
+    );
+    expect(usage).toHaveLength(1);
+    const claimed = events.find((e) => e.type === 'task.completion_claimed');
+    expect(usage[0]?.sequence).toBeLessThan(claimed?.sequence as number);
+    expect(
+      x.calls.filter((call) => call.method === 'agent.event' && call.params.event_type === 'host.usage'),
+    ).toHaveLength(2);
+    // The attempt's row shows what the host counted (one response: the scripted host's first
+    // figures), not a host that said nothing.
+    expect(td.daemon.state.q.usageReport(pid, { taskId: id }).rows[0]?.host).toMatchObject({
+      reported: true,
+      input_tokens: 10200,
+      output_tokens: 50,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 1024,
+      cost_usd: null,
+      turns: 1,
+      model: threadModel(c),
+    });
   });
 
   it('reports the result of a finished attempt after the adapter restarts, without a new turn (review M8-R05)', async () => {

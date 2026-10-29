@@ -6,6 +6,7 @@ import {
   makeApproval,
   makeEscalation,
   makeGoal,
+  makeInboxItem,
   makePlan,
   makeScenario,
   makeSnapshot,
@@ -211,13 +212,15 @@ describe('notifications (plan FD-25)', () => {
       const f = fakeEnv(setup);
       const ctx = ctxWith(makeSnapshot(), setup.notifications ?? true);
       const stop = start(ctx, f.env);
-      ctx.board(makeSnapshot({ approvals: [makeApproval()] }));
+      // An approval and a message awaiting a reply: the one gate holds both back.
+      const board = makeSnapshot({ approvals: [makeApproval()], inbox: [makeInboxItem({ mode: 'request' })] });
+      ctx.board(board);
       expect(f.shown).toHaveLength(0);
-      // Allowed later: the item already seen is not announced.
+      // Allowed later: the items already seen are not announced.
       ctx.store.patch('prefs', { notifications: true });
       f.setPermission('granted');
       f.doc.visibilityState = 'hidden';
-      ctx.board(makeSnapshot({ approvals: [makeApproval()] }));
+      ctx.board({ ...board });
       expect(f.shown).toHaveLength(0);
       stop();
     }
@@ -314,7 +317,61 @@ describe('notifications (plan FD-25)', () => {
     n?.onclick?.call(undefined as never, new Event('click'));
     expect(f.focusWindow).toHaveBeenCalledOnce();
     expect(ctx.store.select('ui').selectedTaskId).toBe('task_x');
+    expect(ctx.store.select('ui').drawer).toBeNull();
     expect(n?.closed).toBe(true);
+  });
+
+  it('announces a message awaiting a reply as it does an approval; its click opens Messages at the delivery', () => {
+    const f = fakeEnv();
+    const ctx = ctxWith();
+    start(ctx, f.env);
+    // A message that waits for nobody announces nothing.
+    const note = makeInboxItem({ delivery_id: 'dlv_note' });
+    ctx.board(makeSnapshot({ inbox: [note] }));
+    expect(f.shown).toHaveLength(0);
+    const request = makeInboxItem({
+      delivery_id: 'dlv_req',
+      mode: 'request',
+      subject: `Which plan names? ${HOSTILE}`,
+      task_id: 'task_x',
+    });
+    const board = makeSnapshot({ inbox: [note, request] });
+    ctx.board(board);
+    ctx.board({ ...board });
+    expect(f.shown).toHaveLength(1);
+    expect(f.shown[0]?.title).toBe('A message waits for your reply — Friday — shop');
+    expect(f.shown[0]?.options).toMatchObject({
+      body: `claude-1: Which plan names? ${HOSTILE}`,
+      tag: 'message:dlv_req',
+    });
+    f.shown[0]?.onclick?.call(undefined as never, new Event('click'));
+    expect(f.focusWindow).toHaveBeenCalledOnce();
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'inbox', id: 'dlv_req' });
+    expect(ctx.store.select('ui').selectedTaskId).toBe('task_x');
+    expect(f.shown[0]?.closed).toBe(true);
+  });
+
+  it('a message present at the start is not announced; one replied to closes its notification', () => {
+    const f = fakeEnv();
+    const first = makeInboxItem({ delivery_id: 'dlv_first', mode: 'request' });
+    const ctx = ctxWith(makeSnapshot({ inbox: [first] }));
+    start(ctx, f.env);
+    expect(f.doc.title).toBe('(1) Friday — shop');
+    expect(f.shown).toHaveLength(0);
+    // A blocking message from the Master Brain without a subject: the preview stands in.
+    const blocking = makeInboxItem({
+      delivery_id: 'dlv_block',
+      blocking: true,
+      subject: null,
+      preview: 'Choose the plan to keep.',
+      from: { kind: 'master_brain', id: 'master', agent_key: null, role: null },
+    });
+    ctx.board(makeSnapshot({ inbox: [first, blocking] }));
+    expect(f.shown.map((n) => n.options?.tag)).toEqual(['message:dlv_block']);
+    expect(f.shown[0]?.options?.body).toBe('Master Brain: Choose the plan to keep.');
+    // Replied to (or acknowledged): the delivery leaves the inbox and the notification closes.
+    ctx.board(makeSnapshot({ inbox: [first] }));
+    expect(f.shown[0]?.closed).toBe(true);
   });
 
   it('closes a notification when its item is decided, and all of them when the tab is shown', () => {
@@ -330,18 +387,28 @@ describe('notifications (plan FD-25)', () => {
     expect(f.shown[1]?.closed).toBe(true);
   });
 
-  it(`shows at most ${MAX_PER_UPDATE} per update and sums up the rest`, () => {
+  it(`shows at most ${MAX_PER_UPDATE} per update, messages counted with the rest, and sums up what is over`, () => {
     const f = fakeEnv();
     const ctx = ctxWith();
     start(ctx, f.env);
     ctx.board(
       makeSnapshot({
-        approvals: Array.from({ length: 6 }, (_, i) =>
+        approvals: Array.from({ length: 4 }, (_, i) =>
           makeApproval({ approval_id: `apr_${i}`, created_at: `2026-10-17T09:0${i}:00.000Z` }),
         ),
+        inbox: [
+          makeInboxItem({ delivery_id: 'dlv_1', mode: 'request' }),
+          makeInboxItem({ delivery_id: 'dlv_2', blocking: true }),
+        ],
       }),
     );
     expect(f.shown).toHaveLength(MAX_PER_UPDATE + 1);
+    expect(f.shown.map((n) => n.options?.tag)).toEqual([
+      'approval:apr_0',
+      'approval:apr_1',
+      'approval:apr_2',
+      'more:approval:apr_3',
+    ]);
     expect(f.shown.at(-1)?.title).toBe('Friday — shop: 3 more items need you');
   });
 

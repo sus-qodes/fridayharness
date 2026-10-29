@@ -37,6 +37,7 @@ export {
   achievedEnforcement,
   type BrainJob,
   type BrainJobInput,
+  BUDGET_STOP_GRACE_MS,
   type Caller,
   DEFAULT_STATE_CONFIG,
   FridayState,

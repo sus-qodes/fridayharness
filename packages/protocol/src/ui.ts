@@ -227,6 +227,20 @@ export type SnapshotList =
   | 'inbox'
   | 'reservations';
 
+/**
+ * What a running daemon did with a changed `config.yaml` (plan M11.2). The daemon reads the file
+ * again when it changes and applies every key that is read where it is used; the keys captured
+ * when Friday started keep their start values until a restart.
+ */
+export interface ConfigChanges {
+  /** Changed keys in force now, applied without a restart (dotted: `scopes.frontend.write`). */
+  applied: string[];
+  /** Changed keys that keep their start values until Friday restarts (`daemon.port`). */
+  restart_needed: string[];
+  /** Why the file as it stands could not be applied (the settings in force are unchanged), else null. */
+  error: string | null;
+}
+
 /** `GET …/ui/snapshot`: everything the board needs, consistent with `head` (plan §5.3). */
 export interface UiSnapshot {
   /** The interface API version the daemon speaks; a mismatched page asks to be reloaded. */
@@ -243,8 +257,13 @@ export interface UiSnapshot {
     has_commit: boolean;
     worktrees_mode: string;
   };
-  /** Differ → "config.yaml changed; restart Friday to apply". */
-  config: { loaded_hash: string; current_hash: string | null };
+  /**
+   * `config.yaml` as Friday started with it (`loaded_hash`) and as it is now (`current_hash`; null
+   * when unreadable), and what the daemon did with the difference. A key in `changes.restart_needed`,
+   * or an `error`, shows the config banner, which names it; left out, the daemon does not read the
+   * file again, and a changed file is only a changed hash.
+   */
+  config: { loaded_hash: string; current_hash: string | null; changes?: ConfigChanges };
   control: ControlState;
   verification: { checks: { name: string; kind: string; required: boolean }[]; auto_on_completion: boolean };
   counts: Record<string, number>;

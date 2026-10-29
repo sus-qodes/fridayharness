@@ -1,22 +1,26 @@
 /**
  * Browser notifications and the title badge (plan FD-25, §7.1, §7.10).
  *
- * - **Title:** always `(N) Friday — <project>`, N = approvals + questions + blocked agents waiting
- *   (one decision counted once), or `Friday — <project>` when nothing waits; `opts.title` replaces
- *   the base.
+ * - **Title:** always `(N) Friday — <project>`, N = the length of the shared waiting list of
+ *   `notch/derive.ts` (approvals, questions, blocked agents, proposed plans, messages awaiting a
+ *   reply, the memories to review as one row, an untrusted policy; one decision counted once), or
+ *   `Friday — <project>` when nothing waits; `opts.title` replaces the base.
  * - **Notifications:** only when the Settings toggle is on (`prefs.notifications`, asked from a
  *   user gesture there), the browser granted permission, and the tab is hidden. Triggers: a new
- *   approval, question, proposed plan, blocked agent, failure, and Friday stopping. One per item;
- *   items present when the notifier starts are not announced. Clicking one focuses the window.
+ *   approval, question, proposed plan, blocked agent, message awaiting the human's reply, failure,
+ *   and Friday stopping. One per item, at most `MAX_PER_UPDATE` per board (the rest summed up in
+ *   one); items present when the notifier starts are not announced. Clicking one focuses the window
+ *   and selects the item's task; a message's click also opens the Messages drawer at the delivery.
+ *   A notification whose approval, question or message leaves the list closes by itself.
  *
- * In the desktop shell native notifications come from Rust (plan §8.7); the shell decides whether
- * to start this one.
+ * In the desktop shell native notifications come from Rust (plan §8.7); the Notch window runs this
+ * module against the shell's `notify`, so the same rules hold there.
  */
-import type { SnapshotTask, UiSnapshot } from '@friday/protocol';
+import type { SnapshotInboxItem, SnapshotTask, UiSnapshot } from '@friday/protocol';
 import { visible } from '../model/text.js';
 import { nextExpiryIn, waitingItems } from '../notch/derive.js';
 import { realTimers, type TimerApi } from '../notch/island-fsm.js';
-import type { AppContext } from '../shell/context.js';
+import { type AppContext, type DrawerRequest, openDrawer } from '../shell/context.js';
 import type { Connection } from '../store/state.js';
 import { cleanText, truncate } from '../ui/format.js';
 
@@ -45,12 +49,16 @@ export interface Notice {
   title: string;
   body: string;
   taskId: string | null;
+  /** The drawer a click opens besides selecting the task: the Messages drawer at a delivery. */
+  drawer?: DrawerRequest;
 }
 
 /** At most this many notifications per update; the rest are summed up in one. */
 export const MAX_PER_UPDATE = 3;
 const EXPIRY_SLACK_MS = 50;
 const EXPIRY_MAX_MS = 10 * 60_000;
+/** The items whose notification closes by itself when they leave the list (decided, answered, replied to). */
+const CLOSES_WHEN_GONE = ['approval:', 'question:', 'message:'];
 
 /** `(2) Friday — shop`; `Friday — shop` when nothing waits. */
 export function pageTitle(base: string, waiting: number): string {
@@ -65,7 +73,7 @@ export function baseTitle(board: UiSnapshot | null, override?: string): string {
 
 /** What the notifier remembers between boards. */
 export interface NoticeMemory {
-  /** Approvals, questions and plans already announced (or present at the start). */
+  /** Approvals, questions, plans and messages already announced (or present at the start). */
   seen: Set<string>;
   /** Tasks blocked (WAITING(blocked)) in the previous board. */
   blocked: Set<string>;
@@ -103,6 +111,14 @@ export function remember(board: UiSnapshot, now: number): NoticeMemory {
 
 function short(text: string | null | undefined, max = 160): string {
   return text ? truncate(cleanText(text), max) : '';
+}
+
+/** Who sent a message, as the Messages drawer names them. */
+function sender(m: SnapshotInboxItem): string {
+  if (m.from.kind === 'agent') return m.from.agent_key ?? m.from.id;
+  if (m.from.kind === 'master_brain') return 'Master Brain';
+  if (m.from.kind === 'system') return 'Friday';
+  return m.from.kind;
 }
 
 /**
@@ -160,6 +176,20 @@ export function diffNotices(memory: NoticeMemory, board: UiSnapshot, now: number
     });
   }
   memory.blocked = new Set(blocked.map((t) => t.task_id));
+  // A message awaiting the human's reply, as an approval: once, and read in the Messages drawer at
+  // its delivery. After the agents' own items, as the rail orders them.
+  for (const item of items) {
+    if (item.kind !== 'message' || memory.seen.has(item.key)) continue;
+    memory.seen.add(item.key);
+    const m = item.message;
+    notices.push({
+      key: item.key,
+      title: 'A message waits for your reply',
+      body: `${short(sender(m), 40)}: ${short(m.subject ?? m.preview)}`,
+      taskId: item.taskId,
+      drawer: { kind: 'inbox', id: item.id },
+    });
+  }
   const failed = failedTasks(board);
   for (const t of failed) {
     if (memory.failed.get(t.task_id) === t.status) continue;
@@ -210,6 +240,8 @@ export function startNotifierWith(ctx: AppContext, opts: { title?: string }, env
       shown.onclick = () => {
         env.focusWindow();
         if (n.taskId) store.patch('ui', { selectedTaskId: n.taskId });
+        // A message is read and answered in the Messages drawer, at that delivery.
+        if (n.drawer) openDrawer(ctx, n.drawer);
         shown.close();
         open.delete(n.key);
       };
@@ -238,7 +270,7 @@ export function startNotifierWith(ctx: AppContext, opts: { title?: string }, env
     if (!open.size) return;
     const live = new Set(waitingItems(board, ctx.now()).map((i) => i.key));
     for (const [key, n] of open) {
-      if (!(key.startsWith('approval:') || key.startsWith('question:'))) continue;
+      if (!CLOSES_WHEN_GONE.some((prefix) => key.startsWith(prefix))) continue;
       if (live.has(key)) continue;
       try {
         n.close();

@@ -10,6 +10,7 @@ export {
   CodexAdapter,
   type CodexAdapterOptions,
   type CodexSandbox,
+  codexHostUsage,
   FINAL_SCHEMA,
   parseFinal,
 } from './adapter.js';

@@ -107,6 +107,16 @@ const nameOf = (v: unknown): string =>
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 /**
+ * The session's spending cap (`--max-budget-usd`): the smaller of the adapter's own cap and the
+ * task's (`task.start`'s `budget_usd`, from `routing.task_budget_usd`, plan M11.5); none when
+ * neither is set. Friday ends the attempt itself as well when its reported cost reaches the task's.
+ */
+export function sessionBudgetUsd(own: number | undefined, task: number | null | undefined): number | undefined {
+  const caps = [own, task].filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+  return caps.length ? Math.min(...caps) : undefined;
+}
+
+/**
  * What the host's result message says the turn cost, for the token baseline (M10a). Every field is
  * null when the message does not carry it, so a host that reports nothing is never read as one that
  * spent nothing. The two cache fields are the measure of a stable prompt: what was read back from
@@ -310,6 +320,7 @@ export class ClaudeSpawnAdapter {
         },
       }),
     );
+    const budget = sessionBudgetUsd(this.opts.maxBudgetUsd, p.budget_usd);
     const args = [
       ...(this.opts.host.args ?? []),
       '-p',
@@ -339,7 +350,7 @@ export class ClaudeSpawnAdapter {
       JSON.stringify(FINAL_SCHEMA),
       ...(p.model ? ['--model', p.model] : []),
       ...(this.opts.effort ? ['--effort', this.opts.effort] : []),
-      ...(this.opts.maxBudgetUsd ? ['--max-budget-usd', String(this.opts.maxBudgetUsd)] : []),
+      ...(budget === undefined ? [] : ['--max-budget-usd', String(budget)]),
     ];
     const group = this.#groups.create();
     const trace = this.opts.trace;

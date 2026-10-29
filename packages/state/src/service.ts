@@ -144,6 +144,12 @@ export interface StateConfig {
    * again, or its harness lost) before it expires and others may take the files.
    */
   fileReservationTtlMs: number;
+  /**
+   * `routing.task_budget_usd` (plan M11.5): the spending cap per task attempt, in dollars, carried
+   * in `task.start` for adapters whose host enforces one. Null means no cap. The daemon judges each
+   * cost report against the project's setting itself; this copy is what the host is told.
+   */
+  taskBudgetUsd: number | null;
 }
 
 export const DEFAULT_STATE_CONFIG: StateConfig = {
@@ -169,6 +175,7 @@ export const DEFAULT_STATE_CONFIG: StateConfig = {
   worktreeRoot: null,
   workspaceTimeoutMs: 10 * 60 * 1000,
   fileReservationTtlMs: 30 * 60 * 1000,
+  taskBudgetUsd: null,
 };
 
 /** Who sends a message (ADR-0017 §4). Agents are identified by their harness token, never by the request. */
@@ -419,6 +426,8 @@ const OBSERVATION_TYPES = new Set([
   'laya.unavailable',
   // The daemon noticed it had been paused (a sleeping machine); it was refused before it was listed.
   'daemon.paused',
+  // M11.2: config.yaml read again; the keys applied and the keys that wait for a restart.
+  'config.reloaded',
   // M9: browser sign-in and agents started from the interface (docs/frontend/PLAN.md §5).
   'ui.session_started',
   'ui.session_ended',
@@ -453,6 +462,32 @@ const SYSTEM: Actor = { kind: 'system', id: 'friday' };
 const LEASE_MANAGER: Actor = { kind: 'system', id: 'lease-manager' };
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+/** Dollars in a message: `$0.0123`, `$2`; the binary noise of a sum does not show. */
+const usd = (n: number): string => `$${Number(n.toFixed(6))}`;
+
+/**
+ * How long an attempt stays open after its reported cost reached the task's spending cap (plan
+ * M11.5). A spawn adapter sends what the attempt reported about itself (`host.usage` among it) and
+ * then, in the same delivery, how the attempt ended; a report of the end that arrives within this
+ * grace is recorded as what it is, so finished, paid-for work is not run again (plan rule B31). A few
+ * seconds are enough: the two calls follow each other at once, and only a Friday out of reach between
+ * them makes the second one late. The grace is counted from the `budget.exceeded` record and judged
+ * by `tick`, so it is as coarse as the tick.
+ */
+export const BUDGET_STOP_GRACE_MS = 5_000;
+
+/** A cap stop on record for an attempt that is still open (`budget.exceeded`, plan M11.5). */
+interface CapStop {
+  /** When the cap was reached: the grace counts from here. */
+  at: string;
+  attempt: number;
+  cost_usd: number;
+  cap_usd: number;
+}
+
+/** The fatal error an attempt ends with at the task's spending cap; the recovery assessment names it. */
+const capReason = (s: CapStop): string =>
+  `budget_exceeded: attempt ${s.attempt} reported ${usd(s.cost_usd)}, at or above the task's spending cap of ${usd(s.cap_usd)} (routing.task_budget_usd)`;
 const RUN_EVENT: Partial<Record<RunStatus, string>> = {
   ACTIVE: 'run.accepted',
   DECLINED: 'run.declined',
@@ -1904,6 +1939,12 @@ export class FridayState {
           refs: [{ kind: 'task', id: task.task_id }],
         });
         if (!p.fatal) return { task_status: task.status };
+        if (run.status === 'ENDED' || run.status === 'DECLINED' || task.current_run_id !== run.run_id) {
+          // The attempt is already over (Friday ended it at the task's spending cap once the grace
+          // had passed, or a human released it): the error is on record, and the task's state is no
+          // longer this attempt's to change.
+          return { task_status: task.status };
+        }
         if (run.status === 'STARTING') {
           // The work never started (Friday had not heard that the run was accepted): the harness
           // could not take it, which is a decline, and the task is free again.
@@ -1913,6 +1954,14 @@ export class FridayState {
           });
           this.syncHarnessBusy(ctx, caller.harness_id);
           return { task_status: this.q.task(projectId, p.task_id).status };
+        }
+        const stop = this.capStopOf(projectId, run.run_id);
+        if (stop && (task.status === 'RUNNING' || task.status === 'WAITING')) {
+          // The attempt had reached the task's spending cap, and this is how it ended (a host stopped
+          // by its own cap reports its error after its usage, plan M11.5): the host's error is on
+          // record, and the attempt ends at the cap now, for a human to decide, never for the
+          // recovery sweep to retry.
+          return { task_status: this.endAtCap(ctx, run, task, stop).status };
         }
         if (task.status === 'RUNNING') {
           task = this.moveTask(ctx, task, 'task.wait', {
@@ -1926,6 +1975,165 @@ export class FridayState {
         this.releaseAgent(ctx, caller.agent_id, task.task_id);
         this.syncHarnessBusy(ctx, caller.harness_id);
         return { task_status: task.status };
+      },
+    );
+  }
+
+  /**
+   * The spending cap per task (plan M11.5), judged on every `host.usage` report: when the attempt's
+   * reported cost reaches `routing.task_budget_usd`, Friday records `budget.exceeded` with the
+   * figures, once per attempt, drops whatever was still queued for the attempt and tells a spawned
+   * host to stop. The attempt itself stays open for `BUDGET_STOP_GRACE_MS`: a spawn adapter sends
+   * the attempt's cost and then, at once, how the attempt ended, and that report is still recorded as
+   * what it is (a completion claim moves the task to READY_FOR_VERIFICATION as any claim does, a
+   * blocked result or an error is recorded as such), so finished work is not paid for twice (plan
+   * rule B31). When the grace passes without one, `tick` ends the attempt as a fatal agent error
+   * `budget_exceeded` and the task waits for a human (`endAtCap`). A report without a cost, a cap
+   * that is not set, a run already over, or a run that is no longer the task's current one changes
+   * nothing: a report that arrives after the stop is read, not acted on.
+   */
+  enforceTaskBudget(
+    projectId: string,
+    p: { run_id: string; cost_usd: unknown; cap_usd: unknown },
+  ): { stopped: boolean; task_status: TaskView['status'] | null } {
+    const cap = typeof p.cap_usd === 'number' && Number.isFinite(p.cap_usd) && p.cap_usd > 0 ? p.cap_usd : null;
+    const cost = typeof p.cost_usd === 'number' && Number.isFinite(p.cost_usd) ? p.cost_usd : null;
+    if (cap === null || cost === null || cost < cap) return { stopped: false, task_status: null };
+    const known = this.q.findRun(p.run_id);
+    if (!known || (known.status !== 'ACTIVE' && known.status !== 'SUSPENDED')) {
+      return { stopped: false, task_status: null };
+    }
+    // Once per attempt: a second report past the cap during the grace (the host's final figures)
+    // is read, and the grace already running decides the attempt.
+    if (this.capStopOf(projectId, p.run_id)) return { stopped: false, task_status: null };
+    return this.exec(
+      {
+        name: 'budget.enforce',
+        project_id: projectId,
+        actor: SYSTEM,
+        params: { run_id: p.run_id, cost_usd: cost, cap_usd: cap },
+      },
+      (ctx) => {
+        const run = this.q.run(p.run_id);
+        const task = this.q.task(projectId, run.task_id);
+        if (
+          (run.status !== 'ACTIVE' && run.status !== 'SUSPENDED') ||
+          task.current_run_id !== run.run_id ||
+          (task.status !== 'RUNNING' && task.status !== 'WAITING')
+        ) {
+          return { stopped: false, task_status: null };
+        }
+        const stop: CapStop = { at: ctx.now, attempt: run.attempt, cost_usd: cost, cap_usd: cap };
+        ctx.emit({
+          type: 'budget.exceeded',
+          payload: { task_id: task.task_id, run_id: run.run_id, attempt: run.attempt, cost_usd: cost, cap_usd: cap },
+          refs: [
+            { kind: 'task', id: task.task_id },
+            { kind: 'run', id: run.run_id },
+          ],
+        });
+        // Whatever was queued for the attempt no longer goes out; the host is told to stop after
+        // that, so the cancel is not what gets expired.
+        this.expireOutboxForRun(ctx, run.run_id);
+        const h = this.q.findHarness(run.harness_id);
+        if (
+          run.status === 'ACTIVE' &&
+          h?.attach_mode === 'spawn' &&
+          !['DISCONNECTED', 'TERMINATED'].includes(h.status)
+        ) {
+          this.enqueue(
+            ctx,
+            run.harness_id,
+            'task.cancel',
+            { task_id: task.task_id, run_id: run.run_id, reason: capReason(stop) },
+            run.run_id,
+          );
+        }
+        return { stopped: true, task_status: task.status };
+      },
+    );
+  }
+
+  /**
+   * The cap stop on record for an attempt (`budget.exceeded`, plan M11.5), read from the attempt's
+   * own events: the event store is the one place a stop lives, so a grace in progress survives a
+   * restart and needs no second record. An attempt that is over keeps its record, which the usage
+   * row reads; callers check the run's status themselves.
+   */
+  private capStopOf(projectId: string, runId: string): CapStop | undefined {
+    const [e] = this.store.readByRef(projectId, 'run', runId, { types: ['budget.exceeded'], limit: 1 });
+    if (!e) return undefined;
+    const p = e.payload as { attempt?: unknown; cost_usd?: unknown; cap_usd?: unknown };
+    return { at: e.occurred_at, attempt: Number(p.attempt), cost_usd: Number(p.cost_usd), cap_usd: Number(p.cap_usd) };
+  }
+
+  /**
+   * Ends an attempt at the task's spending cap (plan M11.5), once its grace passed with no report of
+   * the end or once the host's own fatal error arrived: a fatal agent error `budget_exceeded` the
+   * recovery assessment names, the run ended `failed`, and a human asked with the figures. The task
+   * waits as `blocked`, not `agent_error`: the automatic recovery sweep retries agent errors within
+   * its limits, and another attempt would spend up to the cap again, so only a human runs the task
+   * again (after raising the cap) or cancels it.
+   */
+  private endAtCap(ctx: CommandContext, run: RunView, task: TaskView, stop: CapStop): TaskView {
+    const reason = capReason(stop);
+    ctx.emit({
+      type: 'agent.event',
+      payload: { task_id: task.task_id, run_id: run.run_id, event_type: 'error', message: reason, fatal: true },
+      refs: [
+        { kind: 'task', id: task.task_id },
+        { kind: 'run', id: run.run_id },
+      ],
+    });
+    const waiting =
+      task.status === 'RUNNING'
+        ? this.moveTask(ctx, task, 'task.wait', { waiting_reason: 'blocked', reason: reason.slice(0, 200) })
+        : this.updateTaskFields(ctx, task.task_id, { waiting_reason: 'blocked' });
+    this.endRun(ctx, run, 'failed');
+    // Anything queued for the attempt during the grace (a message, a packet) no longer goes out.
+    this.expireOutboxForRun(ctx, run.run_id);
+    this.releaseAgent(ctx, run.agent_id, task.task_id);
+    this.syncHarnessBusy(ctx, run.harness_id);
+    this.escalationWithin(ctx, {
+      kind: 'recovery_needed',
+      goal_id: task.goal_id ?? null,
+      task_id: task.task_id,
+      question: `${task.task_id} was stopped at its spending cap: attempt ${stop.attempt} reported ${usd(stop.cost_usd)} against routing.task_budget_usd ${usd(stop.cap_usd)}. Raise the cap in .friday/config.yaml before it runs again, or cancel it`,
+      options: [
+        `friday recover ${task.task_id} --action reassign`,
+        `friday recover ${task.task_id} --action restart`,
+        `friday task cancel ${task.task_id}`,
+      ],
+      details: {
+        reason: 'budget_exceeded',
+        run_id: run.run_id,
+        attempt: stop.attempt,
+        cost_usd: stop.cost_usd,
+        cap_usd: stop.cap_usd,
+      },
+    });
+    return waiting;
+  }
+
+  /**
+   * The grace of a cap stop passed with no report of the end (`tick`, plan M11.5): the attempt ends
+   * as `budget_exceeded`, if it is still open and still the task's current one. True when it did.
+   */
+  private endRunAtCap(projectId: string, runId: string, stop: CapStop): boolean {
+    return this.exec(
+      { name: 'budget.stop', project_id: projectId, actor: SYSTEM, params: { run_id: runId } },
+      (ctx) => {
+        const run = this.q.run(runId);
+        const task = this.q.task(projectId, run.task_id);
+        if (
+          (run.status !== 'ACTIVE' && run.status !== 'SUSPENDED') ||
+          task.current_run_id !== run.run_id ||
+          (task.status !== 'RUNNING' && task.status !== 'WAITING')
+        ) {
+          return false;
+        }
+        this.endAtCap(ctx, run, task, stop);
+        return true;
       },
     );
   }
@@ -3336,6 +3544,8 @@ export class FridayState {
     /** Replies recovered for answers recorded without one, and those that could not be sent. */
     messages_replied: string[];
     messages_reply_failed: { escalation_id: string; error: string }[];
+    /** Attempts ended at the task's spending cap: their grace for a report of the end passed (plan M11.5). */
+    budget_stopped: string[];
   } {
     const now = this.clock.now();
     const nowMs = Date.parse(now);
@@ -3358,6 +3568,7 @@ export class FridayState {
       messages_escalated: [] as string[],
       messages_replied: [] as string[],
       messages_reply_failed: [] as { escalation_id: string; error: string }[],
+      budget_stopped: [] as string[],
     };
     const leases = this.db
       .prepare(
@@ -3448,6 +3659,14 @@ export class FridayState {
         );
         out.declined.push(run.run_id);
       }
+    }
+    // Attempts stopped at the task's spending cap whose grace for a report of the end has passed
+    // (plan M11.5) end now, as `budget_exceeded`. A stop recorded before Friday was away is held
+    // like the leases: the report may still be on its way.
+    for (const run of this.q.runsWithStatus(projectId, ['ACTIVE', 'SUSPENDED'])) {
+      const stop = this.capStopOf(projectId, run.run_id);
+      if (!stop || held(stop.at) || Date.parse(stop.at) + BUDGET_STOP_GRACE_MS > nowMs) continue;
+      if (this.endRunAtCap(projectId, run.run_id, stop)) out.budget_stopped.push(run.run_id);
     }
     out.unreserved.push(...this.expireReservations(projectId, this.clock.now()));
     out.files_released.push(...this.expireFileReservations(projectId, this.clock.now()));
@@ -4239,6 +4458,11 @@ export class FridayState {
       // The session to resume, as the adapter reported it when it accepted the run (ADR-0032 §3).
       session_ref: run.session_ref ?? null,
       note,
+      // The task's spending cap (plan M11.5), for a host that can enforce one itself.
+      budget_usd:
+        typeof this.config.taskBudgetUsd === 'number' && this.config.taskBudgetUsd > 0
+          ? this.config.taskBudgetUsd
+          : null,
     };
   }
 

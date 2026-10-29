@@ -150,6 +150,12 @@ export const RoutingSettings = z
       .prefault({}),
     /** Models the project adds to Friday's registry, or replaces by id. */
     models: z.array(z.record(z.string(), z.unknown())).max(100).default([]),
+    /**
+     * A spending cap per task attempt, in dollars (plan M11.5); unset means no cap. Friday hands it
+     * to spawn adapters whose host can enforce one (Claude Code's `--max-budget-usd`: the smaller of
+     * the adapter's own cap and this), and ends any attempt whose reported cost reaches it.
+     */
+    task_budget_usd: z.number().positive().optional(),
     laya: z
       .object({
         enabled: z.boolean().default(false),
@@ -382,6 +388,113 @@ export function policyVersion(config: FridayConfig): string {
     .update(JSON.stringify(canonical({ autonomy, risk, scopes, security, reservations })))
     .digest('hex')
     .slice(0, 16);
+}
+
+/**
+ * How a change to config.yaml reaches a running daemon (plan M11.2). A key under a live prefix is
+ * read where it is used, so the daemon applies its new value as soon as it reads the file again;
+ * what loosens still waits for trust (ADR-0028). A key under a restart prefix was captured when
+ * Friday started (the address it listens on and its origins, the lease timers already running,
+ * the worktree layout, the model providers and the planner built on its provider) and keeps its
+ * start value until a restart. The most specific prefix decides, so the Master Brain's model, its
+ * effort and token limit, its thresholds, `auto_approve` and `reservation_ttl_ms` are live inside a
+ * section whose provider (and scripted answers) needs a restart. A key no list names applies live:
+ * nothing of Friday captured it.
+ */
+export const LIVE_CONFIG_KEYS: readonly string[] = [
+  'scopes',
+  'autonomy',
+  'risk',
+  'security',
+  'verification',
+  'reservations',
+  'recovery',
+  'context',
+  'communication',
+  'master_brain.model',
+  'master_brain.effort',
+  'master_brain.max_tokens',
+  'master_brain.auto_approve',
+  'master_brain.escalate_after_failures',
+  'master_brain.max_replans',
+  'master_brain.reservation_ttl_ms',
+  'operations',
+  'execution',
+  'mcp',
+  'approvals',
+  'routing',
+];
+export const RESTART_CONFIG_KEYS: readonly string[] = [
+  'project',
+  'daemon',
+  'leases',
+  'worktrees',
+  'providers',
+  'master_brain',
+];
+
+export type ConfigKeyEffect = 'live' | 'restart';
+
+const prefixOf = (key: string, prefixes: readonly string[]): string =>
+  prefixes
+    .filter((p) => key === p || key.startsWith(`${p}.`))
+    .reduce((longest, p) => (p.length > longest.length ? p : longest), '');
+
+/** Whether a changed key (a dotted path such as `daemon.port`) applies while Friday runs or needs a restart. */
+export function configKeyEffect(key: string): ConfigKeyEffect {
+  return prefixOf(key, RESTART_CONFIG_KEYS).length > prefixOf(key, LIVE_CONFIG_KEYS).length ? 'restart' : 'live';
+}
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+const sameValue = (a: unknown, b: unknown): boolean => {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => sameValue(v, b[i]));
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    return [...keys].every((k) => sameValue(a[k], b[k]));
+  }
+  return false;
+};
+
+/**
+ * The keys whose values differ between two configurations, as dotted paths down to the first value
+ * that is not a plain object (`daemon.port`, `scopes.frontend.write`, `verification.checks`), in
+ * the file's order.
+ */
+export function changedConfigKeys(before: unknown, after: unknown, prefix = ''): string[] {
+  if (isPlainObject(before) && isPlainObject(after)) {
+    const keys = [...new Set([...Object.keys(after), ...Object.keys(before)])];
+    return keys.flatMap((k) => changedConfigKeys(before[k], after[k], prefix ? `${prefix}.${k}` : k));
+  }
+  return sameValue(before, after) || prefix === '' ? [] : [prefix];
+}
+
+/** Whether a declared key lies below this path, so the path's own effect is not the whole story. */
+const dividedBelow = (path: string): boolean =>
+  [...LIVE_CONFIG_KEYS, ...RESTART_CONFIG_KEYS].some((k) => k.startsWith(`${path}.`));
+
+function inForce(path: string, started: unknown, next: unknown): unknown {
+  // The root, and a section with live and restart-only keys below it, are decided key by key.
+  if ((path === '' || dividedBelow(path)) && isPlainObject(started) && isPlainObject(next)) {
+    const out: Record<string, unknown> = {};
+    for (const k of new Set([...Object.keys(next), ...Object.keys(started)])) {
+      const sub = path ? `${path}.${k}` : k;
+      const v = inForce(sub, started[k], next[k]);
+      if (v !== undefined) out[k] = v;
+    }
+    return out;
+  }
+  return configKeyEffect(path) === 'restart' ? started : next;
+}
+
+/**
+ * The configuration a running daemon applies once the file changed: every live key as the file
+ * has it now, every restart-only key as Friday started with it.
+ */
+export function liveConfig(started: FridayConfig, next: FridayConfig): FridayConfig {
+  return inForce('', started, next) as FridayConfig;
 }
 
 export function parseConfig(text: string, source = 'config.yaml'): FridayConfig {

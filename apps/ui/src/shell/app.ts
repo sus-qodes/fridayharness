@@ -54,6 +54,15 @@ import { type LoginReason, type LoginScreenOptions, loginScreen } from './login-
 import { mountModalHost } from './modal-host.js';
 import { createToastHost, type ToastHost } from './toast.js';
 
+/**
+ * What the shell lends the areas it mounts. The header's *Waiting for you* count and the browser
+ * pill's *N waiting* chip are two doors to one place, so they share one function (plan §7.5).
+ */
+export interface ShellHooks {
+  /** Shows the *Waiting for you* rail: scrolled to its top and given the keyboard. */
+  onShowWaiting: () => void;
+}
+
 /** What the areas contribute; `main.ts` (and the desktop entry) fill it in. */
 export interface AreaSet {
   /** Each registers its drawers, modals and palette commands. */
@@ -66,8 +75,12 @@ export interface AreaSet {
   palette: (ctx: AppContext, container: HTMLElement) => Component;
   /** The decisions tray: the right rail. */
   tray: (ctx: AppContext, container: HTMLElement) => Component;
-  /** The in-page Notch at the top centre (browser only; the desktop's Studio window draws none). */
-  notch?: (ctx: AppContext, container: HTMLElement) => Component;
+  /**
+   * The in-page Notch at the top centre (browser only; the desktop's Studio window draws none). It
+   * gets the shell's hooks, so its *N waiting* chip shows the rail through the same function as the
+   * header's count.
+   */
+  notch?: (ctx: AppContext, container: HTMLElement, hooks: ShellHooks) => Component;
   /** The getting-started checklist, shown under the header until dismissed. */
   gettingStarted?: (ctx: AppContext) => Component;
   /** Background services (sound, notifier); each returns the function that stops it. */
@@ -188,14 +201,15 @@ export function mountShell(
     }
   }
 
-  mount('The header', top, () =>
-    mountHeader(ctx, {
-      onShowWaiting: () => {
-        rail.scrollTop = 0;
-        focusQuietly(rail);
-      },
-    }),
-  );
+  // One way to the rail for every door that promises it: the header's count and the pill's chip.
+  const hooks: ShellHooks = {
+    onShowWaiting: () => {
+      rail.scrollTop = 0;
+      focusQuietly(rail);
+    },
+  };
+
+  mount('The header', top, () => mountHeader(ctx, { onShowWaiting: hooks.onShowWaiting }));
   mount('The banners', top, () => mountBanners(ctx, { reload: opts.reload }));
   mount('The connection strip', top, () => mountConnectionStrip(ctx.store, { onRetry: opts.onRetry }));
   mount('The Studio', studio, () => areas.studio(ctx, studio));
@@ -205,7 +219,7 @@ export function mountShell(
   mount('The dock', dock, () => areas.dock(ctx, dock));
   mount('The palette', palette, () => areas.palette(ctx, palette));
   const notchArea = areas.notch;
-  if (notchArea && opts.notch !== false) mount('The Notch', notch, () => notchArea(ctx, notch));
+  if (notchArea && opts.notch !== false) mount('The Notch', notch, () => notchArea(ctx, notch, hooks));
   // Drawers and modals sit under the confirm dialogs and the toasts.
   mount('The drawers', overlays, () => mountDrawerHost(ctx, services.layers), services.confirms.el);
   mount('The dialogs', overlays, () => mountModalHost(ctx, services.layers), services.confirms.el);

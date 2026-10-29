@@ -420,6 +420,17 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
           typeof reported.basis === 'string' ? reported.basis : 'reported',
         );
       }
+      // The task's spending cap (plan M11.5): a `host.usage` whose cost reached
+      // `routing.task_budget_usd` ends the attempt, once. The cap is read from the project's
+      // configuration at each report, so a changed setting applies to the next one; a report
+      // without a cost never trips it, and the state service decides the rest.
+      if (p.event_type === 'host.usage' && p.run_id) {
+        state.enforceTaskBudget(pid, {
+          run_id: p.run_id,
+          cost_usd: (p.data as { cost_usd?: unknown } | undefined)?.cost_usd,
+          cap_usd: deps.project.config.routing.task_budget_usd ?? null,
+        });
+      }
       const paths = (p.data as { changed_paths?: unknown } | undefined)?.changed_paths;
       if (p.run_id && Array.isArray(paths)) {
         state.observePaths(

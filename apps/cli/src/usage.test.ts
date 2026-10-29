@@ -36,6 +36,7 @@ function row(o: Partial<Omit<UsageRowView, 'host'>> & { host?: Partial<UsageRowV
       cache_read_input_tokens: null,
       cache_creation_input_tokens: null,
       cost_usd: null,
+      cap_usd: null,
       turns: null,
       model: null,
       ...o.host,
@@ -72,6 +73,15 @@ function report(rows: UsageRowView[], totals: Partial<UsageReport['totals']> = {
 }
 
 describe('friday usage, the table (plan M10a)', () => {
+  it("shows the task's spending cap beside the cost of an attempt Friday ended at it (plan M11.5)", () => {
+    const stopped = row({ host: { reported: true, cost_usd: 0.0123, cap_usd: 0.01, turns: 3 } });
+    const text = renderUsage(report([stopped], { cost_usd: 0.0123 }));
+    expect(text).toMatch(/\$0\.0123 \(cap \$0\.0100\)\s+0\/0\/0\/0/);
+    expect(text).toContain('COST "(cap $x)": the attempt reached the task\'s spending cap');
+    // An attempt no cap ended shows its cost alone.
+    expect(renderUsage(report([row({ host: { reported: true, cost_usd: 0.5 } })]))).toMatch(/\$0\.5000\s+0\/0\/0\/0/);
+  });
+
   it('says which "-" means the host did not report and which means nothing to show', () => {
     // No packet, no verdict, no model, no agent record: four dashes the host had no part in.
     const text = renderUsage(report([row({ agent_key: null })]));

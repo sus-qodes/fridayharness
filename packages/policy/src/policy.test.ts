@@ -111,6 +111,7 @@ describe('command classification', () => {
     ['taskkill /F /PID 12', 'process.kill'],
     ['Stop-Process -Name node', 'process.kill'],
     ['printenv', 'secrets.read'],
+    ['env', 'secrets.read'],
     ['Get-ChildItem env:', 'secrets.read'],
     ['echo $env:ANTHROPIC_API_KEY', 'secrets.read'],
     ['friday approve apr_123', 'friday.internal'],

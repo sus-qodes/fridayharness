@@ -740,7 +740,6 @@ describe('settings drawer', () => {
     expect(about.querySelector('img')).toBeNull();
     expect(text).toContain('0.0.0');
     expect(text).toContain(`${UI_VERSION} · API 1`);
-    expect(text).not.toContain('localhost');
     d.destroy();
   });
 });

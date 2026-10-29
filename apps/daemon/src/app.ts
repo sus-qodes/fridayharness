@@ -402,6 +402,9 @@ export function buildApp(deps: AppDeps): Hono<Env> {
       project: { project_id: pid, name: project.name },
       head,
       counts: state.q.statusCounts(pid),
+      // What the daemon did with a changed config.yaml (plan M11.2), so `friday status` need not
+      // build the board's snapshot for it.
+      config: deps.uiInfo?.().config ?? null,
       tasks,
       harnesses: state.q.harnesses(pid),
       agents,

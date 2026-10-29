@@ -384,7 +384,7 @@ export function verifyModal(
         },
       ),
     ),
-    note('Friday reads config.yaml when it starts: restart Friday to apply new checks.'),
+    note('Friday reads config.yaml again when it changes: new checks judge the next verification.'),
   );
 
   function updateButtons() {

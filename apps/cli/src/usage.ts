@@ -11,6 +11,9 @@ import { table } from './output.js';
 
 const dash = (v: number | string | null | undefined): string => (v === null || v === undefined ? '-' : String(v));
 const money = (v: number | null): string => (v === null ? '-' : `$${v.toFixed(4)}`);
+/** The cost, and beside it the task's spending cap when the attempt reached it (plan M11.5). */
+const cost = (h: UsageRowView['host']): string =>
+  h.cap_usd === null ? money(h.cost_usd) : `${money(h.cost_usd)} (cap ${money(h.cap_usd)})`;
 
 /** The model that ran, as the host named it; what Friday asked for when nothing ran yet. */
 function modelOf(r: UsageRowView): string {
@@ -66,13 +69,13 @@ export function renderUsage(report: UsageReport): string {
         dash(r.host.output_tokens),
         dash(r.host.cache_read_input_tokens),
         dash(r.host.cache_creation_input_tokens),
-        money(r.host.cost_usd),
+        cost(r.host),
         `${r.tool_calls.by_kind.read}/${r.tool_calls.by_kind.edit}/${r.tool_calls.by_kind.shell}/${r.tool_calls.by_kind.friday}`,
         `${r.tool_calls.reads.whole_file}/${r.tool_calls.reads.ranged}`,
         verifiedText(r),
       ]),
     ),
-    'TOOLS: read/edit/shell/Friday calls the host reported; READS W/R: Read calls of a whole file / of a line range, as the hooks saw them; PACKET TOK: the delivered packets\' token budget; "-" under IN, OUT, CACHE and COST: the host did not report it; elsewhere: nothing to show (no packet delivered, no verdict yet, no model named, the agent record gone).',
+    'TOOLS: read/edit/shell/Friday calls the host reported; READS W/R: Read calls of a whole file / of a line range, as the hooks saw them; PACKET TOK: the delivered packets\' token budget; "-" under IN, OUT, CACHE and COST: the host did not report it; elsewhere: nothing to show (no packet delivered, no verdict yet, no model named, the agent record gone); COST "(cap $x)": the attempt reached the task\'s spending cap (routing.task_budget_usd), and was stopped there unless its claim still arrived.',
     `${t.attempts} attempt(s), ${t.host_reported} of ${t.attempts} reported host usage: in ${total(t, 'input_tokens', dash(t.input_tokens))}, out ${total(t, 'output_tokens', dash(t.output_tokens))}, cache read ${total(t, 'cache_read_input_tokens', dash(t.cache_read_input_tokens))}, cache write ${total(t, 'cache_creation_input_tokens', dash(t.cache_creation_input_tokens))}, cost ${total(t, 'cost_usd', money(t.cost_usd))}; ${t.tool_calls} tool call(s).`,
   ];
   if (report.truncated) {
