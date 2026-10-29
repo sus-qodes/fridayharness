@@ -75,7 +75,14 @@ export {
   revokeProvider,
   setProviderEndpoint,
 } from './provider-trust.js';
-export { renderContextMarkdown } from './render.js';
+export {
+  firstTaskMessage,
+  holdsContract,
+  renderContextMarkdown,
+  SHOWN_FILES_RULE,
+  SPAWN_PACKET_CHARS,
+  SPAWN_RENDER_CHARS,
+} from './render.js';
 export {
   credentialsDir,
   hasSecret,

@@ -7,7 +7,9 @@ import {
   DaemonClient,
   DaemonUnreachableError,
   findProjectRoot,
+  firstTaskMessage,
   formatSse,
+  holdsContract,
   loadProject,
   parseConfig,
   privateDirFor,
@@ -211,5 +213,17 @@ describe('DaemonClient (review M8-R02)', () => {
     });
     await expect(gone.get('/health')).rejects.toBeInstanceOf(DaemonUnreachableError);
     expect(answered).toEqual(['http://127.0.0.1:41001/health', 'http://127.0.0.1:41002/health']);
+  });
+});
+
+describe('the first message of a spawned attempt (plan M10b.2)', () => {
+  const p = { task_id: 'task_1', instruction: 'Add a.ts.', acceptance_criteria: ['tests pass'] };
+  it('points at the instructions when they hold the contract, and carries the task when they do not', () => {
+    expect(firstTaskMessage(p, true)).toBe(
+      'Task task_1: start now. Its contract, acceptance criteria and scope, and the files it names, are in your instructions.',
+    );
+    expect(firstTaskMessage(p, false)).toBe('Task task_1: Add a.ts.\n\nAcceptance criteria:\n- tests pass');
+    expect(holdsContract('## Task [task.contract · task_record:task_1 · task]\n...')).toBe(true);
+    expect(holdsContract("Friday could not compile this task's context (boom).")).toBe(false);
   });
 });

@@ -89,7 +89,7 @@ const DESKTOP_BUILD = ['apps', 'desktop', 'src-tauri', 'target', 'release', 'fri
 
 /**
  * Where the desktop shell may be, first match wins: the path in FRIDAY_DESKTOP, the build of a
- * checkout (FRIDAY_HOME, then the one this CLI runs from), then the per-user install folders.
+ * checkout (FRIDAY_HOME, then the one this CLI runs from), then the per-user install folder.
  */
 export function desktopCandidates(
   env: NodeJS.ProcessEnv = process.env,
@@ -103,7 +103,9 @@ export function desktopCandidates(
   // apps/cli/{src,dist} -> the repository root.
   list.push(path.resolve(cliDir, '..', '..', '..', ...DESKTOP_BUILD));
   const local = env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
-  list.push(path.join(local, 'Programs', 'Friday', 'Friday.exe'), path.join(local, 'Friday', 'Friday.exe'));
+  // Where the per-user installer puts it (apps/desktop/README.md); never %LOCALAPPDATA%\Friday, the
+  // private state folder.
+  list.push(path.join(local, 'Friday Desktop', 'friday-desktop.exe'));
   return list;
 }
 

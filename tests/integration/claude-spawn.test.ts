@@ -19,7 +19,7 @@ import {
 } from '@friday/adapter-claude';
 import { SPAWNED_AGENT_TOOLS } from '@friday/mcp-server';
 import type { TaskStartParams, TaskView, UsageReport } from '@friday/protocol';
-import type { DaemonClient } from '@friday/sdk';
+import { type DaemonClient, firstTaskMessage } from '@friday/sdk';
 import { FakeClock, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli } from '../helpers/cli.js';
@@ -270,6 +270,12 @@ describe('Claude Code in spawn mode', () => {
     const rules = readFileSync(path.join(attempt, 'instructions.md'), 'utf8');
     expect(rules.startsWith(CLAUDE_SPAWN_RULES.split('\n')[0] as string)).toBe(true);
     expect(rules).toContain(id);
+    // The instructions hold the task's contract, so the first message points at it instead of
+    // repeating it (plan M10b.2).
+    expect(rules).toContain('[task.contract');
+    const first = () => c.entries().find((e) => typeof e.received_message === 'string')?.received_message;
+    await eventually(first, (m) => typeof m === 'string', 'the first message');
+    expect(first()).toBe(firstTaskMessage({ task_id: id, instruction: '', acceptance_criteria: [] }, true));
     // Its instructions name only the Friday tools the session has (review M8-R06).
     const named = new Set(rules.match(/friday_[a-z_]+/g) ?? []);
     expect(

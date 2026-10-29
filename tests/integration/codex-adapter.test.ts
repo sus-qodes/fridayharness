@@ -11,7 +11,7 @@ import { CODEX_RULES, CodexAdapter } from '@friday/adapter-codex';
 import { createDaemon } from '@friday/daemon';
 import { SPAWNED_AGENT_TOOLS } from '@friday/mcp-server';
 import type { TaskStartParams, TaskView } from '@friday/protocol';
-import { DaemonClient, loadProject } from '@friday/sdk';
+import { DaemonClient, firstTaskMessage, loadProject } from '@friday/sdk';
 import { FakeClock, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
@@ -187,6 +187,13 @@ describe('the Codex adapter', () => {
     expect(path.resolve(String(started.cwd))).toBe(path.resolve(root));
     expect(String(started.developerInstructions)).toContain(CODEX_RULES.split('\n')[0]);
     expect(String(started.developerInstructions)).toContain(id);
+    // The instructions hold the task's contract, so the first turn's message points at it instead
+    // of repeating it (plan M10b.2).
+    expect(String(started.developerInstructions)).toContain('[task.contract');
+    const firstTurn = c.entries().find((e) => e.request === 'turn/start')?.params as { input: { text: string }[] };
+    expect(firstTurn.input[0]?.text).toBe(
+      firstTaskMessage({ task_id: id, instruction: '', acceptance_criteria: [] }, true),
+    );
     // Its instructions name only the Friday tools the thread has (the M8a live check, review M8-R06).
     const named = new Set(String(started.developerInstructions).match(/friday_[a-z_]+/g) ?? []);
     expect(

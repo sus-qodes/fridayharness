@@ -86,7 +86,9 @@ describe('friday start (plan M12.5)', () => {
     expect(candidates).toContain(
       path.join(dir, 'home', 'apps', 'desktop', 'src-tauri', 'target', 'release', 'friday-desktop.exe'),
     );
-    expect(candidates).toContain(path.join(dir, 'local', 'Programs', 'Friday', 'Friday.exe'));
+    expect(candidates).toContain(path.join(dir, 'local', 'Friday Desktop', 'friday-desktop.exe'));
+    // Never inside Friday's private state folder.
+    expect(candidates.some((c) => path.dirname(c) === path.join(dir, 'local', 'Friday'))).toBe(false);
     expect(findDesktopApp(candidates)).toBeUndefined();
     writeFileSync(exe, '');
     expect(findDesktopApp(candidates)).toBe(exe);

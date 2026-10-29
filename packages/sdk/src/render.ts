@@ -38,6 +38,42 @@ export function renderContextMarkdown(
   return `${header}\n${body}${note}${tail}${footer}`;
 }
 
+/**
+ * The packet a spawn adapter asks for at the start of an attempt, and how much of it the host is
+ * given (plan M10b.1): room for the files the task names (`task.files`) beside the rest.
+ */
+export const SPAWN_PACKET_CHARS = 16_000;
+export const SPAWN_RENDER_CHARS = 20_000;
+
+/** A spawned session's rule about the files its instructions show (plan M10b.1). */
+export const SHOWN_FILES_RULE =
+  '- The files your task names are shown in your instructions as they are in your worktree now: use them as shown, and read a file again only after you have changed it.';
+
+/**
+ * The first message of a spawned attempt (plan M10b.2). When the packet with the task's contract
+ * reached the host's instructions, the message points at it instead of repeating it; otherwise it
+ * carries the task's instruction and acceptance criteria, which the host has nowhere else.
+ */
+export function firstTaskMessage(
+  p: { task_id: string; instruction: string; acceptance_criteria: string[] },
+  contractInInstructions: boolean,
+): string {
+  if (contractInInstructions) {
+    return `Task ${p.task_id}: start now. Its contract, acceptance criteria and scope, and the files it names, are in your instructions.`;
+  }
+  return [
+    `Task ${p.task_id}: ${p.instruction}`,
+    ...(p.acceptance_criteria.length
+      ? ['', 'Acceptance criteria:', ...p.acceptance_criteria.map((c) => `- ${c}`)]
+      : []),
+  ].join('\n');
+}
+
+/** Whether a rendered packet holds the task's contract (its first protected section). */
+export function holdsContract(rendered: string): boolean {
+  return rendered.includes('[task.contract');
+}
+
 function titleOf(kind: string): string {
   const map: Record<string, string> = {
     'agent.identity': 'You',
@@ -46,6 +82,7 @@ function titleOf(kind: string): string {
     'task.scope': 'Scope',
     'task.plan': 'Goal, plan and decisions',
     'task.progress': 'Progress so far',
+    'task.files': 'Files the task names',
     'repo.head': 'Repository',
     'repo.dirty': 'Uncommitted changes',
     'repo.recent_commits': 'Recent commits in scope',
