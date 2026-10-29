@@ -36,7 +36,7 @@ import { FakeHarness } from '../helpers/fake-harness.js';
 
 const ws = useTestWorkspace();
 /** Deleting a lost clone: retried while Windows releases the last handles of its processes (LESSONS T-42). */
-const LOST = { recursive: true, force: true, maxRetries: 20, retryDelay: 100 } as const;
+const LOST = { recursive: true, force: true, maxRetries: 50, retryDelay: 200 } as const;
 /** A dummy key in the shape of a payment sandbox key: never a real one. */
 const SECRET = `sk_test_51Hjoined${'Q7x'.repeat(10)}`;
 const saved: Record<string, string | undefined> = {};

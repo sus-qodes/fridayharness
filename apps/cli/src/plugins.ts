@@ -186,13 +186,23 @@ function registerHarness(program: Command): void {
         .choices(['read-only', 'workspace-write', 'danger-full-access'])
         .default('workspace-write'),
     )
+    .addOption(
+      new Option(
+        '--windows-sandbox <mode>',
+        'codex: the Windows sandbox its commands would run in (your Codex setting otherwise)',
+      ).choices(['elevated', 'unelevated']),
+    )
     .action(
       async (
         host: string,
-        opts: { quick?: boolean; sandbox: 'read-only' | 'workspace-write' | 'danger-full-access' },
+        opts: {
+          quick?: boolean;
+          sandbox: 'read-only' | 'workspace-write' | 'danger-full-access';
+          windowsSandbox?: 'elevated' | 'unelevated';
+        },
       ) => {
         // A spawn-mode host writes nothing into the project: its doctor checks the host itself (ADR-0032).
-        if (host === 'codex') return doctorCodex(g, opts.sandbox);
+        if (host === 'codex') return doctorCodex(g, opts.sandbox, opts.windowsSandbox);
         requireHost(host);
         const ref = project(g());
         const report = await claudeDoctor(ref, { ...(opts.quick ? { skipMcp: true } : {}) });

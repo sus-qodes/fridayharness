@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { ProcessGroups, startProcess } from '@friday/execution';
 import { FRIDAY_VERSION } from '@friday/sdk';
@@ -7,6 +8,42 @@ import { JsonRpcLines } from './rpc.js';
 
 /** The host version the adapter's protocol was recorded against (M3.5, `tests/fixtures/codex/`). */
 export const RECORDED_VERSION = '0.162.1';
+
+/**
+ * Whether Codex's Windows sandbox starts a command here (`codex sandbox`, the sandbox a thread's
+ * commands run in), and whether that command can start another program, as test runners and
+ * package managers do: Node, in the system temp folder, starting Node once. No model is called.
+ */
+export function sandboxStarts(
+  codex: string,
+  env: NodeJS.ProcessEnv,
+  mode?: 'elevated' | 'unelevated',
+): Promise<{ ok: boolean; spawns: boolean; error: string }> {
+  const args = [
+    'sandbox',
+    ...(mode ? ['-c', `windows.sandbox="${mode}"`] : []),
+    process.execPath,
+    '-e',
+    "process.exit(require('child_process').spawnSync(process.execPath, ['-e', '0']).status === 0 ? 0 : 3)",
+  ];
+  return new Promise((resolve) => {
+    execFile(
+      codex,
+      args,
+      { cwd: tmpdir(), env: hostEnvironment(env), timeout: 30_000, windowsHide: true },
+      (err, _stdout, stderr) => {
+        if (!err) return resolve({ ok: true, spawns: true, error: '' });
+        if ((err as { code?: unknown }).code === 3) return resolve({ ok: true, spawns: false, error: '' });
+        const why = String(stderr || err.message)
+          .trim()
+          .split('\n')
+          .find((l) => l.trim())
+          ?.slice(0, 200);
+        resolve({ ok: false, spawns: false, error: why || 'it failed' });
+      },
+    );
+  });
+}
 
 export interface CodexDoctorCheck {
   id: string;
@@ -22,7 +59,12 @@ export interface CodexDoctorCheck {
  * model is called.
  */
 export async function codexDoctor(
-  opts: { env?: NodeJS.ProcessEnv; sandbox?: CodexSandbox; probe?: boolean } = {},
+  opts: {
+    env?: NodeJS.ProcessEnv;
+    sandbox?: CodexSandbox;
+    windowsSandbox?: 'elevated' | 'unelevated';
+    probe?: boolean;
+  } = {},
 ): Promise<{ checks: CodexDoctorCheck[]; achieved: string }> {
   const env = opts.env ?? process.env;
   const sandbox = opts.sandbox ?? 'workspace-write';
@@ -79,6 +121,21 @@ export async function codexDoctor(
           .catch((e: Error) => ({ status: `unknown (${e.message})` }));
         sandboxReady = r.status ?? 'unknown';
       }
+      const read = await rpc
+        .request<{ config?: { mcp_servers?: Record<string, unknown> | null } }>(
+          'config/read',
+          { includeLayers: false, cwd: tmpdir() },
+          20_000,
+        )
+        .catch(() => null);
+      const servers = Object.keys(read?.config?.mcp_servers ?? {}).sort();
+      checks.push({
+        id: 'codex.isolation',
+        status: read ? 'info' : 'warn',
+        message: read
+          ? `Friday's threads run without your Codex plugins, ChatGPT apps, tool suggestions and web search${servers.length ? `, and with your MCP servers off (${servers.join(', ')})` : ''}; the checkout is untrusted for them, so a repository's own .codex/ files and AGENTS.md do not apply and nothing is added to your Codex configuration`
+          : 'Codex did not show its configuration; each thread Friday starts reads it again, and starts no turn unless Codex confirms that no MCP server runs in it',
+      });
     } catch (e) {
       checks.push({
         id: 'codex.server',
@@ -90,23 +147,39 @@ export async function codexDoctor(
       await groups.close();
     }
   }
-  if (sandboxReady !== null) {
-    if (sandbox === 'danger-full-access') {
+  if (sandbox === 'danger-full-access') {
+    checks.push({
+      id: 'codex.sandbox',
+      status: 'warn',
+      message: `Codex's commands run without its sandbox (--sandbox danger-full-access); file changes Codex does not ask about are not judged before they happen`,
+      fix: 'verification judges every change afterwards; use workspace-write where the sandbox starts commands',
+    });
+  } else if (process.platform === 'win32' && opts.probe !== false) {
+    // Codex's own readiness report said `ready` on a machine where every sandboxed command failed to
+    // start (M3.5, and the live check of 2026-10-15): a command is started to see.
+    const chosen = await sandboxStarts(install.binary, env, opts.windowsSandbox);
+    const named = opts.windowsSandbox ? `the ${opts.windowsSandbox} sandbox` : 'the sandbox your Codex setting chooses';
+    if (chosen.ok && chosen.spawns) {
+      checks.push({ id: 'codex.sandbox', status: 'ok', message: `Codex starts commands in ${named} (${sandbox})` });
+    } else if (chosen.ok) {
       checks.push({
         id: 'codex.sandbox',
         status: 'warn',
-        message: `Codex's commands run without its sandbox (--sandbox danger-full-access; its sandbox here: ${sandboxReady}); file changes Codex does not ask about are not judged before they happen`,
-        fix: 'verification judges every change afterwards; use workspace-write where the sandbox is ready',
-      });
-    } else if (sandboxReady !== 'ready') {
-      checks.push({
-        id: 'codex.sandbox',
-        status: 'warn',
-        message: `Codex's Windows sandbox is ${sandboxReady}: under ${sandbox} the commands Friday approves fail to start (M3.5)`,
-        fix: 'set the sandbox up as an administrator, or run with --sandbox danger-full-access and rely on approvals and verification',
+        message: `Codex starts commands in ${named} (${sandbox}), but they cannot start other programs (EPERM): test runners and package managers that start workers fail there`,
+        fix: 'have tests run in one process (node --test --test-isolation=none), set the elevated sandbox up as an administrator, or run with --sandbox danger-full-access and rely on approvals and verification',
       });
     } else {
-      checks.push({ id: 'codex.sandbox', status: 'ok', message: `Codex's Windows sandbox is ready (${sandbox})` });
+      const fallback =
+        opts.windowsSandbox === 'unelevated' ? chosen : await sandboxStarts(install.binary, env, 'unelevated');
+      checks.push({
+        id: 'codex.sandbox',
+        status: 'warn',
+        message: `Codex cannot start commands in ${named} here (${chosen.error}; its readiness report: ${sandboxReady ?? 'unknown'}): every command Friday approves would fail`,
+        fix:
+          fallback.ok && opts.windowsSandbox !== 'unelevated'
+            ? `run with --windows-sandbox unelevated, which starts commands here${fallback.spawns ? '' : ', though they cannot start other programs (run tests in one process: node --test --test-isolation=none)'}. In a check on 2026-10-15 it kept network connections out but not writes outside the folder; verification judges every change. Or set the elevated sandbox up as an administrator`
+            : 'set the sandbox up as an administrator, or run with --sandbox danger-full-access and rely on approvals and verification',
+      });
     }
   } else {
     checks.push({ id: 'codex.sandbox', status: 'info', message: `threads run with --sandbox ${sandbox}` });

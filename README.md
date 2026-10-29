@@ -65,6 +65,7 @@ See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 | [docs/routing.md](docs/routing.md) | Model routing: pins, hard constraints, the registry and guide, evidence, Laya and its calibration, what binds and what is advice |
 | [docs/protocol/README.md](docs/protocol/README.md) | The harness protocol: transport, tokens, methods, errors, versions |
 | [docs/integration/claude-code-spike.md](docs/integration/claude-code-spike.md) | Verified Claude Code hook and MCP behaviour on Windows |
+| [docs/integration/mvp-demo.md](docs/integration/mvp-demo.md) | The MVP demonstration with real Claude Code and Codex: the steps, and what to record for the M8 gate |
 | [docs/integration/codex.md](docs/integration/codex.md) | Codex as a spawn-mode harness: running it, what Friday pins and decides, what is not mediated |
 | [docs/integration/codex-spike.md](docs/integration/codex-spike.md) | The M3.5 Codex app-server spike: what works, what does not, and the contract changes before M8 |
 | [docs/reviews/](docs/reviews/) | External reviews of the plan and the project, and how each finding was handled |

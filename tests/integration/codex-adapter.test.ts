@@ -4,7 +4,7 @@
  * approvals answered through Friday's policy, the model the host reports, messages steered into
  * the running turn, and a turn's end reported as a claim, a blocked result or an error.
  */
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CODEX_RULES, CodexAdapter } from '@friday/adapter-codex';
@@ -38,6 +38,9 @@ interface Script {
   multiAgentMode?: string;
   turns: Step[][];
   resume?: Step[];
+  mcpServers?: string[];
+  keepServers?: boolean;
+  approvalPolicy?: string;
 }
 
 /** A Codex agent working for Friday, its host scripted. */
@@ -103,6 +106,7 @@ describe('the Codex adapter', () => {
     const pid = td.project.project_id;
     const c = codex(td, 'cx-1', {
       model: 'gpt-fake',
+      mcpServers: ['user_repl'],
       turns: [
         [
           { op: 'write', path: 'src/ok.ts', text: 'export const ok = 1;\n' },
@@ -135,6 +139,28 @@ describe('the Codex adapter', () => {
     expect(path.resolve(String(started.cwd))).toBe(path.resolve(root));
     expect(String(started.developerInstructions)).toContain(CODEX_RULES.split('\n')[0]);
     expect(String(started.developerInstructions)).toContain(id);
+    // Codex has none of Friday's own tools, so its instructions name none (the M8a live check).
+    expect(String(started.developerInstructions)).not.toMatch(/friday_[a-z]+|friday:\/\//);
+    expect(String(started.developerInstructions)).toContain("Finish as the instructions from Friday's adapter");
+    // Nothing of the host's own that Friday cannot judge: the checkout, and the main checkout Codex
+    // keys a worktree's trust by, are untrusted for the thread (the repository's Codex files do not
+    // apply, nothing is recorded in the user's Codex configuration); plugins, apps, tool
+    // suggestions, web search and the configured MCP servers are off, and Codex confirmed it.
+    const config = started.config as {
+      projects: Record<string, { trust_level: string }>;
+      features: Record<string, boolean>;
+      web_search: string;
+      mcp_servers: Record<string, { enabled: boolean }>;
+    };
+    const untrusted = Object.entries(config.projects)
+      .filter(([, v]) => v.trust_level === 'untrusted')
+      .map(([k]) => path.resolve(k).toLowerCase());
+    expect(untrusted).toEqual(
+      expect.arrayContaining([path.resolve(root).toLowerCase(), realpathSync.native(ws().projectDir).toLowerCase()]),
+    );
+    expect(config.features).toEqual({ plugins: false, apps: false, tool_suggest: false });
+    expect(config.web_search).toBe('disabled');
+    expect(config.mcp_servers).toEqual({ user_repl: { enabled: false } });
     const turn = c.entries().find((e) => e.request === 'turn/start')?.params as Record<string, unknown>;
     expect(turn.outputSchema).toBeTruthy();
     expect(String((turn.input as { text: string }[])[0]?.text)).toContain(id);
@@ -164,6 +190,18 @@ describe('the Codex adapter', () => {
     expect((unmediated?.payload as { data?: { paths?: string[] } } | undefined)?.data?.paths).toEqual(['src/quiet.ts']);
     const judged = events.filter((e) => e.type === 'policy.evaluated').map((e) => (e.payload as { tool: string }).tool);
     expect(new Set(judged)).toEqual(new Set(['fileChange', 'commandExecution']));
+    // What the thread really runs with is recorded, as Codex reported it.
+    const settings = events.find(
+      (e) => e.type === 'agent.event' && (e.payload as { event_type: string }).event_type === 'host.settings',
+    )?.payload as { data?: Record<string, unknown> } | undefined;
+    expect(settings?.data).toMatchObject({
+      sandbox: 'workspaceWrite',
+      network_access: false,
+      approval_policy: 'untrusted',
+      approvals_reviewer: 'user',
+      mcp_servers_disabled: ['user_repl'],
+      repository_config: 'untrusted',
+    });
 
     // The model is the host's report: first at thread start, then its reroute.
     const observed = td.daemon.state.store
@@ -180,6 +218,31 @@ describe('the Codex adapter', () => {
     ]);
     // The attempt's host ended with the attempt.
     expect(c.adapter.running(run?.run_id as string)).toBe(false);
+  });
+
+  it('starts no turn in a thread that keeps tools Friday cannot judge, or that applies another approval policy', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const done = [[{ op: 'final', status: 'completed', summary: 'never runs', changed_paths: [] }]];
+    const kept = codex(td, 'cx-1', { mcpServers: ['user_repl'], keepServers: true, turns: done });
+    const policy = codex(td, 'cx-2', { approvalPolicy: 'never', turns: done });
+    await kept.adapter.start();
+    await policy.adapter.start();
+    const one = await assigned(td, 'cx-1', ['src/**'], 'a host that keeps its servers');
+    const two = await assigned(td, 'cx-2', ['lib/**'], 'a host with another policy');
+    const refusal = async (id: string) => {
+      const e = await eventually(
+        () => td.daemon.state.store.readByRef(td.project.project_id, 'task', id).find((x) => x.type === 'run.declined'),
+        (x) => Boolean(x),
+        `the refusal of ${id}`,
+      );
+      return (e?.payload as { transition?: { trigger?: string } } | undefined)?.transition?.trigger;
+    };
+    expect(await refusal(one)).toMatch(/MCP servers in Friday's thread.*user_repl \(connected\)/);
+    expect(await refusal(two)).toMatch(/did not apply Friday's settings: approval policy "never"/);
+    // Before any turn: the model was never asked anything, and the hosts are gone.
+    for (const c of [kept, policy]) expect(c.entries().some((e) => e.request === 'turn/start')).toBe(false);
+    expect(status(td, one).status).toBe('READY');
+    expect(status(td, two).status).toBe('READY');
   });
 
   it('reports a blocked turn as blocked, a failed one as an error, and answers a question for the user', async () => {

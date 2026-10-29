@@ -18,6 +18,13 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - **Finishing.** A turn's end becomes a completion claim for verification, a blocked result, or an error.
   - **Doctor.** `friday harness doctor codex` checks the executable, its app-server and its sandbox, without calling a model.
   - Writes Codex makes without asking, and its own delegation, are reported, not hidden.
+- **M8a.4, the MVP demonstration:** `tests/scenarios/mvp-demo.test.ts` runs the spec's MVP script end to end with Claude Code and Codex on one project. That covers the plan, parallel worktrees, each agent's context, a contract change routed only to the agent it concerns, tests, one harness killed and recovered, verification, integration and the verified goal. `docs/integration/mvp-demo.md` is the same script for a recorded run with real hosts.
+- **The live Codex check:** Friday's Codex adapter ran against the real Codex in six turns the owner approved (`tests/scenarios/codex.live.test.ts`, results in `docs/integration/codex.md`). What it changed:
+  - Friday's Codex threads no longer carry your own Codex tools (plugins, ChatGPT apps, MCP servers, web search), and a repository's own Codex configuration no longer applies in them; nothing is written to your Codex configuration.
+  - A run's first turn starts only once Friday knows the run started. An error before that frees the task instead of leaving it stuck.
+  - Context for a host without Friday's tools no longer names them.
+  - Friday's command policy judges what PowerShell blocks run, so Codex's reads on Windows pass and the writes inside them do not.
+  - `friday harness doctor codex` starts a command in Codex's sandbox to see whether it works. `friday harness run codex` takes `--windows-sandbox` and `--service-tier`.
 
 ## Unreleased — M7.1e, the follow-up review of M7.1
 

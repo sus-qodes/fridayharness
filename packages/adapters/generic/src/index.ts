@@ -49,9 +49,13 @@ export interface HarnessDescriptor {
 }
 
 export type Registration = ResultOf<'harness.register'>;
-export type TaskHandler = (
-  msg: OutboundMessage,
-) => Promise<{ accepted: boolean; reason?: string; session_ref?: string }>;
+export type TaskHandler = (msg: OutboundMessage) => Promise<{
+  accepted: boolean;
+  reason?: string;
+  session_ref?: string;
+  /** Runs once Friday has the answer: work that must not begin before Friday knows the run started. */
+  afterAck?: () => void;
+}>;
 
 /**
  * Registers with the bootstrap credential, then switches to the harness token it receives.
@@ -159,6 +163,7 @@ export class GenericHarnessClient {
             ...(res.session_ref ? { session_ref: res.session_ref } : {}),
           },
         ]);
+        res.afterAck?.();
       }
     }
   }

@@ -6,6 +6,15 @@ import { renderDoctor } from './doctor.js';
 
 const SANDBOXES = ['read-only', 'workspace-write', 'danger-full-access'] as const;
 
+interface SpawnRunOptions {
+  agent?: string;
+  role: string;
+  sandbox: CodexSandbox;
+  effort?: string;
+  serviceTier?: string;
+  windowsSandbox?: 'elevated' | 'unelevated';
+}
+
 /**
  * `friday harness run codex` (ADR-0032 §1): Codex works for Friday in the foreground, taking the
  * tasks Friday gives its agent, until it is stopped; its hosts and their work end with it.
@@ -22,7 +31,17 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
         .default('workspace-write'),
     )
     .option('--effort <level>', 'reasoning effort for its turns (the host default otherwise)')
-    .action(async (host: string, o: { agent?: string; role: string; sandbox: CodexSandbox; effort?: string }) => {
+    .option(
+      '--service-tier <tier>',
+      'service tier of its threads: default (standard speed) or priority (your Codex setting otherwise)',
+    )
+    .addOption(
+      new Option(
+        '--windows-sandbox <mode>',
+        "the Windows sandbox its commands run in: elevated needs an administrator's setup, unelevated does not (your Codex setting otherwise)",
+      ).choices(['elevated', 'unelevated']),
+    )
+    .action(async (host: string, o: SpawnRunOptions) => {
       if (host !== 'codex') throw new UsageError(`spawn mode is built for codex; ${host} is not supported yet`);
       const ref = project(g());
       const install = findCodex();
@@ -41,6 +60,8 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
         hostEnv: hostEnvironment(),
         sandbox: o.sandbox,
         ...(o.effort ? { effort: o.effort } : {}),
+        ...(o.serviceTier ? { serviceTier: o.serviceTier } : {}),
+        ...(o.windowsSandbox ? { windowsSandbox: o.windowsSandbox } : {}),
         log: (m) => process.stderr.write(`${m}\n`),
       });
       const reg = await adapter.start();
@@ -59,8 +80,12 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
 }
 
 /** `friday harness doctor codex`: what Friday would run, and the level it gives (no model call). */
-export async function doctorCodex(g: () => GlobalOptions, sandbox: CodexSandbox): Promise<void> {
-  const report = await codexDoctor({ sandbox });
+export async function doctorCodex(
+  g: () => GlobalOptions,
+  sandbox: CodexSandbox,
+  windowsSandbox?: 'elevated' | 'unelevated',
+): Promise<void> {
+  const report = await codexDoctor({ sandbox, ...(windowsSandbox ? { windowsSandbox } : {}) });
   out(g(), report, () => `${renderDoctor(report.checks)}\n\nEnforcement: ${report.achieved}`);
   if (report.checks.some((c) => c.status === 'fail')) process.exitCode = 1;
 }

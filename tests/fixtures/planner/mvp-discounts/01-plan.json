@@ -1,0 +1,52 @@
+{
+  "purpose": "plan",
+  "match": "discount codes",
+  "usage": { "input_tokens": 2100, "output_tokens": 1500, "cache_creation_input_tokens": 2900 },
+  "output": {
+    "objective": "Customers can enter a discount code at checkout; the backend applies it and the frontend shows the discounted total",
+    "constraints": [
+      "money stays in integer minor units with an ISO-4217 currency (DECISIONS.md ADR-001)",
+      "the frontend reaches the backend only through shared/src (ADR-002)"
+    ],
+    "outcomes": [
+      "a valid code lowers the checkout total",
+      "the checkout page shows the discount line",
+      "the README explains discount codes"
+    ],
+    "summary": "Extend the shared contract and the checkout client, apply codes in the checkout service, and document them, in parallel with disjoint write scopes.",
+    "rationale": "The contract change is small and owned by the frontend task; the backend task reads the contract and learns of its change through Friday, so the three tasks can start at once.",
+    "needs_human": null,
+    "tasks": [
+      {
+        "key": "discount-contract",
+        "kind": "implementation",
+        "summary": "Discount codes in the shared contract and the checkout client",
+        "description": "Add discountCode to CheckoutRequest and discount (Money) to CheckoutResponse in shared/src/api.ts, and frontend/src/discount.ts with the discount line the checkout page shows, with tests in frontend/test.",
+        "acceptance_criteria": ["node --test passes", "the discount line shows the amount saved"],
+        "scope": { "write": ["shared/src/api.ts", "frontend/**"], "read": ["frontend/**", "shared/**"] },
+        "role": "frontend",
+        "risk_level": "medium"
+      },
+      {
+        "key": "discount-service",
+        "kind": "implementation",
+        "summary": "Apply discount codes in the checkout service",
+        "description": "Add backend/src/discount.ts: applyDiscount(total, code) for the codes the business defines, with tests in backend/test.",
+        "acceptance_criteria": ["node --test passes", "an unknown code leaves the total unchanged"],
+        "scope": { "write": ["backend/**"], "read": ["backend/**", "shared/**"] },
+        "role": "backend",
+        "risk_level": "medium"
+      },
+      {
+        "key": "discount-docs",
+        "kind": "docs",
+        "summary": "Document discount codes",
+        "description": "Explain discount codes in README.md.",
+        "acceptance_criteria": ["the README names the codes and what they do"],
+        "scope": { "write": ["README.md"], "read": ["**"] },
+        "role": "docs",
+        "risk_level": "low"
+      }
+    ]
+  }
+}

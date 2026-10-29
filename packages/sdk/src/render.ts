@@ -2,11 +2,17 @@ import type { ContextPacket } from '@friday/protocol';
 
 /**
  * Renders a context packet as compact Markdown with inline provenance tags, within `maxChars`.
- * Sections are dropped from the end except the protocol reminder, which is always kept.
+ * Sections are dropped from the end except the protocol reminder, which is always kept. A host
+ * without Friday's own tools (`fridayTools: false`, a spawn adapter's host) is not pointed at them.
  */
-export function renderContextMarkdown(packet: ContextPacket, maxChars = 9000): string {
+export function renderContextMarkdown(
+  packet: ContextPacket,
+  maxChars = 9000,
+  opts: { fridayTools?: boolean } = {},
+): string {
+  const tools = opts.fridayTools !== false;
   const header = `<friday-context id="${packet.context_id}" task="${packet.task_id ?? 'none'}" state="${packet.state_version}" created="${packet.created_at}">`;
-  const footer = `Full packet: friday://context/${packet.context_id}\n</friday-context>`;
+  const footer = tools ? `Full packet: friday://context/${packet.context_id}\n</friday-context>` : '</friday-context>';
   const render = (s: ContextPacket['sections'][number]) => {
     const src = s.sources[0];
     const tag = src ? ` [${s.kind} · ${src.source_type}:${src.source_id} · ${s.authority}]` : ` [${s.kind}]`;
@@ -27,7 +33,7 @@ export function renderContextMarkdown(packet: ContextPacket, maxChars = 9000): s
   }
   const note =
     dropped > 0
-      ? `_(${dropped} section(s) omitted to fit the budget; request them with friday_request_context)_\n`
+      ? `_(${dropped} section(s) omitted to fit the budget${tools ? '; request them with friday_request_context' : ''})_\n`
       : '';
   return `${header}\n${body}${note}${tail}${footer}`;
 }

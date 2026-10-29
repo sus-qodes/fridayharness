@@ -5,7 +5,10 @@
 // file, so a test can prove what Friday allowed, declined and stopped. It never calls a model.
 //
 // Environment:
-//   FAKE_CODEX_SCRIPT  a JSON file: { model?, multiAgentMode?, turns: Step[][], resume?: Step[] }
+//   FAKE_CODEX_SCRIPT  a JSON file: { model?, multiAgentMode?, turns: Step[][], resume?: Step[],
+//                      mcpServers?: string[] (configured MCP servers), keepServers?: true (a host that
+//                      leaves them running whatever the thread's config says), approvalPolicy?: string
+//                      (a host that applies another policy than the one asked for) }
 //   FAKE_CODEX_LOG     a JSON-lines file of everything the client sent, and the answers it gave
 //   FAKE_CODEX_WORK    a folder: <task>.work files grow while a long command runs; threads.json
 //                      (thread-<id>.json) remembers each thread, so a new app-server can resume it
@@ -131,29 +134,56 @@ async function play(steps, thread, turnId) {
   // A script without a final step leaves the turn running, as a long task does.
 }
 
+/** The thread's answer about itself, as `thread/start` and `thread/resume` give it. */
+const opened = (t, p) => ({
+  thread: { id: t.id },
+  model: t.model,
+  modelProvider: 'openai',
+  cwd: t.cwd,
+  approvalPolicy: script.approvalPolicy ?? p.approvalPolicy,
+  approvalsReviewer: p.approvalsReviewer,
+  // As 0.162.1 reports it: the mode in camel case, the network off unless asked for.
+  sandbox: { type: String(p.sandbox ?? 'read-only').replace(/-([a-z])/g, (_, c) => c.toUpperCase()), networkAccess: false },
+  serviceTier: p.serviceTier ?? null,
+  instructionSources: [],
+  multiAgentMode: script.multiAgentMode ?? 'explicitRequestOnly',
+});
+/** The configured MCP servers the thread's config turned off (`mcp_servers.<name>.enabled = false`). */
+const disabledBy = (config) =>
+  Object.entries(config?.mcp_servers ?? {})
+    .filter(([, v]) => v?.enabled === false)
+    .map(([k]) => k);
+
 const handlers = {
   initialize: () => ({ userAgent: `fake_codex/0.162.1 (${process.platform})`, codexHome: workDir }),
+  'config/read': () => ({ config: { mcp_servers: Object.fromEntries((script.mcpServers ?? []).map((n) => [n, { command: 'node' }])) } }),
   'thread/start': (p) => {
     const id = `thr-${process.pid}-${++started}`;
-    const t = { id, cwd: p.cwd, model: p.model ?? script.model ?? 'gpt-fake', task: null, turns: 0 };
+    const t = { id, cwd: p.cwd, model: p.model ?? script.model ?? 'gpt-fake', task: null, turns: 0, disabled: disabledBy(p.config) };
     saveThread(t);
-    return {
-      thread: { id },
-      model: t.model,
-      modelProvider: 'openai',
-      cwd: p.cwd,
-      approvalPolicy: p.approvalPolicy,
-      approvalsReviewer: p.approvalsReviewer,
-      sandbox: { type: p.sandbox },
-      multiAgentMode: script.multiAgentMode ?? 'explicitRequestOnly',
-    };
+    return opened(t, p);
   },
   'thread/resume': (p) => {
     const t = loadThread(p.threadId);
     if (!t) throw Object.assign(new Error(`no thread ${p.threadId}`), { code: -32600 });
     t.cwd = p.cwd ?? t.cwd;
+    t.disabled = disabledBy(p.config);
     saveThread(t);
-    return { thread: { id: t.id }, model: t.model, modelProvider: 'openai', multiAgentMode: script.multiAgentMode ?? 'explicitRequestOnly' };
+    return opened(t, p);
+  },
+  'mcpServerStatus/list': (p) => {
+    const t = loadThread(p.threadId);
+    return {
+      data: (script.mcpServers ?? []).map((name) => ({
+        name,
+        runtimeStatus: !script.keepServers && t?.disabled?.includes(name) ? 'disabled' : 'connected',
+        tools: {},
+        resources: [],
+        resourceTemplates: [],
+        authStatus: 'unsupported',
+      })),
+      nextCursor: null,
+    };
   },
   'turn/start': (p) => {
     const t = loadThread(p.threadId);

@@ -44,11 +44,15 @@ export const DEFAULT_AUTONOMY: Record<CommandClass, Autonomy> = {
 
 const RANK: Record<Autonomy, number> = { auto: 0, review: 1, manual: 2, never: 3 };
 
-/** Splits a command line on && || ; | and newlines, ignoring separators inside quotes. */
+/**
+ * Splits a command line on && || ; | and newlines, ignoring separators inside quotes and inside
+ * brackets: a PowerShell block or a subshell stays one segment, and `partsOf` judges what it holds.
+ */
 export function splitSegments(command: string): string[] {
   const out: string[] = [];
   let cur = '';
   let quote: string | null = null;
+  let depth = 0;
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i] as string;
     const next = command[i + 1];
@@ -62,7 +66,12 @@ export function splitSegments(command: string): string[] {
       cur += ch;
       continue;
     }
-    if (ch === '\n' || ch === ';' || (ch === '&' && next === '&') || (ch === '|' && next === '|') || ch === '|') {
+    if (ch === '(' || ch === '{') depth += 1;
+    else if ((ch === ')' || ch === '}') && depth > 0) depth -= 1;
+    if (
+      depth === 0 &&
+      (ch === '\n' || ch === ';' || (ch === '&' && next === '&') || (ch === '|' && next === '|') || ch === '|')
+    ) {
       if (cur.trim()) out.push(cur.trim());
       cur = '';
       if ((ch === '&' || ch === '|') && next === ch) i += 1;
@@ -145,6 +154,19 @@ export function classifySegment(segment: string): CommandClass {
   if (/\$env:[a-z_]*(key|token|secret|password)/i.test(text)) return 'secrets.read';
 
   if (cmd === 'git') {
+    // Options before the subcommand (`--no-pager`, `-C <dir>`) are skipped; a `-c` setting can run
+    // commands (an alias, a hook path), which no rule knows.
+    if (sub.startsWith('-')) {
+      let k = 1;
+      for (; k < ws.length && (ws[k] as string).startsWith('-'); k += 1) {
+        const o = ws[k] as string;
+        const lo = o.toLowerCase();
+        if (o === '-c' || lo.startsWith('--config-env') || lo.startsWith('--exec-path=')) return 'unknown';
+        if (o === '-C' || ['--git-dir', '--work-tree', '--namespace'].includes(lo)) k += 1;
+      }
+      if (k >= ws.length) return 'git.read';
+      return classifySegment(['git', ...ws.slice(k)].map((x) => (/\s/.test(x) ? JSON.stringify(x) : x)).join(' '));
+    }
     if (sub === 'push')
       return has(rest, '--force', '-f', '--force-with-lease', '--mirror', '--delete') ? 'git.force' : 'git.push';
     if (sub === 'reset' && has(rest, '--hard')) return 'git.force';
@@ -414,7 +436,38 @@ export function classifySegment(segment: string): CommandClass {
     'tr',
     'basename',
     'dirname',
+    // PowerShell's pipeline and path cmdlets (their script blocks are judged on their own).
+    'where-object',
+    '?',
+    'sort-object',
+    'group-object',
+    'get-item',
+    'gi',
+    'split-path',
+    'join-path',
+    'get-member',
+    'gm',
+    'get-filehash',
+    'compare-object',
+    'format-wide',
+    'out-null',
+    'out-host',
+    'write-error',
+    'write-warning',
+    'write-verbose',
+    'write-information',
+    'start-sleep',
+    // Control flow that runs nothing.
+    'exit',
+    'return',
+    'break',
+    'continue',
+    'throw',
   ];
+  // ForEach-Object runs its script block (judged on its own) or, given a name, a method of each item.
+  if (cmd === 'foreach-object' || cmd === '%') {
+    return rest.every((r) => ['-process', '-begin', '-end'].includes(r)) ? 'read.local' : 'unknown';
+  }
   if (readOnly.includes(cmd)) {
     // sed -i / awk -i inplace edit files.
     if ((cmd === 'sed' && rest.some((r) => r.startsWith('-i'))) || (cmd === 'awk' && rest.includes('inplace')))
@@ -486,12 +539,175 @@ export function wrappedCommand(segment: string): string | null {
   return inner;
 }
 
-/** A command line's segments, with every shell wrapper replaced by the segments it runs. */
+/**
+ * A command line's segments: every shell wrapper replaced by the segments it runs, and every
+ * PowerShell block, expression and subshell by the commands inside it.
+ */
 function expandedSegments(command: string, depth = 0): string[] {
   return splitSegments(command).flatMap((s) => {
-    const inner = depth < 4 ? wrappedCommand(s) : null;
-    return inner === null ? [s] : expandedSegments(inner, depth + 1);
+    if (depth >= 8) return [s];
+    const inner = wrappedCommand(s);
+    return inner === null ? partsOf(s, depth) : expandedSegments(inner, depth + 1);
   });
+}
+
+/**
+ * A method call or a .NET member outside quotes (`$f.Delete()`, `(Get-Item x).Delete()`,
+ * `[IO.File]::Delete('x')`): it can do anything, and no rule knows what.
+ */
+function isCall(s: string): boolean {
+  const bare = s.replace(/"[^"]*"|'[^']*'/g, '""');
+  return /\.\s*[A-Za-z_]\w*\s*\(/.test(bare) || bare.includes('::') || /^\$[\w:.]*\s*\(/.test(bare);
+}
+
+/** Words that open a PowerShell (or shell) construct and run nothing themselves. */
+const KEYWORDS = new Set([
+  'if',
+  'elseif',
+  'else',
+  'foreach',
+  'for',
+  'while',
+  'do',
+  'until',
+  'try',
+  'catch',
+  'finally',
+  'switch',
+  'trap',
+  'param',
+  'begin',
+  'process',
+  'end',
+  'function',
+  'filter',
+  // POSIX shells.
+  'then',
+  'elif',
+  'fi',
+  'done',
+  'esac',
+]);
+
+/**
+ * What one segment runs (M8a live check: Codex reads files on Windows through PowerShell, as
+ * `if (Test-Path x) { Get-Content x }`):
+ * - a construct (`if (…) {…} else {…}`, `try {…} catch {…}`, `foreach ($f in …) {…}`): the
+ *   commands inside its brackets;
+ * - a command with blocks or subexpressions (`ForEach-Object { … }`, `Get-Content (Join-Path …)`,
+ *   `"$( … )"`): the command and the commands inside;
+ * - an expression (`$x -like '*.ts'`, a value): nothing, but an assignment runs its right side;
+ * - a method call or a .NET member (`$f.Delete()`, `[IO.File]::Delete(…)`): itself, which no rule
+ *   knows, so a human decides.
+ */
+function partsOf(segment: string, depth: number): string[] {
+  const t = segment.trim();
+  if (!t || VALUE.test(t)) return [];
+  // A negation runs what it negates (`! rm -rf x` in a POSIX shell, `-not (Test-Path x)`).
+  const negated = /^(!|-not\b)\s*([\s\S]*)$/i.exec(t);
+  if (negated) return negated[2] ? partsOf(negated[2], depth + 1) : [];
+  const call = isCall(t);
+  if (!call && t.startsWith('$') && !t.startsWith('$(')) {
+    const assign = /^\$[\w:.]*(?:\[[^\]]*\])?\s*[-+*/%]?=\s*([\s\S]*)$/.exec(t);
+    if (assign) return expandedSegments(assign[1] as string, depth + 1);
+    const within = /^\$\w+\s+in\s+([\s\S]*)$/i.exec(t);
+    if (within) return expandedSegments(within[1] as string, depth + 1);
+  }
+  const g = groupsOf(t);
+  if (!g) return [segment];
+  const inner = g.groups.flatMap((x) => expandedSegments(x, depth + 1));
+  // The call is judged as it stands (unknown), and what its brackets hold as well.
+  if (call) return [segment, ...inner];
+  // A keyword opens a construct and runs nothing, but what follows it does (`do rm x`, `then …`).
+  let frame = g.frame.trim();
+  for (;;) {
+    const m = /^(\S+)\s*([\s\S]*)$/.exec(frame);
+    const w = (m?.[1] ?? '').toLowerCase();
+    if (!m || !KEYWORDS.has(w)) break;
+    // A definition's name runs nothing either (`function f { … }`).
+    frame = (w === 'function' || w === 'filter' ? (m[2] ?? '').replace(/^\S+\s*/, '') : (m[2] ?? '')).trim();
+  }
+  // An expression, a value or a string PowerShell only prints runs nothing beyond its brackets.
+  if (!frame || t.startsWith('$') || VALUE.test(frame) || PRINTED.test(frame) || OPERATOR.test(frame)) return inner;
+  return frame === t ? [segment] : [frame, ...inner];
+}
+
+/**
+ * The continuation of an expression: an operator (`-gt 0`), an array or hashtable (`@( … )`), or a
+ * member of what a bracket returned (`.Length`). A program path (`./x`, `/bin/rm`) is none of these.
+ */
+const OPERATOR = /^(-[a-z]+\b|[@,+*=]|\.[A-Za-z_])/i;
+
+/** A literal value: a number, a string without variables, `$true`, `$false`, `$null`. */
+const VALUE = /^(-?\d+(\.\d+)?|'[^']*'|"[^"$]*"|\$(true|false|null))$/i;
+/**
+ * A string PowerShell prints, perhaps formatted (`"--- name"`, `"{0}: {1}" -f $i, $_`): it holds a
+ * space, so it names no command, and neither a path separator (`"C:\Program Files\…\node.exe"`
+ * runs in cmd and POSIX shells) nor a variable, which a POSIX shell could run.
+ */
+const PRINTED = /^("[^"$\\/]*\s[^"$\\/]*"|'[^'\\/]*\s[^'\\/]*')(\s|$)/;
+
+/**
+ * The bracketed parts of a segment and what is left around them: `( … )` and `{ … }` outside
+ * quotes, and `$( … )` inside double quotes, which runs too. Null when the brackets do not balance.
+ */
+function groupsOf(s: string): { frame: string; groups: string[] } | null {
+  const groups: string[] = [];
+  let frame = '';
+  let quote: string | null = null;
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i] as string;
+    if (quote) {
+      if (ch === quote) quote = null;
+      else if (quote === '"' && ch === '$' && s[i + 1] === '(') {
+        const end = closing(s, i + 1);
+        if (end < 0) return null;
+        groups.push(s.slice(i + 2, end));
+        frame += ' ';
+        i = end;
+        continue;
+      }
+      frame += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      frame += ch;
+      continue;
+    }
+    if (ch === '(' || ch === '{') {
+      const end = closing(s, i);
+      if (end < 0) return null;
+      groups.push(s.slice(i + 1, end));
+      frame += ' ';
+      i = end;
+      continue;
+    }
+    if (ch === ')' || ch === '}') return null;
+    frame += ch;
+  }
+  return quote ? null : { frame, groups };
+}
+
+/** Where the bracket at `open` closes, skipping quoted text; -1 when it does not. */
+function closing(s: string, open: number): number {
+  const stack: string[] = [s[open] === '(' ? ')' : '}'];
+  let quote: string | null = null;
+  for (let i = open + 1; i < s.length; i += 1) {
+    const ch = s[i] as string;
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === '(') stack.push(')');
+    else if (ch === '{') stack.push('}');
+    else if (ch === ')' || ch === '}') {
+      if (stack.pop() !== ch) return -1;
+      if (stack.length === 0) return i;
+    }
+  }
+  return -1;
 }
 
 export function classifyCommand(
@@ -502,12 +718,20 @@ export function classifyCommand(
   // Classes that are never allowed cannot be relaxed by configuration.
   table['secrets.read'] = 'never';
   table['friday.internal'] = 'never';
-  const segments = expandedSegments(command).map((text) => ({ text, class: classifySegment(text) }));
+  const segments = expandedSegments(command).map((text) => {
+    const c = classifySegment(text);
+    // A method call runs what no rule knows: at least a human's decision.
+    return { text, class: isCall(text) && RANK[table[c]] < RANK[table.unknown] ? ('unknown' as const) : c };
+  });
   if (segments.length === 0) return { class: 'read.local', autonomy: 'auto', segments };
   let worst = segments[0] as { text: string; class: CommandClass };
   for (const s of segments) if (RANK[table[s.class]] > RANK[table[worst.class]]) worst = s;
   // Redirecting output into a file writes it, whatever the command; inside a wrapper too.
-  const redirects = (text: string) => /(^|[^0-9&])>{1,2}\s*[^&\s]/.test(text.replace(/"[^"]*"|'[^']*'/g, ''));
+  // Output thrown away (`> $null`, `*> $null`, `>NUL`, `> /dev/null`) writes nothing.
+  const redirects = (text: string) =>
+    /(^|[^0-9&])>{1,2}\s*[^&\s]/.test(
+      text.replace(/"[^"]*"|'[^']*'/g, '').replace(/[0-9*]?>{1,2}\s*(\$null|nul|\/dev\/null)(?![\w/.\\-])/gi, ' '),
+    );
   if ((redirects(command) || segments.some((s) => redirects(s.text))) && RANK[table[worst.class]] < RANK.review) {
     worst = { text: command, class: 'git.mutate' };
   }

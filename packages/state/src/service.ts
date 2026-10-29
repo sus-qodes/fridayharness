@@ -1704,6 +1704,16 @@ export class FridayState {
           refs: [{ kind: 'task', id: task.task_id }],
         });
         if (!p.fatal) return { task_status: task.status };
+        if (run.status === 'STARTING') {
+          // The work never started (Friday had not heard that the run was accepted): the harness
+          // could not take it, which is a decline, and the task is free again.
+          this.declineWithin(ctx, projectId, run, `the harness could not start: ${p.message}`.slice(0, 500), {
+            kind: 'harness',
+            id: caller.harness_id,
+          });
+          this.syncHarnessBusy(ctx, caller.harness_id);
+          return { task_status: this.q.task(projectId, p.task_id).status };
+        }
         if (task.status === 'RUNNING') {
           task = this.moveTask(ctx, task, 'task.wait', {
             waiting_reason: 'agent_error',
@@ -3247,19 +3257,25 @@ export class FridayState {
     this.exec({ name: 'run.decline', project_id: projectId, actor }, (ctx) => {
       const run = this.q.run(runId);
       if (run.status !== 'STARTING') return;
-      this.moveRun(ctx, run, 'DECLINED', reason, { outcome: 'declined', ended_at: ctx.now });
-      const task = this.q.task(projectId, run.task_id);
-      const agentId = task.assigned_agent_id;
-      if (task.status === 'ASSIGNED' && task.current_run_id === runId) {
-        this.moveTask(ctx, task, 'task.release', {
-          reason,
-          changes: { assigned_agent_id: null, assigned_harness_id: null, current_run_id: null },
-        });
-      }
-      const agent = agentId ? this.q.findAgent(agentId) : undefined;
-      if (agent && agent.status === 'ASSIGNED')
-        this.moveAgent(ctx, agent, 'AVAILABLE', { current_task_id: null, current_run_id: null });
+      this.declineWithin(ctx, projectId, run, reason);
     });
+  }
+
+  /** A run that never started ends declined, and its task is free again (ASSIGNED → READY). */
+  private declineWithin(ctx: CommandContext, projectId: string, run: RunView, reason: string, actor?: Actor): void {
+    this.moveRun(ctx, run, 'DECLINED', reason, { outcome: 'declined', ended_at: ctx.now }, actor);
+    const task = this.q.task(projectId, run.task_id);
+    const agentId = task.assigned_agent_id;
+    if (task.status === 'ASSIGNED' && task.current_run_id === run.run_id) {
+      this.moveTask(ctx, task, 'task.release', {
+        reason,
+        ...(actor ? { actor } : {}),
+        changes: { assigned_agent_id: null, assigned_harness_id: null, current_run_id: null },
+      });
+    }
+    const agent = agentId ? this.q.findAgent(agentId) : undefined;
+    if (agent && agent.status === 'ASSIGNED')
+      this.moveAgent(ctx, agent, 'AVAILABLE', { current_task_id: null, current_run_id: null }, actor);
   }
 
   // ================================================================ outbox (daemon → harness)

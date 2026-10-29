@@ -238,3 +238,45 @@ describe('event stream', () => {
     expect(after).toEqual(['task.created']);
   });
 });
+
+describe('a run that never started', () => {
+  it('ends declined when its harness reports a fatal error before accepting it, and the task is free again', async () => {
+    const td = await startTestDaemon(ws(), { brain: false });
+    // A host that fails while it starts the work, and only then answers task.start (the M8a.2
+    // live dry run: a turn refused at once reached Friday before the acceptance did).
+    let fake: FakeHarness | undefined;
+    fake = await FakeHarness.connect(td, {
+      agentKey: 'dev-1',
+      onMessage: async (m) => {
+        const p = m.params as { task_id: string; run_id: string };
+        if (m.method === 'task.start') {
+          await fake?.client.reportError({ ...p, message: 'the host would not start', fatal: true });
+        }
+        return { accepted: true };
+      },
+    });
+    ws().track({ close: () => fake?.close() });
+    const t = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'never starts',
+      ready: true,
+    });
+    await td.operator.post(td.operator.projectPath(`/tasks/${t.task_id}/assign`), { agent_key: 'dev-1' });
+    await fake.waitFor('task.start');
+    const pid = td.project.project_id;
+    const deadline = Date.now() + 10_000;
+    while (td.daemon.state.q.task(pid, t.task_id).status !== 'READY' && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const task = td.daemon.state.q.task(pid, t.task_id);
+    expect(task.status).toBe('READY');
+    expect(task.current_run_id).toBeNull();
+    const declined = td.daemon.state.store.readByRef(pid, 'task', t.task_id).find((e) => e.type === 'run.declined');
+    expect((declined?.payload as { transition?: { trigger?: string } } | undefined)?.transition?.trigger).toMatch(
+      /the harness could not start: the host would not start/,
+    );
+    // The acceptance that arrives afterwards changes nothing.
+    await new Promise((r) => setTimeout(r, 500));
+    expect(td.daemon.state.q.task(pid, t.task_id).status).toBe('READY');
+    expect(td.daemon.state.q.agents(pid).find((a) => a.agent_key === 'dev-1')?.status).toBe('AVAILABLE');
+  });
+});

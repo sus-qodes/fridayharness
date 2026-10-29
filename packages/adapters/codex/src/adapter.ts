@@ -1,3 +1,4 @@
+import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { GenericHarnessClient, type HarnessDescriptor, type Registration } from '@friday/adapter-generic';
 import { type InteractiveProcess, type ProcessGroup, ProcessGroups, startProcess } from '@friday/execution';
@@ -29,9 +30,18 @@ export interface CodexAdapterOptions {
   sandbox: CodexSandbox;
   /** Reasoning effort for turns; the host's default otherwise. */
   effort?: string;
+  /** The service tier of its threads (`default` is standard speed); the user's own setting otherwise. */
+  serviceTier?: string;
+  /**
+   * Which Windows sandbox Codex runs commands in (`windows.sandbox`): `elevated` needs an
+   * administrator's setup, `unelevated` does not. The user's own setting otherwise.
+   */
+  windowsSandbox?: 'elevated' | 'unelevated';
   /** Harness key; by default stable per project and agent, so a restart resumes its runs. */
   harnessKey?: string;
   log?: (msg: string) => void;
+  /** Every protocol line, before it is sent and as it arrives (diagnosis, live checks). */
+  trace?: (direction: 'send' | 'receive', line: string) => void;
 }
 
 /** The final message every turn ends with (`turn/start`'s `outputSchema`, ADR-0032 §9). */
@@ -51,6 +61,7 @@ export const FINAL_SCHEMA = {
 export const CODEX_RULES = [
   "You are working on a task that Friday assigned. Friday runs this project: it decides what you may do, routes messages between agents, and verifies your work with the project's own checks.",
   '',
+  '- The task below is already yours: Friday assigned it to this session, so start on it right away. There is nothing to claim.',
   "- Work only in this folder, which is your task's own git worktree, and only within the task's scope below.",
   '- Friday decides every command and file change Codex asks about. A declined action is a decision, not an error: do not try it another way. If you cannot finish without it, end with status "blocked" and say what you need.',
   '- Do not hand the task, or parts of it, to other agents.',
@@ -79,7 +90,46 @@ interface Attempt {
 
 type Final = { status: 'completed' | 'blocked'; summary: string; changed_paths: string[]; blocked_reason: string };
 
+/** What `thread/start` and `thread/resume` answer (0.162.1). */
+interface OpenedThread {
+  thread?: { id?: string };
+  model?: string;
+  multiAgentMode?: unknown;
+  approvalPolicy?: unknown;
+  approvalsReviewer?: unknown;
+  sandbox?: { type?: string; networkAccess?: boolean };
+  serviceTier?: string | null;
+  reasoningEffort?: string | null;
+  instructionSources?: unknown[];
+}
+
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+
+/**
+ * Every spelling Codex may key a folder's trust by: the checkout and the main checkout of its
+ * repository (Codex records a linked worktree's trust under the main checkout), each as given and
+ * as its real path, and lower-cased on Windows, where Codex writes the keys in lower case.
+ */
+async function trustKeys(cwd: string): Promise<string[]> {
+  const dirs = new Set([path.resolve(cwd)]);
+  await realpath(cwd).then(
+    (p) => dirs.add(p),
+    () => undefined,
+  );
+  try {
+    const refs = await (await GitRoot.open(cwd)).refs();
+    dirs.add(refs.root);
+    if (path.basename(refs.commonDir).toLowerCase() === '.git') dirs.add(path.dirname(refs.commonDir));
+  } catch {
+    // not a git checkout: the folder itself is all there is
+  }
+  const keys = new Set<string>();
+  for (const d of dirs) {
+    keys.add(d);
+    if (process.platform === 'win32') keys.add(d.toLowerCase());
+  }
+  return [...keys];
+}
 
 /**
  * A Codex agent working for Friday (ADR-0032): registers as a spawn-mode harness and, for each run
@@ -175,13 +225,16 @@ export class CodexAdapter {
     this.#loopDone = undefined;
   }
 
-  async #handle(m: OutboundMessage): Promise<{ accepted: boolean; reason?: string; session_ref?: string }> {
+  async #handle(
+    m: OutboundMessage,
+  ): Promise<{ accepted: boolean; reason?: string; session_ref?: string; afterAck?: () => void }> {
     this.received.push(m);
     const p = m.params as TaskStartParams & { reason?: string };
     if (m.method === 'task.start' || m.method === 'task.resume') {
       try {
-        const threadId = await this.#begin(p, m.method === 'task.resume');
-        return { accepted: true, session_ref: threadId };
+        const { threadId, go } = await this.#begin(p, m.method === 'task.resume');
+        // The turn begins once Friday knows the run started, so whatever it reports finds the run.
+        return { accepted: true, session_ref: threadId, afterAck: go };
       } catch (e) {
         this.#log(`could not start ${p.task_id}: ${(e as Error).message}`);
         await this.#end(p.run_id);
@@ -196,18 +249,22 @@ export class CodexAdapter {
     return { accepted: true };
   }
 
-  /** Starts the attempt's host and thread, and its first turn; resolves with the thread id. */
-  async #begin(p: TaskStartParams, resume: boolean): Promise<string> {
+  /** Starts the attempt's host and thread; resolves with the thread id and what starts its turn. */
+  async #begin(p: TaskStartParams, resume: boolean): Promise<{ threadId: string; go: () => void }> {
     await this.#end(p.run_id);
     const group = this.#groups.create();
     let rpc: JsonRpcLines | undefined;
+    const trace = this.opts.trace;
     const proc = startProcess({
       command: this.opts.host.command,
       args: this.opts.host.args,
       cwd: p.working_directory,
       env: this.opts.hostEnv,
       group,
-      onLine: (line) => rpc?.feed(line),
+      onLine: (line) => {
+        trace?.('receive', line);
+        rpc?.feed(line);
+      },
     });
     const a: Attempt = {
       taskId: p.task_id,
@@ -215,11 +272,17 @@ export class CodexAdapter {
       cwd: p.working_directory,
       group,
       proc,
-      rpc: new JsonRpcLines((line) => proc.write(line), {
-        onNotification: (method, params) => this.#notified(a, method, params),
-        onRequest: (method, params) => this.#asked(a, method, params),
-        onUnparsable: (line) => this.#log(`codex: ${line.slice(0, 300)}`),
-      }),
+      rpc: new JsonRpcLines(
+        (line) => {
+          trace?.('send', line);
+          proc.write(line);
+        },
+        {
+          onNotification: (method, params) => this.#notified(a, method, params),
+          onRequest: (method, params) => this.#asked(a, method, params),
+          onUnparsable: (line) => this.#log(`codex: ${line.slice(0, 300)}`),
+        },
+      ),
       threadId: null,
       turnId: null,
       fileItems: new Map(),
@@ -242,19 +305,18 @@ export class CodexAdapter {
     });
     a.rpc.notify('initialized');
     const instructions = await this.#instructions(p);
+    const host = await this.#hostConfig(a);
     const settings = {
       cwd: p.working_directory,
       ...(p.model ? { model: p.model } : {}),
       approvalPolicy: 'untrusted',
       approvalsReviewer: 'user',
       sandbox: this.opts.sandbox,
+      ...(this.opts.serviceTier ? { serviceTier: this.opts.serviceTier } : {}),
       developerInstructions: instructions,
+      config: host.config,
     };
-    const opened = await a.rpc.request<{
-      thread?: { id?: string };
-      model?: string;
-      multiAgentMode?: unknown;
-    }>(
+    const opened = await a.rpc.request<OpenedThread>(
       resume && p.session_ref ? 'thread/resume' : 'thread/start',
       resume && p.session_ref
         ? { ...settings, threadId: p.session_ref, excludeTurns: true }
@@ -263,24 +325,99 @@ export class CodexAdapter {
     const threadId = str(opened.thread?.id);
     if (!threadId) throw new Error('the host returned no thread');
     a.threadId = threadId;
+    await this.#confirmSettings(a, opened, host.servers);
     if (str(opened.model)) await this.#event(a, 'model.observed', { model: opened.model, basis: 'reported' });
     if (opened.multiAgentMode !== undefined && opened.multiAgentMode !== 'explicitRequestOnly') {
       await this.#event(a, 'host.multi_agent', { mode: opened.multiAgentMode });
     }
-    // The turn runs on; its end is the run's result.
-    void this.#turn(a, p, resume && p.session_ref ? 'resume' : 'start').catch((e: Error) => {
-      this.#log(`the turn of ${a.taskId} could not start: ${e.message}`);
-      if (!a.stopping) void this.#lost(a, e.message);
+    const go = () => {
+      if (a.done || a.stopping) return;
+      // The turn runs on; its end is the run's result.
+      void this.#turn(a, p, resume && p.session_ref ? 'resume' : 'start').catch((e: Error) => {
+        this.#log(`the turn of ${a.taskId} could not start: ${e.message}`);
+        if (!a.stopping) void this.#lost(a, e.message);
+      });
+      void this.#relay(a);
+    };
+    return { threadId, go };
+  }
+
+  /**
+   * What a thread Friday starts takes from the host's configuration (ADR-0032 §12): its folders are
+   * untrusted for the thread, so Codex neither records them as trusted in the user's configuration
+   * nor applies the repository's own Codex files; the tools Friday cannot judge before they act are
+   * off: plugins, ChatGPT apps, tool suggestions, web search and every MCP server configured.
+   */
+  async #hostConfig(a: Attempt): Promise<{ config: Record<string, unknown>; servers: string[] }> {
+    const read = await a.rpc.request<{ config?: { mcp_servers?: Record<string, unknown> | null } }>('config/read', {
+      includeLayers: false,
+      cwd: a.cwd,
     });
-    void this.#relay(a);
-    return threadId;
+    const servers = Object.keys(read.config?.mcp_servers ?? {}).sort();
+    return {
+      servers,
+      config: {
+        projects: Object.fromEntries((await trustKeys(a.cwd)).map((k) => [k, { trust_level: 'untrusted' }])),
+        features: { plugins: false, apps: false, tool_suggest: false },
+        web_search: 'disabled',
+        mcp_servers: Object.fromEntries(servers.map((n) => [n, { enabled: false }])),
+        ...(this.opts.windowsSandbox ? { windows: { sandbox: this.opts.windowsSandbox } } : {}),
+      },
+    };
+  }
+
+  /**
+   * The thread runs as Friday asked, or not at all: approvals reach Friday, and no MCP server is
+   * left running in it. Codex reports both; Friday checks them before the first turn.
+   */
+  async #confirmSettings(a: Attempt, opened: OpenedThread, disabled: string[]): Promise<void> {
+    const wrong = [
+      opened.approvalPolicy !== undefined && opened.approvalPolicy !== 'untrusted'
+        ? `approval policy ${JSON.stringify(opened.approvalPolicy)}`
+        : null,
+      opened.approvalsReviewer !== undefined && opened.approvalsReviewer !== 'user'
+        ? `approvals reviewed by ${JSON.stringify(opened.approvalsReviewer)}`
+        : null,
+    ].filter((x): x is string => Boolean(x));
+    if (wrong.length) throw new Error(`Codex did not apply Friday's settings: ${wrong.join('; ')}`);
+    const live: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 20; page += 1) {
+      const listed: { data?: { name?: string; runtimeStatus?: string | null }[]; nextCursor?: string | null } =
+        await a.rpc.request('mcpServerStatus/list', {
+          threadId: a.threadId,
+          detail: 'toolsAndAuthOnly',
+          ...(cursor ? { cursor } : {}),
+        });
+      for (const s of listed.data ?? []) {
+        if (s.runtimeStatus !== 'disabled') live.push(`${s.name ?? '?'} (${s.runtimeStatus ?? 'status unknown'})`);
+      }
+      cursor = listed.nextCursor ?? null;
+      if (!cursor) break;
+    }
+    if (live.length) {
+      throw new Error(`Codex kept MCP servers in Friday's thread, whose tools Friday cannot judge: ${live.join(', ')}`);
+    }
+    await this.#event(a, 'host.settings', {
+      sandbox: opened.sandbox?.type ?? this.opts.sandbox,
+      windows_sandbox: this.opts.windowsSandbox ?? null,
+      network_access: opened.sandbox?.networkAccess ?? null,
+      approval_policy: opened.approvalPolicy ?? null,
+      approvals_reviewer: opened.approvalsReviewer ?? null,
+      service_tier: opened.serviceTier ?? null,
+      reasoning_effort: this.opts.effort ?? opened.reasoningEffort ?? null,
+      instruction_sources: Array.isArray(opened.instructionSources) ? opened.instructionSources.length : null,
+      mcp_servers_disabled: disabled,
+      repository_config: 'untrusted',
+    });
   }
 
   async #instructions(p: TaskStartParams): Promise<string> {
     let packet = '';
     try {
       const ctx = await this.client.requestContext({ task_id: p.task_id, kind: 'task' });
-      packet = renderContextMarkdown(ctx, 12_000);
+      // Codex has none of Friday's own tools: the packet does not point at them.
+      packet = renderContextMarkdown(ctx, 12_000, { fridayTools: false });
     } catch (e) {
       packet = `Friday could not compile this task's context (${(e as Error).message}).`;
     }

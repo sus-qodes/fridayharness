@@ -141,6 +141,13 @@ describe('command classification', () => {
   it('treats output redirection as a write', () => {
     expect(classifyCommand('echo hi > notes.txt').class).toBe('git.mutate');
     expect(classifyCommand('npm test 2>&1').class).toBe('test.local');
+    // Output thrown away writes nothing; a file named like the sink still counts.
+    expect(classifyCommand('Get-Content a.txt > $null').class).toBe('read.local');
+    expect(classifyCommand('Get-Content a.txt *> $null').class).toBe('read.local');
+    expect(classifyCommand('type a.txt >NUL').class).toBe('read.local');
+    expect(classifyCommand('cat a.txt > /dev/null').class).toBe('read.local');
+    expect(classifyCommand('cat a.txt > nul.txt').class).toBe('git.mutate');
+    expect(classifyCommand('cat a.txt > /dev/null2').class).toBe('git.mutate');
   });
 
   it('never relaxes secrets or Friday-internal commands through configuration', () => {
@@ -161,6 +168,45 @@ describe('command classification', () => {
     expect(classifyCommand(`bash -lc 'echo hi > notes.txt'`).class).toBe('git.mutate');
     expect(wrappedCommand(`${ps} -Command 'Write-Output ''hi'''`)).toBe("Write-Output 'hi'");
     expect(wrappedCommand('node --test')).toBeNull();
+  });
+
+  it('judges what PowerShell blocks, script blocks and subexpressions run (the M8a live check)', () => {
+    const ps = '"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"';
+    // Codex's first command in the live check, as it sent it: reads only.
+    const live = `${ps} -Command 'Get-ChildItem backend/src, backend/test | Select-Object FullName; if (Test-Path backend/src/discount.ts) { Get-Content backend/src/discount.ts }; Get-Content backend/test/checkout.service.test.ts -TotalCount 120; Get-Content package.json -ErrorAction SilentlyContinue; Get-Content backend/package.json -ErrorAction SilentlyContinue'`;
+    expect(classifyCommand(live).class).toBe('read.local');
+    const cases: [string, string][] = [
+      ["if (Test-Path a) { Get-Content a } else { Write-Output 'none' }", 'read.local'],
+      ["try { Get-Content a } catch { Write-Output 'missing' }", 'read.local'],
+      ['foreach ($f in Get-ChildItem src) { Get-Content $f }', 'read.local'],
+      ['Get-Content (Join-Path backend src.ts)', 'read.local'],
+      [
+        "Get-ChildItem -Recurse -File | Where-Object { $_.Name -like '*.ts' } | Select-Object -ExpandProperty FullName",
+        'read.local',
+      ],
+      ['$files = Get-ChildItem src; $files | Select-Object -First 3', 'read.local'],
+      ['Get-ChildItem | ForEach-Object { $_.FullName }', 'read.local'],
+      // What runs inside a block or an expression counts.
+      ['if (-not (Test-Path dist)) { New-Item -ItemType Directory dist }', 'git.mutate'],
+      ['Get-ChildItem -Recurse | ForEach-Object { Remove-Item $_ }', 'git.mutate'],
+      ['Get-ChildItem | ForEach-Object { Remove-Item -Recurse -Force $_ }', 'fs.destructive'],
+      ['$x = Remove-Item -Recurse src', 'fs.destructive'],
+      ['Write-Output "$(Remove-Item -Recurse src)"', 'fs.destructive'],
+      ['if ($ok) { git push origin main }', 'git.push'],
+      ['(cd build && rm -rf out)', 'fs.destructive'],
+      ["Select-Object @{n='x'; e={ Remove-Item y }}", 'git.mutate'],
+      // Method calls and .NET members: no rule knows what they do.
+      ['Get-ChildItem | ForEach-Object { $_.Delete() }', 'unknown'],
+      ['(Get-Item x).Delete()', 'unknown'],
+      ["[System.IO.File]::Delete('x')", 'unknown'],
+      ['Get-Item x | ForEach-Object Delete', 'unknown'],
+      // Unbalanced brackets are judged as written.
+      ['if (Test-Path a { Get-Content a', 'unknown'],
+      // A method named inside quotes is text.
+      ['rg "this.apply(" src', 'read.local'],
+    ];
+    for (const [cmd, cls] of cases) expect(classifyCommand(cmd).class, cmd).toBe(cls);
+    expect(splitSegments('if (a) { b; c }; d')).toEqual(['if (a) { b; c }', 'd']);
   });
 });
 

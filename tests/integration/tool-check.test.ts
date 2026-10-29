@@ -74,6 +74,18 @@ describe('tool.check', () => {
       }),
     ).toMatchObject({ decision: 'ask', rule: 'command.fs.destructive' });
     expect((await check('commandExecution', { kind: 'command', command: `${PS} 'git push'` })).decision).toBe('deny');
+    // How Codex reads on Windows (the M8a live check): PowerShell blocks of reads pass, and a read of
+    // Friday's protected files inside one does not.
+    const inspect = `${PS} 'Get-ChildItem src | Select-Object FullName; if (Test-Path src/a.ts) { Get-Content src/a.ts }'`;
+    expect((await check('commandExecution', { kind: 'command', command: inspect })).decision).toBe('allow');
+    expect(
+      (
+        await check('commandExecution', {
+          kind: 'command',
+          command: `${PS} 'if (Test-Path .friday/run/daemon.json) { Get-Content .friday/run/daemon.json }'`,
+        })
+      ).decision,
+    ).toBe('deny');
 
     // A human decides a commit: one pending approval, whichever number of times it is asked.
     const commit = { kind: 'command', command: `${PS} 'git commit -m wip'` };
