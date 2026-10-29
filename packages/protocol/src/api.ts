@@ -96,8 +96,28 @@ export const RunView = z.object({
   created_at: z.string(),
   accepted_at: z.string().nullable(),
   ended_at: z.string().nullable(),
+  /** The checkout the run works in (ADR-0014, ADR-0023); null while its worktree is being prepared. */
+  execution_root: z.string().nullable(),
+  base_commit: z.string().nullable(),
+  branch_ref: z.string().nullable(),
+  /** `pending` while Friday prepares the worktree, then `ready`. */
+  workspace: z.enum(['pending', 'ready']),
 });
 export type RunView = z.infer<typeof RunView>;
+
+/** A task worktree (ADR-0023). */
+export const WorktreeView = z.object({
+  worktree_id: z.string(),
+  task_id: z.string(),
+  path: z.string(),
+  branch: z.string(),
+  base_commit: z.string().nullable(),
+  status: z.enum(['active', 'released', 'preserved', 'removed']),
+  note: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type WorktreeView = z.infer<typeof WorktreeView>;
 
 export const HarnessView = z.object({
   harness_id: z.string(),

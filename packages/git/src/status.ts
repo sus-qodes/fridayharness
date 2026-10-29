@@ -18,6 +18,9 @@ export interface StatusEntry {
   /** Object names in HEAD and the index, where git reports them. */
   headObject?: string;
   indexObject?: string;
+  /** File modes in the index and the working tree, for ordinary changed entries. */
+  indexMode?: string;
+  worktreeMode?: string;
 }
 
 export interface StatusHead {
@@ -69,6 +72,8 @@ export function parseStatusV2(raw: string): Status {
         submodule: f[2] ?? 'N...',
         headObject: f[6],
         indexObject: f[7],
+        indexMode: f[4],
+        worktreeMode: f[5],
         path: f.slice(8).join(' '),
       });
     } else if (type === '2') {

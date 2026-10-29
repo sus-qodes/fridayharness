@@ -25,13 +25,16 @@ const HOST_CONFIG = [
 const SECRETS = ['**/.env', '**/.env.*', '**/*.pem', '**/id_rsa', '**/id_rsa.*', '**/id_ed25519', '**/id_ed25519.*'];
 const GIT_INTERNAL = ['.git/**'];
 
-/** Text forms that point at Friday's private state from inside a command or glob. */
+/**
+ * Text forms that point at Friday's private state from inside a command or glob. `Friday` must be
+ * a whole path segment: `friday-worktrees`, where task worktrees live beside it, is not private (M5a).
+ */
 const PRIVATE_TEXT = [
-  /appdata[\\/]+local[\\/]+friday\b/i,
-  /%localappdata%[\\/]+friday\b/i,
-  /\$env:localappdata[\\/"' +]+friday\b/i,
-  /\.local[\\/]+state[\\/]+friday\b/i,
-  /\bxdg_state_home\b.*friday/i,
+  /appdata[\\/]+local[\\/]+friday(?=$|[\\/"'\s;&|)])/i,
+  /%localappdata%[\\/]+friday(?=$|[\\/"'\s;&|)])/i,
+  /\$env:localappdata[\\/"' +]+friday(?=$|[\\/"'\s;&|)])/i,
+  /\.local[\\/]+state[\\/]+friday(?=$|[\\/"'\s;&|)])/i,
+  /\bxdg_state_home\b[^\n]*?[\\/"' ]friday(?=$|[\\/"'\s;&|)])/i,
   /\b(?:operator|bootstrap)\.token\b/i,
   /\bfriday_state_dir\b/i,
 ];
@@ -75,9 +78,23 @@ export function sensitiveClassOf(p: string, ctx: PathContext, op: 'read' | 'writ
   const c: CanonicalPath = canonicalize(p, ctx);
   const stateDirs = ctx.stateDir ? [...new Set([ctx.stateDir, realDirectory(ctx.stateDir, windows)])] : [];
   const given = classify(c.absolute, c.relative, op, windows, stateDirs);
-  if (given || !c.linked) return given;
-  const hit = classify(c.real, c.realRelative, op, windows, stateDirs);
-  return hit ? { class: hit.class, path: `${c.relative ?? c.absolute} (links to ${hit.path})` } : null;
+  if (given) return given;
+  if (c.linked) {
+    const hit = classify(c.real, c.realRelative, op, windows, stateDirs);
+    if (hit) return { class: hit.class, path: `${c.relative ?? c.absolute} (links to ${hit.path})` };
+  }
+  // A session in a task worktree: the main checkout's protected files stay protected (ADR-0023 §6).
+  // The path was already resolved against the execution root; only its location is judged again.
+  if (ctx.mainRoot && !isInside(ctx.mainRoot, ctx.projectRoot, windows)) {
+    const m = canonicalize(c.absolute, { ...ctx, projectRoot: ctx.mainRoot });
+    const inMain = classify(m.absolute, m.relative, op, windows, stateDirs);
+    if (inMain) return { class: inMain.class, path: m.absolute };
+    if (m.linked) {
+      const real = classify(m.real, m.realRelative, op, windows, stateDirs);
+      if (real) return { class: real.class, path: `${m.absolute} (links to ${real.path})` };
+    }
+  }
+  return null;
 }
 
 /** Glob and Grep: a pattern is sensitive when it explicitly names a protected area. */

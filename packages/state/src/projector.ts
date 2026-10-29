@@ -85,6 +85,44 @@ export class StateProjector implements Projector {
       case 'run.created':
         this.insertRun(e, p.run as Payload);
         return;
+      // ---- task worktrees (M5a, ADR-0023)
+      case 'run.workspace_ready':
+        this.db
+          .prepare(
+            "UPDATE task_runs SET execution_root = ?, base_commit = ?, branch_ref = ?, workspace = 'ready' WHERE run_id = ?",
+          )
+          .run(str(p.execution_root), opt(p.base_commit), opt(p.branch_ref), str(p.run_id));
+        return;
+      case 'worktree.allocated': {
+        const w = p.worktree as Payload;
+        this.db
+          .prepare(
+            `INSERT INTO worktrees (worktree_id, project_id, task_id, path, branch, base_commit, status, note, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
+          )
+          .run(
+            str(w.worktree_id),
+            e.project_id,
+            str(w.task_id),
+            str(w.path),
+            str(w.branch),
+            opt(w.base_commit),
+            opt(w.note),
+            e.occurred_at,
+            e.occurred_at,
+          );
+        return;
+      }
+      case 'worktree.released':
+        this.db
+          .prepare('UPDATE worktrees SET status = ?, note = ?, updated_at = ? WHERE worktree_id = ?')
+          .run(p.status === 'preserved' ? 'preserved' : 'released', opt(p.reason), e.occurred_at, str(p.worktree_id));
+        return;
+      case 'worktree.removed':
+        this.db
+          .prepare("UPDATE worktrees SET status = 'removed', updated_at = ? WHERE worktree_id = ?")
+          .run(e.occurred_at, str(p.worktree_id));
+        return;
       case 'run.paths_observed':
         this.mergeObservedPaths(str(p.run_id), (p.paths as string[]) ?? []);
         return;
@@ -731,8 +769,9 @@ export class StateProjector implements Projector {
   private insertRun(e: StoredEvent, r: Payload): void {
     this.db
       .prepare(
-        `INSERT INTO task_runs (run_id, project_id, task_id, harness_id, agent_id, attempt, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'STARTING', ?)`,
+        `INSERT INTO task_runs (run_id, project_id, task_id, harness_id, agent_id, attempt, status, created_at,
+           execution_root, base_commit, branch_ref, workspace)
+         VALUES (?, ?, ?, ?, ?, ?, 'STARTING', ?, ?, ?, ?, ?)`,
       )
       .run(
         str(r.run_id),
@@ -742,6 +781,10 @@ export class StateProjector implements Projector {
         str(r.agent_id),
         Number(r.attempt),
         e.occurred_at,
+        opt(r.execution_root),
+        opt(r.base_commit),
+        opt(r.branch_ref),
+        r.workspace === 'pending' ? 'pending' : 'ready',
       );
   }
 

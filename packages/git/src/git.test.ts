@@ -56,7 +56,15 @@ describe('execution roots (M4a exit criterion)', () => {
     const [mi, wi] = await Promise.all([main.identity(), wt.identity()]);
     expect(mi).toMatchObject({ head: mr.head, dirty: true, files: 1, basis: 'content' });
     expect(mi.version).toBe(`${mr.head}+${mi.hash?.slice(0, 12)}`);
-    expect(wi).toEqual({ head: wr.head, dirty: false, files: 0, hash: null, basis: 'content', version: wr.head });
+    expect(wi).toEqual({
+      head: wr.head,
+      dirty: false,
+      files: 0,
+      paths: [],
+      hash: null,
+      basis: 'content',
+      version: wr.head,
+    });
 
     const trees = await main.worktrees();
     expect(trees.map((t) => t.branch).sort()).toEqual(['feature', 'main']);
@@ -84,6 +92,24 @@ describe('the dirty-content identity', () => {
     expect((await r.identity()).hash).toBe(one.hash);
     writeFileSync(a, 'alpha\n');
     expect(await r.identity()).toEqual(clean);
+  });
+
+  it('ignores a file git reports changed only because a line-ending conversion changed its size', async () => {
+    const { dir, g } = await repo();
+    // A checkout with core.autocrlf=true writes CRLF; an editor writes LF back.
+    await g.run(['config', 'core.autocrlf', 'true']);
+    const a = path.join(dir, 'a.txt');
+    rmSync(a);
+    await g.run(['-c', 'core.autocrlf=true', 'checkout', '--', 'a.txt']);
+    expect(readFileSync(a, 'utf8')).toBe('alpha\r\n');
+    const r = await GitRoot.open(dir);
+    const clean = await r.identity();
+    expect(clean.dirty).toBe(false);
+    writeFileSync(a, 'alpha\n');
+    expect((await r.status()).entries.map((e) => [e.path, e.worktree])).toEqual([['a.txt', 'M']]);
+    expect(await r.identity()).toEqual(clean);
+    writeFileSync(a, 'beta\n');
+    expect(await r.identity()).toMatchObject({ dirty: true, files: 1, paths: ['a.txt'] });
   });
 
   it('covers untracked, deleted, renamed and staged files', async () => {

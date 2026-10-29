@@ -66,6 +66,10 @@ export interface RunRow {
   accepted_at: string | null;
   suspended_at: string | null;
   ended_at: string | null;
+  execution_root: string | null;
+  base_commit: string | null;
+  branch_ref: string | null;
+  workspace: string | null;
 }
 
 export interface HarnessRow {
@@ -162,6 +166,10 @@ export function toRunView(row: RunRow): RunView {
     created_at: row.created_at,
     accepted_at: row.accepted_at,
     ended_at: row.ended_at,
+    execution_root: row.execution_root ?? null,
+    base_commit: row.base_commit ?? null,
+    branch_ref: row.branch_ref ?? null,
+    workspace: row.workspace === 'pending' ? 'pending' : 'ready',
   };
 }
 

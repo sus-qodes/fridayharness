@@ -68,6 +68,24 @@ function gitMainRoot(start: string): string | undefined {
   }
 }
 
+/**
+ * The checkout a directory belongs to: its git top level, a task worktree or the main checkout
+ * (ADR-0023 §3), as a real path; undefined outside git.
+ */
+export function checkoutRoot(start: string): string | undefined {
+  try {
+    const out = execFileSync('git', ['-C', start, 'rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+      timeout: 5000,
+    }).trim();
+    return out ? realpath(path.resolve(out)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Finds the project root from a directory: git main worktree first, then the nearest `.friday/config.yaml`. */
 export function findProjectRoot(start: string = process.env.FRIDAY_PROJECT_DIR ?? process.cwd()): string | undefined {
   const abs = path.resolve(start);

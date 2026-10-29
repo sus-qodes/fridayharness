@@ -2,41 +2,65 @@ import { buildGraph, type CodeGraph, type FactsCache, openFactsCache } from '@fr
 import { GitRoot } from '@friday/git';
 import { FridayError } from '@friday/protocol';
 
+interface RootGraph {
+  root: Promise<GitRoot>;
+  latest?: CodeGraph;
+  building?: Promise<CodeGraph>;
+}
+
 /**
- * The code graph of the project's execution root (ADR-0020), rebuilt when the root's source
- * version changes. Until M5 the execution root is the main checkout (ADR-0014).
+ * Code graphs of the project's checkouts (ADR-0020, ADR-0023): the main checkout and each task
+ * worktree, rebuilt when that checkout's source version changes. One facts cache serves them
+ * all, so a file is parsed once whichever checkout holds it.
  */
 export class GraphService {
-  #root: Promise<GitRoot> | undefined;
   #cache: FactsCache | undefined;
-  #latest: CodeGraph | undefined;
-  #building: Promise<CodeGraph> | undefined;
+  readonly #roots = new Map<string, RootGraph>();
 
-  constructor(private readonly opts: { root: string; cacheDir: string }) {}
+  constructor(private readonly opts: { root: string; cacheDir: string; maxRoots?: number }) {}
 
   private cache(): FactsCache {
     this.#cache ??= openFactsCache(this.opts.cacheDir);
     return this.#cache;
   }
 
-  /** The graph at the root's current version; one build at a time. */
-  async graph(): Promise<CodeGraph> {
-    this.#root ??= GitRoot.open(this.opts.root);
-    const root = await this.#root;
-    const version = (await root.identity()).version;
-    if (this.#latest?.version === version) return this.#latest;
-    this.#building ??= buildGraph(root, { cache: this.cache() }).finally(() => {
-      this.#building = undefined;
-    });
-    this.#latest = await this.#building;
-    return this.#latest;
+  private entry(root: string): RootGraph {
+    const key = process.platform === 'win32' ? root.toLowerCase() : root;
+    let e = this.#roots.get(key);
+    if (e) {
+      // Most recently used last.
+      this.#roots.delete(key);
+    } else {
+      e = { root: GitRoot.open(root) };
+    }
+    this.#roots.set(key, e);
+    while (this.#roots.size > (this.opts.maxRoots ?? 16)) {
+      const oldest = this.#roots.keys().next().value as string;
+      this.#roots.delete(oldest);
+    }
+    return e;
   }
 
-  /** Forgets every parsed file and builds again (`friday graph reindex`). */
+  /** The graph of a checkout (the main one by default) at its current version; one build at a time. */
+  async graph(root: string = this.opts.root): Promise<CodeGraph> {
+    const e = this.entry(root);
+    const git = await e.root;
+    const version = (await git.identity()).version;
+    if (e.latest?.version === version) return e.latest;
+    e.building ??= buildGraph(git, { cache: this.cache() }).finally(() => {
+      e.building = undefined;
+    });
+    e.latest = await e.building;
+    return e.latest;
+  }
+
+  /** Forgets every parsed file and builds the main checkout's graph again (`friday graph reindex`). */
   async reindex(): Promise<CodeGraph> {
-    if (this.#building) await this.#building.catch(() => undefined);
+    for (const e of this.#roots.values()) {
+      if (e.building) await e.building.catch(() => undefined);
+      e.latest = undefined;
+    }
     this.cache().clear();
-    this.#latest = undefined;
     return this.graph();
   }
 

@@ -69,6 +69,21 @@ export function findRoot(start: string): string | undefined {
   }
 }
 
+/** The checkout a directory belongs to (a task worktree or the main checkout), as a real path. */
+export function checkoutOf(start: string): string | undefined {
+  try {
+    const top = execFileSync('git', ['-C', start, 'rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+      timeout: 3000,
+    }).trim();
+    return top ? real(top) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function stateDirFromEnv(env: NodeJS.ProcessEnv = process.env): string {
   if (env.FRIDAY_STATE_DIR) return path.resolve(env.FRIDAY_STATE_DIR);
   if (process.platform === 'win32')
@@ -148,7 +163,9 @@ export async function main(argv: string[] = process.argv, env: NodeJS.ProcessEnv
   let localDeny: Out = null;
   if (event === 'PreToolUse' && toolName) {
     const action = actionFromTool(toolName, (hook.tool_input as Record<string, unknown>) ?? {});
-    const local = action ? evaluateSensitive(action, { projectRoot: root, stateDir }) : null;
+    // A session in a task worktree judges paths in its checkout; the main checkout stays protected (ADR-0023 §6).
+    const checkout = checkoutOf(start) ?? root;
+    const local = action ? evaluateSensitive(action, { projectRoot: checkout, mainRoot: root, stateDir }) : null;
     if (local) localDeny = preDecision('deny', local.reason);
   }
 

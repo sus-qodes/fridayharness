@@ -114,6 +114,11 @@ export const FridayConfig = z
     reservations: z
       .object({ mode: z.enum(['hybrid', 'off']).default('hybrid'), required: z.array(z.string()).default([]) })
       .prefault({}),
+    /**
+     * Task worktrees (ADR-0023). `per_task`: each spawn-mode run works in its task's own checkout
+     * beside Friday's state directory; `off`: everything works in the main checkout.
+     */
+    worktrees: z.object({ mode: z.enum(['per_task', 'off']).default('per_task') }).prefault({}),
     context: z.object({ session_start_max_chars: z.number().int().min(1000).max(10_000).default(9000) }).prefault({}),
     /** Agent messaging (M3, ADR-0017). */
     communication: z

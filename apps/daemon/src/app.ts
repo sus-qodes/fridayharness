@@ -37,6 +37,7 @@ import { type GraphService, query as graphQuery, summary as graphSummary } from 
 import type { Logger } from './log.js';
 import { type AuthInfo, callerFor, dispatchRpc } from './rpc.js';
 import { statusPageHtml } from './ui.js';
+import type { WorkspaceManager } from './workspaces.js';
 
 export interface AppDeps {
   state: FridayState;
@@ -61,6 +62,8 @@ export interface AppDeps {
   graph?: GraphService;
   /** The context compiler (M4d). */
   context: ContextService;
+  /** Task worktrees (M5a). */
+  workspaces?: WorkspaceManager;
 }
 
 type Env = { Variables: { auth: AuthInfo; requestId: string } };
@@ -711,6 +714,19 @@ export function buildApp(deps: AppDeps): Hono<Env> {
       ),
     );
   });
+
+  // Task worktrees (M5a, ADR-0023).
+  const workspaces = (): WorkspaceManager => {
+    if (!deps.workspaces) throw new FridayError('capability_unsupported', 'this daemon manages no task worktrees');
+    return deps.workspaces;
+  };
+  app.get(`${P}/worktrees`, allow(...OPERATOR), async (c) =>
+    c.json({ dir: workspaces().dir, worktrees: await workspaces().list(c.req.query('all') === 'true') }),
+  );
+  app.post(`${P}/worktrees/prune`, allow(...OPERATOR), async (c) => c.json(await workspaces().prune(HUMAN)));
+  app.post(`${P}/tasks/:tid/worktree`, allow(...OPERATOR), async (c) =>
+    c.json(await workspaces().forTask(c.req.param('tid'), HUMAN), 201),
+  );
 
   // Code graph (M4b, ADR-0020).
   const graphService = (): GraphService => {

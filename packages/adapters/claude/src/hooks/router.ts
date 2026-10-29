@@ -81,7 +81,19 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
       );
     };
 
-    const otherWriters = (agentId: string | undefined): OtherWriter[] => {
+    /** The checkout a session works in (ADR-0023 §6): its run's execution root, else its own checkout. */
+    const executionRoot = (h: HarnessRecord | undefined, task: TaskView | null): string => {
+      const run = task?.current_run_id ? state.q.findRun(task.current_run_id) : undefined;
+      if (run?.execution_root && h && run.harness_id === h.harness_id) return run.execution_root;
+      return h?.host_cwd ?? project.root;
+    };
+    const sameRoot = (a: string, b: string) =>
+      process.platform === 'win32'
+        ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
+        : path.resolve(a) === path.resolve(b);
+
+    /** Live writers in the same checkout: one live writer per working tree (plan B26, ADR-0023 §6). */
+    const otherWriters = (agentId: string | undefined, root: string): OtherWriter[] => {
       const now = state.clock.now();
       return state.q
         .tasks(pid, { statuses: ['RUNNING'] })
@@ -89,7 +101,8 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           (t) =>
             t.assigned_agent_id !== agentId &&
             t.assigned_harness_id &&
-            state.q.isHarnessLive(t.assigned_harness_id, now),
+            state.q.isHarnessLive(t.assigned_harness_id, now) &&
+            sameRoot(executionRoot(state.q.findHarness(t.assigned_harness_id), t), root),
         )
         .map((t) => ({
           task_id: t.task_id,
@@ -172,11 +185,12 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           const action = actionFromTool(toolName, (hook.tool_input as Record<string, unknown>) ?? {});
           if (!action) return c.json({ ok: true, hook_output: null });
           const task = heldTask(agent?.agent_id);
+          const root = executionRoot(harness, task);
           const result: PolicyResult = evaluate({
             action,
-            ctx: { projectRoot: project.root, stateDir: path.dirname(path.dirname(ctx.privateDir)) },
+            ctx: { projectRoot: root, mainRoot: project.root, stateDir: path.dirname(path.dirname(ctx.privateDir)) },
             task: task ? { task_id: task.task_id, status: task.status, scope: task.scope, kind: task.kind } : null,
-            otherWriters: action.kind === 'write' ? otherWriters(agent?.agent_id) : [],
+            otherWriters: action.kind === 'write' ? otherWriters(agent?.agent_id, root) : [],
             approved: (capability, target) => state.q.grantedApproval(pid, capability, target, state.clock.now()),
             autonomy: project.config.autonomy as Partial<Record<CommandClass, Autonomy>>,
           });
@@ -230,8 +244,9 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           const failed = event === 'PostToolUseFailure';
           let changed: string[] = [];
           if (!failed && WRITE_TOOLS.has(toolName) && action?.paths?.length) {
+            const root = executionRoot(harness, task);
             changed = action.paths
-              .map((p) => canonicalize(p, { projectRoot: project.root }).relative)
+              .map((p) => canonicalize(p, { projectRoot: root }).relative)
               .filter((p): p is string => Boolean(p));
           }
           const run = task?.current_run_id ? state.q.findRun(task.current_run_id) : undefined;

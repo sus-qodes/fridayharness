@@ -81,6 +81,31 @@
         "string",
         "null"
       ]
+    },
+    "execution_root": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "base_commit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "branch_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "workspace": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "ready"
+      ]
     }
   },
   "required": [
@@ -96,6 +121,10 @@
     "claim",
     "created_at",
     "accepted_at",
-    "ended_at"
+    "ended_at",
+    "execution_root",
+    "base_commit",
+    "branch_ref",
+    "workspace"
   ]
 }

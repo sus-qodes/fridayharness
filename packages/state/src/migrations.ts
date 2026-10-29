@@ -575,6 +575,36 @@ export const CONTEXT_MIGRATIONS: Migration[] = [
   },
 ];
 
+/**
+ * M5a: execution roots and task worktrees (ADR-0014, ADR-0023). Worktree paths are machine-local
+ * hints: a missing one is allocated again from its branch.
+ */
+export const WORKTREE_MIGRATIONS: Migration[] = [
+  {
+    version: 10,
+    name: 'worktrees',
+    up: `
+ALTER TABLE task_runs ADD COLUMN execution_root TEXT;
+ALTER TABLE task_runs ADD COLUMN base_commit TEXT;
+ALTER TABLE task_runs ADD COLUMN branch_ref TEXT;
+ALTER TABLE task_runs ADD COLUMN workspace TEXT;
+CREATE TABLE worktrees (
+  worktree_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  base_commit TEXT,
+  status TEXT NOT NULL CHECK (status IN ('active', 'released', 'preserved', 'removed')),
+  note TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX ix_worktrees_task ON worktrees(project_id, task_id, status);
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -585,10 +615,12 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...CONSUMER_MIGRATIONS,
   ...MEMORY_MIGRATIONS,
   ...CONTEXT_MIGRATIONS,
+  ...WORKTREE_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */
 export const DOMAIN_TABLES = [
+  'worktrees',
   'memory_links',
   'memories',
   'message_deliveries',

@@ -26,6 +26,7 @@ export {
 } from './config.js';
 export {
   CONFIG_FILE,
+  checkoutRoot,
   type DaemonDiscovery,
   ensurePrivateDir,
   FRIDAY_DIR,

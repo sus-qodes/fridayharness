@@ -3,6 +3,7 @@ import type { Server } from 'node:http';
 import path from 'node:path';
 import type { Clock, IdGenerator } from '@friday/core';
 import { closeDatabase, openDatabase } from '@friday/db';
+import { GitRoot } from '@friday/git';
 import type { PlannerModel } from '@friday/planner';
 import { type Actor, API_VERSION, type ContextPacket, FridayError, PROTOCOL_VERSIONS } from '@friday/protocol';
 import {
@@ -24,6 +25,7 @@ import { type CompileInput, createContextService } from './context.js';
 import { GraphService } from './graph-service.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
 import { runVerification } from './verify.js';
+import { WorkspaceManager } from './workspaces.js';
 
 export interface DaemonOptions {
   /** Any directory inside the project; resolved to the main worktree root. */
@@ -131,6 +133,11 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   const fridayDir = path.join(project.root, FRIDAY_DIR);
   mkdirSync(path.join(fridayDir, 'run'), { recursive: true });
 
+  // Task worktrees need a git project with a commit (ADR-0023 §2); otherwise runs use the main checkout.
+  const gitRoot = await GitRoot.open(project.root).catch(() => null);
+  const head = gitRoot ? ((await gitRoot.refs().catch(() => null))?.head ?? null) : null;
+  const worktreeMode = project.config.worktrees.mode === 'per_task' && head ? 'per_task' : 'off';
+
   const leases = project.config.leases;
   const stateConfig: Partial<StateConfig> = {
     ...(leases.heartbeat_interval_ms ? { heartbeatIntervalMs: leases.heartbeat_interval_ms } : {}),
@@ -149,6 +156,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     messageTtlMs: project.config.communication.message_ttl_ms,
     blockingReplyMs: project.config.communication.blocking_reply_ms,
     maxOpenPerRecipient: project.config.communication.max_open_per_recipient,
+    worktreeMode,
     ...opts.state,
   };
 
@@ -207,6 +215,26 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   });
 
   const graph = new GraphService({ root: project.root, cacheDir: path.join(fridayDir, 'graph') });
+  // Task worktrees: prepared as soon as a run needs one, released when its task ends (ADR-0023).
+  const workspaces = new WorkspaceManager({ state, project, logger, env });
+  const stopWorkspaces = state.transport.subscribe(
+    { project_id: project.project_id, types: ['run.created', 'task.cancelled', 'task.completed'] },
+    (e) => {
+      if (e.type === 'run.created') {
+        const run = (e.payload as { run?: { run_id: string; workspace?: string } }).run;
+        if (run?.workspace === 'pending') void workspaces.prepare(run.run_id);
+        return;
+      }
+      const taskId = (e.payload as { task_id?: string }).task_id;
+      if (taskId) {
+        void workspaces
+          .release(taskId, e.type === 'task.completed' ? 'the task completed' : 'the task was cancelled')
+          .catch((err) =>
+            logger.warn('releasing a task worktree failed', { task_id: taskId, message: (err as Error).message }),
+          );
+      }
+    },
+  );
   // The per-user state folder (it holds every project's private folder): never gathered into context.
   const context = createContextService({ state, project, graph, stateDir: path.dirname(path.dirname(privateDir)) });
   const ctx: DaemonContext = {
@@ -250,6 +278,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     ...(brain ? { brain } : {}),
     graph,
     context,
+    workspaces,
   });
   for (const ext of opts.extensions ?? []) ext(app as unknown as Hono, ctx);
 
@@ -334,6 +363,10 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
           }
           try {
             const r = tick();
+            // Runs still waiting for a worktree (after a restart or a failure) are prepared again.
+            void workspaces
+              .sweep()
+              .catch((e) => logger.warn('preparing worktrees failed', { message: (e as Error).message }));
             if (
               r.lost.length ||
               r.degraded.length ||
@@ -362,6 +395,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       if (brain) await brain.brain.stop().catch(() => undefined);
       if (timer) clearInterval(timer);
       clearInterval(sweep);
+      stopWorkspaces();
       graph.close();
       for (const s of streams) s.abort();
       await new Promise((r) => setTimeout(r, 30));

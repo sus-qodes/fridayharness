@@ -16,6 +16,7 @@ import { clip, describeEvent, kv, shortTime, table } from './output.js';
 import { restoreProject } from './restore.js';
 import { runDaemon } from './run.js';
 import { FRIDAY_DIR_GITIGNORE } from './templates.js';
+import { registerWorktreeCommands } from './worktrees.js';
 
 const collect = (v: string, prev: string[] = []) => [...prev, v];
 
@@ -682,6 +683,7 @@ export function buildProgram(): Command {
   registerMessageCommands(program, g);
   registerGraphCommands(program, g);
   registerContextCommands(program, g);
+  registerWorktreeCommands(program, g);
   registerMemoryCommands(program, g);
   for (const plugin of commandPlugins) plugin(program);
   return program;

@@ -2,6 +2,18 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M5 verification, recovery, worktrees
+
+- **M5a, one checkout per task:**
+  - A spawn-mode run gets its **own git worktree** on its own branch `friday/<task_id>`, in a per-user folder beside Friday's state (`%LOCALAPPDATA%\friday-worktrees` on Windows). The run's `task.start` names it as the working directory. Agents working in parallel no longer share one checkout, and the main checkout's `git status` stays clean.
+  - The worktree is prepared before the task starts. A crash during preparation is retried; an existing worktree and branch are reused, never created twice; a failure returns the task to READY with the reason.
+  - **Sessions you start yourself:** `friday task worktree <task>` prepares the task's worktree and says where to open it. A Claude Code session started there is recorded in that checkout, can claim only that task, and can write only there. Friday's runtime files in the main checkout stay protected from it.
+  - Context packets, the code graph and the single-live-writer rule work per checkout: one live writer per worktree.
+  - When a task ends, its worktree is **released**, or **preserved** when it holds uncommitted work. `friday worktrees` lists them with their changes; `friday worktrees prune` removes released, clean ones and keeps their branches.
+  - `worktrees.mode: off` in `.friday/config.yaml` keeps every run in the main checkout.
+  - **Fixes:** the patterns that protect Friday's private folder also matched `friday-worktrees`; the MCP server reported the main checkout as every session's folder; a file whose only difference was a line-ending conversion (common on Windows with `core.autocrlf=true`) counted as an uncommitted change; a NUL byte in `packages/git/src/root.ts` made git treat it as binary. The portability check now refuses NUL bytes in text files.
+  - Decision: ADR-0023.
+
 ## Unreleased — M4 context engine
 
 - **M4a, the code as it is in each checkout:**

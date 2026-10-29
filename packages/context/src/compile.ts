@@ -28,10 +28,10 @@ export interface ContextProject {
 export interface ContextDeps {
   state: FridayState;
   project: ContextProject;
-  /** The execution root (the main checkout until M5, ADR-0014); null without git. */
-  git: () => Promise<GitRoot | null>;
-  /** The execution root's code graph; null when it cannot be built. */
-  graph: () => Promise<CodeGraph | null>;
+  /** Git of a checkout (an execution root, ADR-0014); null without git. */
+  git: (root: string) => Promise<GitRoot | null>;
+  /** The code graph of a checkout; null when it cannot be built. */
+  graph: (root: string) => Promise<CodeGraph | null>;
   /** Friday's per-user state directory, so private paths are never gathered. */
   stateDir?: string;
   cache: ContextCache;
@@ -123,16 +123,22 @@ export async function compileContext(
   const goal: GoalView | undefined = task?.goal_id ? state.q.findGoal(pid, task.goal_id) : undefined;
 
   let t = performance.now();
-  const git = await deps.git().catch(() => null);
+  // Everything that reads code reads the recipient's execution root (ADR-0014 §5, ADR-0023).
+  const root = executionRootOf(deps, input, task);
+  const git = await deps.git(root).catch(() => null);
   const identity: SourceIdentity | null = git ? await git.identity().catch(() => null) : null;
   lap('git_identity', t);
 
-  const key = await cacheKey(deps, input, task, goal, agent?.agent_id, identity, maxChars, maxSources);
+  const key = await cacheKey(deps, root, input, task, goal, agent?.agent_id, identity, maxChars, maxSources);
   const hit = deps.cache.get(key);
   if (hit) return { ...hit, cached: true };
 
   const now = state.clock.now();
-  const pathCtx: PathContext = { projectRoot: project.root, ...(deps.stateDir ? { stateDir: deps.stateDir } : {}) };
+  const pathCtx: PathContext = {
+    projectRoot: root,
+    mainRoot: project.root,
+    ...(deps.stateDir ? { stateDir: deps.stateDir } : {}),
+  };
   let withheld = 0;
   const declaredRead = task?.scope?.read?.length ? [...task.scope.read, ...task.scope.write] : null;
   /** Permission first (ADR-0022 §3): never gather what the recipient may not read. */
@@ -384,7 +390,7 @@ export async function compileContext(
       reason: 'the code as it is now',
       rule: 'git state (priority 0)',
     });
-    dirtyPaths = (status?.entries ?? []).filter((e) => e.kind !== 'ignored').map((e) => e.path);
+    dirtyPaths = identity.paths;
     const shown = dirtyPaths.filter((p) => {
       if (readable(p)) return true;
       withheld += 1;
@@ -439,7 +445,7 @@ export async function compileContext(
   const unsupportedEdges: ContextExplanation['unsupported_edges'] = [];
   let related = 0;
   if (task?.scope?.write.length) {
-    const graph = await deps.graph().catch(() => null);
+    const graph = await deps.graph(root).catch(() => null);
     if (!graph) notes.push('the code graph is not available; no related files were gathered');
     else {
       related = gatherGraph(
@@ -686,6 +692,22 @@ export async function compileContext(
   return { packet, explanation, cached: false };
 }
 
+/**
+ * The checkout a packet is about (ADR-0023): the task's current run's execution root, else the
+ * recipient session's own checkout, else the task's worktree, else the main checkout.
+ */
+export function executionRootOf(deps: ContextDeps, input: CompileInput, task: TaskView | undefined): string {
+  const { state, project } = deps;
+  const run = task?.current_run_id ? state.q.findRun(task.current_run_id) : undefined;
+  if (run?.execution_root) return run.execution_root;
+  if (input.recipient.harness_id) {
+    const cwd = state.q.findHarness(input.recipient.harness_id)?.host_cwd;
+    if (cwd) return cwd;
+  }
+  const worktree = task ? state.q.worktreeForTask(task.task_id) : undefined;
+  return worktree?.path ?? project.root;
+}
+
 function progressEvents(state: FridayState, pid: string, taskId: string) {
   return state.store
     .readByRef(pid, 'task', taskId, { types: ['agent.event'] })
@@ -810,6 +832,7 @@ function gatherGraph(
 /** The cache key of ADR-0022 §7. */
 async function cacheKey(
   deps: ContextDeps,
+  root: string,
   input: CompileInput,
   task: TaskView | undefined,
   goal: GoalView | undefined,
@@ -832,7 +855,7 @@ async function cacheKey(
   const claimable =
     agentId && !task ? state.claimableTasks(pid, state.q.agent(agentId).agent_key, 5).map((x) => x.task_id) : [];
   const parts = {
-    root: project.root,
+    root,
     source: identity?.version ?? null,
     task: task
       ? {
@@ -875,12 +898,15 @@ export async function packetStaleness(
   const { state, project } = deps;
   const task = packet.task_id ? state.q.findTask(project.project_id, packet.task_id) : undefined;
   const goal = task?.goal_id ? state.q.findGoal(project.project_id, task.goal_id) : undefined;
-  const git = await deps.git().catch(() => null);
+  const input: CompileInput = { recipient: packet.recipient, task_id: packet.task_id, purpose: packet.purpose ?? '' };
+  const root = executionRootOf(deps, input, task);
+  const git = await deps.git(root).catch(() => null);
   const identity = git ? await git.identity().catch(() => null) : null;
   const agentId = packet.recipient.kind === 'agent' ? packet.recipient.id : undefined;
   const key = await cacheKey(
     deps,
-    { recipient: packet.recipient, task_id: packet.task_id, purpose: packet.purpose ?? '' },
+    root,
+    input,
     task,
     goal,
     agentId,

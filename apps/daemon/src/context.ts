@@ -24,15 +24,22 @@ export function createContextService(opts: {
   graph: GraphService;
   stateDir?: string;
 }): ContextService {
-  let root: Promise<GitRoot | null> | undefined;
+  // One git view per checkout: the main one and each task worktree (ADR-0023).
+  const roots = new Map<string, Promise<GitRoot | null>>();
   const deps: ContextDeps = {
     state: opts.state,
     project: opts.project as unknown as ContextDeps['project'],
-    git: () => {
-      root ??= GitRoot.open(opts.project.root).catch(() => null);
+    git: (dir) => {
+      const key = process.platform === 'win32' ? dir.toLowerCase() : dir;
+      let root = roots.get(key);
+      if (!root) {
+        root = GitRoot.open(dir).catch(() => null);
+        roots.set(key, root);
+        if (roots.size > 32) roots.delete(roots.keys().next().value as string);
+      }
       return root;
     },
-    graph: () => opts.graph.graph(),
+    graph: (dir) => opts.graph.graph(dir),
     ...(opts.stateDir ? { stateDir: opts.stateDir } : {}),
     cache: new ContextCache(),
   };

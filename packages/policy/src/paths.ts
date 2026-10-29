@@ -5,8 +5,13 @@ import picomatch from 'picomatch';
 const WIN = process.platform === 'win32';
 
 export interface PathContext {
-  /** Real path of the project's main worktree. */
+  /**
+   * Real path of the checkout paths are judged in: the session's execution root, which is the
+   * project's main checkout unless the session works in a task worktree (ADR-0023).
+   */
   projectRoot: string;
+  /** Real path of the main checkout, when the execution root is a task worktree: its protected files stay protected. */
+  mainRoot?: string;
   /** Friday's per-user state directory (contains every project's private dir). */
   stateDir?: string;
   /** Platform override for tests. Links are resolved on disk only when it matches the host. */

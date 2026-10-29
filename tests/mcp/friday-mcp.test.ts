@@ -195,6 +195,11 @@ describe('friday-mcp over stdio', () => {
     const be = await FakeHarness.connect(td, { agentKey: 'be-1', role: 'backend' });
     await td.operator.post(td.operator.projectPath(`/tasks/${api.task_id}/assign`), { agent_key: 'be-1' });
     await td.operator.post(td.operator.projectPath(`/tasks/${page.task_id}/assign`), { agent_key: 'dev-1' });
+    // be-1 runs in its own task worktree, which Friday prepares before delivering task.start (ADR-0023).
+    await eventually(
+      () => td.operator.get<{ task: TaskView }>(td.operator.projectPath(`/tasks/${api.task_id}`)),
+      (r) => r.task.status === 'RUNNING',
+    );
 
     const mcp = await startMcp(ws());
     await eventually(

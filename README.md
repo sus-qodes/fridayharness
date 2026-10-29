@@ -4,7 +4,7 @@ Friday is a local orchestration and context control plane for AI software develo
 
 The architecture is called **ContextOS** in the original specification.
 
-**Status:** M3 built (gates pending), after the M2.5 stabilization from an independent review (see [the disposition](docs/reviews/2026-10-14-review-disposition.md)).
+**Status:** M4 built and M5 under way (gates pending), after two stabilizations from independent reviews (M2.5 and M3.1; see [the dispositions](docs/reviews/)).
 - **M1** gives you the event spine, the daemon, the `friday` CLI, a read-only status page, and Claude Code attached through an MCP server, a skill and policy hooks. A task runs from creation through a Claude Code session to a verified completion, with Friday's policy enforced on the session's tools.
 - **M2** adds the Master Brain. A goal becomes a versioned plan that you approve; its tasks are delegated to agents, revised when verification fails, and escalated to you when only a human can decide.
 - **M2.5** closes the twelve findings of the 2026-10-14 review:
@@ -17,6 +17,8 @@ The architecture is called **ContextOS** in the original specification.
 - **M3** makes Friday the communication authority: agents message each other, roles, the Master Brain and humans through Friday, which authorizes, delivers and records every message, with per-recipient delivery and real acknowledgements. Channels a host offers outside Friday (Claude Code's own agent messaging, for example) are listed as limits in the security model. Events can be snapshotted, replayed into an isolated copy, backed up and restored.
 - **M3.1** closes the nine findings of the M3 review: one authorization rule for every way of addressing a message, only authorized replies settle a request, only the receiving session acknowledges, escalations and answers survive a crash, answered questions stop asking, and backups are relocatable, verified, credential-free and restorable with `friday restore`, without holding up the daemon.
 - **M3.5** tried a second host before building for it: Codex app-server takes Friday's context and tasks, asks Friday before commands and file writes, and resumes after a crash, but does not stop a running command when a turn is cancelled, so Friday will own that ([spike report](docs/integration/codex-spike.md)).
+- **M4** compiles the context each agent receives: the code as it is in the agent's checkout (uncommitted work included), the files related through a code graph (imports, consumers, tests, shared contracts), and project memory with its authority, within a budget and explained by `friday context explain`.
+- **M5a** gives each task its own git worktree: agents working in parallel no longer share a checkout, a session started in a task's worktree works on that task only, and worktrees holding uncommitted work are kept.
 
 See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 
@@ -98,9 +100,9 @@ Set `FRIDAY_TEST_TMP` to a short directory (for example `C:\t`) if your temp pat
 
 ```
 apps/        daemon, cli
-packages/    protocol, core, db, events, state, sdk, policy, verification, planner, mcp-server, adapters/{generic,claude}
+packages/    protocol, core, db, events, state, sdk, policy, verification, planner, git, code-graph, context, mcp-server, adapters/{generic,claude}
 tests/       support and helpers, cross-package suites (integration, hooks, mcp, security, scenarios), fixtures
 docs/        plan, spec, decisions, security, integration notes
 ```
 
-More packages (communication, git, code-graph, memory, context, execution, routing, more adapters, UI) arrive in later milestones as listed in the build plan.
+Messaging and memory live in `packages/state`, because each change commits with the event log. More packages (execution, routing, more adapters, UI) arrive in later milestones as listed in the build plan.

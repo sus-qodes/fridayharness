@@ -13,6 +13,7 @@ import {
   type TaskStatus,
   type TaskView,
   type VerificationView,
+  type WorktreeView,
 } from '@friday/protocol';
 import {
   type AgentRow,
@@ -46,12 +47,15 @@ export type HarnessRecord = HarnessView & {
   requested_agent_key: string | null;
   /** When a Friday hook first reached the daemon from this harness (review F09). */
   hooks_seen_at: string | null;
+  /** The checkout the session runs in, as the host reported it (ADR-0023 §3). */
+  host_cwd: string | null;
 };
 const toRecord = (row: HarnessRow): HarnessRecord => ({
   ...toHarnessView(row),
   shadow: Boolean(row.shadow),
   requested_agent_key: row.requested_agent_key,
   hooks_seen_at: row.hooks_seen_at ?? null,
+  host_cwd: row.host_cwd ?? null,
 });
 
 const LIVE_HARNESS = "('REGISTERED','READY','BUSY','DEGRADED','RECONNECTING')";
@@ -266,6 +270,42 @@ export class Queries {
       .prepare('SELECT packet_json FROM context_packets WHERE context_id = ?')
       .get<{ packet_json: string }>(contextId);
     return row ? (JSON.parse(row.packet_json) as ContextPacket) : undefined;
+  }
+
+  runsWithStatus(projectId: string, statuses: string[]): RunView[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM task_runs WHERE project_id = ? AND status IN (${statuses.map(() => '?').join(', ')}) ORDER BY created_at, run_id`,
+      )
+      .all<RunRow>(projectId, ...statuses)
+      .map(toRunView);
+  }
+
+  /** Task worktrees of the project, newest first (ADR-0023). */
+  worktrees(projectId: string, statuses?: WorktreeView['status'][]): WorktreeView[] {
+    const rows = this.db
+      .prepare('SELECT * FROM worktrees WHERE project_id = ? ORDER BY created_at DESC, worktree_id DESC')
+      .all<WorktreeView>(projectId);
+    return statuses ? rows.filter((w) => statuses.includes(w.status)) : rows;
+  }
+
+  /** The task's worktree that still holds its work (active or preserved), if any. */
+  worktreeForTask(taskId: string): WorktreeView | undefined {
+    return this.db
+      .prepare(
+        "SELECT * FROM worktrees WHERE task_id = ? AND status IN ('active', 'preserved') ORDER BY created_at DESC LIMIT 1",
+      )
+      .get<WorktreeView>(taskId);
+  }
+
+  /** The active or preserved worktree at a path (case-insensitive on Windows). */
+  worktreeAt(projectId: string, dir: string): WorktreeView | undefined {
+    const norm = (p: string) => {
+      const forward = p.replace(/[\\/]+/g, '/').replace(/\/$/, '');
+      return process.platform === 'win32' ? forward.toLowerCase() : forward;
+    };
+    const want = norm(dir);
+    return this.worktrees(projectId, ['active', 'preserved']).find((w) => norm(w.path) === want);
   }
 
   /** The explanation stored with a packet (ADR-0022 §8). */

@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import {
   addMs,
   type Clock,
@@ -51,6 +52,7 @@ import {
   type TokenClass,
   type VerificationStatus,
   type WaitingReason,
+  type WorktreeView,
 } from '@friday/protocol';
 import type { z } from 'zod';
 import { CommandBus, type CommandContext, type CommandMeta } from './bus.js';
@@ -88,6 +90,14 @@ export interface StateConfig {
   blockingReplyMs: number;
   /** Unacknowledged deliveries an agent may hold before low and normal notifications are refused. */
   maxOpenPerRecipient: number;
+  /**
+   * `worktrees.mode` (ADR-0023): `per_task` gives each spawn-mode run its task's worktree, prepared
+   * by the daemon before `task.start` is delivered. The library default is `off`; the daemon
+   * turns it on for git projects with a commit.
+   */
+  worktreeMode: 'per_task' | 'off';
+  /** How long a run may wait for its worktree before it is declined. */
+  workspaceTimeoutMs: number;
 }
 
 export const DEFAULT_STATE_CONFIG: StateConfig = {
@@ -109,6 +119,8 @@ export const DEFAULT_STATE_CONFIG: StateConfig = {
   messageTtlMs: 24 * 60 * 60 * 1000,
   blockingReplyMs: 30 * 60 * 1000,
   maxOpenPerRecipient: 50,
+  worktreeMode: 'off',
+  workspaceTimeoutMs: 10 * 60 * 1000,
 };
 
 /** Who sends a message (ADR-0017 §4). Agents are identified by their harness token, never by the request. */
@@ -211,6 +223,14 @@ export function achievedEnforcement(h: {
 }
 
 /** Identity of a protocol caller, derived from its harness token (never from request fields). */
+/** Where a run works (ADR-0023): its execution root, the commit and branch it started from. */
+export interface Workspace {
+  execution_root: string | null;
+  base_commit: string | null;
+  branch_ref: string | null;
+  workspace: 'pending' | 'ready';
+}
+
 export interface Caller {
   harness_id: string;
   agent_id: string;
@@ -449,12 +469,48 @@ export class FridayState {
     return this.q.task(ctx.project_id, taskId);
   }
 
-  private createRun(ctx: CommandContext, task: TaskView, harnessId: string, agentId: string): RunView {
+  /**
+   * Where a new run works (ADR-0023 §2–§3): an attach session in its own checkout; a spawn run in
+   * its task's worktree (reused when it exists, else prepared by the daemon: `pending`); without
+   * worktrees, in the main checkout.
+   */
+  private workspaceFor(ctx: CommandContext, projectId: string, task: TaskView, harness: HarnessRecord): Workspace {
+    const root = this.q.project(projectId)?.root_path ?? '.';
+    if (harness.attach_mode !== 'spawn') {
+      return { execution_root: harness.host_cwd ?? root, base_commit: null, branch_ref: null, workspace: 'ready' };
+    }
+    if (this.config.worktreeMode !== 'per_task') {
+      return { execution_root: root, base_commit: null, branch_ref: null, workspace: 'ready' };
+    }
+    const wt = this.q.worktreeForTask(task.task_id);
+    if (wt && existsSync(wt.path)) {
+      if (wt.status === 'preserved') {
+        ctx.emit({
+          type: 'worktree.released',
+          payload: { worktree_id: wt.worktree_id, status: 'active', reason: 'reused by a new attempt' },
+          refs: [
+            { kind: 'task', id: task.task_id },
+            { kind: 'worktree', id: wt.worktree_id },
+          ],
+        });
+      }
+      return { execution_root: wt.path, base_commit: wt.base_commit, branch_ref: wt.branch, workspace: 'ready' };
+    }
+    return { execution_root: null, base_commit: null, branch_ref: null, workspace: 'pending' };
+  }
+
+  private createRun(
+    ctx: CommandContext,
+    task: TaskView,
+    harnessId: string,
+    agentId: string,
+    ws: Workspace = { execution_root: null, base_commit: null, branch_ref: null, workspace: 'ready' },
+  ): RunView {
     const run_id = this.ids.next('run');
     const attempt = this.q.maxAttempt(task.task_id) + 1;
     ctx.emit({
       type: 'run.created',
-      payload: { run: { run_id, task_id: task.task_id, harness_id: harnessId, agent_id: agentId, attempt } },
+      payload: { run: { run_id, task_id: task.task_id, harness_id: harnessId, agent_id: agentId, attempt, ...ws } },
       refs: [
         { kind: 'task', id: task.task_id },
         { kind: 'run', id: run_id },
@@ -699,7 +755,8 @@ export class FridayState {
           }),
         };
       }
-      const run = this.createRun(ctx, task, harness.harness_id, agent.agent_id);
+      const ws = this.workspaceFor(ctx, projectId, task, harness);
+      const run = this.createRun(ctx, task, harness.harness_id, agent.agent_id, ws);
       task = this.moveTask(ctx, task, 'task.assign', {
         changes: {
           assigned_agent_id: agent.agent_id,
@@ -711,13 +768,16 @@ export class FridayState {
         },
       });
       this.moveAgent(ctx, agent, 'ASSIGNED', { current_task_id: task.task_id, current_run_id: run.run_id });
-      this.enqueue(
-        ctx,
-        harness.harness_id,
-        'task.start',
-        this.startParams(projectId, task, run, agent.role),
-        run.run_id,
-      );
+      // A run waiting for its worktree gets task.start once the daemon prepared it (ADR-0023 §2).
+      if (ws.workspace === 'ready') {
+        this.enqueue(
+          ctx,
+          harness.harness_id,
+          'task.start',
+          this.startParams(projectId, task, run, agent.role),
+          run.run_id,
+        );
+      }
       return { mode: 'assigned' as const, task };
     }
   }
@@ -746,8 +806,27 @@ export class FridayState {
         }
         const gap = this.enforcementGap(harness);
         if (gap) throw new FridayError('enforcement_insufficient', gap);
-        const task = p.task_id ? this.q.task(projectId, p.task_id) : this.pickNext(projectId, agent);
+        // A session in a task's worktree works on that task; a task's worktree holds its work (ADR-0023 §3).
+        const sessionTree = harness.host_cwd ? this.q.worktreeAt(projectId, harness.host_cwd) : undefined;
+        const task = p.task_id
+          ? this.q.task(projectId, p.task_id)
+          : this.pickNext(projectId, agent, sessionTree?.task_id);
         if (!task) throw new FridayError('task_not_found', 'no task is ready for this agent');
+        if (sessionTree && sessionTree.task_id !== task.task_id) {
+          throw new FridayError(
+            'permission_denied',
+            `this session works in the worktree of ${sessionTree.task_id} (${sessionTree.path}); claim that task, or start a session in the checkout of ${task.task_id}`,
+            { rule: 'claim.worktree_mismatch' },
+          );
+        }
+        const taskTree = this.q.worktreeForTask(task.task_id);
+        if (!sessionTree && taskTree) {
+          throw new FridayError(
+            'permission_denied',
+            `the work of ${task.task_id} is in its worktree ${taskTree.path}; start a session there to continue it`,
+            { rule: 'claim.worktree_elsewhere' },
+          );
+        }
         const active = this.q.activeRunForAgent(agent.agent_id);
         if (active && active.task_id !== task.task_id) {
           throw new FridayError(
@@ -770,7 +849,13 @@ export class FridayState {
               open,
             });
           }
-          const run = this.createRun(ctx, task, harness.harness_id, agent.agent_id);
+          const run = this.createRun(
+            ctx,
+            task,
+            harness.harness_id,
+            agent.agent_id,
+            this.workspaceFor(ctx, projectId, task, harness),
+          );
           let t = this.moveTask(ctx, task, 'task.claim', {
             changes: {
               assigned_agent_id: agent.agent_id,
@@ -821,7 +906,13 @@ export class FridayState {
             return { task: t, run_id: current.run_id, attempt: current.attempt, resumed: true };
           }
           this.endRun(ctx, current, 'released');
-          const run = this.createRun(ctx, task, harness.harness_id, agent.agent_id);
+          const run = this.createRun(
+            ctx,
+            task,
+            harness.harness_id,
+            agent.agent_id,
+            this.workspaceFor(ctx, projectId, task, harness),
+          );
           this.moveRun(ctx, run, 'ACTIVE', 'resumed', { accepted_at: ctx.now, session_ref: harness.host_session_id });
           const moved =
             task.status === 'HARNESS_LOST'
@@ -844,7 +935,8 @@ export class FridayState {
     );
   }
 
-  private pickNext(projectId: string, agent: AgentView): TaskView | undefined {
+  private pickNext(projectId: string, agent: AgentView, onlyTask?: string): TaskView | undefined {
+    if (onlyTask) return this.q.findTask(projectId, onlyTask);
     const mine = this.q
       .tasks(projectId, { statuses: ['HARNESS_LOST', 'RUNNING', 'WAITING', 'ASSIGNED'] })
       .filter((t) => t.assigned_agent_id === agent.agent_id);
@@ -2372,6 +2464,18 @@ export class FridayState {
       this.db.prepare("UPDATE outbox_messages SET status = 'expired' WHERE message_id = ?").run(m.message_id);
       out.declined.push(m.run_id);
     }
+    // Runs whose worktree was never prepared (ADR-0023 §2): declined, with the reason, never left waiting.
+    for (const run of this.runsAwaitingWorkspace(projectId)) {
+      if (held(run.created_at)) continue;
+      if (nowMs - Date.parse(run.created_at) > this.config.workspaceTimeoutMs) {
+        this.workspaceFailed(
+          projectId,
+          run.run_id,
+          `it was not ready within ${Math.round(this.config.workspaceTimeoutMs / 1000)} s`,
+        );
+        out.declined.push(run.run_id);
+      }
+    }
     out.unreserved.push(...this.expireReservations(projectId, this.clock.now()));
     const timeouts = this.expireMessages(projectId, this.clock.now());
     out.messages_expired.push(...timeouts.expired);
@@ -2540,6 +2644,151 @@ export class FridayState {
     });
   }
 
+  // ================================================================ task worktrees (M5a, ADR-0023)
+
+  /** Spawn runs whose worktree the daemon still has to prepare. */
+  runsAwaitingWorkspace(projectId: string): RunView[] {
+    return this.q.runsWithStatus(projectId, ['STARTING']).filter((r) => r.workspace === 'pending');
+  }
+
+  /**
+   * The run's worktree is ready: it is recorded (or reused), the run gets its execution root,
+   * and `task.start` is queued with it, in one transaction.
+   */
+  workspaceReady(
+    projectId: string,
+    runId: string,
+    alloc: { path: string; branch: string; base_commit: string; created: boolean; warnings: string[] },
+  ): RunView {
+    return this.exec({ name: 'run.workspace', project_id: projectId, actor: SYSTEM, params: { runId } }, (ctx) => {
+      const run = this.q.run(runId);
+      if (run.workspace !== 'pending' || run.status !== 'STARTING') return run;
+      const task = this.q.task(projectId, run.task_id);
+      let worktree = this.q.worktreeForTask(task.task_id);
+      if (!worktree || worktree.path !== alloc.path) {
+        const worktree_id = this.ids.next('wt');
+        ctx.emit({
+          type: 'worktree.allocated',
+          payload: {
+            worktree: {
+              worktree_id,
+              task_id: task.task_id,
+              path: alloc.path,
+              branch: alloc.branch,
+              base_commit: alloc.base_commit,
+              note: alloc.warnings.join('; ') || null,
+            },
+          },
+          refs: [
+            { kind: 'task', id: task.task_id },
+            { kind: 'run', id: run.run_id },
+            { kind: 'worktree', id: worktree_id },
+          ],
+        });
+        worktree = this.q.worktreeForTask(task.task_id);
+      }
+      ctx.emit({
+        type: 'run.workspace_ready',
+        payload: {
+          run_id: run.run_id,
+          execution_root: alloc.path,
+          base_commit: alloc.base_commit,
+          branch_ref: alloc.branch,
+          worktree_id: worktree?.worktree_id ?? null,
+          warnings: alloc.warnings,
+        },
+        refs: [
+          { kind: 'task', id: task.task_id },
+          { kind: 'run', id: run.run_id },
+        ],
+      });
+      const ready = this.q.run(run.run_id);
+      const agent = this.q.agent(run.agent_id);
+      this.enqueue(ctx, run.harness_id, 'task.start', this.startParams(projectId, task, ready, agent.role), run.run_id);
+      return ready;
+    });
+  }
+
+  /** The worktree could not be prepared: the run is declined and the task is free again, with the reason. */
+  workspaceFailed(projectId: string, runId: string, reason: string): void {
+    const run = this.q.findRun(runId);
+    if (run?.workspace !== 'pending' || run.status !== 'STARTING') return;
+    this.declineRun(projectId, runId, `the task worktree could not be prepared: ${reason}`, SYSTEM);
+  }
+
+  /** A worktree a human asked for (`friday task worktree`), to start a session in. */
+  recordWorktree(
+    projectId: string,
+    actor: Actor,
+    taskId: string,
+    alloc: { path: string; branch: string; base_commit: string; warnings: string[] },
+  ): WorktreeView {
+    return this.exec({ name: 'worktree.allocate', project_id: projectId, actor, params: { taskId } }, (ctx) => {
+      const task = this.q.task(projectId, taskId);
+      if (TERMINAL_TASK.has(task.status)) {
+        throw new FridayError('invalid_state_transition', `task ${taskId} is ${task.status}`);
+      }
+      const existing = this.q.worktreeForTask(taskId);
+      if (existing && existing.path === alloc.path) return existing;
+      const worktree_id = this.ids.next('wt');
+      ctx.emit({
+        type: 'worktree.allocated',
+        payload: {
+          worktree: {
+            worktree_id,
+            task_id: taskId,
+            path: alloc.path,
+            branch: alloc.branch,
+            base_commit: alloc.base_commit,
+            note: alloc.warnings.join('; ') || null,
+          },
+        },
+        refs: [
+          { kind: 'task', id: taskId },
+          { kind: 'worktree', id: worktree_id },
+        ],
+      });
+      return this.q.worktreeForTask(taskId) as WorktreeView;
+    });
+  }
+
+  /** A finished task's worktree: `released` when clean, `preserved` when it holds uncommitted work. */
+  releaseWorktree(
+    projectId: string,
+    actor: Actor,
+    worktreeId: string,
+    status: 'released' | 'preserved',
+    reason: string,
+  ): void {
+    this.exec({ name: 'worktree.release', project_id: projectId, actor, params: { worktreeId, status } }, (ctx) => {
+      const w = this.q.worktrees(projectId).find((x) => x.worktree_id === worktreeId);
+      if (!w || w.status === 'removed' || w.status === status) return;
+      ctx.emit({
+        type: 'worktree.released',
+        payload: { worktree_id: worktreeId, status, reason },
+        refs: [
+          { kind: 'task', id: w.task_id },
+          { kind: 'worktree', id: worktreeId },
+        ],
+      });
+    });
+  }
+
+  worktreeRemoved(projectId: string, actor: Actor, worktreeId: string): void {
+    this.exec({ name: 'worktree.remove', project_id: projectId, actor, params: { worktreeId } }, (ctx) => {
+      const w = this.q.worktrees(projectId).find((x) => x.worktree_id === worktreeId);
+      if (!w || w.status === 'removed') return;
+      ctx.emit({
+        type: 'worktree.removed',
+        payload: { worktree_id: worktreeId },
+        refs: [
+          { kind: 'task', id: w.task_id },
+          { kind: 'worktree', id: worktreeId },
+        ],
+      });
+    });
+  }
+
   private startParams(projectId: string, task: TaskView, run: RunView, role: string): TaskStartParams {
     return {
       task_id: task.task_id,
@@ -2548,8 +2797,8 @@ export class FridayState {
       role,
       instruction: task.description ? `${task.summary}\n\n${task.description}` : task.summary,
       context_packet_ref: null,
-      working_directory: this.q.project(projectId)?.root_path ?? '.',
-      git_ref: null,
+      working_directory: run.execution_root ?? this.q.project(projectId)?.root_path ?? '.',
+      git_ref: run.branch_ref,
       acceptance_criteria: task.acceptance_criteria,
       policy_profile: null,
     };

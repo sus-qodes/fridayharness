@@ -3,6 +3,7 @@ import path from 'node:path';
 import { GenericHarnessClient, type Registration } from '@friday/adapter-generic';
 import { FridayError, type InboxItem, isFridayError, type TaskView } from '@friday/protocol';
 import {
+  checkoutRoot,
   DaemonClient,
   DaemonUnreachableError,
   FRIDAY_VERSION,
@@ -129,7 +130,8 @@ export class FridaySession {
       capabilities: { mcp_tools: true, hooks: this.opts.vendor !== 'generic', context_request: true },
       host: {
         pid,
-        cwd: this.project.root,
+        // The checkout this session works in: a task worktree, or the main checkout (ADR-0023 §3).
+        cwd: checkoutRoot(this.opts.projectDir ?? process.cwd()) ?? this.project.root,
         ...(this.opts.hostSessionId ? { session_id: this.opts.hostSessionId } : {}),
       },
     });

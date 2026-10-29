@@ -31,6 +31,8 @@ export const RefKind = z.enum([
   'message',
   // M4: scoped memory.
   'memory',
+  // M5: task worktrees.
+  'worktree',
 ]);
 export type RefKind = z.infer<typeof RefKind>;
 
@@ -106,6 +108,10 @@ export const EVENT_TYPES = [
   'communication.escalated',
   'communication.resolved',
   'memory.recorded',
+  'run.workspace_ready',
+  'worktree.allocated',
+  'worktree.released',
+  'worktree.removed',
   'memory.superseded',
   'memory.approved',
   'memory.retracted',

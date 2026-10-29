@@ -16,3 +16,12 @@ export {
 } from './root.js';
 export { type RunOptions, type RunResult, runGit } from './run.js';
 export { type EntryKind, parseStatusV2, type Status, type StatusEntry, type StatusHead } from './status.js';
+export {
+  type AllocateOptions,
+  type Allocation,
+  allocateWorktree,
+  removeWorktree,
+  rootKey,
+  taskBranch,
+  worktreesDir,
+} from './worktree.js';

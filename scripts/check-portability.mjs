@@ -6,6 +6,7 @@
  *  - no shell scripts (*.sh) in the repository
  *  - no executable bits or symlinks in the index
  *  - every text file stored with LF (except *.cmd / *.bat)
+ *  - no NUL byte in a text file (git would treat it as binary and hide its diffs)
  *  - no `localhost` literal in source (use 127.0.0.1); add `portability-allow: localhost` on a line to exempt it
  *  - no POSIX-only constructs in package.json scripts (rm -rf, VAR=value prefixes, $VAR, export)
  */
@@ -54,6 +55,13 @@ for (const line of git('ls-files', '--eol').split('\n').filter(Boolean)) {
   const [, indexEol, file] = match;
   if (/\.(cmd|bat)$/i.test(file)) continue;
   if (indexEol === 'crlf' || indexEol === 'mixed') problems.push(`${file}: stored with ${indexEol} line endings`);
+}
+
+// 3b. NUL bytes in text files (a literal NUL typed through a shell instead of the escape \0)
+for (const f of files) {
+  if (TEXT.test(f) && readFileSync(path.join(root, f)).includes(0)) {
+    problems.push(`${f}: contains a NUL byte; git treats the file as binary (write the escape \\0 instead)`);
+  }
 }
 
 // 4. localhost literal in source
