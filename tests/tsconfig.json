@@ -7,17 +7,6 @@
     "noEmit": true,
     "rootDir": ".."
   },
-  "include": [
-    "helpers",
-    "protocol",
-    "integration",
-    "failure",
-    "security",
-    "conformance",
-    "mcp",
-    "hooks",
-    "scenarios",
-    "evals"
-  ],
-  "exclude": ["support", ".artifacts", ".reports", "fixtures", "evals/vitest.config.ts"]
+  "include": ["helpers", "protocol", "integration", "failure", "security", "conformance", "mcp", "hooks", "scenarios"],
+  "exclude": ["support", ".artifacts", ".reports", "fixtures"]
 }

@@ -1,9 +1,0 @@
-{
-  "host": "cursor",
-  "cli_version": "2026.10.16-e3cb207",
-  "ide_version": "3.24",
-  "written_at": "2026-10-18",
-  "recorded": false,
-  "source": "fake-agent.mjs is written by hand from Cursor's documented CLI (its parameters, output-format, headless and hooks pages, and the CLI changelog, read 2026-10-18), not recorded from a run. It speaks the documented stream-json events (system/init with apiKeySource, cwd, session_id, model and permissionMode; user; assistant; tool_call started and completed with call_id and tool_call.readToolCall, writeToolCall or function; result with type, subtype, is_error, duration_ms, duration_api_ms, result and session_id) and runs hooks as the hooks page describes. What the documentation leaves open is listed in the header of fake-agent.mjs and on the live check of docs/integration/cursor.md; replace the assumptions with recordings once the owner has run it.",
-  "files": ["fake-agent.mjs"]
-}

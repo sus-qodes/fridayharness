@@ -8,12 +8,10 @@ export const PACKAGE_NAME = '@friday/context';
 
 export { ContextCache } from './cache.js';
 export {
-  boundRecord,
   type CompileInput,
   type ContextDeps,
   type ContextPolicy,
   type ContextProject,
   compileContext,
   packetStaleness,
-  RECORD_LIMIT_BYTES,
 } from './compile.js';

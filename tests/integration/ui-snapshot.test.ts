@@ -67,9 +67,6 @@ describe('the board snapshot', () => {
     appendFileSync(path.join(ws().fridayDir, 'config.yaml'), '\n# edited\n');
     const snap = await td.operator.get<UiSnapshot>(td.operator.projectPath('/ui/snapshot'));
     expect(snap.config.current_hash).not.toBe(snap.config.loaded_hash);
-    // The file was read again (plan M11.2), and a comment changed no key: nothing applied, nothing
-    // waits for a restart, no error, so the banner has nothing to say.
-    expect(snap.config.changes).toEqual({ applied: [], restart_needed: [], error: null });
   });
 
   it('carries inbox previews, not bodies, and why a READY task waits', async () => {

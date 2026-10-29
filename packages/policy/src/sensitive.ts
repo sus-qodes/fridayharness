@@ -11,36 +11,16 @@ const RUNTIME = [
   '.friday/cache/**',
   '.friday/sessions/**',
 ];
-/**
- * Writable only by humans and `friday harness config`; reading is fine. Each folder holds hook
- * commands or MCP servers a host runs in this project: `.gemini/` for Gemini CLI, `.agents/` for
- * Antigravity (plan M8b.1), so an agent cannot plant a command its host would later run.
- */
+/** Writable only by humans and `friday harness config`; reading is fine. */
 const HOST_CONFIG = [
   '.claude/**',
   '.mcp.json',
   '.cursor/**',
   '.codex/**',
-  '.gemini/**',
-  '.agents/**',
   '.friday/harness/**',
   '.friday/config.yaml',
   '.friday/policies/**',
   '.friday/.gitignore',
-];
-/**
- * Programs started by their bare name from the project's root: the hook command a host runs
- * (`node .friday/harness/<host>/hook.mjs`; Cursor runs it from the root, in a shell it does not
- * name) and `git`, which the launcher starts. A Windows shell that looks in the current folder
- * first (cmd.exe) would run `node.cmd` or `node.exe` from the root instead, and its answer would be
- * taken for Friday's. Every extension Windows runs by default (PATHEXT) is covered.
- */
-const PATHEXT = ['com', 'exe', 'bat', 'cmd', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'msc'];
-export const ROOT_PROGRAMS: readonly string[] = ['node', 'git'].flatMap((n) => PATHEXT.map((e) => `${n}.${e}`));
-/** The folders whose content is Friday's or git's own: a command run inside one reads them by relative names. */
-const OWN_FOLDERS: readonly { glob: string[]; class: SensitiveClass }[] = [
-  { glob: ['.friday', '.friday/**'], class: 'friday.runtime' },
-  { glob: ['.git', '.git/**'], class: 'git.internal' },
 ];
 const SECRETS = ['**/.env', '**/.env.*', '**/*.pem', '**/id_rsa', '**/id_rsa.*', '**/id_ed25519', '**/id_ed25519.*'];
 const GIT_INTERNAL = ['.git/**'];
@@ -84,42 +64,9 @@ function classify(
   if (any(RUNTIME)) return { class: 'friday.runtime', path: rel };
   if (matchesAny(rel, SECRETS, windows)) return { class: 'secrets', path: rel };
   if (any(GIT_INTERNAL)) return { class: 'git.internal', path: rel };
-  if (op === 'write' && (any(HOST_CONFIG) || matchesAny(rel, ROOT_PROGRAMS, windows)))
-    return { class: 'host.config', path: rel };
+  if (op === 'write' && any(HOST_CONFIG)) return { class: 'host.config', path: rel };
   return null;
 }
-
-/**
- * The folder a command runs in, when the host names it (Gemini CLI's `dir_path`, Antigravity's
- * `Cwd`, Cursor's `cwd`): inside Friday's private state, `.friday` or `.git`, the command's
- * relative names reach files the text checks would see only by their full names, so the folder
- * itself is protected. Checked as given and behind links, and in the main checkout for a session
- * in a task worktree.
- */
-export function sensitiveWorkingFolder(p: string, ctx: PathContext): SensitiveHit | null {
-  const windows = ctx.windows ?? process.platform === 'win32';
-  if (PRIVATE_TEXT.some((re) => re.test(p))) return { class: 'friday.private', path: p };
-  const stateDirs = ctx.stateDir ? [...new Set([ctx.stateDir, realDirectory(ctx.stateDir, windows)])] : [];
-  const judge = (absolute: string, rel: string | null): SensitiveHit | null => {
-    if (stateDirs.some((d) => isInside(absolute, d, windows))) return { class: 'friday.private', path: absolute };
-    if (rel === null) return null;
-    const own = OWN_FOLDERS.find((f) => matchesAny(rel, f.glob, windows));
-    return own ? { class: own.class, path: rel } : null;
-  };
-  for (const root of [ctx.projectRoot, ...(ctx.mainRoot ? [ctx.mainRoot] : [])]) {
-    const c = canonicalize(p, { ...ctx, projectRoot: root });
-    const hit = judge(c.absolute, c.relative) ?? (c.linked ? judge(c.real, c.realRelative) : null);
-    if (hit) return hit;
-  }
-  return null;
-}
-
-/**
- * A command that changes its own folder into `.friday` or `.git` (`cd .friday`, `Set-Location
- * .git`, `pushd`): the relative names after it reach what the text checks see only by full name.
- */
-const INTO_OWN_FOLDER =
-  /(?:^|[\s;&|(){}])(?:cd|chdir|pushd|sl|set-location|push-location)(?:\s+--?[a-z]*(?::\S*)?)*\s+["']?(?:[^\s"';&|]*[\\/])?\.(friday|git)(?=$|[\\/"'\s;&|)}])/i;
 
 /**
  * Classifies one path for a read (also search/list) or write. Both the path as given and its
@@ -184,12 +131,6 @@ export function sensitiveInText(text: string, ctx: PathContext): SensitiveHit | 
   }
   if (/(^|[\s"'=/(])\.env(\.[\w.-]+)?($|[\s"');|&])/i.test(t) || /\bid_(rsa|ed25519)\b/.test(t) || /\.pem\b/i.test(t)) {
     return { class: 'secrets', path: 'secret file' };
-  }
-  const into = INTO_OWN_FOLDER.exec(text);
-  if (into) {
-    return into[1]?.toLowerCase() === 'git'
-      ? { class: 'git.internal', path: '.git (the command changes into it)' }
-      : { class: 'friday.runtime', path: '.friday (the command changes into it)' };
   }
   if (ctx.stateDir) {
     // The state folder itself or anything inside it, not a sibling whose name starts the same way

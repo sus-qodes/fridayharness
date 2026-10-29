@@ -111,10 +111,7 @@ export interface StateConfig {
   reservationTtlMs: number;
   /** `security.enforcement_required`: the level a session must reach before it may take work (review F09). */
   enforcementRequired: EnforcementLevel;
-  /**
-   * `security.require_enforcing_hooks`: sessions of a host that runs Friday's hooks (Claude Code,
-   * Cursor, Antigravity, Gemini CLI) must run where a failing hook blocks the call.
-   */
+  /** `security.require_enforcing_hooks`: Claude Code sessions must run on a host that blocks when a hook fails. */
   requireEnforcingHooks: boolean;
   /** Agent messaging (ADR-0017, `communication.*`). */
   allowBroadcast: boolean;
@@ -147,12 +144,6 @@ export interface StateConfig {
    * again, or its harness lost) before it expires and others may take the files.
    */
   fileReservationTtlMs: number;
-  /**
-   * `routing.task_budget_usd` (plan M11.5): the spending cap per task attempt, in dollars, carried
-   * in `task.start` for adapters whose host enforces one. Null means no cap. The daemon judges each
-   * cost report against the project's setting itself; this copy is what the host is told.
-   */
-  taskBudgetUsd: number | null;
 }
 
 export const DEFAULT_STATE_CONFIG: StateConfig = {
@@ -178,7 +169,6 @@ export const DEFAULT_STATE_CONFIG: StateConfig = {
   worktreeRoot: null,
   workspaceTimeoutMs: 10 * 60 * 1000,
   fileReservationTtlMs: 30 * 60 * 1000,
-  taskBudgetUsd: null,
 };
 
 /** Who sends a message (ADR-0017 §4). Agents are identified by their harness token, never by the request. */
@@ -226,76 +216,15 @@ const LEVEL_RANK: Record<EnforcementLevel, number> = { L0: 0, L1: 1, L2: 2 };
 /** Claude Code versions that block an action when a hook fails (`onFailure: block`), and that run hooks at all. */
 const CLAUDE_ENFORCING = [2, 1, 295] as const;
 const CLAUDE_HOOKS = [2, 1, 232] as const;
-/**
- * The first Cursor whose documentation describes `failClosed` on a permission hook (its hooks page,
- * read for 3.24). When Cursor added the key is not documented: an older Cursor may ignore it and
- * let a call through when the hook fails, so its level stays unverified (plan B21).
- */
-const CURSOR_FAIL_CLOSED = [3, 24] as const;
-/** The same for the Cursor CLI (`agent`), whose versions are dates: the release its documentation was read for. */
-const CURSOR_CLI_FAIL_CLOSED = [2026, 10, 16] as const;
-/** The hosts other than Claude Code whose Friday hooks reach the daemon in attach mode (plan M8b). */
-const HOOKED_HOSTS: Record<string, string> = { cursor: 'Cursor', antigravity: 'Antigravity', gemini: 'Gemini CLI' };
-/** What reaches an enforcing level on each host whose sessions run Friday's hooks (`security.require_enforcing_hooks`). */
-const ENFORCING_FIX: Record<string, string> = {
-  'claude-code': 'Update Claude Code to 2.1.295 or later.',
-  cursor: `Use Cursor ${CURSOR_FAIL_CLOSED.join('.')} or later with the hooks "friday harness config cursor" writes (each permission hook fails closed).`,
-  antigravity:
-    'What Antigravity does when a hook fails is not documented, so no Antigravity session counts as enforcing yet.',
-  gemini: 'Gemini CLI lets a call through when a hook fails, so no Gemini CLI session counts as enforcing.',
-};
 
-/**
- * Whether `v` is at least `min`. A three-part minimum needs a three-part version (`2.1` is not
- * read as 2.1.0); a two-part minimum takes `3.24` and `3.24.1` alike. Null when `v` does not say.
- */
 function versionAtLeast(v: string | null | undefined, min: readonly number[]): boolean | null {
-  const m = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(v ?? '');
-  if (!m || (min.length > 2 && m[3] === undefined)) return null;
-  const parts = [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)];
-  for (let i = 0; i < min.length; i += 1) {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(v ?? '');
+  if (!m) return null;
+  const parts = [Number(m[1]), Number(m[2]), Number(m[3])];
+  for (let i = 0; i < 3; i += 1) {
     if ((parts[i] ?? 0) !== (min[i] ?? 0)) return (parts[i] ?? 0) > (min[i] ?? 0);
   }
   return true;
-}
-
-/**
- * What the hooks route learned about an attached session's hooks (`capabilities.hook_evidence`):
- * the host version its hooks report (Cursor's `cursor_version`), and whether the project's hook
- * file makes a failing permission hook block (`fail-closed`), let the call through (`fail-open`),
- * or could not be read (null). Unknown values are null.
- */
-export interface HookEvidence {
-  host_version: string | null;
-  hook_failure: 'fail-closed' | 'fail-open' | null;
-}
-
-/**
- * Whether a registering MCP server takes over the session its hooks registered first (plan M8b):
- * the same host, both attached, a harness the hooks route made (it has no tools), and a server
- * with tools. Claude Code's hooks and MCP server share one harness key, so they never register apart.
- */
-function takesOverHooksSession(
-  holder: { vendor: string; attach_mode: string; capabilities?: Record<string, unknown> | null },
-  params: { vendor: string; attach_mode: string; capabilities: Record<string, unknown> },
-): boolean {
-  return (
-    holder.vendor === params.vendor &&
-    params.vendor !== 'claude-code' &&
-    holder.attach_mode === 'attach' &&
-    params.attach_mode === 'attach' &&
-    holder.capabilities?.hooks_route === true &&
-    params.capabilities.mcp_tools === true
-  );
-}
-
-export function hookEvidenceOf(capabilities: Record<string, unknown> | null | undefined): HookEvidence {
-  const e = (capabilities?.hook_evidence ?? {}) as Record<string, unknown>;
-  const failure = e.hook_failure === 'fail-closed' || e.hook_failure === 'fail-open' ? e.hook_failure : null;
-  return {
-    host_version: typeof e.host_version === 'string' && e.host_version ? e.host_version : null,
-    hook_failure: failure,
-  };
 }
 
 /**
@@ -309,13 +238,10 @@ export function hostCohort(vendor: string, version: string | null | undefined): 
 }
 
 /**
- * The enforcement a session actually reached (ADR-0010, review F09, plan B21), from evidence
- * rather than from what the client says. A session attached to a host with Friday hooks (Claude
- * Code, Cursor, Antigravity, Gemini CLI) reaches L1 once Friday hooks reached the daemon from it,
- * and what the host does with a failing hook decides its status: enforcing where it blocks the
- * call, degraded where it lets the call through, unverified where that is not known. Adapters that
- * run the host themselves (spawn mode, FakeHarness) report their level; one whose capabilities say
- * its hooks fail open (`hook_failure: "fail-open"`) is degraded, not reported.
+ * The enforcement a session actually reached (ADR-0010, review F09), from evidence rather than
+ * from what the client says: for a Claude Code session in attach mode, Friday hooks must have
+ * reached the daemon from that session, and the host version decides whether a failing hook
+ * blocks. Adapters that run the host themselves (spawn mode, FakeHarness) report their level.
  */
 export function achievedEnforcement(h: {
   vendor: string;
@@ -323,59 +249,7 @@ export function achievedEnforcement(h: {
   claimed: EnforcementLevel | null;
   hooks_seen: boolean;
   host_version: string | null;
-  capabilities?: Record<string, unknown> | null;
 }): { level: EnforcementLevel; status: EnforcementStatus; basis: string } {
-  const hooked = HOOKED_HOSTS[h.vendor];
-  if (hooked && h.attach_mode === 'attach') {
-    if (!h.hooks_seen) {
-      return { level: 'L0', status: 'observed', basis: 'no Friday hook has reached the daemon from this session' };
-    }
-    if (h.vendor === 'gemini') {
-      return {
-        level: 'L1',
-        status: 'degraded',
-        basis:
-          'Friday hooks from this session; Gemini CLI lets a call through when a hook fails, and no setting changes that',
-      };
-    }
-    if (h.vendor === 'antigravity') {
-      return {
-        level: 'L1',
-        status: 'unverified',
-        basis: 'Friday hooks from this session; what Antigravity does when a hook fails is not documented',
-      };
-    }
-    const evidence = hookEvidenceOf(h.capabilities);
-    const version = evidence.host_version ?? h.host_version;
-    const host = version ? `Cursor ${version}` : 'Cursor (version unknown)';
-    if (evidence.hook_failure === 'fail-open') {
-      return {
-        level: 'L1',
-        status: 'degraded',
-        basis: `Friday hooks from this session; a permission hook in .cursor/hooks.json has no failClosed, so ${host} lets that call through when the hook fails`,
-      };
-    }
-    if (evidence.hook_failure !== 'fail-closed') {
-      return {
-        level: 'L1',
-        status: 'unverified',
-        basis: `Friday hooks from this session; ${host}, and Friday could not read whether .cursor/hooks.json runs each permission hook with failClosed`,
-      };
-    }
-    const cli = /^\d{4}\./.test(version ?? '');
-    if (versionAtLeast(version, cli ? CURSOR_CLI_FAIL_CLOSED : CURSOR_FAIL_CLOSED)) {
-      return {
-        level: 'L1',
-        status: 'enforcing',
-        basis: `Friday hooks from this session; ${host} blocks a call when its failClosed permission hook fails`,
-      };
-    }
-    return {
-      level: 'L1',
-      status: 'unverified',
-      basis: `Friday hooks from this session; ${host}: failClosed is documented from Cursor ${CURSOR_FAIL_CLOSED.join('.')} (CLI ${CURSOR_CLI_FAIL_CLOSED.join('.')}), and whether this version honours it is not known`,
-    };
-  }
   if (h.vendor === 'claude-code' && h.attach_mode === 'attach') {
     if (!h.hooks_seen) {
       return { level: 'L0', status: 'observed', basis: 'no Friday hook has reached the daemon from this session' };
@@ -401,14 +275,6 @@ export function achievedEnforcement(h: {
     return { level: 'L0', status: 'observed', basis: `${host} is too old for Friday hooks` };
   }
   if (h.claimed && h.claimed !== 'L0') {
-    // An adapter whose host lets a call through when a hook fails says so (Gemini CLI's spawn adapter).
-    if (h.capabilities?.hook_failure === 'fail-open') {
-      return {
-        level: h.claimed,
-        status: 'degraded',
-        basis: `reported by the ${h.vendor} adapter; its host lets a call through when a hook fails`,
-      };
-    }
     return { level: h.claimed, status: 'reported', basis: `reported by the ${h.vendor} adapter` };
   }
   return { level: 'L0', status: 'observed', basis: `the ${h.vendor} client has no Friday policy hooks` };
@@ -471,92 +337,6 @@ export interface PlanApproval {
   reworked: TaskView[];
   dropped: TaskView[];
   readied: TaskView[];
-}
-
-/**
- * The ceiling on a plan's tasks (plan M12.2): per agent role, the write scopes the project's
- * policy declares for it (ADR-0028 team scopes, one layer per source). A plan task of that role
- * holds no more than lies inside every layer.
- */
-export interface PlanBounds {
-  teams: Readonly<Record<string, readonly { source: string; write: readonly string[] }[]>>;
-}
-
-/** One plan task after the ceiling was applied (`FridayState.boundPlanTask`). */
-export interface BoundedPlanTask {
-  /** The write scope the task holds: as written, or cut to the ceiling. */
-  write: string[];
-  /** Why it was cut, for the human who reviews the plan; null when nothing changed. */
-  note: string | null;
-  /** Why it cannot be held at all; null when it can. */
-  refused: string | null;
-}
-
-const GLOB_CHARS = /[*?[{]/;
-
-/**
- * A project-relative glob as a list of segments, a trailing slash read as "everything under"
- * (as the hooks read it). Backslashes and a leading `./` are tolerated, never produced by a plan.
- */
-function globSegments(glob: string): string[] {
-  const g = glob.replaceAll('\\', '/').replace(/^\.\//, '');
-  return (g.endsWith('/') ? `${g}**` : g).split('/').filter((s) => s.length > 0);
-}
-
-/** One glob segment as a regular expression over one path segment, case folded. */
-function segmentPattern(segment: string): RegExp {
-  const source = segment
-    .split(/(\*|\?)/)
-    .map((part) => (part === '*' ? '[^/]*' : part === '?' ? '[^/]' : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
-    .join('');
-  return new RegExp(`^${source}$`, 'i');
-}
-
-/**
- * Whether every path `inner` can name is also named by `outer`, judged segment by segment: `**`
- * in the outer glob stands for any run of segments, `*` and `?` for parts of one segment, and a
- * literal segment for itself (case folded, since the hooks fold case on Windows). An inner `**`
- * is inside only an outer `**`; an inner wildcard segment only an outer `*`, `**` or the same
- * text. Conservative: when it cannot tell, the answer is no, and the hooks still judge the write.
- */
-function globInside(inner: string, outer: string): boolean {
-  const a = globSegments(inner);
-  const b = globSegments(outer);
-  const fits = (i: number, j: number): boolean => {
-    if (j === b.length) return i === a.length;
-    const o = b[j] as string;
-    if (o === '**') {
-      // Zero or more inner segments, then the rest of the outer glob.
-      for (let k = i; k <= a.length; k += 1) if (fits(k, j + 1)) return true;
-      return false;
-    }
-    if (i === a.length) return false;
-    const s = a[i] as string;
-    if (s === '**') return false;
-    if (s.toLowerCase() === o.toLowerCase()) return fits(i + 1, j + 1);
-    if (o === '*') return fits(i + 1, j + 1);
-    if (GLOB_CHARS.test(s)) return false;
-    return GLOB_CHARS.test(o) && segmentPattern(o).test(s) ? fits(i + 1, j + 1) : false;
-  };
-  return fits(0, 0);
-}
-
-/**
- * The part of a write scope that lies inside a ceiling: each glob kept when a ceiling glob
- * contains it, replaced by the ceiling globs it contains when it is wider, dropped otherwise.
- */
-function boundWriteScope(write: readonly string[], ceiling: readonly string[]): { write: string[]; changed: boolean } {
-  const out: string[] = [];
-  let changed = false;
-  for (const g of write) {
-    if (ceiling.some((c) => globInside(g, c))) {
-      out.push(g);
-      continue;
-    }
-    changed = true;
-    for (const c of ceiling) if (globInside(c, g)) out.push(c);
-  }
-  return { write: [...new Set(out)], changed };
 }
 
 /** A model request as recorded in `model.called` (plan B28): never the prompt or the answer. */
@@ -639,8 +419,6 @@ const OBSERVATION_TYPES = new Set([
   'laya.unavailable',
   // The daemon noticed it had been paused (a sleeping machine); it was refused before it was listed.
   'daemon.paused',
-  // M11.2: config.yaml read again; the keys applied and the keys that wait for a restart.
-  'config.reloaded',
   // M9: browser sign-in and agents started from the interface (docs/frontend/PLAN.md §5).
   'ui.session_started',
   'ui.session_ended',
@@ -675,32 +453,6 @@ const SYSTEM: Actor = { kind: 'system', id: 'friday' };
 const LEASE_MANAGER: Actor = { kind: 'system', id: 'lease-manager' };
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
-/** Dollars in a message: `$0.0123`, `$2`; the binary noise of a sum does not show. */
-const usd = (n: number): string => `$${Number(n.toFixed(6))}`;
-
-/**
- * How long an attempt stays open after its reported cost reached the task's spending cap (plan
- * M11.5). A spawn adapter sends what the attempt reported about itself (`host.usage` among it) and
- * then, in the same delivery, how the attempt ended; a report of the end that arrives within this
- * grace is recorded as what it is, so finished, paid-for work is not run again (plan rule B31). A few
- * seconds are enough: the two calls follow each other at once, and only a Friday out of reach between
- * them makes the second one late. The grace is counted from the `budget.exceeded` record and judged
- * by `tick`, so it is as coarse as the tick.
- */
-export const BUDGET_STOP_GRACE_MS = 5_000;
-
-/** A cap stop on record for an attempt that is still open (`budget.exceeded`, plan M11.5). */
-interface CapStop {
-  /** When the cap was reached: the grace counts from here. */
-  at: string;
-  attempt: number;
-  cost_usd: number;
-  cap_usd: number;
-}
-
-/** The fatal error an attempt ends with at the task's spending cap; the recovery assessment names it. */
-const capReason = (s: CapStop): string =>
-  `budget_exceeded: attempt ${s.attempt} reported ${usd(s.cost_usd)}, at or above the task's spending cap of ${usd(s.cap_usd)} (routing.task_budget_usd)`;
 const RUN_EVENT: Partial<Record<RunStatus, string>> = {
   ACTIVE: 'run.accepted',
   DECLINED: 'run.declined',
@@ -2152,12 +1904,6 @@ export class FridayState {
           refs: [{ kind: 'task', id: task.task_id }],
         });
         if (!p.fatal) return { task_status: task.status };
-        if (run.status === 'ENDED' || run.status === 'DECLINED' || task.current_run_id !== run.run_id) {
-          // The attempt is already over (Friday ended it at the task's spending cap once the grace
-          // had passed, or a human released it): the error is on record, and the task's state is no
-          // longer this attempt's to change.
-          return { task_status: task.status };
-        }
         if (run.status === 'STARTING') {
           // The work never started (Friday had not heard that the run was accepted): the harness
           // could not take it, which is a decline, and the task is free again.
@@ -2167,14 +1913,6 @@ export class FridayState {
           });
           this.syncHarnessBusy(ctx, caller.harness_id);
           return { task_status: this.q.task(projectId, p.task_id).status };
-        }
-        const stop = this.capStopOf(projectId, run.run_id);
-        if (stop && (task.status === 'RUNNING' || task.status === 'WAITING')) {
-          // The attempt had reached the task's spending cap, and this is how it ended (a host stopped
-          // by its own cap reports its error after its usage, plan M11.5): the host's error is on
-          // record, and the attempt ends at the cap now, for a human to decide, never for the
-          // recovery sweep to retry.
-          return { task_status: this.endAtCap(ctx, run, task, stop).status };
         }
         if (task.status === 'RUNNING') {
           task = this.moveTask(ctx, task, 'task.wait', {
@@ -2188,165 +1926,6 @@ export class FridayState {
         this.releaseAgent(ctx, caller.agent_id, task.task_id);
         this.syncHarnessBusy(ctx, caller.harness_id);
         return { task_status: task.status };
-      },
-    );
-  }
-
-  /**
-   * The spending cap per task (plan M11.5), judged on every `host.usage` report: when the attempt's
-   * reported cost reaches `routing.task_budget_usd`, Friday records `budget.exceeded` with the
-   * figures, once per attempt, drops whatever was still queued for the attempt and tells a spawned
-   * host to stop. The attempt itself stays open for `BUDGET_STOP_GRACE_MS`: a spawn adapter sends
-   * the attempt's cost and then, at once, how the attempt ended, and that report is still recorded as
-   * what it is (a completion claim moves the task to READY_FOR_VERIFICATION as any claim does, a
-   * blocked result or an error is recorded as such), so finished work is not paid for twice (plan
-   * rule B31). When the grace passes without one, `tick` ends the attempt as a fatal agent error
-   * `budget_exceeded` and the task waits for a human (`endAtCap`). A report without a cost, a cap
-   * that is not set, a run already over, or a run that is no longer the task's current one changes
-   * nothing: a report that arrives after the stop is read, not acted on.
-   */
-  enforceTaskBudget(
-    projectId: string,
-    p: { run_id: string; cost_usd: unknown; cap_usd: unknown },
-  ): { stopped: boolean; task_status: TaskView['status'] | null } {
-    const cap = typeof p.cap_usd === 'number' && Number.isFinite(p.cap_usd) && p.cap_usd > 0 ? p.cap_usd : null;
-    const cost = typeof p.cost_usd === 'number' && Number.isFinite(p.cost_usd) ? p.cost_usd : null;
-    if (cap === null || cost === null || cost < cap) return { stopped: false, task_status: null };
-    const known = this.q.findRun(p.run_id);
-    if (!known || (known.status !== 'ACTIVE' && known.status !== 'SUSPENDED')) {
-      return { stopped: false, task_status: null };
-    }
-    // Once per attempt: a second report past the cap during the grace (the host's final figures)
-    // is read, and the grace already running decides the attempt.
-    if (this.capStopOf(projectId, p.run_id)) return { stopped: false, task_status: null };
-    return this.exec(
-      {
-        name: 'budget.enforce',
-        project_id: projectId,
-        actor: SYSTEM,
-        params: { run_id: p.run_id, cost_usd: cost, cap_usd: cap },
-      },
-      (ctx) => {
-        const run = this.q.run(p.run_id);
-        const task = this.q.task(projectId, run.task_id);
-        if (
-          (run.status !== 'ACTIVE' && run.status !== 'SUSPENDED') ||
-          task.current_run_id !== run.run_id ||
-          (task.status !== 'RUNNING' && task.status !== 'WAITING')
-        ) {
-          return { stopped: false, task_status: null };
-        }
-        const stop: CapStop = { at: ctx.now, attempt: run.attempt, cost_usd: cost, cap_usd: cap };
-        ctx.emit({
-          type: 'budget.exceeded',
-          payload: { task_id: task.task_id, run_id: run.run_id, attempt: run.attempt, cost_usd: cost, cap_usd: cap },
-          refs: [
-            { kind: 'task', id: task.task_id },
-            { kind: 'run', id: run.run_id },
-          ],
-        });
-        // Whatever was queued for the attempt no longer goes out; the host is told to stop after
-        // that, so the cancel is not what gets expired.
-        this.expireOutboxForRun(ctx, run.run_id);
-        const h = this.q.findHarness(run.harness_id);
-        if (
-          run.status === 'ACTIVE' &&
-          h?.attach_mode === 'spawn' &&
-          !['DISCONNECTED', 'TERMINATED'].includes(h.status)
-        ) {
-          this.enqueue(
-            ctx,
-            run.harness_id,
-            'task.cancel',
-            { task_id: task.task_id, run_id: run.run_id, reason: capReason(stop) },
-            run.run_id,
-          );
-        }
-        return { stopped: true, task_status: task.status };
-      },
-    );
-  }
-
-  /**
-   * The cap stop on record for an attempt (`budget.exceeded`, plan M11.5), read from the attempt's
-   * own events: the event store is the one place a stop lives, so a grace in progress survives a
-   * restart and needs no second record. An attempt that is over keeps its record, which the usage
-   * row reads; callers check the run's status themselves.
-   */
-  private capStopOf(projectId: string, runId: string): CapStop | undefined {
-    const [e] = this.store.readByRef(projectId, 'run', runId, { types: ['budget.exceeded'], limit: 1 });
-    if (!e) return undefined;
-    const p = e.payload as { attempt?: unknown; cost_usd?: unknown; cap_usd?: unknown };
-    return { at: e.occurred_at, attempt: Number(p.attempt), cost_usd: Number(p.cost_usd), cap_usd: Number(p.cap_usd) };
-  }
-
-  /**
-   * Ends an attempt at the task's spending cap (plan M11.5), once its grace passed with no report of
-   * the end or once the host's own fatal error arrived: a fatal agent error `budget_exceeded` the
-   * recovery assessment names, the run ended `failed`, and a human asked with the figures. The task
-   * waits as `blocked`, not `agent_error`: the automatic recovery sweep retries agent errors within
-   * its limits, and another attempt would spend up to the cap again, so only a human runs the task
-   * again (after raising the cap) or cancels it.
-   */
-  private endAtCap(ctx: CommandContext, run: RunView, task: TaskView, stop: CapStop): TaskView {
-    const reason = capReason(stop);
-    ctx.emit({
-      type: 'agent.event',
-      payload: { task_id: task.task_id, run_id: run.run_id, event_type: 'error', message: reason, fatal: true },
-      refs: [
-        { kind: 'task', id: task.task_id },
-        { kind: 'run', id: run.run_id },
-      ],
-    });
-    const waiting =
-      task.status === 'RUNNING'
-        ? this.moveTask(ctx, task, 'task.wait', { waiting_reason: 'blocked', reason: reason.slice(0, 200) })
-        : this.updateTaskFields(ctx, task.task_id, { waiting_reason: 'blocked' });
-    this.endRun(ctx, run, 'failed');
-    // Anything queued for the attempt during the grace (a message, a packet) no longer goes out.
-    this.expireOutboxForRun(ctx, run.run_id);
-    this.releaseAgent(ctx, run.agent_id, task.task_id);
-    this.syncHarnessBusy(ctx, run.harness_id);
-    this.escalationWithin(ctx, {
-      kind: 'recovery_needed',
-      goal_id: task.goal_id ?? null,
-      task_id: task.task_id,
-      question: `${task.task_id} was stopped at its spending cap: attempt ${stop.attempt} reported ${usd(stop.cost_usd)} against routing.task_budget_usd ${usd(stop.cap_usd)}. Raise the cap in .friday/config.yaml before it runs again, or cancel it`,
-      options: [
-        `friday recover ${task.task_id} --action reassign`,
-        `friday recover ${task.task_id} --action restart`,
-        `friday task cancel ${task.task_id}`,
-      ],
-      details: {
-        reason: 'budget_exceeded',
-        run_id: run.run_id,
-        attempt: stop.attempt,
-        cost_usd: stop.cost_usd,
-        cap_usd: stop.cap_usd,
-      },
-    });
-    return waiting;
-  }
-
-  /**
-   * The grace of a cap stop passed with no report of the end (`tick`, plan M11.5): the attempt ends
-   * as `budget_exceeded`, if it is still open and still the task's current one. True when it did.
-   */
-  private endRunAtCap(projectId: string, runId: string, stop: CapStop): boolean {
-    return this.exec(
-      { name: 'budget.stop', project_id: projectId, actor: SYSTEM, params: { run_id: runId } },
-      (ctx) => {
-        const run = this.q.run(runId);
-        const task = this.q.task(projectId, run.task_id);
-        if (
-          (run.status !== 'ACTIVE' && run.status !== 'SUSPENDED') ||
-          task.current_run_id !== run.run_id ||
-          (task.status !== 'RUNNING' && task.status !== 'WAITING')
-        ) {
-          return false;
-        }
-        this.endAtCap(ctx, run, task, stop);
-        return true;
       },
     );
   }
@@ -2684,49 +2263,8 @@ export class FridayState {
   }
 
   /**
-   * The ceiling on delegated work (plan M12.2): what the project's policy declares for each agent
-   * role (`teams.<role>.write`, every source). The daemon sets it from the effective policy; it is
-   * read again at every proposal and approval, so a tightened policy applies to the next plan.
-   * Without it, plan tasks are recorded as the planner wrote them.
-   */
-  planBounds: (() => PlanBounds) | null = null;
-
-  /**
-   * Bounds one plan task by the ceiling of its role (plan M12.2): a task never holds more
-   * authority than what delegated it. Its write scope is cut to what lies inside the role's
-   * declared scopes, with a note a human reads in the plan; a task with nothing left inside is
-   * refused. Read scopes are not authority to change anything and stay as written. The hooks
-   * remain the final judge of every write, so a glob this cut keeps is still judged at use.
-   */
-  boundPlanTask(task: { key: string; kind: string; role: string; write: readonly string[] }): BoundedPlanTask {
-    const layers = this.planBounds?.().teams[task.role] ?? [];
-    let write = [...task.write];
-    const notes: string[] = [];
-    for (const layer of layers) {
-      if (!layer.write.length) continue;
-      const bounded = boundWriteScope(write, layer.write);
-      if (bounded.changed && write.length > 0 && bounded.write.length === 0) {
-        return {
-          write,
-          note: null,
-          refused: `task "${task.key}" (role ${task.role}) would write ${write.join(', ')}, outside the project's scope for that role (${layer.write.join(', ')}, from ${layer.source}), and nothing of it lies inside: narrow the task's scope.write or give it another role`,
-        };
-      }
-      if (bounded.changed) {
-        notes.push(
-          `scope.write cut to the project's scope for role ${task.role}: ${bounded.write.join(', ')} (the plan asked for ${write.join(', ')}; ${layer.source})`,
-        );
-        write = bounded.write;
-      }
-    }
-    return { write, note: notes.length ? notes.join('; ') : null, refused: null };
-  }
-
-  /**
    * Records a plan version as PROPOSED. The planner validated it (or a human wrote it and the
-   * CLI validated it); this checks that kept, reworked and dropped tasks belong to the goal, and
-   * bounds every new task by the ceiling of its role (plan M12.2), so the version a human reviews
-   * already shows the scope the task will hold, with a note where it was cut.
+   * CLI validated it); this only checks that kept, reworked and dropped tasks belong to the goal.
    */
   proposePlan(projectId: string, actor: Actor, goalId: string, proposal: PlanProposal): PlanVersionView {
     return this.exec(
@@ -2758,19 +2296,6 @@ export class FridayState {
             );
           }
         }
-        // The ceiling (plan M12.2): a new task is recorded with the scope it will hold. A task with
-        // nothing inside its role's scope refuses the whole proposal, with the task and the ceiling named.
-        const tasks = proposal.tasks.map((t) => {
-          if (t.change !== 'new') return t;
-          const b = this.boundPlanTask({ key: t.key, kind: t.kind, role: t.role, write: t.scope.write });
-          if (b.refused) throw new FridayError('invalid_request', `the plan exceeds its ceiling: ${b.refused}`);
-          if (!b.note) return t;
-          return {
-            ...t,
-            scope: { write: b.write, read: t.scope.read },
-            note: t.note ? `${t.note}; ${b.note}` : b.note,
-          };
-        });
         // One proposal waits for a decision at a time.
         for (const v of versions.filter((x) => x.status === 'PROPOSED')) {
           this.movePlan(ctx, v, 'SUPERSEDED', `replaced by version ${version}`);
@@ -2789,7 +2314,7 @@ export class FridayState {
               trigger: proposal.trigger,
               model_call_id: proposal.model_call_id ?? null,
               prompt_version: proposal.prompt_version ?? null,
-              tasks,
+              tasks: proposal.tasks,
             },
           },
           refs: [
@@ -2845,20 +2370,6 @@ export class FridayState {
       }
       const active = this.q.latestPlanVersion(planId, ['ACTIVE']);
       this.assertPlanFresh(projectId, v, active?.version ?? null);
-      // The ceiling again (plan M12.2): the policy may have tightened since the version was proposed,
-      // and a task is materialized with the scope it may hold now, or the approval is refused.
-      const bounded = new Map<string, BoundedPlanTask>();
-      for (const t of v.tasks) {
-        if (t.change !== 'new') continue;
-        const b = this.boundPlanTask({ key: t.key, kind: t.kind, role: t.role, write: t.scope.write });
-        if (b.refused) {
-          throw new FridayError(
-            'plan_outdated',
-            `plan ${planId} v${version} exceeds its ceiling under the project's policy as it is now: ${b.refused}. Reject it ("friday plan reject") and ask for a new one ("friday goal replan").`,
-          );
-        }
-        bounded.set(t.key, b);
-      }
       if (active) this.movePlan(ctx, active, 'SUPERSEDED', `superseded by version ${version}`);
       this.movePlan(ctx, v, 'ACTIVE', 'approved', note);
 
@@ -2870,8 +2381,6 @@ export class FridayState {
         idOfKey.set(t.key, task_id);
         const dependencies = t.depends_on.map((d) => idOfKey.get(d) ?? d);
         for (const dep of dependencies) this.q.task(projectId, dep);
-        const bound = bounded.get(t.key);
-        const scope = bound?.note ? { write: bound.write, read: t.scope.read } : t.scope;
         ctx.emit({
           type: 'task.created',
           payload: {
@@ -2888,7 +2397,7 @@ export class FridayState {
               acceptance_criteria: t.acceptance_criteria,
               priority: t.priority,
               risk_level: t.risk_level,
-              scope,
+              scope: t.scope,
               dependencies,
               reserved_for_agent_key: null,
               created_by: ctx.actor,
@@ -2902,14 +2411,7 @@ export class FridayState {
         });
         ctx.emit({
           type: 'plan.task_materialized',
-          payload: {
-            plan_id: planId,
-            version,
-            key: t.key,
-            task_id,
-            // Cut at approval, after the version was proposed: what the task holds and why.
-            ...(bound?.note ? { bounded: { write: bound.write, note: bound.note } } : {}),
-          },
+          payload: { plan_id: planId, version, key: t.key, task_id },
           refs: [
             { kind: 'plan', id: planId },
             { kind: 'task', id: task_id },
@@ -3465,13 +2967,6 @@ export class FridayState {
     return this.exec({ name: 'harness.register', project_id: projectId, actor }, (ctx) => {
       const host = params.host ?? {};
       const previous = this.q.harnessByKey(projectId, params.harness_key);
-      // What the hooks route learned about this session's hooks stays with it when its MCP server
-      // registers again (a restarted daemon, a lost lease).
-      const kept = previous?.capabilities?.hook_evidence;
-      const capabilities =
-        kept !== undefined && params.capabilities.hook_evidence === undefined
-          ? { ...params.capabilities, hook_evidence: kept }
-          : params.capabilities;
       const enforcement = achievedEnforcement({
         vendor: params.vendor,
         attach_mode: params.attach_mode,
@@ -3479,7 +2974,6 @@ export class FridayState {
         hooks_seen: Boolean(previous?.hooks_seen_at),
         // A client that cannot tell (a hook arriving first) keeps the version already known.
         host_version: params.version ?? previous?.version ?? null,
-        capabilities,
       });
       const hostChanges = {
         host_pid: host.pid ?? null,
@@ -3488,7 +2982,7 @@ export class FridayState {
         version: params.version ?? previous?.version ?? null,
         adapter_version: params.adapter_version ?? previous?.adapter_version ?? null,
         protocol_version,
-        capabilities,
+        capabilities: params.capabilities,
         enforcement_level: enforcement.level,
         enforcement_status: enforcement.status,
         enforcement_basis: enforcement.basis,
@@ -3560,13 +3054,7 @@ export class FridayState {
       } else if (agent.harness_id === harness_id || !agent.harness_id) {
         agent = this.reattachAgent(ctx, agent, harness_id);
       } else if (this.q.isHarnessLive(agent.harness_id, ctx.now) && agent.harness_id !== harness_id) {
-        const holder = this.q.harness(agent.harness_id);
-        if (takesOverHooksSession(holder, params)) {
-          this.adoptHooksSession(ctx, holder, harness_id, params.enforcement_level ?? null);
-          agent = this.reattachAgent(ctx, this.q.agent(agent.agent_id), harness_id);
-        } else {
-          shadow = true;
-        }
+        shadow = true;
       } else {
         agent = this.reattachAgent(ctx, agent, harness_id);
       }
@@ -3610,79 +3098,22 @@ export class FridayState {
   }
 
   /**
-   * The hooks of a session reached Friday before its MCP server registered (plan M8b): a host
-   * that runs its hooks through a shell gives them another parent than its MCP server, so the two
-   * registered apart. The server's harness takes the session over, with what its hooks showed,
-   * and the hooks' own harness ends: it had no tools, so it held no work. One agent, one harness.
-   */
-  private adoptHooksSession(
-    ctx: CommandContext,
-    holder: HarnessRecord,
-    harnessId: string,
-    claimed: EnforcementLevel | null,
-  ): void {
-    const h = this.q.harness(harnessId);
-    const evidence = holder.capabilities?.hook_evidence;
-    const capabilities = evidence !== undefined ? { ...h.capabilities, hook_evidence: evidence } : h.capabilities;
-    const version = h.version ?? holder.version ?? null;
-    const e = achievedEnforcement({
-      vendor: h.vendor,
-      attach_mode: h.attach_mode,
-      claimed,
-      hooks_seen: Boolean(holder.hooks_seen_at),
-      host_version: version,
-      capabilities,
-    });
-    this.moveHarness(ctx, h, h.status, 'hooks session', {
-      hooks_seen_at: holder.hooks_seen_at,
-      host_session_id: holder.host_session_id,
-      version,
-      capabilities,
-      enforcement_level: e.level,
-      enforcement_status: e.status,
-      enforcement_basis: e.basis,
-    });
-    if (holder.host_session_id) {
-      ctx.emit({
-        type: 'harness.session_bound',
-        payload: {
-          vendor: h.vendor,
-          host_session_id: holder.host_session_id,
-          harness_id: harnessId,
-          transcript_path: null,
-        },
-        refs: [{ kind: 'harness', id: harnessId }],
-      });
-    }
-    this.loseRuns(ctx, holder.harness_id, 'its session was taken over by its MCP server');
-    this.moveHarness(ctx, holder, 'DISCONNECTED', 'taken over by its MCP server', { disconnected_at: ctx.now });
-    this.moveHarness(ctx, this.q.harness(holder.harness_id), 'TERMINATED', 'taken over by its MCP server', {
-      terminated_at: ctx.now,
-    });
-    this.revokeTokens({ harness_id: holder.harness_id }, 'taken over by its MCP server');
-  }
-
-  /**
    * A Friday hook reached the daemon from this harness's session: evidence that its tool calls
-   * pass the policy hook (review F09). Recomputes the achieved enforcement once. `evidence` is what
-   * the hooks route read about the session's hooks (Cursor: its version and its hook file).
+   * pass the policy hook (review F09). Recomputes the achieved enforcement once.
    */
-  noteHookEvidence(projectId: string, harnessId: string, evidence?: HookEvidence): HarnessRecord {
+  noteHookEvidence(projectId: string, harnessId: string): HarnessRecord {
     const h = this.q.harness(harnessId);
     if (h.hooks_seen_at) return h;
     this.exec({ name: 'harness.hooks_seen', project_id: projectId, actor: SYSTEM }, (ctx) => {
-      const capabilities = evidence ? { ...h.capabilities, hook_evidence: evidence } : h.capabilities;
       const e = achievedEnforcement({
         vendor: h.vendor,
         attach_mode: h.attach_mode,
         claimed: h.enforcement_level,
         hooks_seen: true,
         host_version: h.version,
-        capabilities,
       });
       this.moveHarness(ctx, h, h.status, 'hooks seen', {
         hooks_seen_at: ctx.now,
-        ...(evidence ? { capabilities } : {}),
         enforcement_level: e.level,
         enforcement_status: e.status,
         enforcement_basis: e.basis,
@@ -3699,20 +3130,16 @@ export class FridayState {
     const level = h.enforcement_level ?? 'L0';
     const need = this.config.enforcementRequired;
     if (LEVEL_RANK[level] < LEVEL_RANK[need]) {
-      const hooked = h.vendor === 'claude-code' ? 'Claude Code' : HOOKED_HOSTS[h.vendor];
       const hint =
         need === 'L2'
           ? 'No adapter in this version of Friday provides L2 (isolated execution); lower security.enforcement_required or wait for M6.'
-          : hooked && h.attach_mode === 'attach'
-            ? `Run "friday harness config ${h.vendor}" in the project and start a new ${hooked} session, so its tool calls pass Friday's policy hook.`
+          : h.vendor === 'claude-code'
+            ? 'Run "friday harness config claude-code" in the project and start a new Claude Code session, so its tool calls pass Friday\'s policy hook.'
             : 'Use a harness with Friday policy hooks, or lower security.enforcement_required in .friday/config.yaml.';
       return `this project requires ${need} enforcement (security.enforcement_required), but this session has ${level}: ${h.enforcement_basis ?? 'no evidence'}. ${hint}`;
     }
-    // Every host whose sessions run Friday's hooks: a Gemini CLI or Antigravity session is never
-    // taken for one whose failing hook blocks the call (plan B21).
-    const fix = ENFORCING_FIX[h.vendor];
-    if (this.config.requireEnforcingHooks && fix && h.enforcement_status !== 'enforcing') {
-      return `this project requires hooks that block when they fail (security.require_enforcing_hooks), but this session is ${h.enforcement_status ?? 'unknown'}: ${h.enforcement_basis ?? 'no evidence'}. ${fix}`;
+    if (this.config.requireEnforcingHooks && h.vendor === 'claude-code' && h.enforcement_status !== 'enforcing') {
+      return `this project requires hooks that block when they fail (security.require_enforcing_hooks), but this session is ${h.enforcement_status ?? 'unknown'}: ${h.enforcement_basis ?? 'no evidence'}. Update Claude Code to 2.1.295 or later.`;
     }
     return null;
   }
@@ -3909,8 +3336,6 @@ export class FridayState {
     /** Replies recovered for answers recorded without one, and those that could not be sent. */
     messages_replied: string[];
     messages_reply_failed: { escalation_id: string; error: string }[];
-    /** Attempts ended at the task's spending cap: their grace for a report of the end passed (plan M11.5). */
-    budget_stopped: string[];
   } {
     const now = this.clock.now();
     const nowMs = Date.parse(now);
@@ -3933,7 +3358,6 @@ export class FridayState {
       messages_escalated: [] as string[],
       messages_replied: [] as string[],
       messages_reply_failed: [] as { escalation_id: string; error: string }[],
-      budget_stopped: [] as string[],
     };
     const leases = this.db
       .prepare(
@@ -4024,14 +3448,6 @@ export class FridayState {
         );
         out.declined.push(run.run_id);
       }
-    }
-    // Attempts stopped at the task's spending cap whose grace for a report of the end has passed
-    // (plan M11.5) end now, as `budget_exceeded`. A stop recorded before Friday was away is held
-    // like the leases: the report may still be on its way.
-    for (const run of this.q.runsWithStatus(projectId, ['ACTIVE', 'SUSPENDED'])) {
-      const stop = this.capStopOf(projectId, run.run_id);
-      if (!stop || held(stop.at) || Date.parse(stop.at) + BUDGET_STOP_GRACE_MS > nowMs) continue;
-      if (this.endRunAtCap(projectId, run.run_id, stop)) out.budget_stopped.push(run.run_id);
     }
     out.unreserved.push(...this.expireReservations(projectId, this.clock.now()));
     out.files_released.push(...this.expireFileReservations(projectId, this.clock.now()));
@@ -4823,11 +4239,6 @@ export class FridayState {
       // The session to resume, as the adapter reported it when it accepted the run (ADR-0032 §3).
       session_ref: run.session_ref ?? null,
       note,
-      // The task's spending cap (plan M11.5), for a host that can enforce one itself.
-      budget_usd:
-        typeof this.config.taskBudgetUsd === 'number' && this.config.taskBudgetUsd > 0
-          ? this.config.taskBudgetUsd
-          : null,
     };
   }
 

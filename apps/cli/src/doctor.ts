@@ -226,8 +226,7 @@ export async function doctor(projectDir?: string): Promise<CheckResult[]> {
         message: `remote model providers enabled: ${remote.map(([n]) => n).join(', ')}`,
       });
     for (const [name, p] of Object.entries(ref.config.providers)) {
-      // The local server's address is loopback only and receives no key, so the tracked file may name it.
-      if (p.base_url && name !== 'local') {
+      if (p.base_url) {
         out.push({
           id: 'endpoint',
           status: 'warn',
@@ -237,9 +236,7 @@ export async function doctor(projectDir?: string): Promise<CheckResult[]> {
       }
     }
     const mb = ref.config.master_brain;
-    if (mb.provider === 'local') {
-      out.push(await localBrainCheck(ref.config.providers.local.base_url, mb.model));
-    } else if (mb.provider === 'anthropic') {
+    if (mb.provider === 'anthropic') {
       const allowed = ref.config.providers.anthropic?.allow_remote ?? false;
       const approved = Boolean(providerApproval(ref, 'anthropic'));
       const key = hasSecret('anthropic') || Boolean(process.env.ANTHROPIC_API_KEY?.trim());
@@ -310,75 +307,6 @@ export async function doctor(projectDir?: string): Promise<CheckResult[]> {
 
   for (const extra of extraDoctorChecks) out.push(...(await extra(ref)));
   return out;
-}
-
-/** The two ways a model server lists what it has: OpenAI's `/v1/models`, else Ollama's own `/api/tags`. */
-async function listLocalModels(base: string): Promise<{ models: string[] } | { error: string }> {
-  const get = async (url: string) => {
-    const res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(3000) });
-    const body = res.ok ? ((await res.json()) as Record<string, unknown>) : null;
-    return { status: res.status, body };
-  };
-  try {
-    const openai = await get(`${base}/models`);
-    if (openai.body) {
-      const data = Array.isArray(openai.body.data) ? (openai.body.data as { id?: unknown }[]) : [];
-      return { models: data.map((m) => m.id).filter((id): id is string => typeof id === 'string') };
-    }
-    const tags = await get(`${new URL(base).origin}/api/tags`);
-    if (tags.body) {
-      const list = Array.isArray(tags.body.models) ? (tags.body.models as { name?: unknown }[]) : [];
-      return { models: list.map((m) => m.name).filter((n): n is string => typeof n === 'string') };
-    }
-    return { error: `it answered ${openai.status} for /models and ${tags.status} for /api/tags` };
-  } catch (e) {
-    return { error: (e as Error).message };
-  }
-}
-
-/** Ollama lists `name:latest` for a model pulled without a tag; the user may write either. */
-function sameModel(a: string, b: string): boolean {
-  const bare = (s: string) => s.replace(/:latest$/, '');
-  return a === b || bare(a) === bare(b);
-}
-
-/**
- * Provider `local` (plan M12.1): the server at `providers.local.base_url` answers, and it has the
- * model `master_brain.model` names. Read-only, and nothing is sent but the two GETs.
- */
-async function localBrainCheck(baseUrl: string, model: string): Promise<CheckResult> {
-  const base = baseUrl.replace(/\/$/, '');
-  const listed = await listLocalModels(base);
-  if ('error' in listed) {
-    return {
-      id: 'master-brain',
-      status: 'fail',
-      message: `no model server answers at ${base} (${listed.error})`,
-      fix: 'start it: Ollama ("ollama serve", port 11434) or LM Studio\'s local server (port 1234), and point providers.local.base_url at it',
-    };
-  }
-  const have = listed.models.length ? listed.models.join(', ') : 'none yet';
-  if (model === 'auto') {
-    return {
-      id: 'master-brain',
-      status: 'fail',
-      message: `the server at ${base} answers, but master_brain.model names no model (it has: ${have})`,
-      fix: 'set master_brain.model in .friday/config.yaml to one of them',
-    };
-  }
-  if (!listed.models.some((m) => sameModel(m, model))) {
-    return {
-      id: 'master-brain',
-      status: 'fail',
-      message: `the server at ${base} has no model "${model}" (it has: ${have})`,
-      fix: `ollama pull ${model}, or set master_brain.model to a model the server has`,
-    };
-  }
-  return {
-    id: 'master-brain',
-    status: 'ok',
-    message: `the Master Brain plans with ${model} on this machine (${base}); nothing leaves it, and no key is needed`,
-  };
 }
 
 function listFiles(dir: string, depth = 3): string[] {

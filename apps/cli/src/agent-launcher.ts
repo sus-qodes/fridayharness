@@ -7,7 +7,6 @@ import type { DaemonContext, DaemonOptions } from '@friday/daemon';
 import {
   type Actor,
   type AgentHost,
-  type AgentHostName,
   type AgentOptions,
   type AgentProcess,
   type AgentProfile,
@@ -26,7 +25,7 @@ import { AGENT_KEY, AgentProfiles, optionFlags, ROLE, validateOptions } from './
  * tied to the daemon through its standard input (`--parent-stdin`).
  */
 
-export type Host = AgentHostName;
+export type Host = 'claude-code' | 'codex';
 /** The daemon's app as an extension receives it (its type comes from the daemon, not from hono). */
 type App = Parameters<NonNullable<DaemonOptions['extensions']>[number]>[0];
 /** What the routes use of a request context. */
@@ -60,7 +59,7 @@ export interface LauncherOptions {
 
 const RING = 200;
 const SYSTEM: Actor = { kind: 'system', id: 'agent-launcher' };
-export const HOSTS: readonly Host[] = ['claude-code', 'codex', 'cursor', 'gemini'];
+const HOSTS: Host[] = ['claude-code', 'codex'];
 // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escape sequences are removed on purpose
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b[@-_][^\u001b]*/g;
 
@@ -71,8 +70,7 @@ export function cliEntry(): string {
 
 /** The harness key a host's adapter registers with (for spotting a key another session holds). */
 export function harnessKeyOf(host: Host, projectId: string, agentKey: string): string {
-  // Codex's adapter came first and names no mode; every later spawn adapter names it.
-  return host === 'codex' ? `codex:${projectId}:${agentKey}` : `${host}:${projectId}:spawn:${agentKey}`;
+  return host === 'claude-code' ? `claude-code:${projectId}:spawn:${agentKey}` : `codex:${projectId}:${agentKey}`;
 }
 
 /** Detection in a child process: never on the daemon's event loop, never from the project folder. */
@@ -348,8 +346,9 @@ export function createAgentLauncher(opts: LauncherOptions = {}) {
       } catch {
         throw new FridayError('invalid_request', 'the request body must be JSON');
       }
-      const host = body.host as Host;
-      if (!HOSTS.includes(host)) throw new FridayError('invalid_request', `host is one of ${HOSTS.join(', ')}`);
+      const host = body.host;
+      if (host !== 'claude-code' && host !== 'codex')
+        throw new FridayError('invalid_request', 'host is claude-code or codex');
       if (typeof body.agent_key !== 'string' || !AGENT_KEY.test(body.agent_key)) {
         throw new FridayError('invalid_request', 'agent_key: lower-case letters, digits and dashes, at most 64');
       }

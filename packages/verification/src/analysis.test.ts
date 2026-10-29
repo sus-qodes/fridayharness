@@ -44,29 +44,6 @@ describe('diff analysis', () => {
     ]);
   });
 
-  it('fails a change beyond the ceiling of the task even when a human approved that exact path (plan M12.2)', () => {
-    const team = { source: 'policies/teams.yaml', write: ['frontend/**'] };
-    const input = base({
-      write: ['frontend/src/**'],
-      inScope: (p) => p.startsWith('frontend/src/'),
-      changed: [
-        { path: 'frontend/src/a.ts', change: 'modified' },
-        { path: 'frontend/shared/theme.ts', change: 'modified' },
-        { path: 'backend/prices.ts', change: 'modified' },
-      ],
-      // A human granted both paths outside the scope; only the one inside the ceiling counts.
-      approved: (p) => (p === 'frontend/src/a.ts' ? null : `apr_${p.replace(/\W/g, '_')}`),
-      aboveCeiling: (p) => (p.startsWith('frontend/') ? null : team),
-    });
-    const findings = analyzeDiff(input);
-    expect(findings.map((f) => [f.rule, f.severity, f.paths])).toEqual([
-      ['diff.above_ceiling', 'fail', ['backend/prices.ts']],
-      ['diff.approved', 'info', ['frontend/shared/theme.ts']],
-    ]);
-    expect(findings[0]?.message).toContain('frontend/**');
-    expect(findings[0]?.message).toContain('policies/teams.yaml');
-  });
-
   it('compares the claim with what changed', () => {
     const input = base({
       changed: [

@@ -192,10 +192,8 @@ export function createToolJudge(deps: {
             status: task.status,
             scope: task.scope,
             kind: task.kind,
-            // The team scopes of the agent's role only tighten (ADR-0028); the ceiling is the
-            // task's own role's (plan M12.2), what delegated it, and a task without a role has none.
+            // The team scopes of the agent's role only tighten (ADR-0028).
             teams: (agent?.role ? effective?.teams[agent.role] : undefined) ?? [],
-            ceiling: (task.role ? effective?.teams[task.role] : undefined) ?? [],
           }
         : null,
       otherWriters: action.kind === 'write' ? otherWriters(agent?.agent_id, root) : [],

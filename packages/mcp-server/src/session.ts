@@ -12,29 +12,14 @@ import {
   privateDirFor,
 } from '@friday/sdk';
 
-/** The hosts a `friday` MCP server can serve (`FRIDAY_HARNESS`), with the name each is registered under. */
-export const SESSION_HOSTS = {
-  'claude-code': 'Claude Code',
-  cursor: 'Cursor',
-  antigravity: 'Antigravity',
-  gemini: 'Gemini CLI',
-  generic: 'MCP client',
-} as const;
-export type SessionVendor = keyof typeof SESSION_HOSTS;
-
-/** The host `FRIDAY_HARNESS` names; Claude Code when it names none Friday knows (its configuration sets none). */
-export function sessionVendor(name: string | undefined): SessionVendor {
-  return name && Object.hasOwn(SESSION_HOSTS, name) ? (name as SessionVendor) : 'claude-code';
-}
-
 export interface SessionOptions {
   projectDir?: string | undefined;
   agentKey?: string | undefined;
-  /** The host's process id (the MCP server's parent, or `FRIDAY_HOST_PID`). */
+  /** Claude Code process id (the MCP server's parent). */
   hostPid?: number | undefined;
-  /** CLAUDE_CODE_SESSION_ID, linking this server to the session's hooks (spike S2); other hosts do not say it. */
+  /** CLAUDE_CODE_SESSION_ID, linking this server to the session's hooks (spike S2). */
   hostSessionId?: string | undefined;
-  vendor?: SessionVendor;
+  vendor?: 'claude-code' | 'generic';
   log?: (msg: string) => void;
 }
 
@@ -96,11 +81,6 @@ export class FridaySession {
 
   constructor(readonly opts: SessionOptions) {}
 
-  /** The host this server serves, as its registration and its session links name it. */
-  get vendor(): SessionVendor {
-    return this.opts.vendor ?? 'claude-code';
-  }
-
   private log(msg: string): void {
     this.opts.log?.(msg);
   }
@@ -135,20 +115,19 @@ export class FridaySession {
       return false;
     }
     const pid = this.opts.hostPid ?? process.ppid;
-    const vendor = this.vendor;
     const client = new GenericHarnessClient(bootstrap, {
-      harness_key: `${vendor}:${this.project.project_id}:pid:${pid}`,
-      vendor,
-      name: SESSION_HOSTS[vendor],
+      harness_key: `${this.opts.vendor ?? 'claude-code'}:${this.project.project_id}:pid:${pid}`,
+      vendor: this.opts.vendor ?? 'claude-code',
+      name: this.opts.vendor === 'generic' ? 'MCP client' : 'Claude Code',
       ...(this.hostVersion ? { version: this.hostVersion } : {}),
       adapter_version: FRIDAY_VERSION,
       attach_mode: 'attach',
       project_id: this.project.project_id,
       agent_key: this.agentKey,
-      // MCP alone intercepts nothing: a generic client is L0. For a host with Friday hooks the
-      // daemon decides from evidence, once the session's Friday hooks reach it (review F09).
-      ...(vendor === 'generic' ? { enforcement_level: 'L0' as const } : {}),
-      capabilities: { mcp_tools: true, hooks: vendor !== 'generic', context_request: true },
+      // MCP alone intercepts nothing: a generic client is L0. For Claude Code the daemon decides
+      // from evidence, once the session's Friday hooks reach it (review F09).
+      ...(this.opts.vendor === 'generic' ? { enforcement_level: 'L0' as const } : {}),
+      capabilities: { mcp_tools: true, hooks: this.opts.vendor !== 'generic', context_request: true },
       host: {
         pid,
         // The checkout this session works in: a task worktree, or the main checkout (ADR-0023 §3).

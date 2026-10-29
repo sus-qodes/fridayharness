@@ -29,7 +29,7 @@ function taskMarkdown(t: TaskView): string {
     .join('\n\n');
 }
 
-/** The `friday` MCP server: 19 tools, resources and prompts (plan M1.9, memory tools M4d, operations M6c, peers and receipts M12.4). */
+/** The `friday` MCP server: 17 tools, resources and prompts (plan M1.9, memory tools M4d, operations M6c). */
 export function createFridayMcpServer(session: FridaySession): McpServer {
   const server = new McpServer(
     { name: 'friday', version: FRIDAY_VERSION },

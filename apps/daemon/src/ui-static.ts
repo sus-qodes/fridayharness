@@ -15,7 +15,7 @@ import type { Context, Env, Hono } from 'hono';
 /** Headers on every bundle response (plan §5.1). No inline script or style, no framing. */
 export const UI_SECURITY_HEADERS: Readonly<Record<string, string>> = {
   'content-security-policy':
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; require-trusted-types-for 'script'; trusted-types 'none'",
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; media-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; require-trusted-types-for 'script'; trusted-types 'none'",
   'x-frame-options': 'DENY',
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
@@ -34,6 +34,7 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.woff2': 'font/woff2',
   '.txt': 'text/plain; charset=utf-8',
+  '.wav': 'audio/wav',
 };
 
 /** Paths the bundle may hold: plain names, folders, dots inside names; never `..`, `\`, `%` or NUL. */
@@ -126,6 +127,17 @@ export function mountUiStatic<E extends Env>(
     c.header('cache-control', 'no-store');
     return c.redirect(base, 302);
   };
+  app.get('/sounds/*', (c) => {
+    const raw = new URL(c.req.url).pathname;
+    const rest = raw.replace(/^\/sounds\//, '');
+    const file = readBundleFile(bundle, `sounds/${rest}`);
+    if (!file) {
+      withHeaders(c, { 'cache-control': 'no-store' });
+      return c.text('not found', 404);
+    }
+    withHeaders(c, { 'content-type': file.type, 'cache-control': 'no-store' });
+    return c.body(new Uint8Array(file.body), 200);
+  });
   app.get('/ui', home);
   app.get('/ui/*', (c) => {
     const raw = new URL(c.req.url).pathname;

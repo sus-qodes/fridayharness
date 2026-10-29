@@ -63,7 +63,6 @@ function row(over: RowOverrides = {}): UsageRowView {
       cache_read_input_tokens: 9600,
       cache_creation_input_tokens: 2400,
       cost_usd: 0.009,
-      cap_usd: null,
       turns: 7,
       model: BASELINE_MODEL,
       ...over.host,

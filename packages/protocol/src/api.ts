@@ -486,58 +486,6 @@ export const GoalView = z.object({
 });
 export type GoalView = z.infer<typeof GoalView>;
 
-/**
- * What Friday did for a goal (plan M12.7), counted from Friday's own records: the events that name
- * the goal's tasks, the usage reports of their attempts and the Master Brain's calls for the goal.
- * `GET goals/:gid` carries it as `summary`. Nothing in it is estimated, and a figure nobody
- * reported is null, never 0: a line built from it leaves such a figure out.
- */
-export const GoalSummary = z.object({
-  tasks: z.object({
-    /** The goal's tasks except cancelled and abandoned ones. */
-    total: z.number().int(),
-    /** Those a verification passed (`verification.finished` with `PASSED`, each task once). */
-    verified: z.number().int(),
-  }),
-  /** Completion claims a verification refused (`verification.finished` with `FAILED`). */
-  claims_refused: z.number().int(),
-  /** Tasks sent back for rework after a refused claim (`task.rework`). */
-  reworked: z.number().int(),
-  /** Actions that waited for a human's decision (`approval.requested`). */
-  held_for_human: z.number().int(),
-  /** Actions the policy refused (`policy.evaluated` with `deny`). */
-  refused_by_policy: z.number().int(),
-  /** Attempts whose session was lost (`task.harness_lost`). */
-  sessions_lost: z.number().int(),
-  /** Lost attempts whose task went on afterwards: it left HARNESS_LOST for work, not for cancellation. */
-  sessions_recovered: z.number().int(),
-  hosts: z.object({
-    /** The attempts of the goal's tasks (accepted runs, as the usage report counts them). */
-    attempts: z.number().int(),
-    /** Attempts whose host sent a usage report at all. */
-    reported: z.number().int(),
-    /**
-     * Input and output tokens as the hosts reported them, summed over the attempts that reported
-     * either; each host's counters are kept as it counts them (Codex counts cached input inside
-     * its input figure, Claude Code outside it). Null when no attempt reported.
-     */
-    tokens: z.number().int().nullable(),
-    tokens_reporters: z.number().int(),
-    /** The hosts' reported cost, summed over the attempts that named one; null when none did. */
-    cost_usd: z.number().nullable(),
-    cost_reporters: z.number().int(),
-  }),
-  planning: z.object({
-    /** Friday's own model calls for the goal: its plans and revisions. */
-    calls: z.number().int(),
-    /** The known cost of those calls; null when no call's cost is known. */
-    cost_usd: z.number().nullable(),
-    /** Calls whose cost is unknown (no price for the model, an outcome the daemon did not see). */
-    unknown_cost_calls: z.number().int(),
-  }),
-});
-export type GoalSummary = z.infer<typeof GoalSummary>;
-
 export const PlanTaskView = z.object({
   key: z.string(),
   position: z.number().int(),
@@ -700,9 +648,8 @@ export type UsageToolKinds = z.infer<typeof UsageToolKinds>;
 
 /**
  * What the host said it spent on the attempt (its last `host.usage` event). A host that reports
- * nothing (an attached session, a plain harness) has `reported: false` and every number null: an
- * unknown value is never written as 0. `cap_usd` is Friday's, not the host's: the task's spending
- * cap the attempt reached, shown beside the cost that reached it.
+ * nothing (an attached session, a Codex thread) has `reported: false` and every number null: an
+ * unknown value is never written as 0.
  */
 export const UsageHostView = z.object({
   reported: z.boolean(),
@@ -711,12 +658,6 @@ export const UsageHostView = z.object({
   cache_read_input_tokens: z.number().int().nullable(),
   cache_creation_input_tokens: z.number().int().nullable(),
   cost_usd: z.number().nullable(),
-  /**
-   * The task's spending cap the attempt reached (`routing.task_budget_usd`, plan M11.5, from the
-   * run's `budget.exceeded`), whether Friday then ended it or its claim still arrived; null when
-   * no cap was reached.
-   */
-  cap_usd: z.number().nullable(),
   turns: z.number().int().nullable(),
   /** The model the host named in its report. */
   model: z.string().nullable(),

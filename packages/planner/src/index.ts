@@ -60,15 +60,6 @@ export {
 } from './providers/anthropic.js';
 export { FakePlannerModel, type FakeResponse } from './providers/fake.js';
 export {
-  DEFAULT_LOCAL_BASE_URL,
-  jsonModeInstructions,
-  localEndpoint,
-  localOutputSchema,
-  type OpenAICompatibleOptions,
-  OpenAICompatiblePlannerModel,
-  usageFrom,
-} from './providers/openai-compatible.js';
-export {
   type Billed,
   ModelError,
   type ModelErrorCode,
@@ -94,7 +85,6 @@ export { type BrainAction, failureAction, type TriggerEvent, type TriggerFacts, 
 export {
   type ExistingTask,
   isReadOnly,
-  type PlanTaskBounder,
   type ValidationResult,
   validatePlanDraft,
   validateReplanDraft,

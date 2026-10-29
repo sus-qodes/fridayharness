@@ -3,15 +3,8 @@ import type { PolicyAction } from '@friday/policy';
 import { COMMAND_TOOLS, NETWORK_TOOLS, thirdPartyMcp, WRITE_TOOLS } from './types.js';
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.length > 0 ? v : undefined);
-/** `patterns`: Friday's key for a search of another host that names several globs at once. */
-const many = (one: unknown, list: unknown): string[] =>
-  [str(one), ...(Array.isArray(list) ? list.slice(0, 100).map(str) : [])].filter((x): x is string => Boolean(x));
 
-/**
- * Maps a tool call in Friday's vocabulary (Claude Code's tools, plus `Shell`; another host's call
- * is translated by its host module first) to the action Friday's policy evaluates. Unknown tools
- * return null.
- */
+/** Maps a Claude Code tool call to the action Friday's policy evaluates. Unknown tools return null. */
 export function actionFromTool(toolName: string, input: Record<string, unknown>): PolicyAction | null {
   if (toolName === 'Read') {
     const p = str(input.file_path);
@@ -21,7 +14,7 @@ export function actionFromTool(toolName: string, input: Record<string, unknown>)
     return {
       tool: toolName,
       kind: 'search',
-      patterns: many(input.pattern, input.patterns),
+      patterns: [str(input.pattern)].filter((x): x is string => Boolean(x)),
       paths: [str(input.path)].filter((x): x is string => Boolean(x)),
     };
   }
@@ -30,7 +23,7 @@ export function actionFromTool(toolName: string, input: Record<string, unknown>)
     return {
       tool: toolName,
       kind: 'search',
-      patterns: many(input.glob, input.patterns),
+      patterns: [str(input.glob)].filter((x): x is string => Boolean(x)),
       paths: [str(input.path)].filter((x): x is string => Boolean(x)),
     };
   }
@@ -40,9 +33,7 @@ export function actionFromTool(toolName: string, input: Record<string, unknown>)
   }
   if (COMMAND_TOOLS.has(toolName)) {
     const c = str(input.command);
-    // `cwd`: the folder another host's shell runs the command in, when its hook names it.
-    const cwd = str(input.cwd);
-    return c ? { tool: toolName, kind: 'command', command: c, ...(cwd ? { cwd } : {}) } : null;
+    return c ? { tool: toolName, kind: 'command', command: c } : null;
   }
   if (NETWORK_TOOLS.has(toolName)) {
     return { tool: toolName, kind: 'network', url: str(input.url) ?? `search: ${str(input.query) ?? ''}` };

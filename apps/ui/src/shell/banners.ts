@@ -1,60 +1,30 @@
 /**
- * Banners under the header (plan §7.1). Friday reads config.yaml again when it changes and applies
- * what it can (plan M11.2), so the config banner shows only when something still waits: it names
- * the changed keys that need a restart ("config.yaml changed: daemon.port needs a restart to
- * apply."), with how to restart from where the person is (the desktop app restarts from the banner
- * or the tray; a browser tab stops Friday in Settings and opens it again from its shortcut), or it
- * says the file as it stands could not be read and that the settings in force are unchanged.
- * "This page is older than Friday; reload it" shows while the snapshot's `ui_api` is not this
- * bundle's; and the slot of the getting-started checklist, shown until it is dismissed (and again
- * if the setting brings it back).
+ * Banners under the header (plan §7.1): "config.yaml changed; restart Friday to apply" while the
+ * snapshot's config hashes differ, with how to restart from where the person is (the desktop app
+ * restarts from the banner or the tray; a browser tab stops Friday in Settings and opens it again
+ * from its shortcut); "This page is older than Friday; reload it" while the snapshot's `ui_api` is
+ * not this bundle's; and the slot of the getting-started checklist, shown until it is dismissed
+ * (and again if the setting brings it back).
  */
-import type { ConfigChanges, UiSnapshot } from '@friday/protocol';
+import type { UiSnapshot } from '@friday/protocol';
 import { STALE_PAGE_MESSAGE } from '../sync/sync-engine.js';
 import { button, h } from '../ui/dom.js';
 import { icon } from '../ui/svg.js';
 import { type AppContext, type Component, openDrawer } from './context.js';
 import { UI_API } from './version.js';
 
+export const CONFIG_CHANGED_MESSAGE = 'config.yaml changed; restart Friday to apply.';
 /** How to restart from the desktop app: the button beside this, or the tray. */
 export const RESTART_HINT_DESKTOP = 'Restart Friday here, or from the tray.';
 /** How to restart from a browser tab, which cannot start Friday itself. */
 export const RESTART_HINT_BROWSER =
   'From a browser: stop Friday in Settings → Friday, then open it again from its shortcut or the desktop app.';
-/** The file as it stands could not be read; what follows is the daemon's reason. */
-export const CONFIG_ERROR_MESSAGE = 'config.yaml could not be read, so Friday keeps the settings it had:';
 
-/** The changed keys of config.yaml that keep their start values until Friday restarts. */
-export function configRestartKeys(board: UiSnapshot | null): string[] {
-  return board?.config?.changes?.restart_needed ?? [];
-}
-
-/** Why config.yaml as it stands could not be read, or null. */
-export function configError(board: UiSnapshot | null): string | null {
-  return board?.config?.changes?.error ?? null;
-}
-
-/** Whether the config banner has something to say: a key that needs a restart, or a file that could not be read. */
+/** The project's `config.yaml` was edited after Friday read it (it is read only at start). */
 export function configChanged(board: UiSnapshot | null): boolean {
-  return configRestartKeys(board).length > 0 || configError(board) !== null;
-}
-
-/** "a", "a and b", "a, b and c". */
-function listKeys(keys: string[]): string {
-  if (keys.length <= 1) return keys.join('');
-  return `${keys.slice(0, -1).join(', ')} and ${keys[keys.length - 1]}`;
-}
-
-/**
- * The banner's sentence for what changed: the keys applied, when any, then the keys that need a
- * restart; or why the file could not be read.
- */
-export function configBannerText(changes: ConfigChanges): string {
-  if (changes.error !== null) return `${CONFIG_ERROR_MESSAGE} ${changes.error}`;
-  const restart = changes.restart_needed;
-  if (!restart.length) return '';
-  const applied = changes.applied.length ? `${listKeys(changes.applied)} applied; ` : '';
-  return `config.yaml changed: ${applied}${listKeys(restart)} ${restart.length === 1 ? 'needs' : 'need'} a restart to apply.`;
+  if (!board?.config) return false;
+  const { loaded_hash, current_hash } = board.config;
+  return current_hash !== null && current_hash !== undefined && current_hash !== loaded_hash;
 }
 
 /** The daemon speaks another interface API than this page. */
@@ -112,14 +82,17 @@ export function mountBanners(ctx: AppContext, opts: BannerOptions = {}): Compone
     : button('Open Settings', () => openDrawer(ctx, { kind: 'settings', tab: 'friday' }), {
         class: 'btn btn-ghost sh-banner-action sh-banner-settings',
       });
-  const configText = h('span', { class: 'sh-banner-config-text' });
-  const hint = desktop ? RESTART_HINT_DESKTOP : RESTART_HINT_BROWSER;
-  const restartHint = h('span', { class: 'sh-banner-hint muted' }, hint);
   const config = h(
     'div',
     { class: 'sh-banner sh-banner-warn', role: 'status', hidden: true },
     h('span', { class: 'sh-banner-icon' }, icon('gear', 15)),
-    h('span', { class: 'sh-banner-text' }, configText, ' ', restartHint),
+    h(
+      'span',
+      { class: 'sh-banner-text' },
+      CONFIG_CHANGED_MESSAGE,
+      ' ',
+      h('span', { class: 'sh-banner-hint muted' }, desktop ? RESTART_HINT_DESKTOP : RESTART_HINT_BROWSER),
+    ),
     openConfig,
     restart,
   );
@@ -135,14 +108,7 @@ export function mountBanners(ctx: AppContext, opts: BannerOptions = {}): Compone
 
   function renderBoard(): void {
     const board = ctx.store.select('board');
-    const changes = board?.config?.changes;
     config.hidden = !configChanged(board);
-    configText.textContent = changes ? configBannerText(changes) : '';
-    // A file that could not be read is fixed in the editor; a restart would change nothing.
-    const needsRestart = configRestartKeys(board).length > 0 && configError(board) === null;
-    restartHint.textContent = needsRestart ? hint : '';
-    restartHint.hidden = !needsRestart;
-    restart.hidden = !needsRestart;
     openConfig.hidden = !board?.project.root;
     stale.hidden = !pageIsStale(board);
   }

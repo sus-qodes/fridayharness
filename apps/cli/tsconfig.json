@@ -17,15 +17,6 @@
       "path": "../../packages/adapters/claude"
     },
     {
-      "path": "../../packages/adapters/antigravity"
-    },
-    {
-      "path": "../../packages/adapters/cursor"
-    },
-    {
-      "path": "../../packages/adapters/gemini"
-    },
-    {
       "path": "../daemon"
     },
     {

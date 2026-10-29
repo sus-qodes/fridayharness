@@ -2,7 +2,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { findCredentials } from '@friday/events';
 import { type ContentTree, changedBetween, GitRoot, sameRepository } from '@friday/git';
-import { aboveCeiling, matchesAny, patternsOverlap, sensitiveClassOf } from '@friday/policy';
+import { matchesAny, patternsOverlap, sensitiveClassOf } from '@friday/policy';
 import { type Actor, FridayError, isFridayError, type RunView, type VerificationFinding } from '@friday/protocol';
 import {
   analyzeDiff,
@@ -166,9 +166,6 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     // human's approval of an exact path for this attempt lets that write stand (review F03).
     const role = run ? (state.q.findAgent(run.agent_id)?.role ?? null) : null;
     const teams = (role && policy.teams[role]) || [];
-    // The ceiling of the task (plan M12.2): the team scope of the task's own role, as the hooks
-    // judge it; a change beyond it fails whatever a human approved.
-    const ceiling = (task.role && policy.teams[task.role]) || [];
     const fold = (p: string) => (WINDOWS ? p.toLowerCase() : p);
     const grants = new Map(writeGrants(policy.version).map((g) => [fold(g.target), g.approval_id]));
     const findings: Finding[] = since
@@ -198,7 +195,6 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
               : null;
           },
           approved: (p) => grants.get(fold(p)) ?? null,
-          aboveCeiling: (p) => aboveCeiling(p, { scope: task.scope, ceiling }, WINDOWS),
         })
       : [
           {

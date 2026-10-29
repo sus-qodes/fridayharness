@@ -13,4 +13,4 @@ export const SERVER_INSTRUCTIONS = `Friday coordinates the work in this reposito
 7. Questions only a human can answer: friday_ask_human.
 8. Never ask for secrets (keys, tokens). For work that needs one, such as a test against a sandbox, call friday_run_operation: Friday runs what the project declared with the secret and returns the outcome without it.
 
-Other tools: friday_task_current, friday_task_next, friday_task_release, friday_request_context, friday_list_peers (who else works on your goal), friday_message_receipt (whether a message you sent was read or answered), friday_acknowledge, friday_session_bind. Resources: friday://task/current, friday://context/{id}, friday://inbox. Prompts: /mcp__friday__start_task, /mcp__friday__handoff, /mcp__friday__status.`;
+Other tools: friday_task_current, friday_task_next, friday_task_release, friday_request_context, friday_acknowledge, friday_session_bind. Resources: friday://task/current, friday://context/{id}, friday://inbox. Prompts: /mcp__friday__start_task, /mcp__friday__handoff, /mcp__friday__status.`;

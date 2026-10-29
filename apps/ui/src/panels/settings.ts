@@ -504,9 +504,8 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
       plannerSteps(brain, budget).map((s) => h('li', null, s.text, s.command ? copyLine(ctx, s.command) : null)),
     );
     openConfig.disabled = !root;
-    // The same steps as the commands above, offered while each is still needed: a planner that
-    // needs no key (a model on this machine) is offered none.
-    keyBtn.hidden = brain?.key === 'not needed' || (!!brain?.remote && brain.key !== 'missing');
+    // The same steps as the commands above, offered while each is still needed.
+    keyBtn.hidden = !(!brain?.remote || brain.key === 'missing');
     spendBtn.hidden = !!brain?.approved_here;
     replace(spendBtn, icon('check', 14), `Allow spending up to ${usd(budget)} a day…`);
   }

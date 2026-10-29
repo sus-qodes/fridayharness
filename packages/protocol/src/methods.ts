@@ -155,12 +155,6 @@ export const TaskStartParams = z.object({
    * adapter sends it as the resumed session's next message; without it, its restart text.
    */
   note: z.string().max(2000).nullable().default(null),
-  /**
-   * The task's spending cap in dollars (`routing.task_budget_usd`, plan M11.5): null when none is
-   * set. An adapter whose host can enforce a cap passes it on (Claude Code's `--max-budget-usd`, the
-   * smaller of its own cap and this); Friday ends the attempt itself when its reported cost reaches it.
-   */
-  budget_usd: z.number().positive().nullable().default(null),
 });
 export type TaskStartParams = z.infer<typeof TaskStartParams>;
 export const TaskCancelParams = z.object({ task_id: z.string(), run_id: z.string(), reason: z.string().optional() });
@@ -182,8 +176,6 @@ export const TaskClaimResult = z.object({
     .object({ model: z.string().nullable(), binding: z.boolean(), reason: z.string() })
     .nullable()
     .default(null),
-  /** Why no context came with the claim, when `context` is null: the task is still the agent's. */
-  note: z.string().nullable().default(null),
 });
 
 export const TaskUpdateParams = z.object({

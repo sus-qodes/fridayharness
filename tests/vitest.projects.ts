@@ -31,8 +31,4 @@ export const rootSuites = [
   // The interface in the installed Edge or Chrome against a real daemon, gated by FRIDAY_TEST_UI_E2E=1
   // (Turbo passes only FRIDAY_TEST_* variables; docs/frontend/PLAN.md §10.3). One file at a time.
   suite('ui-e2e', ['ui-e2e'], { fileParallelism: false, testTimeout: 120_000 }),
-  // The context evals (plan M12.6): the eval set's checks run always; the measurement clones this
-  // repository and builds its code graph, so it runs only with FRIDAY_TEST_BENCH=1 and gets a long
-  // ceiling (docs/measurements/README.md).
-  suite('evals', ['evals'], { testTimeout: 300_000 }),
 ];

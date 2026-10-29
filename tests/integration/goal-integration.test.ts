@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { closeDatabase, openDatabase } from '@friday/db';
 import { commitContent, FRIDAY_IDENTITY, GitRoot, runGit } from '@friday/git';
-import type { GoalSummary, IntegrationView, TaskStartParams, TaskView, VerificationView } from '@friday/protocol';
+import type { IntegrationView, TaskStartParams, TaskView, VerificationView } from '@friday/protocol';
 import { FridayState } from '@friday/state';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -73,8 +73,6 @@ async function project(checks = CHECKS, extra: Record<string, string> = {}): Pro
 interface GoalDetail {
   goal: { goal_id: string; status: string };
   active: { plan_id: string; tasks: { key: string; task_id: string | null; status: string }[] } | null;
-  /** What Friday did for the goal, from its records (plan M12.7). */
-  summary: GoalSummary;
 }
 
 /** A goal with a human-written plan, approved: its tasks exist. */
@@ -208,32 +206,11 @@ describe('goal branches', () => {
     const two = await integrationOf(td, second);
     expect(two).toMatchObject({ status: 'integrated', base_commit: one.merged_commit });
     await runOnce(td);
-    const done = await td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`));
-    expect(done.goal.status).toBe('COMPLETED');
+    expect((await td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`))).goal.status).toBe(
+      'COMPLETED',
+    );
     const listed = await cli(['--project', ws().projectDir, 'integrations', '--goal', goalId]);
     expect(listed.stdout).toContain(`git merge ${branch}`);
-
-    // What Friday did for the goal (plan M12.7), from its records: both tasks verified at their
-    // first claim, nothing held, refused or lost; two attempts whose plain harnesses reported no
-    // usage, so no token figure and no cost; a plan a human wrote, so no planning call.
-    expect(done.summary).toMatchObject({
-      tasks: { total: 2, verified: 2 },
-      claims_refused: 0,
-      reworked: 0,
-      held_for_human: 0,
-      refused_by_policy: 0,
-      sessions_lost: 0,
-      sessions_recovered: 0,
-      hosts: { attempts: 2, reported: 0, tokens: null, tokens_reporters: 0, cost_usd: null, cost_reporters: 0 },
-      planning: { calls: 0, cost_usd: null, unknown_cost_calls: 0 },
-    });
-    const shown = await cli(['--project', ws().projectDir, 'goal', 'show', goalId]);
-    expect(shown.code, shown.stderr).toBe(0);
-    expect(shown.stdout).toContain('What Friday did:');
-    expect(shown.stdout).toContain('tasks verified: 2 of 2');
-    expect(shown.stdout).toContain('hosts reported: nothing (0 of 2 attempts)');
-    expect(shown.stdout).not.toContain('tokens');
-    expect(shown.stdout).not.toContain('$');
   });
 
   it('never moves the goal branch to a merge whose checks fail, nor through a conflict, and asks a human', async () => {

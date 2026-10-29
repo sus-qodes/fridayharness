@@ -61,8 +61,6 @@ const VENDOR: Record<string, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   cursor: 'Cursor',
-  antigravity: 'Antigravity',
-  gemini: 'Gemini CLI',
   october: 'October',
   generic: 'Agent',
 };

@@ -19,7 +19,6 @@ import type {
   FilesListing,
   GlobCounts,
   GoalDiff,
-  GoalSummary,
   GoalView,
   HarnessEntry,
   InboxItem,
@@ -62,8 +61,6 @@ export interface GoalDetail {
   proposed: LivePlanVersion | null;
   escalations: EscalationView[];
   model_calls: { count: number; cost_usd: number; unknown_cost_calls: number; estimated_usd: number };
-  /** What Friday did for the goal, counted from its records (plan M12.7). */
-  summary: GoalSummary;
 }
 
 export interface GraphQuery {

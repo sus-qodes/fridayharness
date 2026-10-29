@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryHit } from '../api/client.js';
-import type { DrawerRequest } from '../shell/context.js';
 import type { RecordedCall } from '../test/context.js';
 import { makeContext } from '../test/context.js';
 import { createMemoryBank, SEARCH_DEBOUNCE_MS } from './memory-bank.js';
@@ -52,11 +51,11 @@ const REVIEW = [
   hit({ memory_id: 'mem_review', subject: `Review ${BIDI}me${ZW}`, needs_review: true, tags: [`t${BIDI}`] }),
 ];
 
-function setup(answers: Record<string, unknown> = {}, request: DrawerRequest = { kind: 'memory' }) {
+function setup(answers: Record<string, unknown> = {}) {
   const ctx = makeContext({
     answers: { 'GET /memory': { memories: RESULTS }, 'GET /memory/review': { memories: REVIEW }, ...answers },
   });
-  const drawer = createMemoryBank(ctx, request);
+  const drawer = createMemoryBank(ctx, { kind: 'memory' });
   document.body.append(drawer.el);
   return { ctx, drawer };
 }
@@ -212,47 +211,5 @@ describe('the memory bank', () => {
     await settle();
     expect(drawer.el.querySelector('.dr-error')?.textContent).toContain('memory is unavailable');
     drawer.destroy();
-  });
-
-  it('opened for the review (the rail’s row, tab "review"), scrolls to Needs review once its list is there', async () => {
-    const scrolled: Element[] = [];
-    const original = HTMLElement.prototype.scrollIntoView;
-    HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
-      scrolled.push(this);
-    };
-    try {
-      const { ctx, drawer } = setup({}, { kind: 'memory', tab: 'review' });
-      // Not before the section has its content: there is nothing to scroll to yet.
-      expect(scrolled).toHaveLength(0);
-      await settle();
-      const review = drawer.el.querySelector('.dr-mem-review') as Element;
-      expect(scrolled).toEqual([review]);
-      expect(review.textContent).toContain('Needs review (1)');
-      // A re-read after Approve keeps the place.
-      buttonNamed(review, 'Approve')?.click();
-      await settle();
-      expect(ctx.transport.to('GET', '/memory/review')).toHaveLength(2);
-      expect(scrolled).toHaveLength(1);
-      drawer.destroy();
-      // Opened any other way, the drawer starts at its search.
-      const plain = setup();
-      await settle();
-      expect(scrolled).toHaveLength(1);
-      plain.drawer.destroy();
-    } finally {
-      HTMLElement.prototype.scrollIntoView = original;
-    }
-  });
-
-  it('says when nothing needs review any more, only when it was opened for the review', async () => {
-    const none = { 'GET /memory/review': { memories: [] } };
-    const asked = setup(none, { kind: 'memory', tab: 'review' });
-    await settle();
-    expect(asked.drawer.el.querySelector('.dr-mem-review')?.textContent).toBe('No memory needs review now.');
-    asked.drawer.destroy();
-    const plain = setup(none);
-    await settle();
-    expect(plain.drawer.el.querySelector('.dr-mem-review')?.textContent).toBe('');
-    plain.drawer.destroy();
   });
 });

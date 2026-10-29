@@ -51,7 +51,7 @@ export function createContextService(opts: {
       }
       return root;
     },
-    graph: (dir, identity) => opts.graph.graph(dir, identity),
+    graph: (dir) => opts.graph.graph(dir),
     ...(opts.stateDir ? { stateDir: opts.stateDir } : {}),
     cache: new ContextCache(),
     ...(opts.policy ? { policy: opts.policy } : {}),

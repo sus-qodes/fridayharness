@@ -4,16 +4,13 @@
 // questions, delegation, and calls of the client's own tools (`friday`: Friday's tools, review
 // M8-R06; "$lastMessageId" in its arguments is the newest message steered in). An approved long command starts a real process that writes to a work
 // file, so a test can prove what Friday allowed, declined and stopped. It never calls a model.
-// Like the real one, it counts the thread's tokens and tells the client after each model response
-// (`thread/tokenUsage/updated`), the last time before the turn ends (plan M11.4).
 //
 // Environment:
 //   FAKE_CODEX_SCRIPT  a JSON file: { model?, multiAgentMode?, turns: Step[][], resume?: Step[],
 //                      mcpServers?: string[] (configured MCP servers), keepServers?: true (a host that
 //                      leaves them running whatever the thread's config says), approvalPolicy?: string
 //                      (a host that applies another policy than the one asked for) }
-//   FAKE_CODEX_LOG     a JSON-lines file of everything the client sent, the answers it gave, and the
-//                      token counts sent to it ({ tokenUsage: <total> }, one per model response)
+//   FAKE_CODEX_LOG     a JSON-lines file of everything the client sent, and the answers it gave
 //   FAKE_CODEX_WORK    a folder: <task>.work files grow while a long command runs; threads.json
 //                      (thread-<id>.json) remembers each thread, so a new app-server can resume it
 import { spawn } from 'node:child_process';
@@ -61,44 +58,10 @@ const WRAP =
     : (c) => `/bin/bash -lc '${c.replace(/'/g, "'\\''")}'`;
 const WRITER = "setInterval(() => require('node:fs').appendFileSync(process.argv[1], 'x'), 20)";
 
-/** The steps a model response produces an item for; the final message's count follows the message. */
-const COUNTED = new Set(['command', 'write', 'message', 'ask', 'delegate', 'friday']);
-
-/**
- * One model response's tokens, told as the real app-server tells them (0.162.1): `last` is the
- * response's own count, `total` the thread's so far, in which `inputTokens` holds the whole prompt,
- * the cached part included. The figures are invented but deterministic: response n of a thread
- * reads 10000 + 200 n input tokens, 9984 of them from the cache after the first, which writes 1024
- * into it, and writes 40 + 10 n output tokens. The thread's file keeps the total, so a thread
- * resumed by a new app-server continues it, as a thread's count would (what a real server counts
- * into a resumed thread's total was not recorded).
- */
-function responded(thread, turnId) {
-  thread.responses = (thread.responses ?? 0) + 1;
-  const n = thread.responses;
-  const input = 10000 + 200 * n;
-  const output = 40 + 10 * n;
-  const last = {
-    totalTokens: input + output,
-    inputTokens: input,
-    cachedInputTokens: n > 1 ? 9984 : 0,
-    cacheWriteInputTokens: n === 1 ? 1024 : 0,
-    outputTokens: output,
-    reasoningOutputTokens: 5 * n,
-  };
-  const total = { ...(thread.total ?? {}) };
-  for (const [k, v] of Object.entries(last)) total[k] = (total[k] ?? 0) + v;
-  thread.total = total;
-  saveThread(thread);
-  notify('thread/tokenUsage/updated', { threadId: thread.id, turnId, tokenUsage: { total, last, modelContextWindow: 258400 } });
-  log({ tokenUsage: total });
-}
-
 async function play(steps, thread, turnId) {
   const cwd = thread.cwd;
   const at = (p) => (path.isAbsolute(p) ? p : path.join(cwd, p));
   for (const s of steps) {
-    if (COUNTED.has(s.op)) responded(thread, turnId);
     if (s.op === 'command') {
       const id = `exec-${++item}`;
       const command = WRAP(s.command);
@@ -149,8 +112,6 @@ async function play(steps, thread, turnId) {
         blocked_reason: s.blocked_reason ?? '',
       });
       notify('item/completed', { threadId: thread.id, turnId, item: { type: 'agentMessage', id: `msg-${++item}`, text } });
-      // As recorded: the count of the final response follows its message and precedes the turn's end.
-      responded(thread, turnId);
       notify('turn/completed', { threadId: thread.id, turn: { id: turnId, status: 'completed', items: [], error: null } });
       return;
     } else if (s.op === 'fail') {
@@ -218,17 +179,7 @@ const handlers = {
   'config/read': () => ({ config: { mcp_servers: Object.fromEntries((script.mcpServers ?? []).map((n) => [n, { command: 'node' }])) } }),
   'thread/start': (p) => {
     const id = `thr-${process.pid}-${++started}`;
-    const t = {
-      id,
-      cwd: p.cwd,
-      model: p.model ?? script.model ?? 'gpt-fake',
-      task: null,
-      turns: 0,
-      // The thread's token count so far: how many model responses, and their total.
-      responses: 0,
-      total: null,
-      disabled: disabledBy(p.config),
-    };
+    const t = { id, cwd: p.cwd, model: p.model ?? script.model ?? 'gpt-fake', task: null, turns: 0, disabled: disabledBy(p.config) };
     saveThread(t);
     return opened(t, p);
   },

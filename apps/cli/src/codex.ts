@@ -8,13 +8,6 @@ import {
   SPAWN_MIN,
 } from '@friday/adapter-claude';
 import { CodexAdapter, type CodexSandbox, codexDoctor, findCodex, hostEnvironment } from '@friday/adapter-codex';
-import { cursorRunCli, findCursorAgent } from '@friday/adapter-cursor';
-import {
-  findGemini,
-  MIN_VERSION as GEMINI_MIN,
-  geminiRunCommand,
-  compareVersions as geminiVersionCompare,
-} from '@friday/adapter-gemini';
 import { DaemonClient, type ProjectRef, privateDirFor } from '@friday/sdk';
 import { type Command, Option } from 'commander';
 import { type GlobalOptions, out, project, UsageError } from './context.js';
@@ -34,12 +27,7 @@ interface SpawnRunOptions {
   parentStdin?: boolean;
   /** The host binary to run, resolved by the launcher outside the project (review SEC-12). */
   hostBin?: string;
-  /** gemini: folders outside the worktree its sessions may also read. */
-  includeDirectories?: string[];
 }
-
-/** The hosts `harness run` starts (ADR-0032 §1). */
-export const SPAWN_HOSTS = ['codex', 'claude-code', 'cursor', 'gemini'] as const;
 
 /**
  * Runs until a signal, or, with `--parent-stdin`, until standard input closes (plan M9 §5.12);
@@ -80,18 +68,15 @@ function budgetOf(text: string): number {
 }
 
 /**
- * `friday harness run codex|claude-code|cursor|gemini` (ADR-0032 §1): the host works for Friday in the
+ * `friday harness run codex|claude-code` (ADR-0032 §1): the host works for Friday in the
  * foreground, taking the tasks Friday gives its agent, until it is stopped; its sessions and their
  * work end with it.
  */
 export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void {
   harness
     .command('run <host>')
-    .description(`work for Friday as a spawn-mode harness, in the foreground (${SPAWN_HOSTS.join(', ')})`)
-    .option(
-      '--agent <key>',
-      'the agent this host works as (default: FRIDAY_AGENT, else codex-1, claude-1, cursor-1 or gemini-1)',
-    )
+    .description('work for Friday as a spawn-mode harness, in the foreground (codex, claude-code)')
+    .option('--agent <key>', 'the agent this host works as (default: FRIDAY_AGENT, else codex-1 or claude-1)')
     .option('--role <role>', 'its role, which delegation matches tasks against', 'developer')
     .addOption(
       new Option('--sandbox <mode>', 'codex: the sandbox Codex runs its commands in')
@@ -112,24 +97,9 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
     .option('--max-budget-usd <amount>', "claude-code: a spending cap for each run attempt's session")
     .option('--parent-stdin', 'stop when standard input closes (used by the agent launcher)')
     .option('--host-bin <path>', 'the host binary to run, instead of finding it')
-    .option('--include-directories <dirs...>', 'gemini: folders outside the worktree its sessions may also read')
     .action(async (host: string, o: SpawnRunOptions) => {
-      if (host !== 'gemini' && o.includeDirectories?.length)
-        throw new UsageError('--include-directories is for gemini');
       if (host === 'claude-code') return runClaudeSpawn(g, o);
-      if (host === 'cursor') return cursorRunCli(project(g()), o);
-      if (host === 'gemini') {
-        for (const [given, name] of [
-          [o.effort, '--effort'],
-          [o.serviceTier, '--service-tier'],
-          [o.windowsSandbox, '--windows-sandbox'],
-          [o.maxBudgetUsd, '--max-budget-usd'],
-        ] as const) {
-          if (given !== undefined) throw new UsageError(`${name} is not a setting Gemini CLI takes`);
-        }
-        return geminiRunCommand(g(), o, { UsageError, renderDoctor });
-      }
-      if (host !== 'codex') throw new UsageError(`spawn mode is built for ${SPAWN_HOSTS.join(', ')}; ${host} is not`);
+      if (host !== 'codex') throw new UsageError(`spawn mode is built for codex and claude-code; ${host} is not`);
       const ref = project(g());
       const found = findCodex();
       const install = o.hostBin ? { ...found, binary: o.hostBin } : found;
@@ -166,8 +136,6 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
     .action(() => {
       const claude = detectClaudeCode();
       const codex = findCodex();
-      const cursor = findCursorAgent();
-      const gemini = findGemini();
       const hosts = [
         {
           host: 'claude-code',
@@ -188,30 +156,6 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
           supported: Boolean(codex.binary),
           path: codex.binary ?? null,
           reason: codex.binary ? null : (codex.problem ?? 'Codex was not found'),
-        },
-        // Found from their install folders; neither is started to be found (plan M8b).
-        {
-          host: 'cursor',
-          found: Boolean(cursor.binary),
-          version: cursor.version ?? null,
-          supported: Boolean(cursor.binary),
-          path: cursor.binary ?? null,
-          reason: cursor.binary ? null : (cursor.problem ?? 'the Cursor CLI was not found'),
-        },
-        {
-          host: 'gemini',
-          found: Boolean(gemini.command),
-          version: gemini.version ?? null,
-          supported: Boolean(
-            gemini.command && (!gemini.version || geminiVersionCompare(gemini.version, GEMINI_MIN) >= 0),
-          ),
-          // What `--host-bin` hands back to GEMINI_CLI_BIN: the package folder, else its entry script or executable.
-          path: gemini.packageDir ?? gemini.args[0] ?? gemini.command ?? null,
-          reason: !gemini.command
-            ? (gemini.problem ?? 'Gemini CLI was not found')
-            : gemini.version && geminiVersionCompare(gemini.version, GEMINI_MIN) < 0
-              ? `spawn mode needs Gemini CLI ${GEMINI_MIN} or newer; this is ${gemini.version}`
-              : null,
         },
       ];
       out(g(), { hosts }, () =>

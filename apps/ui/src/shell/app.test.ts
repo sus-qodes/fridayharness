@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { studioAreas } from '../areas.js';
-import { recordingContext } from '../mascot/testing.js';
 import { ApiError } from '../platform/transport.js';
 import { makeContext } from '../test/context.js';
-import { makeScenario, makeSnapshot, PID } from '../test/fixtures.js';
+import { makeSnapshot, PID } from '../test/fixtures.js';
 import { h } from '../ui/dom.js';
 import {
   type AreaSet,
@@ -12,7 +10,6 @@ import {
   createAppContext,
   createShellServices,
   mountShell,
-  type ShellHooks,
 } from './app.js';
 import type { AppContext, Toast } from './context.js';
 
@@ -42,15 +39,10 @@ class MemoryStorage implements Storage {
   }
 }
 
-function fakeAreas(
-  log: string[],
-  opts: { failing?: keyof AreaSet; notch?: boolean; onNotchHooks?: (hooks: ShellHooks) => void } = {},
-): AreaSet {
+function fakeAreas(log: string[], opts: { failing?: keyof AreaSet; notch?: boolean } = {}): AreaSet {
   const part =
-    (name: 'studio' | 'dock' | 'palette' | 'tray' | 'notch') =>
-    (_ctx: AppContext, container: HTMLElement, hooks?: ShellHooks) => {
+    (name: 'studio' | 'dock' | 'palette' | 'tray' | 'notch') => (_ctx: AppContext, container: HTMLElement) => {
       if (opts.failing === name) throw new Error(`${name} broke`);
-      if (name === 'notch' && hooks) opts.onNotchHooks?.(hooks);
       const el = h('div', { class: `fake-${name}` }, name);
       container.append(el);
       log.push(`mount:${name}`);
@@ -160,7 +152,6 @@ afterEach(() => {
   document.body.replaceChildren();
   document.documentElement.className = '';
   vi.useRealTimers();
-  vi.restoreAllMocks();
 });
 
 describe('createAppContext', () => {
@@ -279,66 +270,10 @@ describe('mountShell', () => {
     expect(shell.regions.overlays.querySelector('.sh-toast-error')?.textContent).toContain('dock broke');
   });
 
-  it('"Waiting for you" moves focus to the decisions rail, and the in-page Notch gets the same hook', () => {
-    const given: { hooks: ShellHooks | null } = { hooks: null };
-    const { shell } = shellSetup(
-      fakeAreas([], {
-        onNotchHooks: (hooks) => {
-          given.hooks = hooks;
-        },
-      }),
-    );
-    const rail = shell.regions.rail;
-    rail.scrollTop = 40;
+  it('"Waiting for you" moves focus to the decisions rail', () => {
+    const { shell } = shellSetup(fakeAreas([]));
     (shell.regions.top.querySelector('.sh-metric-waiting') as HTMLButtonElement).click();
-    expect(document.activeElement).toBe(rail);
-    expect(rail.scrollTop).toBe(0);
-    rail.blur();
-    rail.scrollTop = 40;
-    expect(given.hooks).not.toBeNull();
-    given.hooks?.onShowWaiting();
-    expect(document.activeElement).toBe(rail);
-    expect(rail.scrollTop).toBe(0);
-  });
-
-  it('the browser pill’s chip shows the rail as the header’s count does (the real areas)', () => {
-    // The canvas and the mascot measure themselves and draw: a real window gives them a box and a
-    // 2D context (happy-dom has none).
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
-      x: 0,
-      y: 0,
-      left: 0,
-      top: 0,
-      width: 1200,
-      height: 800,
-      right: 1200,
-      bottom: 800,
-      toJSON: () => ({}),
-    } as DOMRect);
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => recordingContext().g as never);
-    const ctx = makeContext({ snapshot: makeScenario() });
-    ctx.store.patch('prefs', { motion: 'reduce' });
-    const services = createShellServices(ctx.keys);
-    const root = h('div');
-    document.body.append(root);
-    const shell = mountShell(
-      { ...ctx, toast: (t) => services.toasts.show(t) },
-      services,
-      root,
-      studioAreas({ sounds: false }),
-    );
-    try {
-      const chip = shell.regions.notch.querySelector('.nt-chip') as HTMLButtonElement;
-      expect(chip.hidden).toBe(false);
-      expect(chip.textContent).toBe('3 waiting');
-      // The rail's list is in the page, so a Notch on its own would focus its first row; through
-      // the shell it lands where the header's count does: on the rail itself.
-      expect(shell.regions.rail.querySelector('.gv-tray button')).not.toBeNull();
-      chip.click();
-      expect(document.activeElement).toBe(shell.regions.rail);
-    } finally {
-      shell.destroy();
-    }
+    expect(document.activeElement).toBe(shell.regions.rail);
   });
 
   it('opens the drawers and modals the areas registered', () => {

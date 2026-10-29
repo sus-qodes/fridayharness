@@ -5,14 +5,19 @@
   top: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-surface-elevated);
-  border: 1px solid var(--border-medium);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
+  background:
+    radial-gradient(320px 240px at 50% 0%, rgba(255, 255, 255, 0.04) 0%, transparent 70%),
+    var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    inset 0 1px 0 var(--glass-inner-bevel),
+    0 8px 28px rgba(0, 0, 0, 0.45);
   color: var(--color-slate-200);
   font-size: var(--text-sm);
   cursor: default;
   transition:
+    transform var(--spring-duration) var(--spring-bounce),
     box-shadow var(--duration-base) var(--ease-standard),
     border-color var(--duration-base) var(--ease-standard);
 }
@@ -20,17 +25,22 @@
 .nd-card:hover,
 .nd-card:focus-within {
   z-index: 3;
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 14px 36px rgba(0, 0, 0, 0.55);
 }
 
 .nd-card:focus-visible {
   outline: none;
-  box-shadow: var(--focus-ring), var(--shadow-md);
+  box-shadow: var(--focus-ring), 0 14px 36px rgba(0, 0, 0, 0.55);
 }
 
 .nd-selected {
+  border-color: var(--cyan);
   box-shadow:
-    0 0 0 2px var(--color-cyan-glow),
-    var(--shadow-md);
+    0 0 0 2px var(--cyan),
+    0 12px 32px rgba(34, 211, 238, 0.18);
 }
 
 .nd-body {
@@ -390,12 +400,12 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 30px;
+  height: 32px;
   min-width: 0;
-  padding: 0 12px;
+  padding: 0 14px;
   border-top: 1px solid var(--border-subtle);
-  border-radius: 0 0 var(--radius-md) var(--radius-md);
-  background: color-mix(in srgb, var(--nd-status, var(--color-slate-500)) 12%, transparent);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  background: color-mix(in srgb, var(--nd-status, var(--color-slate-500)) 8%, transparent);
   color: var(--nd-status, var(--color-slate-400));
   font-size: var(--text-caption);
   font-weight: var(--weight-semibold);
@@ -423,15 +433,19 @@
   position: absolute;
   left: 8px;
   bottom: 100%;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   display: flex;
-  gap: 2px;
+  gap: 3px;
   width: max-content;
-  padding: 3px;
-  background: var(--bg-surface-active);
-  border: 1px solid var(--border-medium);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-md);
+  padding: 4px;
+  background: rgba(20, 21, 24, 0.88);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-pill);
+  box-shadow:
+    0 12px 30px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
   opacity: 0;
   visibility: hidden;
   transform: translateY(4px);
@@ -534,12 +548,17 @@
 /* ---- goal ------------------------------------------------------------------------------------ */
 .nd-goal {
   border-radius: var(--radius-lg);
-  border-color: var(--border-strong);
-  background: linear-gradient(180deg, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.94));
+  border: 1px solid rgba(34, 211, 238, 0.25);
+  background:
+    radial-gradient(380px 240px at 50% 0%, rgba(34, 211, 238, 0.08) 0%, transparent 75%),
+    var(--card);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 12px 36px rgba(0, 0, 0, 0.5);
 }
 
 .nd-goal-done {
-  border-color: var(--color-emerald);
+  border-color: var(--green);
 }
 
 .nd-goal .nd-head {
@@ -683,25 +702,34 @@
   font-size: var(--text-caption);
 }
 
-/* What Friday did for the goal: one line under the card's body, the rows in its tooltip. */
-.nd-goal-did {
-  font-size: var(--text-caption);
-  color: var(--color-slate-400);
-  margin: 0;
-}
-
 /* ---- agent pod ------------------------------------------------------------------------------- */
 .nd-pod {
-  border-radius: 14px;
-  border-color: rgba(56, 189, 248, 0.3);
-  background: rgba(30, 41, 59, 0.88);
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  background:
+    radial-gradient(320px 200px at 50% 0%, rgba(56, 189, 248, 0.06) 0%, transparent 70%),
+    var(--card);
+  box-shadow:
+    inset 0 1px 0 var(--glass-inner-bevel),
+    0 8px 28px rgba(0, 0, 0, 0.45);
   cursor: pointer;
+  transition:
+    transform var(--spring-duration) var(--spring-bounce),
+    box-shadow var(--duration-base) var(--ease-standard),
+    border-color var(--duration-base) var(--ease-standard);
+}
+
+.nd-pod:hover {
+  border-color: rgba(56, 189, 248, 0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 12px 32px rgba(56, 189, 248, 0.15);
 }
 
 .nd-pod-working {
-  border-color: var(--color-neon-blue);
+  border-color: var(--cyan);
   box-shadow:
-    0 0 18px rgba(56, 189, 248, 0.25),
+    0 0 20px rgba(34, 211, 238, 0.25),
     var(--shadow-md);
 }
 

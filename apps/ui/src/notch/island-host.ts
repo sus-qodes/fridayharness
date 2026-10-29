@@ -50,9 +50,8 @@ export interface NotchOptions {
   onRect?: (r: { x: number; y: number; width: number; height: number }) => void;
   onOpenStudio?: (target: NotchStudioTarget) => void;
   /**
-   * The pill's waiting chip was clicked in a page: show the rail. The shell passes the function its
-   * header's count calls (`ShellHooks.onShowWaiting`: the rail scrolled to its top and focused), so
-   * the two doors lead to the one place. Without it the Notch finds the list in the page.
+   * The pill's waiting chip was clicked in a page: show the rail (the shell scrolls it to the top
+   * and focuses it, as for the header's count). Without it the Notch finds the list in the page.
    */
   onShowWaiting?: () => void;
 }
@@ -89,7 +88,7 @@ const EXPIRY_MAX_MS = 10 * 60_000;
  * notifier announces the plan).
  */
 const OPENS_CARD: ReadonlySet<WaitingKind> = new Set<WaitingKind>(['approval', 'question', 'waiting', 'message']);
-/** The Studio's "Waiting for you" list, found in the page by a Notch mounted without the shell's `onShowWaiting`. */
+/** The Studio's "Waiting for you" list, found in the page when the shell gave no `onShowWaiting`. */
 const TRAY_SELECTOR = '.gv-tray';
 
 export function defaultNotchEnv(): NotchEnv {

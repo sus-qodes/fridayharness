@@ -364,33 +364,6 @@ describe('restored work continues where it was (review M7.1 R05)', () => {
       note: 'its work was lost with clone A',
     });
     expect(failed.task.status).toBe('FAILED');
-    // Reworked and started over in this clone (the first attempt's worktree stays in clone A): the
-    // second attempt is told what the first claimed and what the human recorded (plan M12.3).
-    await b.operator.post(b.operator.projectPath(`/tasks/${lost}/rework`), { reason: 'start over here' });
-    const restarted = await cli([
-      '--project',
-      B,
-      'recover',
-      lost,
-      '--action',
-      'restart',
-      '--reason',
-      'start over here',
-    ]);
-    expect(restarted.code, restarted.stderr).toBe(0);
-    const again = await begin(b, 'ch-2', lost);
-    expect(again.start.attempt).toBe(2);
-    const packet = await again.fake.client.requestContext({ kind: 'task', task_id: lost });
-    const progress = packet.sections.find((s) => s.kind === 'task.progress')?.content ?? '';
-    expect(progress.startsWith(`Handoff: attempt 1 of ${lost}, for attempt 2.`)).toBe(true);
-    for (const label of ['Goal:', 'Done so far:', 'Checked:', 'Decided:', 'Next:', 'Files:']) {
-      expect(progress).toContain(`\n${label}`);
-    }
-    expect(progress).toContain('(attempt 1) claimed done: wrote notes/lost.md');
-    expect(progress).toContain('- verification FAILED: its work was lost with clone A; manual FAILED');
-    expect(progress).toContain('Files: notes/lost.md');
-    expect(progress.length).toBeLessThanOrEqual(1500);
-    await again.fake.close();
 
     // The committed claim needs no record: its branch holds what it lists, and it is verified here.
     expect(await rebind(kept)).toMatchObject({ available: true });

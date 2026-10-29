@@ -1,10 +1,10 @@
 # Friday
 
-Friday is a local orchestration and context control plane for AI software development. It sits above existing coding harnesses (Claude Code, Codex, Cursor, Gemini CLI, Antigravity) and owns what they don't: intent, plans and tasks, the compiled context each agent receives, communication between agents, policy, model routing, verification and recovery. Harnesses keep running the agent loop. Git stays the source of truth for code.
+Friday is a local orchestration and context control plane for AI software development. It sits above existing coding harnesses (Claude Code, Codex, Cursor, October) and owns what they don't: intent, plans and tasks, the compiled context each agent receives, communication between agents, policy, model routing, verification and recovery. Harnesses keep running the agent loop. Git stays the source of truth for code.
 
 The architecture is called **ContextOS** in the original specification.
 
-**Status:** M0 to M12 built and tested locally, after stabilizations from independent reviews (M2.5, M3.1, M7.1 with its follow-up M7.1e, M8a.5; see [the dispositions](docs/reviews/)). Claude Code and Codex work with Friday attached and spawned, shown live with real hosts on 2026-10-16; Cursor, Antigravity and Gemini CLI are experimental until they are tried with a real login. The gates are pending: they need CI on both operating systems and the owner's hands-on checks ([status table](docs/BUILD_PLAN.md#f1-status-table-updated-at-every-gate)). The decision records were accepted by the owner on 2026-10-18.
+**Status:** M0–M7 built and tested locally, after three stabilizations from independent reviews (M2.5, M3.1 and M7.1, with its follow-up M7.1e; see [the dispositions](docs/reviews/)). The gates are pending: they need live runs with real hosts, CI on both operating systems, and the owner's acceptance of the decision records ([status table](docs/BUILD_PLAN.md#f1-status-table-updated-at-every-gate)). M8a, a second host, is under way: Codex works for Friday as a spawn-mode harness (`friday harness run codex`), checked live in six turns the owner approved, and Friday can start the installed Claude Code itself (`friday harness run claude-code`), tested against a scripted Claude Code and checked live in three turns the owner approved. After a readiness review of M8a (M8a.5), both adapters keep serving Friday through failures, and the agents they run can ask and answer each other through Friday's tools. The recorded live demonstration waits for the owner.
 - **M1** gives you the event spine, the daemon, the `friday` CLI, a read-only status page, and Claude Code attached through an MCP server, a skill and policy hooks. A task runs from creation through a Claude Code session to a verified completion, with Friday's policy enforced on the session's tools.
 - **M2** adds the Master Brain. A goal becomes a versioned plan that you approve; its tasks are delegated to agents, revised when verification fails, and escalated to you when only a human can decide.
 - **M2.5** closes the twelve findings of the 2026-10-14 review:
@@ -45,11 +45,7 @@ The architecture is called **ContextOS** in the original specification.
   - work that was finished in a lost clone continues in the restored one (`friday recover --action rebind`);
   - history shows only commits the agent may read about, and a restore checks the backup's database before it changes anything.
 
-- **M8** puts two different hosts on one project under one Master Brain: Codex through its app-server (`friday harness run codex`) and Claude Code driven headless with Friday's hooks (`friday harness run claude-code`), each in its task's worktree and inside a process group Friday ends; the deterministic MVP scenario and a recorded live demonstration with both hosts ([guide](docs/integration/mvp-demo.md)). **M8b** adds Cursor (attached and spawned), Antigravity (attached) and Gemini CLI (attached and spawned) through one hook launcher for every host, each experimental until tried with a real login ([Cursor](docs/integration/cursor.md), [Antigravity](docs/integration/antigravity.md), [Gemini CLI](docs/integration/gemini-cli.md)).
-- **M9** gives Friday an interface, so daily work needs no terminal ([plan](docs/frontend/PLAN.md)): the **Studio**, a canvas of goals, tasks and agents with drawers for a task's context, diff and history; the **Notch**, an island at the top of the screen with the mascot Blip, which opens when an agent needs your approval or an answer; and a desktop shell that floats the Notch over your editor. From it you start agents, write or approve plans, decide requests (agents started from the interface carry on afterwards), verify, integrate, recover, see what is ready to land, and pause, resume or halt everything.
-- **M10a and M10b** measure what a host spends: `friday usage` gives one row per run attempt (the host's tokens and cost, what Friday gave it, the tool calls, the verdict), and two live runs of the same tasks are recorded in [docs/measurements/](docs/measurements/README.md). A spawned host's first message no longer repeats what its instructions hold.
-- **M11** finishes what the built milestones left open: commands inside `xargs` and `case` judged as what they run, `config.yaml` applied while Friday runs, Codex usage recorded, and a spending cap per task (`routing.task_budget_usd`).
-- **M12** makes existing parts cheaper to run or quicker to start: planning with a model on your own machine (`master_brain.provider: local`), a task never holding more authority than what delegated it, a fixed handoff summary when work is continued, two agent tools (`friday_list_peers`, `friday_message_receipt`), `friday start` and an install archive, the context evals, and one line per goal saying what Friday did for it.
+- **M9** (under way) gives Friday an interface, so daily work needs no terminal ([plan](docs/frontend/PLAN.md)): the **Studio**, a canvas of goals, tasks and agents with drawers for a task's context, diff and history; the **Notch**, an island at the top of the screen with the mascot Blip, which opens when an agent needs your approval or an answer; and a desktop shell that floats the Notch over your editor. From it you start agents, write or approve plans, decide requests (agents started from the interface carry on afterwards), verify, integrate, recover, see what is ready to land, and pause, resume or halt everything.
 
 See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 
@@ -73,35 +69,26 @@ See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 | [docs/integration/claude-code-spike.md](docs/integration/claude-code-spike.md) | Verified Claude Code hook and MCP behaviour on Windows |
 | [docs/integration/mvp-demo.md](docs/integration/mvp-demo.md) | The MVP demonstration with real Claude Code and Codex: the steps, and what to record for the M8 gate |
 | [docs/integration/codex.md](docs/integration/codex.md) | Codex as a spawn-mode harness: running it, what Friday pins and decides, what is not mediated |
-| [docs/integration/cursor.md](docs/integration/cursor.md) | Cursor attached and in spawn mode (experimental): the files, what the hooks decide, the level, the doctor, the live check still to do |
-| [docs/integration/antigravity.md](docs/integration/antigravity.md) | Antigravity attached (experimental, no spawn mode): the files, what the hooks decide, why the level is unverified, the live check still to do |
-| [docs/integration/gemini-cli.md](docs/integration/gemini-cli.md) | Gemini CLI attached and in spawn mode (experimental): the files, what the hooks decide, why the level is degraded, the live check still to do |
 | [docs/integration/codex-spike.md](docs/integration/codex-spike.md) | The M3.5 Codex app-server spike: what works, what does not, and the contract changes before M8 |
 | [docs/reviews/](docs/reviews/) | External reviews of the plan and the project, and how each finding was handled |
 | [docs/frontend/](docs/frontend/) | The interface: its plan, where it deviates from the [design handoff](docs/frontend-handoff/), and its lessons |
 
-## Quickstart
+## Use the interface
 
-Friday needs Node 22.18 or newer and Git; nothing else of Friday has to be on the machine.
-
-**Install Friday once per machine.** The archive `friday-<version>.tgz` is not published yet: build it from this repository, then install it with npm.
+Once per machine, in a terminal (PowerShell) in the Friday repository:
 
 ```powershell
-pnpm install; pnpm pack:release                   # writes dist-release\friday-0.1.0.tgz
-npm install -g .\dist-release\friday-0.1.0.tgz    # the friday command, on your PATH
+pnpm install; pnpm build
+node apps\cli\bin\friday.mjs setup
 ```
 
-`pnpm pack:release` builds every package, bundles the `friday` command (the daemon runs inside it) and the `friday-mcp` server with every workspace package inlined, declares the third-party packages npm installs with them (among them `better-sqlite3`, whose prebuilt binary npm fetches), includes the Studio bundle and the hook launcher, packs the archive, then installs it into a temporary folder and runs `friday --version`, `friday setup` and `friday start` in a fresh repository there before it reports the archive good. Nothing is published.
-
-**Start Friday in your repository.** In a folder that is a git repository (`git init` makes one; no commit is needed yet):
+Once per project, in the project's folder (a git repository with at least one commit):
 
 ```powershell
-friday start
+node C:\friday\apps\cli\bin\friday.mjs init --shortcut
 ```
 
-It makes the folder a Friday project when it is not one yet (`.friday/config.yaml` and `.friday/.gitignore`; commit both), starts Friday hidden when it is not running (its output goes to `.friday/logs/daemon-console.log`), and opens the Studio in your browser, already signed in; it prints what it did, in three lines at most. A folder that is not a git repository is refused with the command that makes it one. Every day after that, `friday start` again, or double-click the shortcut `friday shortcut` creates. `friday start --desktop` opens the desktop app instead when it is installed on this machine and otherwise says where to get it; `friday start --no-open` prints the Studio's address instead of opening anything.
-
-To attach a Claude Code session running in VS Code, run `friday setup` once per machine first: it records where Friday is installed, for the hooks and the MCP launcher ([docs/integration/claude-code.md](docs/integration/claude-code.md)). From the Studio:
+This creates `.friday/config.yaml` and `.friday/.gitignore` (commit both) and a desktop shortcut "Friday - <project>". Every day after that, double-click the shortcut: it starts Friday if it is not running and opens the Studio in your browser, already signed in. From the Studio:
 - **Agents** (dock): start Claude Code or Codex for this project, or set up Claude Code in VS Code.
 - **New goal**: describe what you want; write the plan yourself, or let the Master Brain plan it once a provider key is set up (Settings → Planner says how).
 - When an agent needs you, the request appears in full under **Waiting for you** at the right, and the Notch at the top of the page shows how many wait; decide it there (a high-risk request asks you to hold the button), and the agent carries on in its run.
@@ -109,11 +96,9 @@ To attach a Claude Code session running in VS Code, run `friday setup` once per 
 
 A sign-in link works once, for a minute; a browser session lasts until Friday stops or restarts, at most 12 hours. `friday ui` opens it again from a terminal. See [docs/frontend/README.md](docs/frontend/README.md).
 
-**The desktop app (Windows)** floats the Notch over your editor and keeps the Studio in its own window, with a tray icon; it starts Friday for the project when it is not running, and holds no credential in its pages. It is built with Rust's per-user toolchain (no administrator rights), into an exe or into a per-user installer, `Friday Desktop_0.1.0_x64-setup.exe`, that installs it into `%LOCALAPPDATA%\Friday Desktop` (the steps are in [apps/desktop/README.md](apps/desktop/README.md)). It is started with `friday start --desktop` or with `friday-desktop.exe --project <the project's folder>`. `friday start --desktop` finds the app at the path in `FRIDAY_DESKTOP`, in the checkout named by `FRIDAY_HOME` or the one the `friday` command runs from, or where the installer put it.
+**The desktop app (Windows)** floats the Notch over your editor and keeps the Studio in its own window, with a tray icon; it starts Friday for the project when it is not running, and holds no credential in its pages. It is built with Rust's per-user toolchain (no administrator rights; the steps are in [apps/desktop/README.md](apps/desktop/README.md)), then started with `apps\desktop\src-tauri\target\release\friday-desktop.exe --project <the project's folder>`.
 
 ## Try it (Windows, PowerShell)
-
-With Friday installed from the archive, `friday` is on your PATH; in a source checkout, define the function below instead.
 
 ```powershell
 # In the Friday repository
@@ -146,7 +131,7 @@ friday secrets set anthropic                   # paste your Anthropic API key (h
 friday brain allow-remote --budget 5           # this clone may use your key, at most $5 a day
 friday goal create "Add Stripe subscriptions, keep one-time checkout working, add tests"
 friday plan approve                            # tasks are created and handed to agents
-friday goal show                               # live plan; revisions, questions and "What Friday did" appear here
+friday goal show                               # live plan; revisions and questions appear here
 friday escalations                             # questions only you can answer: friday answer <id> "..."
 ```
 
@@ -165,7 +150,6 @@ pnpm lint                       # Biome
 pnpm test                       # every package and suite, via Turbo
 pnpm test:all                   # every Vitest project in one run
 pnpm check:portability          # LF, file modes, no shell scripts, no localhost literal
-pnpm pack:release               # the install archive, dist-release/friday-<version>.tgz, built, packed and checked
 ```
 
 Set `FRIDAY_TEST_TMP` to a short directory (for example `C:\t`) if your temp path is longer than about 70 characters.

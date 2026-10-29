@@ -90,36 +90,6 @@ cargo build --release
 
 On MSVC, `WebView2Loader.dll` is linked statically and is not needed beside the exe; `windres` is not needed (the Windows SDK's `rc.exe` is used).
 
-### The installer
-
-`friday start --desktop` opens the shell when it is on the machine, looking in this order: the path in `FRIDAY_DESKTOP`; `<FRIDAY_HOME>\apps\desktop\src-tauri\target\release\friday-desktop.exe`; the same path in the checkout the `friday` command runs from; `%LOCALAPPDATA%\Friday Desktop\friday-desktop.exe`, where the installer puts it. When none exists it says so and points here, and the Studio stays reachable in the browser.
-
-The installer is a per-user NSIS setup, `Friday Desktop_0.1.0_x64-setup.exe` (1.6 MB), which installs without administrator rights into `%LOCALAPPDATA%\Friday Desktop\`. The app's product name is "Friday Desktop" for that reason: a per-user Tauri installer installs into `%LOCALAPPDATA%\<productName>`, and `%LOCALAPPDATA%\Friday` is Friday's private state folder (tokens, credentials, `install.json`), which no app may share. The executable keeps the name `friday-desktop.exe` (`mainBinaryName` in `Tauri.toml`). `Tauri.toml` keeps `bundle.active = false`, so `cargo build --release` gives the exe alone; the installer is made on purpose:
-
-1. The Tauri CLI, installed once per user, without administrator rights (it compiles for about 15 minutes):
-
-   ```powershell
-   # TERMINAL, once
-   $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:LOCALAPPDATA\Programs\winlibs\mingw64\bin;$env:PATH"
-   $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "$env:USERPROFILE\.rustup\toolchains\stable-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained\x86_64-w64-mingw32-gcc.exe"
-   New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Programs\ktmw32" | Out-Null
-   Copy-Item "$env:LOCALAPPDATA\Programs\winlibs\mingw64\x86_64-w64-mingw32\lib\libktmw32.a" "$env:LOCALAPPDATA\Programs\ktmw32\"
-   $env:RUSTFLAGS = "-L native=$env:LOCALAPPDATA\Programs\ktmw32"
-   cargo install tauri-cli --version "^2" --locked
-   Remove-Item Env:RUSTFLAGS
-   ```
-
-   Without the `RUSTFLAGS` line the link of `cargo-tauri.exe` fails with `ld: cannot find -lktmw32`: Rust's self-contained MinGW, the linker route 2 uses, has no `libktmw32.a`, and WinLibs has one. Only that file goes on the search path, so no other C runtime object of WinLibs is mixed in. This installed tauri-cli 2.12.3.
-
-2. The installer, in `apps\desktop\src-tauri`, with the route 2 variables (the first two lines above) set and `apps/ui/dist` built, bundling switched on for this one build:
-
-   ```powershell
-   # TERMINAL, in C:\friday\apps\desktop\src-tauri
-   cargo tauri build --config '{"bundle":{"active":true,"targets":["nsis"]}}'
-   ```
-
-   It takes about 3 minutes after a release build, and writes `target\release\bundle\nsis\Friday Desktop_0.1.0_x64-setup.exe`. The NSIS bundler downloads NSIS per user on first use. The generated script, `target\release\nsis\x64\installer.nsi`, shows the install folder (`$LOCALAPPDATA\${PRODUCTNAME}`) and the mode (`currentUser`); read it before handing an installer out after any change to `Tauri.toml`.
-
 ## Running
 
 ```powershell

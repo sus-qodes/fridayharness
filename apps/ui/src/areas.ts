@@ -34,8 +34,7 @@ export const registrations: AreaSet['register'] = [
 ];
 
 /**
- * The Studio's areas. `notch` is the in-page island of a browser tab, given the shell's hook that
- * shows the rail, so its chip and the header's count open the same place; the desktop Studio window
+ * The Studio's areas. `notch` is the in-page island of a browser tab; the desktop Studio window
  * leaves it out (its Notch is its own window, which alone plays sounds and raises notifications).
  */
 export function studioAreas(opts: { notch?: Omit<NotchOptions, 'mode'> | false; sounds?: boolean } = {}): AreaSet {
@@ -47,14 +46,7 @@ export function studioAreas(opts: { notch?: Omit<NotchOptions, 'mode'> | false; 
     tray: mountDecisionsTray,
     ...(opts.notch === false
       ? {}
-      : {
-          notch: (ctx, el, hooks) =>
-            mountNotch(ctx, el, notchSlots, {
-              mode: 'in-page',
-              onShowWaiting: hooks.onShowWaiting,
-              ...(opts.notch ?? {}),
-            }),
-        }),
+      : { notch: (ctx, el) => mountNotch(ctx, el, notchSlots, { mode: 'in-page', ...(opts.notch ?? {}) }) }),
     gettingStarted,
     start: opts.sounds === false ? [] : [startSound, startNotifier],
   };

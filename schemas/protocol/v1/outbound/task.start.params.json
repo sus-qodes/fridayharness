@@ -76,18 +76,6 @@
           "type": "null"
         }
       ]
-    },
-    "budget_usd": {
-      "default": null,
-      "anyOf": [
-        {
-          "type": "number",
-          "exclusiveMinimum": 0
-        },
-        {
-          "type": "null"
-        }
-      ]
     }
   },
   "required": [

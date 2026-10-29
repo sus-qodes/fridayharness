@@ -14,8 +14,7 @@ import {
 } from '../test/fixtures.js';
 import { h } from '../ui/dom.js';
 import {
-  CONFIG_ERROR_MESSAGE,
-  configBannerText,
+  CONFIG_CHANGED_MESSAGE,
   configChanged,
   mountBanners,
   pageIsStale,
@@ -226,6 +225,7 @@ describe('header', () => {
     more.click();
     item('about').click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'about' });
+    expect(ctx.store.select('ui').activeView).toBe('settings');
   });
 
   it('shows the pause banner with its reason, and Resume resumes', async () => {
@@ -285,87 +285,31 @@ describe('header', () => {
   });
 });
 
-/** A snapshot whose config.yaml changed: the port waits for a restart, a scope applied. */
-const portChanged = () =>
-  makeSnapshot({
-    config: {
-      loaded_hash: 'a',
-      current_hash: 'b',
-      changes: { applied: ['scopes.frontend.write'], restart_needed: ['daemon.port'], error: null },
-    },
-  });
-
 describe('banners', () => {
-  it('names the changed key that needs a restart, and how to restart from a browser', () => {
-    // A changed file whose every key applied says nothing; the hashes alone decide nothing.
-    expect(configChanged(portChanged())).toBe(true);
-    expect(
-      configChanged(
-        makeSnapshot({
-          config: {
-            loaded_hash: 'a',
-            current_hash: 'b',
-            changes: { applied: ['scopes'], restart_needed: [], error: null },
-          },
-        }),
-      ),
-    ).toBe(false);
-    expect(configChanged(makeSnapshot({ config: { loaded_hash: 'a', current_hash: 'b' } }))).toBe(false);
+  it('says config.yaml changed while the hashes differ, and how to restart from a browser', () => {
+    expect(configChanged(makeSnapshot({ config: { loaded_hash: 'a', current_hash: 'b' } }))).toBe(true);
+    expect(configChanged(makeSnapshot({ config: { loaded_hash: 'a', current_hash: null } }))).toBe(false);
     expect(configChanged(makeSnapshot())).toBe(false);
     expect(configChanged(null)).toBe(false);
-    expect(configBannerText({ applied: [], restart_needed: ['daemon.port'], error: null })).toBe(
-      'config.yaml changed: daemon.port needs a restart to apply.',
-    );
-    expect(
-      configBannerText({
-        applied: ['scopes.api'],
-        restart_needed: ['daemon.port', 'leases.lease_ttl_ms'],
-        error: null,
-      }),
-    ).toBe('config.yaml changed: scopes.api applied; daemon.port and leases.lease_ttl_ms need a restart to apply.');
-    const ctx = makeContext({ snapshot: portChanged() });
+    const ctx = makeContext({ snapshot: makeSnapshot({ config: { loaded_hash: 'a', current_hash: 'b' } }) });
     const open = vi.spyOn(ctx.platform, 'openInEditor');
     const banners = mountBanners(ctx);
     mounted.push(banners);
     const banner = banners.el.querySelector('.sh-banner-warn') as HTMLElement;
     expect(banner.hidden).toBe(false);
-    expect(banner.textContent).toContain(
-      'config.yaml changed: scopes.frontend.write applied; daemon.port needs a restart to apply.',
-    );
+    expect(banner.textContent).toContain(CONFIG_CHANGED_MESSAGE);
     expect(banner.textContent).toContain(RESTART_HINT_BROWSER);
     expect(banner.querySelector('.sh-banner-restart')).toBeNull();
     (banner.querySelector('button') as HTMLButtonElement).click();
     expect(open).toHaveBeenCalledWith('C:/demo/shop/.friday/config.yaml');
     (banner.querySelector('.sh-banner-settings') as HTMLButtonElement).click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'friday' });
-    // Friday restarted (or the key was changed back): nothing waits, so nothing is said.
-    ctx.board(
-      makeSnapshot({
-        config: { loaded_hash: 'b', current_hash: 'b', changes: { applied: [], restart_needed: [], error: null } },
-      }),
-    );
+    ctx.board(makeSnapshot());
     expect(banner.hidden).toBe(true);
   });
 
-  it('says when config.yaml could not be read and that the settings in force are unchanged, without a restart', () => {
-    const error = 'config.yaml is invalid: daemon.port: Invalid input: expected number, received string';
-    const ctx = makeContext({
-      snapshot: makeSnapshot({
-        config: { loaded_hash: 'a', current_hash: 'b', changes: { applied: [], restart_needed: [], error } },
-      }),
-    });
-    const banners = mountBanners(ctx);
-    mounted.push(banners);
-    const banner = banners.el.querySelector('.sh-banner-warn') as HTMLElement;
-    expect(banner.hidden).toBe(false);
-    expect(banner.textContent).toContain(`${CONFIG_ERROR_MESSAGE} ${error}`);
-    expect(banner.textContent).not.toContain(RESTART_HINT_BROWSER);
-    expect((banner.querySelector('.sh-banner-settings') as HTMLElement).hidden).toBe(true);
-    expect(banner.querySelector('img')).toBeNull();
-  });
-
   it('on the desktop, the config banner restarts Friday from where you are', async () => {
-    const base = makeContext({ snapshot: portChanged() });
+    const base = makeContext({ snapshot: makeSnapshot({ config: { loaded_hash: 'a', current_hash: 'b' } }) });
     const restart = vi.fn(async () => true);
     const desktop = { restart } as unknown as DesktopCommands;
     const ctx: AppContext = { ...base, platform: { ...base.platform, desktop } };
@@ -425,7 +369,7 @@ describe('banners', () => {
   it('renders a hostile project root without markup', () => {
     const ctx = makeContext({
       snapshot: makeSnapshot({
-        config: portChanged().config,
+        config: { loaded_hash: 'a', current_hash: 'b' },
         project: { ...makeSnapshot().project, root: `C:\\${HOSTILE}${BIDI}${LONG}` },
       }),
     });

@@ -1,5 +1,5 @@
 import { buildGraph, type CodeGraph, type FactsCache, openFactsCache } from '@friday/code-graph';
-import { GitRoot, type SourceIdentity } from '@friday/git';
+import { GitRoot } from '@friday/git';
 import { FridayError } from '@friday/protocol';
 
 interface RootGraph {
@@ -44,13 +44,12 @@ export class GraphService {
   /**
    * The graph of a checkout (the main one by default) at its current version; one build at a time.
    * An approximate identity (sizes and times) does not prove the code is unchanged, so its graph is
-   * built again; the content-addressed parse cache keeps that cheap (review F13). A caller that
-   * just read the checkout's identity (the context compiler) passes it, so it is not read twice.
+   * built again; the content-addressed parse cache keeps that cheap (review F13).
    */
-  async graph(root: string = this.opts.root, known?: SourceIdentity | null): Promise<CodeGraph> {
+  async graph(root: string = this.opts.root): Promise<CodeGraph> {
     const e = this.entry(root);
     const git = await e.root;
-    const identity = known ?? (await git.identity());
+    const identity = await git.identity();
     if (e.latest?.version === identity.version && identity.basis === 'content') return e.latest;
     e.building ??= buildGraph(git, { cache: this.cache() }).finally(() => {
       e.building = undefined;

@@ -38,31 +38,6 @@ export function renderContextMarkdown(
   return `${header}\n${body}${note}${tail}${footer}`;
 }
 
-/**
- * The first message of a spawned attempt (plan M10b.2). When the packet with the task's contract
- * reached the host's instructions, the message points at it instead of repeating it; otherwise it
- * carries the task's instruction and acceptance criteria, which the host has nowhere else.
- */
-export function firstTaskMessage(
-  p: { task_id: string; instruction: string; acceptance_criteria: string[] },
-  contractInInstructions: boolean,
-): string {
-  if (contractInInstructions) {
-    return `Task ${p.task_id}: start now. Its contract, acceptance criteria and scope are in your instructions.`;
-  }
-  return [
-    `Task ${p.task_id}: ${p.instruction}`,
-    ...(p.acceptance_criteria.length
-      ? ['', 'Acceptance criteria:', ...p.acceptance_criteria.map((c) => `- ${c}`)]
-      : []),
-  ].join('\n');
-}
-
-/** Whether a rendered packet holds the task's contract (its first protected section). */
-export function holdsContract(rendered: string): boolean {
-  return rendered.includes('[task.contract');
-}
-
 function titleOf(kind: string): string {
   const map: Record<string, string> = {
     'agent.identity': 'You',

@@ -4,7 +4,6 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { antigravityConfigCli, antigravityDoctorCli } from '@friday/adapter-antigravity';
 import {
   applyPlan,
   claudeCodeHooks,
@@ -14,8 +13,6 @@ import {
   hookLevel,
   planClaudeCode,
 } from '@friday/adapter-claude';
-import { cursorConfigCli, cursorDoctor, cursorDoctorCli } from '@friday/adapter-cursor';
-import { geminiConfigCommand, geminiDoctor, geminiDoctorCommand } from '@friday/adapter-gemini';
 import { newId } from '@friday/protocol';
 import { type Command, Option } from 'commander';
 import { createAgentLauncher } from './agent-launcher.js';
@@ -28,33 +25,15 @@ import { commandPlugins } from './program.js';
 import { daemonPlugins } from './run.js';
 import { FRIDAY_DIR_GITIGNORE } from './templates.js';
 
-/**
- * The hosts `harness config` and `harness doctor` serve, each by its own adapter (plan M8b);
- * `harness doctor` also checks codex, a spawn-mode host with nothing to write into the project.
- */
-const CONFIG_HOSTS = ['claude-code', 'cursor', 'antigravity', 'gemini'] as const;
+const HOSTS = ['claude-code'];
 
 function requireHost(host: string): void {
-  if (host !== 'claude-code') {
+  if (!HOSTS.includes(host)) {
     throw new UsageError(
-      `unsupported host "${host}": this command configures ${CONFIG_HOSTS.join(', ')}; codex works as a spawn-mode harness and needs no files in the project (friday harness run codex)`,
+      `unsupported host "${host}": this command configures claude-code; codex works as a spawn-mode harness and needs no files in the project (friday harness run codex); cursor and october arrive in M8b`,
     );
   }
 }
-
-/** What `harness config <host>` changes for every host besides the host's own files. */
-const sharedChanges = (root: string): FileChange[] => {
-  const gi = gitignoreChange(root);
-  return gi ? [gi] : [];
-};
-
-/** How a host adapter's own `harness config|doctor <host>` prints (plan M8b): as every other command does. */
-const hostIo = (g: () => GlobalOptions) => ({
-  out: (value: unknown, text: () => string) => out(g(), value, text),
-  diff: lineDiff,
-  render: renderDoctor,
-  extraChanges: sharedChanges,
-});
 
 /** Appendix 4 item 9: make sure `.friday/.gitignore` lists every runtime path (append-only). */
 function gitignoreChange(root: string): FileChange | null {
@@ -113,16 +92,13 @@ function registerHarness(program: Command): void {
 
   harness
     .command('config <host>')
-    .description(
-      `write Friday hooks, the friday MCP server entry and Friday guidance for a host (${CONFIG_HOSTS.join(', ')})`,
-    )
+    .description('write Friday hooks, the friday MCP server entry and the friday skill for a host (claude-code)')
     .option('--agent <key>', 'agent identity on this machine (default: the current one, else dev-1)')
     .addOption(new Option('--scope <scope>', 'where the hooks go').choices(['project', 'local']).default('project'))
     .option('--print', 'show what would change, without writing anything')
     .option('--remove', 'remove everything Friday added for this host')
     .option('--claude-md', 'also add a short Friday block to CLAUDE.md')
     .option('--require-enforcing', 'refuse unless Claude Code can enforce hooks (2.1.295 or newer)')
-    .option('--no-gemini-md', 'gemini: leave GEMINI.md alone')
     .action(
       (
         host: string,
@@ -133,25 +109,8 @@ function registerHarness(program: Command): void {
           remove?: boolean;
           claudeMd?: boolean;
           requireEnforcing?: boolean;
-          geminiMd?: boolean;
         },
       ) => {
-        if (host !== 'gemini' && opts.geminiMd === false) throw new UsageError('--no-gemini-md is for gemini');
-        if (host === 'antigravity') return antigravityConfigCli(project(g()), opts, hostIo(g));
-        if (host === 'cursor') return cursorConfigCli(project(g()), opts, hostIo(g));
-        if (host === 'gemini') {
-          for (const [given, name] of [
-            [opts.scope === 'local', '--scope local'],
-            [opts.claudeMd, '--claude-md'],
-            [opts.requireEnforcing, '--require-enforcing'],
-          ] as const) {
-            if (given)
-              throw new UsageError(
-                `${name} is for claude-code; Gemini CLI reads project hooks from .gemini/settings.json`,
-              );
-          }
-          return geminiConfigCommand(g(), opts, sharedChanges);
-        }
         requireHost(host);
         const ref = project(g());
         const install = opts.remove ? null : detectClaudeCode();
@@ -253,9 +212,6 @@ function registerHarness(program: Command): void {
       ) => {
         // A spawn-mode host writes nothing into the project: its doctor checks the host itself (ADR-0032).
         if (host === 'codex') return doctorCodex(g, opts.sandbox, opts.windowsSandbox);
-        if (host === 'antigravity') return antigravityDoctorCli(project(g()), opts, hostIo(g));
-        if (host === 'cursor') return cursorDoctorCli(project(g()), opts, hostIo(g));
-        if (host === 'gemini') return geminiDoctorCommand(g(), opts, { UsageError, renderDoctor });
         requireHost(host);
         const ref = project(g());
         const report = await claudeDoctor(ref, { ...(opts.quick ? { skipMcp: true } : {}) });
@@ -313,30 +269,5 @@ if (!registered) {
         message: `Claude Code attach: ${report.achieved} (details: friday harness doctor claude-code)`,
       },
     ];
-  });
-  // The other hosts set up in this project (plan M8b), read-only and without starting any host.
-  extraDoctorChecks.push(async (ref) => {
-    if (!ref) return [];
-    const has = (host: string) => existsSync(path.join(ref.root, '.friday', 'harness', host));
-    const out: { id: string; status: 'ok' | 'warn' | 'fail' | 'info'; message: string; fix?: string }[] = [];
-    const add = (host: string, name: string, report: { checks: typeof out; achieved: string }) => {
-      out.push(...report.checks.filter((c) => c.status === 'fail' || c.status === 'warn'), {
-        id: host,
-        status: 'info',
-        message: `${name} attach (experimental): ${report.achieved} (details: friday harness doctor ${host})`,
-      });
-    };
-    if (has('cursor')) add('cursor', 'Cursor', await cursorDoctor(ref, { skipMcp: true }));
-    if (has('gemini')) add('gemini', 'Gemini CLI', await geminiDoctor(ref, { quick: true }));
-    // Reading Antigravity's version runs its CLI, which `friday doctor` does not do.
-    if (has('antigravity')) {
-      out.push({
-        id: 'antigravity',
-        status: 'info',
-        message:
-          'Antigravity attach (experimental): set up in this project (details: friday harness doctor antigravity)',
-      });
-    }
-    return out;
   });
 }

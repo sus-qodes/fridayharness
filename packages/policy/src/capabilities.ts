@@ -4,7 +4,7 @@
  * shell command, a host tool and an explicit request are judged in the same terms.
  */
 import { type Autonomy, type CommandClass, classifyCommand, DEFAULT_AUTONOMY } from './commands.js';
-import { aboveCeiling, type PolicyTask } from './evaluate.js';
+import type { PolicyTask } from './evaluate.js';
 import { canonicalize, matchesAny, type PathContext } from './paths.js';
 import { sensitiveClassOf } from './sensitive.js';
 
@@ -185,17 +185,6 @@ export function evaluateCapability(req: CapabilityRequest): CapabilityDecision {
       if (hit) return d('deny', `sensitive.${hit.class}`, `${hit.path} is protected by Friday (${hit.class})`);
       const rel = canonicalize(req.target, req.ctx).relative;
       if (rel === null) return d('deny', 'capability.outside_project', `${req.target} is outside the project`);
-      // The ceiling of the task (plan M12.2) is judged before anything a human could grant, as the
-      // hooks judge it: a path outside the task's scope and outside the team scope of its role is
-      // refused here, so nobody is asked for a grant that nothing can use.
-      const ceiling = op === 'write' && req.task ? aboveCeiling(rel, req.task, req.ctx.windows) : null;
-      if (ceiling) {
-        return d(
-          'deny',
-          'capability.above_ceiling',
-          `${rel} is outside the task's scope and outside the ${ceiling.source} scope of its role (${ceiling.write.join(', ')}): that scope is the ceiling of this task, and no approval reaches beyond it`,
-        );
-      }
       // The project's own tightening (ADR-0028) holds here as in the hooks: a human decides.
       const denied = op === 'read' ? (req.deny?.read ?? []) : (req.deny?.write ?? []);
       if (denied.length && matchesAny(rel, denied, req.ctx.windows)) {

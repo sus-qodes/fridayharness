@@ -333,17 +333,14 @@ export function createPlanGhost(ctx: AppContext, initial: GhostCardModel): NodeV
           )
         : null,
     );
-    // A new task's note is the ceiling cut (plan M12.2): the reviewer reads that the plan asked
-    // for more than the role may hold, here and in full in the review.
-    const note = pt.note ? cleanText(pt.note) : '';
     replace(
       foot,
       h(
         'span',
-        { class: 'muted nd-ghost-note', ...(note ? { title: truncate(note, 1000) } : {}) },
+        { class: 'muted nd-ghost-note' },
         g.change === 'rework' && g.taskId
-          ? `Rework of ${shortId(g.taskId)}${note ? `: ${truncate(note, 80)}` : ''}`
-          : `Proposed in plan v${g.version}${note ? `: ${truncate(note, 80)}` : ''}`,
+          ? `Rework of ${shortId(g.taskId)}${pt.note ? `: ${truncate(cleanText(pt.note), 80)}` : ''}`
+          : `Proposed in plan v${g.version}`,
       ),
       h('span', { class: 'spacer' }),
       actionButton('Review', 'eye', () => openModal(ctx, { kind: 'plan-review', id: g.goalId }), { action: 'review' }),

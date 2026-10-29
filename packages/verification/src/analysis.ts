@@ -54,12 +54,6 @@ export interface DiffInput {
   policyRule?: (path: string) => { rule: string; message: string } | null;
   /** The exact-path approval a human gave this task's attempt for writing the path, or null. */
   approved?: (path: string) => string | null;
-  /**
-   * The ceiling of the task (plan M12.2): the team scope of the task's role that a path outside
-   * both it and the task's write scope lies beyond, or null. Such a change fails whatever a human
-   * approved, as the hooks refuse it; here it is caught when the write went around them.
-   */
-  aboveCeiling?: (path: string) => { source: string; write: readonly string[] } | null;
 }
 
 /**
@@ -106,36 +100,18 @@ export function analyzeDiff(input: DiffInput): Finding[] {
     });
   }
   const isProtected = new Set(protectedPaths.map((x) => x.path));
-  // Beyond the ceiling of the task: judged before any approval, which reaches nothing there.
-  const beyond = new Map<string, { source: string; write: readonly string[] }>();
-  for (const p of touched) {
-    const ceiling = isProtected.has(p) ? null : (input.aboveCeiling?.(p) ?? null);
-    if (ceiling) beyond.set(p, ceiling);
-  }
-  if (beyond.size) {
-    const paths = [...beyond.keys()];
-    const first = beyond.get(paths[0] as string) as { source: string; write: readonly string[] };
-    findings.push({
-      rule: 'diff.above_ceiling',
-      severity: 'fail',
-      message: `changed beyond the ceiling of the task, outside its write scope and outside the ${first.source} scope of its role (${first.write.join(', ')}), which no approval lifts: ${show(paths)}.`,
-      paths: listed(paths),
-    });
-  }
   const writable = Boolean(input.write?.length);
   // A human's exact-path approval lets a write outside the scope, or under a deny rule, stand.
   const grant = new Map<string, string>();
   for (const p of touched) {
-    const id = isProtected.has(p) || beyond.has(p) ? null : (input.approved?.(p) ?? null);
+    const id = isProtected.has(p) ? null : (input.approved?.(p) ?? null);
     if (id) grant.set(p, id);
   }
-  const outside = touched.filter(
-    (p) => !isProtected.has(p) && !beyond.has(p) && !grant.has(p) && (!writable || !input.inScope(p)),
-  );
+  const outside = touched.filter((p) => !isProtected.has(p) && !grant.has(p) && (!writable || !input.inScope(p)));
   const isOutside = new Set(outside);
   const byRule = new Map<string, { message: string; paths: string[] }>();
   for (const p of touched) {
-    if (isProtected.has(p) || beyond.has(p) || isOutside.has(p) || grant.has(p)) continue;
+    if (isProtected.has(p) || isOutside.has(p) || grant.has(p)) continue;
     const hit = input.policyRule?.(p);
     if (!hit) continue;
     const entry = byRule.get(hit.rule) ?? { message: hit.message, paths: [] };

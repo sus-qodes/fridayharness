@@ -15,7 +15,7 @@ import { type InteractiveProcess, type ProcessGroup, ProcessGroups, startProcess
 import { GitRoot } from '@friday/git';
 import { SPAWNED_AGENT_TOOLS, spawnedAgentTools } from '@friday/mcp-server';
 import type { InboxItem, OutboundMessage, TaskStartParams } from '@friday/protocol';
-import { type DaemonClient, FRIDAY_VERSION, firstTaskMessage, holdsContract, renderContextMarkdown } from '@friday/sdk';
+import { type DaemonClient, FRIDAY_VERSION, renderContextMarkdown } from '@friday/sdk';
 import { ToolEndpoints } from './tools.js';
 
 /**
@@ -105,16 +105,6 @@ const nameOf = (v: unknown): string =>
   typeof v === 'string' ? v : String((v as { name?: unknown } | null)?.name ?? '?');
 /** A number the host reported, or null: what a host did not report is unknown, never zero. */
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-
-/**
- * The session's spending cap (`--max-budget-usd`): the smaller of the adapter's own cap and the
- * task's (`task.start`'s `budget_usd`, from `routing.task_budget_usd`, plan M11.5); none when
- * neither is set. Friday ends the attempt itself as well when its reported cost reaches the task's.
- */
-export function sessionBudgetUsd(own: number | undefined, task: number | null | undefined): number | undefined {
-  const caps = [own, task].filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
-  return caps.length ? Math.min(...caps) : undefined;
-}
 
 /**
  * What the host's result message says the turn cost, for the token baseline (M10a). Every field is
@@ -298,8 +288,7 @@ export class ClaudeSpawnAdapter {
     const dir = path.join(this.opts.workDir ?? path.join(tmpdir(), 'friday-claude'), p.run_id);
     mkdirSync(dir, { recursive: true });
     const promptFile = path.join(dir, 'instructions.md');
-    const instructions = await this.#instructions(p);
-    writeFileSync(promptFile, instructions.text);
+    writeFileSync(promptFile, await this.#instructions(p));
     const settingsFile = path.join(dir, 'settings.json');
     writeFileSync(settingsFile, JSON.stringify(this.#settings()));
     // Friday's tools for this attempt, served by this adapter; the only MCP server the session has.
@@ -321,7 +310,6 @@ export class ClaudeSpawnAdapter {
         },
       }),
     );
-    const budget = sessionBudgetUsd(this.opts.maxBudgetUsd, p.budget_usd);
     const args = [
       ...(this.opts.host.args ?? []),
       '-p',
@@ -351,7 +339,7 @@ export class ClaudeSpawnAdapter {
       JSON.stringify(FINAL_SCHEMA),
       ...(p.model ? ['--model', p.model] : []),
       ...(this.opts.effort ? ['--effort', this.opts.effort] : []),
-      ...(budget === undefined ? [] : ['--max-budget-usd', String(budget)]),
+      ...(this.opts.maxBudgetUsd ? ['--max-budget-usd', String(this.opts.maxBudgetUsd)] : []),
     ];
     const group = this.#groups.create();
     const trace = this.opts.trace;
@@ -394,8 +382,12 @@ export class ClaudeSpawnAdapter {
       const text = resuming
         ? // A human's decision says why the run continues (plan M9 §5.6); otherwise it restarted.
           (p.note ?? 'The previous session of this task ended unexpectedly. Continue the task where you left off.')
-        : // The packet carries the contract: the message does not repeat it (plan M10b.2).
-          firstTaskMessage(p, instructions.contract);
+        : [
+            `Task ${p.task_id}: ${p.instruction}`,
+            ...(p.acceptance_criteria.length
+              ? ['', 'Acceptance criteria:', ...p.acceptance_criteria.map((c) => `- ${c}`)]
+              : []),
+          ].join('\n');
       try {
         this.#send(attempt, text);
         attempt.started = true;
@@ -436,7 +428,7 @@ export class ClaudeSpawnAdapter {
     };
   }
 
-  async #instructions(p: TaskStartParams): Promise<{ text: string; contract: boolean }> {
+  async #instructions(p: TaskStartParams): Promise<string> {
     let packet = '';
     try {
       // The run is named so the packet is recorded as this attempt's (the usage row, plan M10a).
@@ -446,7 +438,7 @@ export class ClaudeSpawnAdapter {
     } catch (e) {
       packet = `Friday could not compile this task's context (${(e as Error).message}).`;
     }
-    return { text: `${CLAUDE_SPAWN_RULES}\n\n${packet}\n`, contract: holdsContract(packet) };
+    return `${CLAUDE_SPAWN_RULES}\n\n${packet}\n`;
   }
 
   /** A user message on the session's input (stream-json); its uuid comes back once it is taken. */

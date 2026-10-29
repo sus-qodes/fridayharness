@@ -402,9 +402,6 @@ export function buildApp(deps: AppDeps): Hono<Env> {
       project: { project_id: pid, name: project.name },
       head,
       counts: state.q.statusCounts(pid),
-      // What the daemon did with a changed config.yaml (plan M11.2), so `friday status` need not
-      // build the board's snapshot for it.
-      config: deps.uiInfo?.().config ?? null,
       tasks,
       harnesses: state.q.harnesses(pid),
       agents,
@@ -464,79 +461,6 @@ export function buildApp(deps: AppDeps): Hono<Env> {
       awaiting_verification: held.filter((t) => t.status === 'READY_FOR_VERIFICATION').map((t) => t.task_id),
       claimable: state.claimableTasks(pid, agent.agent_key, 10).filter((t) => t.status === 'READY'),
       inbox,
-    });
-  });
-
-  /**
-   * Who else works with this session (plan M12.4): the agents on its task's goal and the task each
-   * holds, or, while it holds no task of a goal, the project's agents. One bounded read, so an agent
-   * learns who its peers are from Friday's records instead of asking the human or sending a message.
-   * Never a token or a harness id; a peer's word grants nothing (ADR-0017).
-   */
-  app.get(`${P}/me/peers`, allow('harness'), (c) => {
-    const caller = callerFor(state, pid, c.get('auth').harness_id as string);
-    const me = state.q.agent(caller.agent_id);
-    const current = me.current_task_id ? state.q.findTask(pid, me.current_task_id) : undefined;
-    const taskOf = (t: { task_id: string; summary: string; status: string; waiting_reason: string | null }) => ({
-      task_id: t.task_id,
-      summary: t.summary,
-      status: t.status,
-      waiting_reason: t.waiting_reason,
-    });
-    if (current?.goal_id) {
-      const ended = new Set(['COMPLETED', 'CANCELLED', 'ABANDONED']);
-      const peers: Record<string, unknown>[] = [];
-      const unassigned: Record<string, unknown>[] = [];
-      for (const t of state.q.goalTasks(pid, current.goal_id)) {
-        if (ended.has(t.status) || t.assigned_agent_id === me.agent_id) continue;
-        const agent = t.assigned_agent_id ? state.q.findAgent(t.assigned_agent_id) : undefined;
-        if (!agent) {
-          unassigned.push({ ...taskOf(t), role: t.role, reserved_for_agent_key: t.reserved_for_agent_key });
-          continue;
-        }
-        peers.push({ agent_key: agent.agent_key, role: agent.role, status: agent.status, task: taskOf(t) });
-      }
-      return c.json({ scope: 'goal', goal_id: current.goal_id, peers, unassigned });
-    }
-    const peers = state.q
-      .agents(pid)
-      .filter((a) => a.agent_id !== me.agent_id)
-      .map((a) => {
-        const held = a.current_task_id ? state.q.findTask(pid, a.current_task_id) : undefined;
-        return { agent_key: a.agent_key, role: a.role, status: a.status, task: held ? taskOf(held) : null };
-      });
-    return c.json({ scope: 'project', goal_id: null, peers, unassigned: [] });
-  });
-
-  /**
-   * The receipt of a message this session's agent sent (plan M12.4): whether each recipient has
-   * it, read it or answered, so the sender need not send it again or ask the human. Only the
-   * sender reads it; a receipt, like the message, grants nothing.
-   */
-  app.get(`${P}/me/messages/:mid`, allow('harness'), (c) => {
-    const caller = callerFor(state, pid, c.get('auth').harness_id as string);
-    const m = state.q.message(c.req.param('mid'));
-    if (m.sender.kind !== 'agent' || m.sender.id !== caller.agent_id) {
-      throw new FridayError('permission_denied', `message ${m.message_id} was not sent by you`);
-    }
-    return c.json({
-      message_id: m.message_id,
-      mode: m.mode,
-      subject: m.subject,
-      status: m.status,
-      settled_reason: m.settled_reason,
-      created_at: m.created_at,
-      reply_by: m.reply_by,
-      expires_at: m.expires_at,
-      deliveries: m.deliveries.map((d) => ({
-        recipient: d.agent_key ?? `${d.recipient_kind}:${d.recipient_id}`,
-        state: d.state,
-        attempts: d.attempts,
-        delivered_at: d.delivered_at,
-        acknowledged_at: d.acknowledged_at,
-        ended_at: d.ended_at,
-        end_reason: d.end_reason,
-      })),
     });
   });
 

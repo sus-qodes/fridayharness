@@ -5,7 +5,7 @@
  */
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createFridayMcpServer } from './server.js';
-import { FridaySession, sessionVendor } from './session.js';
+import { FridaySession } from './session.js';
 
 // Windows looks for a program started by its bare name (git) in the current folder before PATH;
 // this server runs inside a repository, whose content it does not trust (LESSONS D-52).
@@ -13,18 +13,12 @@ if (process.platform === 'win32') process.env.NoDefaultCurrentDirectoryInExePath
 
 const log = (msg: string) => process.stderr.write(`[friday-mcp] ${msg}\n`);
 
-// The host is the one the launcher's configuration names (`FRIDAY_HARNESS`); Claude Code's, unless named.
-const vendor = sessionVendor(process.env.FRIDAY_HARNESS);
-// Cursor's, Antigravity's and Gemini CLI's servers find their project from their own configuration:
-// a Claude Code session's variables inherited from a terminal name another host's project and session.
-const otherHost = vendor === 'cursor' || vendor === 'antigravity' || vendor === 'gemini';
 const session = new FridaySession({
-  projectDir:
-    (otherHost ? undefined : process.env.CLAUDE_PROJECT_DIR) ?? process.env.FRIDAY_PROJECT_DIR ?? process.cwd(),
+  projectDir: process.env.CLAUDE_PROJECT_DIR ?? process.env.FRIDAY_PROJECT_DIR ?? process.cwd(),
   agentKey: process.env.FRIDAY_AGENT || undefined,
   hostPid: process.env.FRIDAY_HOST_PID ? Number(process.env.FRIDAY_HOST_PID) : process.ppid,
-  hostSessionId: (!otherHost && process.env.CLAUDE_CODE_SESSION_ID) || undefined,
-  vendor,
+  hostSessionId: process.env.CLAUDE_CODE_SESSION_ID || undefined,
+  vendor: process.env.FRIDAY_HARNESS === 'generic' ? 'generic' : 'claude-code',
   log,
 });
 const server = createFridayMcpServer(session);

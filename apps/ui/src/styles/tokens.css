@@ -1,69 +1,95 @@
-/* Design tokens (frontend handoff Part 08 §2). Every colour, size and curve in the interface comes from here. */
+/* Design tokens: Apple & Coucou MNC-grade design system.
+   Ported directly from Coucou (windows/src/style.css) and macOS Dynamic Island. */
 :root {
+  color-scheme: dark;
+
+  /* Coucou Apple Palette */
+  --ink: #f5f6f8;        /* primary text */
+  --ink-2: #f1f2f4;
+  --dim: #9398a1;
+  --dim-2: #8e939c;
+  --dim-3: #6b7079;
+  --dim-4: #5f646d;
+  --dim-5: #4b5563;
+  --card: #141518;       /* Apple squircle card body */
+  --card-flat: #0e0f11;  /* Pure flat background */
+  --tab-on: #1d1f23;     /* Active tab pill */
+  --hairline: rgba(255, 255, 255, 0.035);
+  --red: #f4505e;
+  --red-text: #ff8d97;
+  --green: #22c55e;
+  --green-2: #34d399;
+  --amber: #f5a524;
+  --cyan: #22d3ee;
+  --indigo: #6366f1;
+  --pink: #f472b6;
+
   /* Surfaces and backgrounds */
-  --bg-obsidian: #090d16;
-  --bg-canvas: #0c121e;
-  --bg-surface: rgba(15, 23, 42, 0.72);
-  --bg-surface-elevated: rgba(22, 33, 56, 0.85);
-  --bg-surface-active: rgba(30, 41, 59, 0.95);
-  --bg-surface-glass: rgba(13, 20, 36, 0.65);
-  --bg-input: rgba(9, 13, 22, 0.8);
+  --bg-obsidian: #000000;
+  --bg-canvas: #0c0d10;
+  --bg-surface: #141518;
+  --bg-surface-elevated: #1a1c22;
+  --bg-surface-active: #22252d;
+  --bg-surface-glass: rgba(20, 21, 24, 0.82);
+  --bg-input: #0e0f11;
 
   /* Hairline borders and dividers */
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-medium: rgba(255, 255, 255, 0.16);
-  --border-strong: rgba(255, 255, 255, 0.28);
-  --border-accent-glow: rgba(6, 182, 212, 0.35);
+  --border-subtle: rgba(255, 255, 255, 0.035);
+  --border-medium: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --border-accent-glow: rgba(34, 211, 238, 0.25);
 
-  /* Semantic accents */
-  --color-cyan: #06b6d4;
-  --color-cyan-glow: #22d3ee;
+  /* Backward-compatible semantic color aliases */
+  --color-cyan: var(--cyan);
+  --color-cyan-glow: #38e1fc;
   --color-blue: #3b82f6;
   --color-neon-blue: #38bdf8;
-  --color-indigo: #6366f1;
-  --color-emerald: #10b981;
-  --color-amber: #f59e0b;
+  --color-indigo: var(--indigo);
+  --color-emerald: var(--green);
+  --color-amber: var(--amber);
   --color-amber-red: #ea580c;
-  --color-crimson: #ef4444;
+  --color-crimson: var(--red);
   --color-violet: #a855f7;
-  --color-slate-600: #475569;
-  --color-slate-500: #64748b;
-  --color-slate-400: #94a3b8;
-  --color-slate-200: #e2e8f0;
+  --color-slate-600: #4b5563;
+  --color-slate-500: #5f646d;
+  --color-slate-400: #9398a1;
+  --color-slate-200: #f1f2f4;
   --color-white: #ffffff;
-  --color-grid-dot: #334155;
+  --color-grid-dot: rgba(255, 255, 255, 0.06);
 
-  /* Diff colours (handoff Part 08 §5: at least 7:1 against dark slate) */
-  --diff-add-text: #34d399;
-  --diff-add-bg: rgba(16, 185, 129, 0.12);
-  --diff-del-text: #f87171;
-  --diff-del-bg: rgba(239, 68, 68, 0.12);
+  /* Diff colours (Coucou style) */
+  --diff-add-text: var(--green-2);
+  --diff-add-bg: rgba(34, 197, 94, 0.12);
+  --diff-del-text: var(--red-text);
+  --diff-del-bg: rgba(244, 80, 94, 0.12);
 
-  /* Task status tokens (handoff Part 04 §3) */
-  --status-proposed: #475569;
-  --status-ready: #06b6d4;
+  /* Task status tokens */
+  --status-proposed: #5f646d;
+  --status-ready: var(--cyan);
   --status-assigned: #a855f7;
   --status-running: #38bdf8;
-  --status-waiting: #f59e0b;
-  --status-claimed: #6366f1;
+  --status-waiting: var(--amber);
+  --status-claimed: var(--indigo);
   --status-verifying: #a855f7;
-  --status-completed: #10b981;
-  --status-failed: #ef4444;
+  --status-completed: var(--green);
+  --status-failed: var(--red);
   --status-rework: #ea580c;
-  --status-lost: #ef4444;
-  --status-cancelled: #64748b;
+  --status-lost: var(--red);
+  --status-cancelled: #4b5563;
 
-  /* Mascot palette (Blip: an original character, ERRATA F15) */
-  --mascot-shell: #1e293b;
-  --mascot-shell-highlight: #334155;
-  --mascot-visor: #05080f;
-  --mascot-led: #22d3ee;
-  --mascot-blush: rgba(251, 113, 133, 0.65);
+  /* Mascot palette (Coucou Friday authentic constants) */
+  --mascot-body-top: #ededef;
+  --mascot-body-bottom: #c4c5ca;
+  --mascot-ink: #1a1412;
+  --mascot-shell: #141518;
+  --mascot-shell-highlight: #282a30;
+  --mascot-visor: #090a0d;
+  --mascot-led: var(--cyan);
+  --mascot-blush: rgba(255, 120, 150, 0.55);
 
-  /* Typography (no font files are bundled: system stacks, ERRATA F18) */
-  --font-sans:
-    "Inter", "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
-  --font-mono: "JetBrains Mono", "Cascadia Code", "Cascadia Mono", "Fira Code", Menlo, Consolas, monospace;
+  /* Typography: Apple SF Pro System Stack */
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  --font-mono: "SF Mono", "Cascadia Mono", "Consolas", ui-monospace, monospace;
 
   --text-micro: 10px;
   --text-caption: 11px;
@@ -81,28 +107,32 @@
 
   /* Radii and elevations */
   --radius-xs: 4px;
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
-  --radius-pill: 9999px;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-card: 20px;
+  --radius-island: 14px;
+  --radius-pill: 999px;
 
-  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.7);
-  --shadow-glow-cyan: 0 0 24px rgba(6, 182, 212, 0.25);
-  --shadow-glow-amber: 0 0 24px rgba(245, 158, 11, 0.3);
+  /* Apple shadows */
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.85);
+  --shadow-glow-cyan: 0 0 24px rgba(34, 211, 238, 0.2);
+  --shadow-glow-amber: 0 0 24px rgba(245, 165, 36, 0.25);
 
-  /* Spring and timing curves */
+  /* Spring and timing curves (SwiftUI springs & Coucou closeCurve) */
   --ease-snappy: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-elastic: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-elastic: cubic-bezier(0.3, 1.2, 0.4, 1);
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
-  --duration-fast: 120ms;
-  --duration-base: 220ms;
-  --duration-slow: 360ms;
+  --ease-close: cubic-bezier(0.45, 0, 0.2, 1);
+  --duration-fast: 100ms;
+  --duration-base: 200ms;
+  --duration-slow: 340ms;
 
   /* Layout */
-  --header-height: 48px;
+  --header-height: 44px;
   --drawer-width: 540px;
   --drawer-height: 320px;
-  --focus-ring: 0 0 0 2px var(--bg-canvas), 0 0 0 4px var(--color-cyan-glow);
+  --focus-ring: 0 0 0 2px var(--bg-canvas), 0 0 0 4px rgba(34, 211, 238, 0.6);
 }

@@ -1,12 +1,10 @@
 /**
- * Landing a goal (plan §7.7, FD-27): what Friday did for the goal, one row per fact from its
- * records (plan M12.7); what is ready on `friday/goal-<id>` (its commits ahead of the main
- * checkout's HEAD and its files with `+N −M`), a way to the full goal diff, and the steps to merge
- * it in VS Code or git, each with a copy button. Friday never merges into a human's branch.
+ * Landing a goal (plan §7.7, FD-27): what is ready on `friday/goal-<id>` (its commits ahead of the
+ * main checkout's HEAD and its files with `+N −M`), a way to the full goal diff, and the steps to
+ * merge it in VS Code or git, each with a copy button. Friday never merges into a human's branch.
  */
-import type { GoalDiff, GoalSummary } from '@friday/protocol';
+import type { GoalDiff } from '@friday/protocol';
 import { hasHidden, visible } from '../model/text.js';
-import { goalSummaryRows } from '../nodes/goal-node.js';
 import { type AppContext, type Component, type ModalRequest, openDrawer } from '../shell/context.js';
 import { button, h, replace } from '../ui/dom.js';
 import { humanize, timeAgo } from '../ui/format.js';
@@ -28,23 +26,7 @@ export function landModal(
   let branch = goalBranch(goalId);
 
   const branchLine = h('div', { class: 'pn-land-branch' });
-  const didBox = h('div', { class: 'pn-did' }, h('div', { class: 'muted' }, 'Reading what Friday did…'));
   const commitsBox = h('div', { class: 'pn-commits' }, h('div', { class: 'muted' }, 'Reading the goal branch…'));
-
-  /** What Friday did for the goal: every fact on its own row, from the goal detail's summary. */
-  function renderDid(summary: GoalSummary | null | undefined) {
-    const rows = summary ? goalSummaryRows(summary) : [];
-    replace(
-      didBox,
-      rows.length
-        ? h(
-            'dl',
-            { class: 'pn-kv', dataset: { role: 'did' } },
-            rows.flatMap((r) => [h('dt', null, r.label), h('dd', null, r.value)]),
-          )
-        : h('div', { class: 'muted' }, 'Nothing on record for this goal yet.'),
-    );
-  }
   const filesBox = h('div', { class: 'pn-diffstat' });
   const stepsBox = h('div', { class: 'pn-steps-box' });
 
@@ -155,7 +137,6 @@ export function landModal(
       ? note(`This goal is ${humanize(goal.status).toLowerCase()}; it is ready to land once it is completed.`)
       : null,
     goal ? h('p', { class: 'pn-goal-line' }, plain(goal.objective ?? goal.request, 400)) : null,
-    section('What Friday did', didBox),
     branchLine,
     section('Commits', commitsBox),
     section(
@@ -196,26 +177,6 @@ export function landModal(
           'div',
           { class: 'field-error' },
           `Could not read the goal branch: ${err.code ? `${err.code} ` : ''}${plain(err.message, 300)}`,
-        ),
-      );
-    }
-  })();
-
-  // The goal detail carries the summary (plan M12.7); read after the diff, which the dialog is for.
-  void (async () => {
-    try {
-      const detail = await ctx.api.goal(goalId);
-      if (td.done) return;
-      renderDid(detail.summary);
-    } catch (e) {
-      if (td.done) return;
-      const err = errorOf(e);
-      replace(
-        didBox,
-        h(
-          'div',
-          { class: 'field-error' },
-          `Could not read what Friday did: ${err.code ? `${err.code} ` : ''}${plain(err.message, 300)}`,
         ),
       );
     }

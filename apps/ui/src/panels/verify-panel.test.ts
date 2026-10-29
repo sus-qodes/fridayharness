@@ -211,7 +211,7 @@ describe('verification panel', () => {
     });
     buttonBy(m.el, 'Open config.yaml in VS Code').click();
     expect(opened).toEqual(['C:/demo/shop/.friday/config.yaml']);
-    expect(m.el.textContent).toContain('new checks judge the next verification');
+    expect(m.el.textContent).toContain('restart Friday to apply');
     m.destroy();
   });
 

@@ -162,8 +162,7 @@ export interface BrainStatusView {
   auto_approve: boolean;
   escalate_after_failures: number;
   max_replans: number;
-  /** Null when the planner costs nothing (a model on this machine): no budget applies. */
-  daily_budget_usd: number | null;
+  daily_budget_usd: number;
   spent_today_usd: number;
   cursor: number;
   head: number;
@@ -228,20 +227,6 @@ export type SnapshotList =
   | 'inbox'
   | 'reservations';
 
-/**
- * What a running daemon did with a changed `config.yaml` (plan M11.2). The daemon reads the file
- * again when it changes and applies every key that is read where it is used; the keys captured
- * when Friday started keep their start values until a restart.
- */
-export interface ConfigChanges {
-  /** Changed keys in force now, applied without a restart (dotted: `scopes.frontend.write`). */
-  applied: string[];
-  /** Changed keys that keep their start values until Friday restarts (`daemon.port`). */
-  restart_needed: string[];
-  /** Why the file as it stands could not be applied (the settings in force are unchanged), else null. */
-  error: string | null;
-}
-
 /** `GET …/ui/snapshot`: everything the board needs, consistent with `head` (plan §5.3). */
 export interface UiSnapshot {
   /** The interface API version the daemon speaks; a mismatched page asks to be reloaded. */
@@ -258,13 +243,8 @@ export interface UiSnapshot {
     has_commit: boolean;
     worktrees_mode: string;
   };
-  /**
-   * `config.yaml` as Friday started with it (`loaded_hash`) and as it is now (`current_hash`; null
-   * when unreadable), and what the daemon did with the difference. A key in `changes.restart_needed`,
-   * or an `error`, shows the config banner, which names it; left out, the daemon does not read the
-   * file again, and a changed file is only a changed hash.
-   */
-  config: { loaded_hash: string; current_hash: string | null; changes?: ConfigChanges };
+  /** Differ → "config.yaml changed; restart Friday to apply". */
+  config: { loaded_hash: string; current_hash: string | null };
   control: ControlState;
   verification: { checks: { name: string; kind: string; required: boolean }[]; auto_on_completion: boolean };
   counts: Record<string, number>;
@@ -348,12 +328,9 @@ export interface GoalDiff {
   notes: string[];
 }
 
-/** The hosts the agent launcher can start (plan §5.9, M8b): each one's `friday harness run <host>`. */
-export type AgentHostName = 'claude-code' | 'codex' | 'cursor' | 'gemini';
-
 /** A coding host the agent launcher can start (plan §5.9). */
 export interface AgentHost {
-  host: AgentHostName;
+  host: 'claude-code' | 'codex';
   found: boolean;
   version: string | null;
   supported: boolean;
@@ -374,7 +351,7 @@ export interface AgentOptions {
 }
 
 export interface AgentLaunchRequest {
-  host: AgentHostName;
+  host: 'claude-code' | 'codex';
   agent_key: string;
   role: string;
   options?: AgentOptions;
@@ -384,7 +361,7 @@ export interface AgentLaunchRequest {
 
 export interface AgentProcess {
   agent_key: string;
-  host: AgentHostName;
+  host: 'claude-code' | 'codex';
   role: string;
   pid: number | null;
   status: 'starting' | 'running' | 'stopping' | 'exited';
@@ -400,7 +377,7 @@ export interface AgentProcess {
 /** A remembered agent of this project (plan FD-24). */
 export interface AgentProfile {
   agent_key: string;
-  host: AgentHostName;
+  host: 'claude-code' | 'codex';
   role: string;
   options: AgentOptions;
   autostart: boolean;

@@ -51,11 +51,8 @@ const HUMAN_MEMORY: MemoryActor = { kind: 'human', actor: { kind: 'human', id: '
 export interface UiSnapshotInfo {
   has_commit: boolean;
   worktrees_mode: string;
-  /**
-   * The hash of config.yaml as loaded and as it is now, with what the daemon applied of the
-   * difference and which changed keys still need a restart (plan M11.2).
-   */
-  config: UiSnapshot['config'];
+  /** The hash of config.yaml as loaded, and as it is now. */
+  config: { loaded_hash: string; current_hash: string | null };
   /** Claims are verified automatically (trusted, and project checks exist). */
   auto_verification: boolean;
   /**

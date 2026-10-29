@@ -148,15 +148,11 @@ export async function runPlanner<T>(
     const sent = opts.outbound ? opts.outbound(current) : current;
     opts.onCall?.(sent);
     const started = now();
-    // A model on this machine is paid for by nobody, whatever its id (plan M12.1): its cost is 0,
-    // never unknown. A remote model without a price stays unknown (review F04).
-    const unpriced = model.remote ? null : 0;
     try {
       const res = await model.complete(sent, opts.signal);
       const parsed = parse(res.output);
       // Price by the model that answered; a snapshot id Friday does not know falls back to the requested one.
-      const cost =
-        costOf(res.model, res.usage, policy.prices) ?? costOf(current.model, res.usage, policy.prices) ?? unpriced;
+      const cost = costOf(res.model, res.usage, policy.prices) ?? costOf(current.model, res.usage, policy.prices);
       calls.push({
         ...base,
         model: res.model,
@@ -182,16 +178,13 @@ export async function runPlanner<T>(
           ? e
           : new ModelError('unavailable', (e as Error).message, false, undefined, { billed: 'unknown' });
       const usage = err.usage ?? ZERO_USAGE;
-      // Billed answers keep their usage; rejected requests cost nothing; uncertain ones are unknown
-      // (a local model's uncertain outcome still cost nothing).
+      // Billed answers keep their usage; rejected requests cost nothing; uncertain ones are unknown.
       const cost =
         err.billed === 'no'
           ? 0
           : err.billed === 'yes'
-            ? (costOf(err.model ?? current.model, usage, policy.prices) ??
-              costOf(current.model, usage, policy.prices) ??
-              unpriced)
-            : unpriced;
+            ? (costOf(err.model ?? current.model, usage, policy.prices) ?? costOf(current.model, usage, policy.prices))
+            : null;
       calls.push({
         ...base,
         ...(err.model ? { model: err.model } : {}),

@@ -8,19 +8,27 @@
 .gv-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  border: 1px solid var(--border-medium);
-  border-radius: var(--radius-md);
-  background: var(--bg-surface-elevated);
-  box-shadow: var(--shadow-sm);
-  color: var(--color-slate-200);
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(280px 200px at 50% 0%, rgba(255, 255, 255, 0.04) 0%, transparent 70%),
+    var(--card);
+  box-shadow:
+    inset 0 1px 0 var(--glass-inner-bevel),
+    0 8px 24px rgba(0, 0, 0, 0.4);
+  color: var(--ink);
   font-size: var(--text-base);
   min-width: 0;
+  transition:
+    transform var(--spring-duration) var(--spring-bounce),
+    box-shadow var(--duration-base) var(--ease-standard),
+    border-color var(--duration-base) var(--ease-standard);
 }
 
 .gv-card:focus-within {
-  border-color: var(--border-strong);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 .gv-approval {
@@ -501,28 +509,30 @@
   align-items: flex-start;
   gap: 8px;
   width: 100%;
-  padding: 6px 10px;
+  padding: 8px 12px;
   border: 1px solid var(--border-medium);
-  border-radius: var(--radius-sm);
-  background: var(--bg-input);
+  border-radius: var(--radius-md);
+  background: var(--card-flat);
   color: var(--color-slate-200);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   text-align: left;
   transition:
     border-color var(--duration-fast) var(--ease-standard),
-    background var(--duration-fast) var(--ease-standard);
+    background var(--duration-fast) var(--ease-standard),
+    transform var(--spring-duration) var(--spring-bounce);
 }
 
 .gv-chip:hover {
-  border-color: var(--border-strong);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .gv-chip-on,
 .gv-chip[aria-checked="true"] {
-  border-color: var(--color-indigo);
-  background: rgba(99, 102, 241, 0.16);
-  color: var(--color-white);
+  border-color: var(--cyan);
+  background: rgba(34, 211, 238, 0.12);
+  color: var(--white);
 }
 
 .gv-chip-text {

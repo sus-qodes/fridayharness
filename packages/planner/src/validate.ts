@@ -18,25 +18,7 @@ export interface ExistingTask {
 export interface ValidationResult {
   ok: boolean;
   errors: string[];
-  /**
-   * What a valid plan will be held to that its author did not write (plan M12.2): a task whose
-   * write scope was cut to the ceiling of its role. A human reads these with the plan. Present
-   * only when there is one.
-   */
-  notes?: string[];
 }
-
-/**
- * The ceiling on delegated work (plan M12.2): what a plan task of a role may hold under the
- * project's policy. `FridayState.boundPlanTask` is one; the caller hands it in, so these checks
- * stay pure. `refused` names a task nothing of which lies inside its ceiling; `note` says how a
- * task was cut.
- */
-export type PlanTaskBounder = (task: { key: string; kind: string; role: string; write: readonly string[] }) => {
-  write: string[];
-  note: string | null;
-  refused: string | null;
-};
 
 const TERMINAL = new Set(['COMPLETED', 'CANCELLED', 'ABANDONED']);
 const NOT_STARTED = new Set(['PROPOSED', 'READY']);
@@ -125,39 +107,13 @@ function taskErrors(t: PlanTaskDraft, label: string): string[] {
   return errors;
 }
 
-/**
- * The ceiling of a task's role (plan M12.2): what the task will hold once it exists. A task
- * nothing of which lies inside is an error the planner can repair; a cut is a note. The write
- * scope the conflict check sees is the one the task will hold.
- */
-function boundTask(
-  t: PlanTaskDraft,
-  label: string,
-  bound: PlanTaskBounder | undefined,
-  errors: string[],
-  notes: string[],
-): string[] {
-  if (!bound) return t.scope.write;
-  const b = bound({ key: t.key, kind: t.kind, role: t.role, write: t.scope.write });
-  if (b.refused) {
-    errors.push(`${label} exceeds its ceiling: ${b.refused}`);
-    return t.scope.write;
-  }
-  if (b.note) notes.push(`${label}: ${b.note}`);
-  return b.write;
+function result(errors: string[]): ValidationResult {
+  return { ok: errors.length === 0, errors };
 }
 
-function result(errors: string[], notes: string[] = []): ValidationResult {
-  return { ok: errors.length === 0, errors, ...(notes.length ? { notes } : {}) };
-}
-
-/**
- * Checks a first plan: unique keys, known dependencies, no cycles, no parallel write conflicts,
- * and, with a bounder, the ceiling of every task's role (plan M12.2).
- */
-export function validatePlanDraft(draft: PlanDraft, bound?: PlanTaskBounder): ValidationResult {
+/** Checks a first plan: unique keys, known dependencies, no cycles, no parallel write conflicts. */
+export function validatePlanDraft(draft: PlanDraft): ValidationResult {
   const errors: string[] = [];
-  const notes: string[] = [];
   if (draft.tasks.length === 0 && !draft.needs_human) {
     errors.push('a plan needs at least one task, or a needs_human question when the goal cannot be planned yet');
   }
@@ -178,7 +134,7 @@ export function validatePlanDraft(draft: PlanDraft, bound?: PlanTaskBounder): Va
       id: t.key,
       label,
       deps: t.depends_on.filter((d) => keys.has(d) && d !== t.key),
-      write: boundTask(t, label, bound, errors, notes),
+      write: t.scope.write,
       kind: t.kind,
       done: false,
     });
@@ -186,21 +142,15 @@ export function validatePlanDraft(draft: PlanDraft, bound?: PlanTaskBounder): Va
   const cycle = findCycle(nodes);
   if (cycle) errors.push(`dependencies form a cycle: ${cycle.join(' -> ')}`);
   else errors.push(...parallelConflicts(nodes));
-  return result(errors, notes);
+  return result(errors);
 }
 
 /**
  * Checks a revision against the tasks of the active plan: rework only FAILED tasks, drop only
- * tasks that have not started, keep the dependency graph acyclic and conflict-free, and, with a
- * bounder, hold every new task to the ceiling of its role (plan M12.2).
+ * tasks that have not started, and keep the dependency graph acyclic and conflict-free.
  */
-export function validateReplanDraft(
-  draft: ReplanDraft,
-  existing: ExistingTask[],
-  bound?: PlanTaskBounder,
-): ValidationResult {
+export function validateReplanDraft(draft: ReplanDraft, existing: ExistingTask[]): ValidationResult {
   const errors: string[] = [];
-  const notes: string[] = [];
   const byId = new Map(existing.map((t) => [t.task_id, t]));
   const usedKeys = new Set(existing.map((t) => t.key).filter((k): k is string => Boolean(k)));
   const dropped = new Set(draft.drop.map((d) => d.task_id));
@@ -260,17 +210,10 @@ export function validateReplanDraft(
         } else if (dep.status !== 'COMPLETED') deps.push(d);
       } else errors.push(`${label} depends on "${d}", which is neither a new task key nor a task of this plan`);
     }
-    nodes.set(t.key, {
-      id: t.key,
-      label,
-      deps,
-      write: boundTask(t, label, bound, errors, notes),
-      kind: t.kind,
-      done: false,
-    });
+    nodes.set(t.key, { id: t.key, label, deps, write: t.scope.write, kind: t.kind, done: false });
   }
   const cycle = findCycle(nodes);
   if (cycle) errors.push(`dependencies form a cycle: ${cycle.join(' -> ')}`);
   else errors.push(...parallelConflicts(nodes, new Set([...newKeys, ...reworked])));
-  return result(errors, notes);
+  return result(errors);
 }
