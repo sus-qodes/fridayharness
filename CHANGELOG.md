@@ -13,6 +13,14 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - `worktrees.mode: off` in `.friday/config.yaml` keeps every run in the main checkout.
   - **Fixes:** the patterns that protect Friday's private folder also matched `friday-worktrees`; the MCP server reported the main checkout as every session's folder; a file whose only difference was a line-ending conversion (common on Windows with `core.autocrlf=true`) counted as an uncommitted change; a NUL byte in `packages/git/src/root.ts` made git treat it as binary. The portability check now refuses NUL bytes in text files.
   - Decision: ADR-0023.
+- **M5b, verification that says what it verified:**
+  - `friday verify` runs the checks in the checkout the task worked in (its worktree, or the main checkout) and records exactly what it judged: the checkout, its commit, a hash of any uncommitted changes, the commit the work started from, and the task's kind. If the code changes while the checks run, the result is thrown away and the task waits to be verified again.
+  - **Friday's own checks run first and run no project code.** `friday.diff` fails changes outside the task's write scope or to Friday's protected files, and warns when the completion claim and the actual changes disagree. In the shared main checkout it judges only the changes the session was seen making or claimed, and lists the rest. `friday.secrets` fails credentials in well-known formats written into changed files, naming file and line, never the value.
+  - **Checks by task kind:** `task_kinds` limits a check to some kinds of tasks; `required: false` makes it advisory.
+  - **Related tests first:** with `targeted_args` (where `{files}` stands for the test files), a check first runs the tests the code graph relates to the change, and skips the full run when they fail. Changed files that no test covers are listed.
+  - A verification cut short by a daemon restart no longer leaves the task stuck in VERIFYING: it returns to READY_FOR_VERIFICATION.
+  - `friday verify` and `friday task inspect` show the verified code and every finding.
+  - Decision: ADR-0024.
 
 ## Unreleased — M4 context engine
 

@@ -1,12 +1,14 @@
 /**
  * @friday/verification
  * Runs the project's configured checks for a completion claim (spec Part 09 §7, plan B14).
- * M1: one runner, exec form, timeout with process-tree kill. M5 adds policies, diff analysis
- * and targeted tests.
+ * M1: one runner, exec form, timeout with process-tree kill. M5b (ADR-0024): diff analysis,
+ * the credential scan, checks by task kind and related tests, in ./analysis.ts.
  */
 import { execFile, spawn } from 'node:child_process';
 
 export const PACKAGE_NAME = '@friday/verification';
+
+export * from './analysis.js';
 
 export interface CheckSpec {
   name: string;

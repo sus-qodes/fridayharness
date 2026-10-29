@@ -61,3 +61,36 @@ export function describeEvent(e: { type: string; payload: Record<string, unknown
       return '';
   }
 }
+
+/** A verification as lines (ADR-0024): what was verified, each check, and what Friday's checks found. */
+export function verificationLines(v: {
+  status: string;
+  summary: string | null;
+  execution_root: string | null;
+  commit_sha: string | null;
+  source_version: string | null;
+  checks: {
+    name: string;
+    status: string;
+    exit_code: number | null;
+    summary: string | null;
+    required: boolean;
+    details: { findings?: { severity: string; rule: string; message: string }[] } | null;
+  }[];
+}): string[] {
+  const lines: string[] = [];
+  if (v.execution_root) {
+    const plus = v.source_version?.indexOf('+') ?? -1;
+    const head = v.commit_sha ? v.commit_sha.slice(0, 12) : '(no commits)';
+    const dirty =
+      plus >= 0 && v.source_version ? ` with uncommitted changes (${v.source_version.slice(plus + 1)})` : '';
+    lines.push(`  code: ${head}${dirty} in ${v.execution_root}`);
+  }
+  for (const c of v.checks) {
+    const flags = [c.exit_code !== null ? `exit ${c.exit_code}` : '', c.required ? '' : 'advisory'].filter(Boolean);
+    lines.push(`  ${c.name}: ${c.status}${flags.length ? ` (${flags.join(', ')})` : ''} ${c.summary ?? ''}`.trimEnd());
+    for (const f of c.details?.findings ?? []) lines.push(`    ${f.severity} ${f.rule}: ${f.message}`);
+  }
+  if (v.status === 'CANCELLED' && v.summary) lines.push(`  ${v.summary}`);
+  return lines;
+}

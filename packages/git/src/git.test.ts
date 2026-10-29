@@ -269,3 +269,32 @@ describe('status parsing', () => {
     });
   });
 });
+
+describe('changes since a base (ADR-0024)', () => {
+  it('lists committed and uncommitted changes, renames and additions, and copes without a base', async () => {
+    const { dir, g } = await repo();
+    const r = await GitRoot.open(dir);
+    const base = (await r.refs()).head as string;
+    writeFileSync(path.join(dir, 'src', 'c.ts'), 'export const c = 1;\n');
+    await g.run(['mv', 'a.txt', 'renamed.txt']);
+    await deterministicGit(dir, { startEpoch: FIXTURE_BASE_EPOCH + 50 }).commitAll('add c, rename a');
+    writeFileSync(path.join(dir, 'src', 'b.ts'), 'export const b = 2;\n');
+    writeFileSync(path.join(dir, 'src', 'c.ts'), 'export const c = 2;\n');
+    writeFileSync(path.join(dir, 'new.txt'), 'x\n');
+
+    const since = await r.changesSince(base);
+    expect(since.base_found).toBe(true);
+    expect(since.identity.dirty).toBe(true);
+    expect(since.changes.map((c) => [c.path, c.change, c.committed, c.uncommitted, c.origPath ?? null])).toEqual([
+      ['new.txt', 'added', false, true, null],
+      ['renamed.txt', 'renamed', true, false, 'a.txt'],
+      ['src/b.ts', 'modified', false, true, null],
+      ['src/c.ts', 'added', true, true, null],
+    ]);
+    const uncommitted = ['new.txt', 'src/b.ts', 'src/c.ts'];
+    expect((await r.changesSince(null)).changes.map((c) => c.path)).toEqual(uncommitted);
+    const unknown = await r.changesSince('0123456789abcdef0123456789abcdef01234567');
+    expect(unknown.base_found).toBe(false);
+    expect(unknown.changes.map((c) => c.path)).toEqual(uncommitted);
+  });
+});

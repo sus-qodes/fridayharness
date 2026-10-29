@@ -35,6 +35,35 @@ const PATTERNS: Pattern[] = [
   { kind: 'url_credentials', re: /(:\/\/[^\s:@/]+:)[^\s@/]+@/g, replace: '$1[REDACTED]@' },
 ];
 
+/**
+ * Credential formats that are almost never anything else, used to scan code (ADR-0024 §3). The
+ * looser patterns (`token = …`, bearer headers, URL passwords, JWT samples) match ordinary code and
+ * test fixtures, so they only redact.
+ */
+const CREDENTIAL_KINDS = new Set([
+  'private_key',
+  'anthropic_key',
+  'openai_key',
+  'aws_key',
+  'github_token',
+  'github_pat',
+  'slack_token',
+]);
+
+/** Each credential in a well-known format in `text`: its kind and 1-based line, never its value. */
+export function findCredentials(text: string): { kind: string; line: number }[] {
+  const found = new Map<number, string>();
+  for (const p of PATTERNS) {
+    if (!CREDENTIAL_KINDS.has(p.kind)) continue;
+    for (const m of text.matchAll(p.re)) {
+      const line = text.slice(0, m.index).split('\n').length;
+      // An Anthropic key also matches the OpenAI pattern: the first, more specific kind wins.
+      if (!found.has(line)) found.set(line, p.kind);
+    }
+  }
+  return [...found].sort((a, b) => a[0] - b[0]).map(([line, kind]) => ({ kind, line }));
+}
+
 /** Object keys whose values are always secret. */
 const SECRET_KEYS =
   /^(?:password|passwd|secret|token|api[_-]?key|authorization|cookie|private[_-]?key|client[_-]?secret|harness_token)$/i;

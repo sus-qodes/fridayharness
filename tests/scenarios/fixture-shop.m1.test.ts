@@ -275,10 +275,15 @@ describe('fixture-shop M1 demo', () => {
     expect(verified.code, verified.stderr).toBe(0);
     const v = JSON.parse(verified.stdout) as {
       task: TaskView;
-      verification: { status: string; checks: Array<{ status: string; exit_code: number }> };
+      verification: { status: string; checks: Array<{ name: string; status: string; exit_code: number | null }> };
     };
     expect(v.task.status).toBe('COMPLETED');
-    expect(v.verification.checks).toMatchObject([{ status: 'PASSED', exit_code: 0 }]);
+    // Friday's own checks first (ADR-0024); the harness files harness config wrote are not this task's.
+    expect(v.verification.checks.map((c) => [c.name, c.status, c.exit_code])).toEqual([
+      ['friday.diff', 'PASSED', null],
+      ['friday.secrets', 'PASSED', null],
+      ['tests', 'PASSED', 0],
+    ]);
     await hook('SessionEnd', { reason: 'prompt_input_exit' });
 
     expect(await transitions(shop, task.task_id)).toEqual([
@@ -372,10 +377,10 @@ describe('fixture-shop M1 demo', () => {
     const failed = await cli(['--project', shop.root, '--json', 'verify', task.task_id]);
     const f = JSON.parse(failed.stdout) as {
       task: TaskView;
-      verification: { checks: Array<{ status: string; exit_code: number }> };
+      verification: { checks: Array<{ name: string; status: string; exit_code: number | null }> };
     };
     expect(f.task.status).toBe('FAILED');
-    expect(f.verification.checks[0]).toMatchObject({ status: 'FAILED', exit_code: 1 });
+    expect(f.verification.checks.find((c) => c.name === 'tests')).toMatchObject({ status: 'FAILED', exit_code: 1 });
 
     // `friday task rework` sends the task back to READY (FAILED -> REWORK -> READY).
     const rework = await cli(['--project', shop.root, 'task', 'rework', task.task_id]);

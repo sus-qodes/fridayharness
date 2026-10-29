@@ -65,6 +65,10 @@ export interface DaemonContext {
   bootstrapToken: () => string;
   /** The context compiler (M4d, ADR-0022). */
   compile: (input: CompileInput, actor: Actor) => Promise<ContextPacket>;
+  /** Code graphs of the project's checkouts (ADR-0020, ADR-0023). */
+  graph: GraphService;
+  /** Verifications this daemon is running; any other RUNNING one has lost its runner (ADR-0024 §6). */
+  verifying: Set<string>;
 }
 
 export interface Daemon extends DaemonContext {
@@ -245,7 +249,17 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     port: () => port,
     bootstrapToken: () => tokens.bootstrap,
     compile: (input, actor) => context.compile(input, actor),
+    graph,
+    verifying: new Set(),
   };
+  // Checks run inside the daemon: a verification still RUNNING from before this start has no runner.
+  for (const id of state.interruptOrphanedVerifications(
+    project.project_id,
+    'the daemon stopped while its checks ran',
+    ctx.verifying,
+  )) {
+    logger.warn('verification interrupted at start', { verification_id: id });
+  }
 
   const brain =
     opts.brain === false

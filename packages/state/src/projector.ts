@@ -164,17 +164,30 @@ export class StateProjector implements Projector {
       case 'verification.started':
         this.db
           .prepare(
-            `INSERT INTO verification_runs (verification_id, project_id, task_id, run_id, status, started_at)
-             VALUES (?, ?, ?, ?, 'RUNNING', ?)`,
+            `INSERT INTO verification_runs (verification_id, project_id, task_id, run_id, status, started_at,
+               execution_root, commit_sha, source_version, base_commit, task_kind)
+             VALUES (?, ?, ?, ?, 'RUNNING', ?, ?, ?, ?, ?, ?)`,
           )
-          .run(str(p.verification_id), e.project_id, str(p.task_id), opt(p.run_id), e.occurred_at);
+          .run(
+            str(p.verification_id),
+            e.project_id,
+            str(p.task_id),
+            opt(p.run_id),
+            e.occurred_at,
+            opt(p.execution_root),
+            opt(p.commit_sha),
+            opt(p.source_version),
+            opt(p.base_commit),
+            opt(p.task_kind),
+          );
         return;
       case 'verification.check_completed': {
         const c = p.check as Payload;
         this.db
           .prepare(
-            `INSERT INTO verification_checks (check_id, verification_id, project_id, name, kind, status, exit_code, artifact_ref, summary)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO verification_checks (check_id, verification_id, project_id, name, kind, status, exit_code, artifact_ref, summary,
+               required, origin, duration_ms, details_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             str(c.check_id),
@@ -186,6 +199,10 @@ export class StateProjector implements Projector {
             opt(c.exit_code),
             opt(c.artifact_ref),
             opt(c.summary),
+            c.required === false ? 0 : 1,
+            typeof c.origin === 'string' ? c.origin : 'configured',
+            opt(c.duration_ms),
+            c.details ? JSON.stringify(c.details) : null,
           );
         return;
       }
@@ -193,6 +210,13 @@ export class StateProjector implements Projector {
         this.db
           .prepare('UPDATE verification_runs SET status = ?, ended_at = ?, summary = ? WHERE verification_id = ?')
           .run(str(p.status), e.occurred_at, opt(p.summary), str(p.verification_id));
+        return;
+      case 'verification.interrupted':
+        this.db
+          .prepare(
+            "UPDATE verification_runs SET status = 'CANCELLED', ended_at = ?, summary = ? WHERE verification_id = ?",
+          )
+          .run(e.occurred_at, `interrupted: ${str(p.reason)}`, str(p.verification_id));
         return;
       case 'approval.requested': {
         const a = p.approval as Payload;

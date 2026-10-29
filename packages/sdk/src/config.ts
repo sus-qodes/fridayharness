@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { FridayError, TaskScope } from '@friday/protocol';
+import { FridayError, TaskKind, TaskScope } from '@friday/protocol';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
@@ -9,8 +9,17 @@ const Check = z.object({
   command: z.string().min(1),
   args: z.array(z.string()).default([]),
   timeout_ms: z.number().int().min(1000).max(3_600_000).default(120_000),
-  /** Relative to the project root (or the task worktree from M5). */
+  /** Relative to the checkout the task worked in: its worktree, or the main checkout (ADR-0024). */
   cwd: z.string().optional(),
+  /** The task kinds this check applies to; empty: every kind (ADR-0024 §4). */
+  task_kinds: z.array(TaskKind).default([]),
+  /** false: advisory; a failure is reported and does not fail the verification. */
+  required: z.boolean().default(true),
+  /**
+   * Arguments that run only the tests related to the change, where "{files}" stands for them
+   * (ADR-0024 §5). This targeted form runs first; if it fails, the full check is skipped.
+   */
+  targeted_args: z.array(z.string()).optional(),
 });
 export type CheckConfig = z.infer<typeof Check>;
 
@@ -187,11 +196,13 @@ daemon:
 # Named scopes you can reuse when creating tasks (project-relative globs).
 scopes: {}
 
-# Commands \`friday verify <task>\` runs. Example:
+# Commands \`friday verify <task>\` runs in the checkout the task worked in. Example:
 #   checks:
 #     - name: tests
 #       command: node
 #       args: ["--test"]
+#       task_kinds: [implementation]          # optional: only for these task kinds
+#       targeted_args: ["--test", "{files}"]  # optional: the related tests run first
 verification:
   auto_on_completion: false
   checks: []

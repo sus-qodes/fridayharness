@@ -18,12 +18,13 @@ export interface TestDaemon {
 }
 
 /** Writes `.friday/config.yaml` and `.friday/.gitignore` into the workspace project. */
-export function initTestProject(ws: TestWorkspace, opts: { projectId?: string; extraConfig?: string } = {}): void {
+export function initTestProject(
+  ws: TestWorkspace,
+  opts: { projectId?: string; extraConfig?: string; editConfig?: (yaml: string) => string } = {},
+): void {
   mkdirSync(ws.fridayDir, { recursive: true });
-  writeFileSync(
-    path.join(ws.fridayDir, 'config.yaml'),
-    renderInitialConfig(opts.projectId ?? TEST_PROJECT_ID, 'test-project') + (opts.extraConfig ?? ''),
-  );
+  const yaml = renderInitialConfig(opts.projectId ?? TEST_PROJECT_ID, 'test-project') + (opts.extraConfig ?? '');
+  writeFileSync(path.join(ws.fridayDir, 'config.yaml'), opts.editConfig ? opts.editConfig(yaml) : yaml);
   writeFileSync(path.join(ws.fridayDir, '.gitignore'), FRIDAY_DIR_GITIGNORE);
 }
 
@@ -37,13 +38,18 @@ export async function startTestDaemon(
     clock?: FakeClock;
     git?: boolean;
     extraConfig?: string;
+    /** Rewrites the generated config.yaml (to replace a block the template already has). */
+    editConfig?: (yaml: string) => string;
     tickMs?: number;
     extensions?: DaemonOptions['extensions'];
     verify?: DaemonOptions['verify'];
     brain?: DaemonOptions['brain'];
   } = {},
 ): Promise<TestDaemon> {
-  initTestProject(ws, opts.extraConfig ? { extraConfig: opts.extraConfig } : {});
+  initTestProject(ws, {
+    ...(opts.extraConfig ? { extraConfig: opts.extraConfig } : {}),
+    ...(opts.editConfig ? { editConfig: opts.editConfig } : {}),
+  });
   if (opts.git) {
     writeFileSync(path.join(ws.projectDir, 'README.md'), '# test project\n');
     const git = deterministicGit(ws.projectDir);

@@ -6,6 +6,7 @@
 export const PACKAGE_NAME = '@friday/git';
 
 export {
+  type ChangedPath,
   type DiffEntry,
   GitRoot,
   type LogEntry,

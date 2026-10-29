@@ -6,7 +6,7 @@ export const PACKAGE_NAME = '@friday/events';
 
 export { type ArtifactRecord, ArtifactStore, artifactRef } from './artifacts.js';
 export { EVENT_MIGRATIONS } from './migrations.js';
-export { Redactor, truncateText } from './redaction.js';
+export { findCredentials, Redactor, truncateText } from './redaction.js';
 export { nullSnapshotStore, type Projector, replay, type SnapshotStore } from './replay.js';
 export { type EventDraft, EventStore, MAX_EVENT_PAYLOAD_BYTES, type ReadOptions, type StoredEvent } from './store.js';
 export {

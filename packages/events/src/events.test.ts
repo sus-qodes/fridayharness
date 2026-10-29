@@ -9,6 +9,7 @@ import {
   ArtifactStore,
   EVENT_MIGRATIONS,
   EventStore,
+  findCredentials,
   InProcessTransport,
   MAX_EVENT_PAYLOAD_BYTES,
   Redactor,
@@ -205,5 +206,29 @@ describe('ArtifactStore and helpers', () => {
   it('truncateText marks what it dropped', () => {
     expect(truncateText('abc', 5)).toBe('abc');
     expect(truncateText('abcdefgh', 3)).toBe('abc…[truncated 5 chars]');
+  });
+});
+
+describe('credentials in code (ADR-0024 §3)', () => {
+  it('finds well-known credential formats by line, and ignores what only looks like a secret', () => {
+    // Built from parts so the repository never holds a whole sample.
+    const aws = `AKIA${'ABCDEFGHIJKLMNOP'}`;
+    const anthropic = `sk-ant-${'api03-'}${'x'.repeat(24)}`;
+    const pem = ['-----BEGIN RSA PRIVATE KEY-----', 'MIIB', '-----END RSA PRIVATE KEY-----'].join('\n');
+    const text = [
+      'const token = createToken();',
+      `const aws = "${aws}";`,
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: source text that holds a template literal.
+      'const auth = `Bearer ${session}`;',
+      `const key = "${anthropic}";`,
+      'const url = "https://user:password@example.com";',
+      pem,
+    ].join('\n');
+    expect(findCredentials(text)).toEqual([
+      { kind: 'aws_key', line: 2 },
+      { kind: 'anthropic_key', line: 4 },
+      { kind: 'private_key', line: 6 },
+    ]);
+    expect(findCredentials('export const a = 1;\n')).toEqual([]);
   });
 });

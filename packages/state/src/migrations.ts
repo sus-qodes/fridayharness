@@ -605,6 +605,25 @@ CREATE INDEX ix_worktrees_task ON worktrees(project_id, task_id, status);
   },
 ];
 
+/** M5b: what a verification judged, and how each check counted (ADR-0024). */
+export const VERIFICATION_MIGRATIONS: Migration[] = [
+  {
+    version: 11,
+    name: 'verification_revision',
+    up: `
+ALTER TABLE verification_runs ADD COLUMN execution_root TEXT;
+ALTER TABLE verification_runs ADD COLUMN commit_sha TEXT;
+ALTER TABLE verification_runs ADD COLUMN source_version TEXT;
+ALTER TABLE verification_runs ADD COLUMN base_commit TEXT;
+ALTER TABLE verification_runs ADD COLUMN task_kind TEXT;
+ALTER TABLE verification_checks ADD COLUMN required INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE verification_checks ADD COLUMN origin TEXT NOT NULL DEFAULT 'configured';
+ALTER TABLE verification_checks ADD COLUMN duration_ms INTEGER;
+ALTER TABLE verification_checks ADD COLUMN details_json TEXT;
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -616,6 +635,7 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...MEMORY_MIGRATIONS,
   ...CONTEXT_MIGRATIONS,
   ...WORKTREE_MIGRATIONS,
+  ...VERIFICATION_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */

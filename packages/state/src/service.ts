@@ -50,6 +50,7 @@ import {
   type TaskStatus,
   type TaskView,
   type TokenClass,
+  type VerificationFinding,
   type VerificationStatus,
   type WaitingReason,
   type WorktreeView,
@@ -222,7 +223,6 @@ export function achievedEnforcement(h: {
   return { level: 'L0', status: 'observed', basis: `the ${h.vendor} client has no Friday policy hooks` };
 }
 
-/** Identity of a protocol caller, derived from its harness token (never from request fields). */
 /** Where a run works (ADR-0023): its execution root, the commit and branch it started from. */
 export interface Workspace {
   execution_root: string | null;
@@ -231,6 +231,16 @@ export interface Workspace {
   workspace: 'pending' | 'ready';
 }
 
+/** What a verification judged (ADR-0024 §1). */
+export interface VerificationRevision {
+  execution_root?: string | null;
+  commit_sha?: string | null;
+  source_version?: string | null;
+  base_commit?: string | null;
+  task_kind?: string | null;
+}
+
+/** Identity of a protocol caller, derived from its harness token (never from request fields). */
 export interface Caller {
   harness_id: string;
   agent_id: string;
@@ -1893,21 +1903,33 @@ export class FridayState {
 
   // ================================================================ verification
 
-  startVerification(projectId: string, actor: Actor, taskId: string): { verification_id: string; task: TaskView } {
-    return this.exec({ name: 'verification.start', project_id: projectId, actor, params: { taskId } }, (ctx) => {
-      let task = this.q.task(projectId, taskId);
-      task = this.moveTask(ctx, task, 'verification.start');
-      const verification_id = this.ids.next('ver');
-      ctx.emit({
-        type: 'verification.started',
-        payload: { verification_id, task_id: taskId, run_id: task.current_run_id },
-        refs: [
-          { kind: 'task', id: taskId },
-          { kind: 'verification', id: verification_id },
-        ],
-      });
-      return { verification_id, task };
-    });
+  /**
+   * READY_FOR_VERIFICATION to VERIFYING. `revision` records what is verified (ADR-0024 §1): the
+   * checkout, its HEAD and source version, the run's base commit and the task's kind.
+   */
+  startVerification(
+    projectId: string,
+    actor: Actor,
+    taskId: string,
+    revision: VerificationRevision = {},
+  ): { verification_id: string; task: TaskView } {
+    return this.exec(
+      { name: 'verification.start', project_id: projectId, actor, params: { taskId, revision } },
+      (ctx) => {
+        let task = this.q.task(projectId, taskId);
+        task = this.moveTask(ctx, task, 'verification.start');
+        const verification_id = this.ids.next('ver');
+        ctx.emit({
+          type: 'verification.started',
+          payload: { verification_id, task_id: taskId, run_id: task.current_run_id, ...revision },
+          refs: [
+            { kind: 'task', id: taskId },
+            { kind: 'verification', id: verification_id },
+          ],
+        });
+        return { verification_id, task };
+      },
+    );
   }
 
   recordVerificationCheck(
@@ -1921,6 +1943,11 @@ export class FridayState {
       exit_code: number | null;
       artifact_ref: string | null;
       summary: string | null;
+      /** An advisory check (false) does not fail the verification. Default true. */
+      required?: boolean;
+      origin?: 'friday' | 'configured' | 'targeted';
+      duration_ms?: number | null;
+      details?: { findings?: VerificationFinding[]; files?: string[] } | null;
     },
   ): void {
     this.exec(
@@ -1977,6 +2004,47 @@ export class FridayState {
         });
       },
     );
+  }
+
+  /**
+   * A verification that could not finish judged nothing (ADR-0024 §2, §6): it ends CANCELLED as
+   * interrupted, and its task, if still VERIFYING, returns to READY_FOR_VERIFICATION.
+   */
+  interruptVerification(projectId: string, actor: Actor, verificationId: string, reason: string): TaskView {
+    return this.exec(
+      { name: 'verification.interrupt', project_id: projectId, actor, params: { verificationId, reason } },
+      (ctx) => {
+        const v = this.q.verification(verificationId);
+        if (v.status !== 'RUNNING')
+          throw new FridayError('invalid_state_transition', `verification is already ${v.status}`);
+        ctx.emit({
+          type: 'verification.interrupted',
+          payload: { verification_id: verificationId, task_id: v.task_id, reason },
+          refs: [
+            { kind: 'verification', id: verificationId },
+            { kind: 'task', id: v.task_id },
+          ],
+        });
+        const task = this.q.task(projectId, v.task_id);
+        if (task.status !== 'VERIFYING') return task;
+        return this.moveTask(ctx, task, 'verification.interrupt', { reason: reason.slice(0, 200) });
+      },
+    );
+  }
+
+  /** Ends every RUNNING verification except those this process runs: their runner is gone (ADR-0024 §6). */
+  interruptOrphanedVerifications(
+    projectId: string,
+    reason: string,
+    running: ReadonlySet<string> = new Set(),
+  ): string[] {
+    const ended: string[] = [];
+    for (const v of this.q.verificationsWithStatus(projectId, 'RUNNING')) {
+      if (running.has(v.verification_id)) continue;
+      this.interruptVerification(projectId, SYSTEM, v.verification_id, reason);
+      ended.push(v.verification_id);
+    }
+    return ended;
   }
 
   // ================================================================ harnesses

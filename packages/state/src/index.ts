@@ -49,6 +49,8 @@ export {
   type PlanTaskInput,
   type StateConfig,
   type TokenInfo,
+  type VerificationRevision,
+  type Workspace,
 } from './service.js';
 export {
   BACKUP_FORMAT,

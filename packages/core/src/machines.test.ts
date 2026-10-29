@@ -25,7 +25,7 @@ const ALL_TRIGGERS = [...new Set(TASK_RULES.map((r) => r.trigger))] as TaskTrigg
 const NON_TERMINAL = ALL_STATUSES.filter((s) => !['COMPLETED', 'CANCELLED', 'ABANDONED'].includes(s));
 
 /**
- * Independent statement of the allowed edges: spec Part 14 §4 plus ADR-0003.
+ * Independent statement of the allowed edges: spec Part 14 §4 plus ADR-0003 and ADR-0024.
  * Written by hand on purpose; it must not be derived from TASK_RULES.
  */
 const EXPECTED_EDGES = new Set<string>([
@@ -40,6 +40,7 @@ const EXPECTED_EDGES = new Set<string>([
   'READY_FOR_VERIFICATION>VERIFYING',
   'VERIFYING>COMPLETED',
   'VERIFYING>FAILED',
+  'VERIFYING>READY_FOR_VERIFICATION',
   'FAILED>REWORK',
   'REWORK>READY',
   'RUNNING>HARNESS_LOST',
@@ -50,7 +51,7 @@ const EXPECTED_EDGES = new Set<string>([
 ]);
 
 describe('task state machine', () => {
-  it('allows exactly the Part 14 + ADR-0003 edges', () => {
+  it('allows exactly the Part 14 + ADR-0003 + ADR-0024 edges', () => {
     for (const from of ALL_STATUSES) {
       for (const to of ALL_STATUSES) {
         expect(taskEdgeExists(from, to), `${from} -> ${to}`).toBe(EXPECTED_EDGES.has(`${from}>${to}`));
@@ -104,6 +105,7 @@ describe('task state machine', () => {
     expect(transitionTask('RUNNING', { trigger: 'task.cancel', actor: 'agent' }).ok).toBe(false);
     expect(transitionTask('FAILED', { trigger: 'task.rework', actor: 'agent' }).ok).toBe(false);
     expect(transitionTask('VERIFYING', { trigger: 'verification.pass', actor: 'agent' }).ok).toBe(false);
+    expect(transitionTask('VERIFYING', { trigger: 'verification.interrupt', actor: 'agent' }).ok).toBe(false);
     expect(transitionTask('READY', { trigger: 'task.claim', actor: 'human' }).ok).toBe(false);
   });
 
@@ -122,6 +124,11 @@ describe('task state machine', () => {
     expect(lost.ok && lost.value).toMatchObject({ event: 'task.harness_lost', reason: 'lease expired' });
     const done = transitionTask('VERIFYING', { trigger: 'verification.pass', actor: 'system' });
     expect(done.ok && done.value.event).toBe('task.completed');
+    const again = transitionTask('VERIFYING', { trigger: 'verification.interrupt', actor: 'system' });
+    expect(again.ok && again.value).toMatchObject({
+      to: 'READY_FOR_VERIFICATION',
+      event: 'task.verification_interrupted',
+    });
   });
 });
 

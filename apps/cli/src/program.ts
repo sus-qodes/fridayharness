@@ -12,7 +12,7 @@ import { registerGoalCommands, renderEscalation } from './goals.js';
 import { registerGraphCommands } from './graph.js';
 import { registerMemoryCommands } from './memory.js';
 import { registerMessageCommands } from './messages.js';
-import { clip, describeEvent, kv, shortTime, table } from './output.js';
+import { clip, describeEvent, kv, shortTime, table, verificationLines } from './output.js';
 import { restoreProject } from './restore.js';
 import { runDaemon } from './run.js';
 import { FRIDAY_DIR_GITIGNORE } from './templates.js';
@@ -290,7 +290,7 @@ export function buildProgram(): Command {
             '',
             `verification ${d.verification.verification_id}: ${d.verification.status} ${d.verification.summary ?? ''}`,
           );
-          for (const c of d.verification.checks) lines.push(`  ${c.name}: ${c.status} ${c.summary ?? ''}`);
+          lines.push(...verificationLines(d.verification));
         }
         const shown = ev.events.slice(-o.events);
         lines.push(
@@ -362,10 +362,8 @@ export function buildProgram(): Command {
       );
       out(g(), res, () =>
         [
-          `${res.task.task_id}  ${res.task.status}`,
-          ...res.verification.checks.map(
-            (c) => `  ${c.name}: ${c.status}${c.exit_code !== null ? ` (exit ${c.exit_code})` : ''} ${c.summary ?? ''}`,
-          ),
+          `${res.task.task_id}  ${res.task.status}  ${res.verification.summary ?? ''}`.trimEnd(),
+          ...verificationLines(res.verification),
         ].join('\n'),
       );
     });

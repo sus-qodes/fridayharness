@@ -219,6 +219,11 @@ export interface VerificationRow {
   started_at: string | null;
   ended_at: string | null;
   summary: string | null;
+  execution_root?: string | null;
+  commit_sha?: string | null;
+  source_version?: string | null;
+  base_commit?: string | null;
+  task_kind?: string | null;
 }
 
 export interface CheckRow {
@@ -228,6 +233,10 @@ export interface CheckRow {
   exit_code: number | null;
   artifact_ref: string | null;
   summary: string | null;
+  required?: number | null;
+  origin?: string | null;
+  duration_ms?: number | null;
+  details_json?: string | null;
 }
 
 export function toVerificationView(row: VerificationRow, checks: CheckRow[]): VerificationView {
@@ -239,7 +248,23 @@ export function toVerificationView(row: VerificationRow, checks: CheckRow[]): Ve
     started_at: row.started_at,
     ended_at: row.ended_at,
     summary: row.summary,
-    checks: checks.map((c) => ({ ...c, status: c.status as VerificationView['status'] })),
+    execution_root: row.execution_root ?? null,
+    commit_sha: row.commit_sha ?? null,
+    source_version: row.source_version ?? null,
+    base_commit: row.base_commit ?? null,
+    task_kind: row.task_kind ?? null,
+    checks: checks.map((c) => ({
+      name: c.name,
+      kind: c.kind,
+      status: c.status as VerificationView['status'],
+      exit_code: c.exit_code,
+      artifact_ref: c.artifact_ref,
+      summary: c.summary,
+      required: c.required !== 0,
+      origin: (c.origin ?? 'configured') as VerificationView['checks'][number]['origin'],
+      duration_ms: c.duration_ms ?? null,
+      details: c.details_json ? (JSON.parse(c.details_json) as VerificationView['checks'][number]['details']) : null,
+    })),
   };
 }
 

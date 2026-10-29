@@ -19,6 +19,7 @@ export type TaskTrigger =
   | 'verification.start'
   | 'verification.pass'
   | 'verification.fail'
+  | 'verification.interrupt'
   | 'task.rework'
   | 'harness.lost'
   | 'run.resumed'
@@ -91,6 +92,15 @@ export const TASK_RULES: readonly TaskRule[] = [
     trigger: 'verification.fail',
     actors: ['system', 'human'],
     event: 'task.failed',
+  },
+  // ADR-0024: a verification that could not finish (the daemon stopped, or the code changed while
+  // it ran) judged nothing; the task waits to be verified again.
+  {
+    from: ['VERIFYING'],
+    to: 'READY_FOR_VERIFICATION',
+    trigger: 'verification.interrupt',
+    actors: ['system', 'human'],
+    event: 'task.verification_interrupted',
   },
   { from: ['FAILED'], to: 'REWORK', trigger: 'task.rework', actors: PLANNERS, event: 'task.rework' },
   { from: ['REWORK'], to: 'READY', trigger: 'task.ready', actors: PLANNERS, event: 'task.ready' },

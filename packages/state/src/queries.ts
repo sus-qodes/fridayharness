@@ -256,10 +256,20 @@ export class Queries {
     return this.verificationView(row);
   }
 
+  /** Verifications with a status, oldest first (the daemon ends RUNNING ones it does not run, ADR-0024 §6). */
+  verificationsWithStatus(projectId: string, status: string): VerificationView[] {
+    return this.db
+      .prepare(
+        'SELECT * FROM verification_runs WHERE project_id = ? AND status = ? ORDER BY started_at, verification_id',
+      )
+      .all<VerificationRow>(projectId, status)
+      .map((row) => this.verificationView(row));
+  }
+
   private verificationView(row: VerificationRow): VerificationView {
     const checks = this.db
       .prepare(
-        'SELECT name, kind, status, exit_code, artifact_ref, summary FROM verification_checks WHERE verification_id = ? ORDER BY rowid',
+        'SELECT name, kind, status, exit_code, artifact_ref, summary, required, origin, duration_ms, details_json FROM verification_checks WHERE verification_id = ? ORDER BY rowid',
       )
       .all<CheckRow>(row.verification_id);
     return toVerificationView(row, checks);

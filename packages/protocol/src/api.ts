@@ -157,6 +157,33 @@ export const AgentView = z.object({
 });
 export type AgentView = z.infer<typeof AgentView>;
 
+/** Something Friday's own checks found (ADR-0024 §3): the rule, how much it counts and the paths. */
+export const VerificationFinding = z.object({
+  rule: z.string(),
+  severity: z.enum(['fail', 'warn', 'info']),
+  message: z.string(),
+  paths: z.array(z.string()),
+});
+export type VerificationFinding = z.infer<typeof VerificationFinding>;
+
+export const VerificationCheckView = z.object({
+  name: z.string(),
+  kind: z.string(),
+  status: VerificationStatus,
+  exit_code: z.number().int().nullable(),
+  artifact_ref: z.string().nullable(),
+  summary: z.string().nullable(),
+  /** An advisory check's failure does not fail the verification. */
+  required: z.boolean(),
+  /** `friday`: Friday's own check, which runs no project code; `targeted`: a configured check limited to related tests. */
+  origin: z.enum(['friday', 'configured', 'targeted']),
+  duration_ms: z.number().int().nullable(),
+  details: z
+    .object({ findings: z.array(VerificationFinding).optional(), files: z.array(z.string()).optional() })
+    .nullable(),
+});
+export type VerificationCheckView = z.infer<typeof VerificationCheckView>;
+
 export const VerificationView = z.object({
   verification_id: z.string(),
   task_id: z.string(),
@@ -165,16 +192,16 @@ export const VerificationView = z.object({
   started_at: z.string().nullable(),
   ended_at: z.string().nullable(),
   summary: z.string().nullable(),
-  checks: z.array(
-    z.object({
-      name: z.string(),
-      kind: z.string(),
-      status: VerificationStatus,
-      exit_code: z.number().int().nullable(),
-      artifact_ref: z.string().nullable(),
-      summary: z.string().nullable(),
-    }),
-  ),
+  /**
+   * What was verified (ADR-0024 §1): the checkout, its HEAD, its source version (HEAD plus a hash of
+   * uncommitted content) and the run's base commit. Null for manual results and older records.
+   */
+  execution_root: z.string().nullable(),
+  commit_sha: z.string().nullable(),
+  source_version: z.string().nullable(),
+  base_commit: z.string().nullable(),
+  task_kind: z.string().nullable(),
+  checks: z.array(VerificationCheckView),
 });
 export type VerificationView = z.infer<typeof VerificationView>;
 

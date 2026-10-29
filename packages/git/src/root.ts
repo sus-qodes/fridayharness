@@ -45,6 +45,18 @@ export interface SourceIdentity {
   version: string;
 }
 
+/** A path changed since a base commit (ADR-0024 §3). Paths are root-relative with forward slashes. */
+export interface ChangedPath {
+  path: string;
+  change: 'added' | 'modified' | 'deleted' | 'renamed';
+  /** The previous path of a rename. */
+  origPath?: string;
+  /** Changed by commits between the base and HEAD. */
+  committed: boolean;
+  /** Changed in the index or working tree, judged by content. */
+  uncommitted: boolean;
+}
+
 export interface LogEntry {
   commit: string;
   short: string;
@@ -268,6 +280,77 @@ export class GitRoot {
         return st ? `${tag}\0${st.size}:${Math.trunc(st.mtimeMs)}` : `${tag}\0deleted`;
       }),
     );
+  }
+
+  /**
+   * The paths changed since `base` (ADR-0024 §3): the commits from the base to HEAD compared tree to
+   * tree, plus uncommitted changes judged by content (the identity's paths, so a line-ending-only
+   * difference is not a change). Without a base, or with a base this repository does not have,
+   * only uncommitted changes count, and `base_found` says which.
+   */
+  async changesSince(
+    base: string | null,
+  ): Promise<{ changes: ChangedPath[]; identity: SourceIdentity; base_found: boolean }> {
+    const status = await this.status();
+    const identity = await this.identity(status);
+    const out = new Map<string, ChangedPath>();
+    const head = status.head.commit;
+    let baseFound = base === null || base === head;
+    if (base && head && base !== head) {
+      const res = await this.git(['diff-tree', '-r', '-z', '-M', '--name-status', base, head], { okCodes: [128] });
+      baseFound = res.code === 0;
+      const t = baseFound ? res.stdout.split('\0') : [];
+      for (let i = 0; i < t.length; i++) {
+        const code = t[i];
+        if (!code) continue;
+        const letter = code[0];
+        if (letter === 'R' || letter === 'C') {
+          const from = t[i + 1] ?? '';
+          const to = t[i + 2] ?? '';
+          i += 2;
+          out.set(to, {
+            path: to,
+            change: letter === 'R' ? 'renamed' : 'added',
+            ...(letter === 'R' ? { origPath: from } : {}),
+            committed: true,
+            uncommitted: false,
+          });
+        } else {
+          const p = t[i + 1] ?? '';
+          i += 1;
+          out.set(p, {
+            path: p,
+            change: letter === 'A' ? 'added' : letter === 'D' ? 'deleted' : 'modified',
+            committed: true,
+            uncommitted: false,
+          });
+        }
+      }
+    }
+    const real = new Set(identity.paths);
+    for (const e of status.entries) {
+      if (e.kind === 'ignored' || !real.has(e.path)) continue;
+      const prev = out.get(e.path);
+      const change: ChangedPath['change'] =
+        e.index === 'D' || e.worktree === 'D'
+          ? 'deleted'
+          : e.kind === 'untracked' || e.index === 'A'
+            ? 'added'
+            : e.kind === 'renamed'
+              ? 'renamed'
+              : 'modified';
+      const origPath = e.origPath ?? prev?.origPath;
+      out.set(e.path, {
+        path: e.path,
+        // A file added by a commit and edited since is still new relative to the base.
+        change: prev?.change === 'added' && change === 'modified' ? 'added' : change,
+        ...(origPath ? { origPath } : {}),
+        committed: Boolean(prev?.committed),
+        uncommitted: true,
+      });
+    }
+    const changes = [...out.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    return { changes, identity, base_found: baseFound };
   }
 
   /** Commits that touched `paths` (all commits without paths), newest first; no author emails. */

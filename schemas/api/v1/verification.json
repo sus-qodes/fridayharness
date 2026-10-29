@@ -45,6 +45,36 @@
         "null"
       ]
     },
+    "execution_root": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "commit_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "base_commit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "task_kind": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "checks": {
       "type": "array",
       "items": {
@@ -91,6 +121,81 @@
               "string",
               "null"
             ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "friday",
+              "configured",
+              "targeted"
+            ]
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "details": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "findings": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "rule": {
+                          "type": "string"
+                        },
+                        "severity": {
+                          "type": "string",
+                          "enum": [
+                            "fail",
+                            "warn",
+                            "info"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "rule",
+                        "severity",
+                        "message",
+                        "paths"
+                      ]
+                    }
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -99,7 +204,11 @@
           "status",
           "exit_code",
           "artifact_ref",
-          "summary"
+          "summary",
+          "required",
+          "origin",
+          "duration_ms",
+          "details"
         ]
       }
     }
@@ -112,6 +221,11 @@
     "started_at",
     "ended_at",
     "summary",
+    "execution_root",
+    "commit_sha",
+    "source_version",
+    "base_commit",
+    "task_kind",
     "checks"
   ]
 }
