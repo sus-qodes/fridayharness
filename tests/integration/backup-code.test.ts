@@ -20,6 +20,8 @@ import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
 import { FakeHarness } from '../helpers/fake-harness.js';
 
 const ws = useTestWorkspace();
+/** Deleting a lost clone: retried while Windows releases the last handles of its processes (LESSONS T-42). */
+const LOST = { recursive: true, force: true, maxRetries: 20, retryDelay: 100 } as const;
 const human: Actor = { kind: 'human', id: 'local-operator' };
 let saved: string | undefined;
 beforeEach(() => {
@@ -127,8 +129,8 @@ async function cloneWithWork() {
 async function loseClone(c: { a: TestDaemon; A: string; wa: string; fake: FakeHarness }) {
   await c.fake.close();
   await c.a.daemon.close('the disk is lost');
-  rmSync(c.wa, { recursive: true, force: true });
-  rmSync(c.A, { recursive: true, force: true });
+  rmSync(c.wa, LOST);
+  rmSync(c.A, LOST);
   expect(existsSync(c.A)).toBe(false);
 }
 

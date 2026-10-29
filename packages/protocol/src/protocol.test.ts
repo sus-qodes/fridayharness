@@ -149,7 +149,8 @@ describe('method schemas', () => {
     expect(isMethodName('memory.record')).toBe(true);
     expect(isMethodName('operation.run')).toBe(true);
     expect(isMethodName('approval.elicited')).toBe(true);
-    expect(Object.keys(METHODS)).toHaveLength(24);
+    expect(isMethodName('tool.check')).toBe(true);
+    expect(Object.keys(METHODS)).toHaveLength(25);
   });
 });
 

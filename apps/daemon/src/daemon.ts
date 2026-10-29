@@ -32,6 +32,7 @@ import { OperationManager } from './operations.js';
 import { type EffectivePolicy, loadEffectivePolicy, writePolicyTrust } from './policy.js';
 import { RecoveryManager } from './recovery.js';
 import { RoutingService } from './routing.js';
+import { createToolJudge, type ToolJudge } from './tool-policy.js';
 import { runVerification } from './verify.js';
 import { WorkspaceManager } from './workspaces.js';
 
@@ -87,6 +88,8 @@ export interface DaemonContext {
   groups: ProcessGroups;
   /** Stops a task's gateway operations, confirmed, before its checkout is judged or reused. */
   quiesce: (taskId: string, reason: string) => Promise<void>;
+  /** Judges a host's tool call, for every host the same way (ADR-0032 §4). */
+  judgeTool: ToolJudge;
 }
 
 export interface Daemon extends DaemonContext {
@@ -334,6 +337,13 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     stateDir: path.dirname(path.dirname(privateDir)),
     policy: () => policy,
   });
+  // One judgment of host tool calls for every host: the hooks and spawn adapters (ADR-0032 §4).
+  const judgeTool = createToolJudge({
+    state,
+    project,
+    policy: () => policy,
+    stateDir: path.dirname(path.dirname(privateDir)),
+  });
   const ctx: DaemonContext = {
     state,
     project,
@@ -359,6 +369,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     profile,
     groups,
     quiesce: (taskId, reason) => quiesce(taskId, reason),
+    judgeTool,
   };
   for (const e of policy.errors) logger.error('policy file not applied', e);
   if (!policy.trusted) logger.warn('policy settings wait for "friday policy trust"', { loosening: policy.loosening });
@@ -445,6 +456,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     operations,
     routing,
     laya,
+    judgeTool,
   });
   for (const ext of opts.extensions ?? []) ext(app as unknown as Hono, ctx);
 

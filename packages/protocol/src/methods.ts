@@ -136,6 +136,11 @@ export const TaskStartParams = z.object({
    */
   model: z.string().nullable().default(null),
   model_binding: z.boolean().default(false),
+  /**
+   * The host session this run worked in, as its adapter reported it when it accepted the run
+   * (ADR-0032 §3): null for a new attempt; on `task.resume`, the session to resume.
+   */
+  session_ref: z.string().nullable().default(null),
 });
 export type TaskStartParams = z.infer<typeof TaskStartParams>;
 export const TaskCancelParams = z.object({ task_id: z.string(), run_id: z.string(), reason: z.string().optional() });
@@ -433,6 +438,40 @@ export const PermissionRequestResult = z.object({
   risk: z.enum(['low', 'medium', 'high']).optional(),
 });
 
+/**
+ * A host action a spawn adapter asks Friday about before its host may do it (ADR-0032 §4): the
+ * same judgment as Claude Code's PreToolUse hook. Paths are as the host gives them, absolute or
+ * relative to the run's checkout.
+ */
+export const ToolAction = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('command'), command: z.string().min(1).max(8000) }),
+  z.object({ kind: z.literal('write'), paths: z.array(z.string().min(1).max(2000)).min(1).max(200) }),
+  z.object({ kind: z.literal('read'), paths: z.array(z.string().min(1).max(2000)).min(1).max(200) }),
+  z.object({
+    kind: z.literal('search'),
+    patterns: z.array(z.string().max(2000)).max(50).default([]),
+    paths: z.array(z.string().max(2000)).max(50).default([]),
+  }),
+  z.object({ kind: z.literal('network'), url: z.string().min(1).max(2000) }),
+]);
+export type ToolAction = z.infer<typeof ToolAction>;
+export const ToolCheckParams = z.object({
+  ...Base,
+  /** The task and run the action is for; when given, they must be the ones this session holds. */
+  task_id: z.string().optional(),
+  run_id: z.string().optional(),
+  /** The host's own name for the tool, for the record (`commandExecution`, `fileChange`, `Bash`). */
+  tool: z.string().min(1).max(100),
+  action: ToolAction,
+});
+export const ToolCheckResult = z.object({
+  decision: z.enum(['allow', 'deny', 'ask']),
+  reason: z.string(),
+  rule: z.string(),
+  /** With `ask`: the pending approval a human decides; the same action passes once it is granted. */
+  approval_id: z.string().nullable(),
+});
+
 export const HumanEscalationParams = z.object({
   ...Base,
   task_id: z.string().optional(),
@@ -555,6 +594,7 @@ export const METHODS = {
   'operation.status': { params: OperationStatusParams, result: OperationResult },
   'operation.list': { params: OperationListParams, result: OperationListResult },
   'approval.elicited': { params: ApprovalElicitedParams, result: ApprovalElicitedResult },
+  'tool.check': { params: ToolCheckParams, result: ToolCheckResult },
 } as const;
 
 export type MethodName = keyof typeof METHODS;

@@ -67,6 +67,128 @@ function gateEnv(env: NodeJS.ProcessEnv, systemRoot: string): NodeJS.ProcessEnv 
 /** One argument quoted for `cmd.exe /s /c` and the program behind it (callers refuse `"` and `%`). */
 const quoteForCmd = (a: string) => `"${a.replace(/(\\+)$/, '$1$1')}"`;
 
+/** A long-running process Friday talks to over its standard input and output (ADR-0032 §2). */
+export interface InteractiveSpec {
+  command: string;
+  args: readonly string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  /** Every process it starts belongs to this group, and ends with it. */
+  group: ProcessGroup;
+  /** Each line it writes to standard output. */
+  onLine: (line: string) => void;
+  /** Characters of standard error to keep (the tail). */
+  maxStderrChars?: number;
+}
+
+export interface InteractiveProcess {
+  readonly pid: number | undefined;
+  /** Writes to its standard input; what is written before it is in its group waits until then. */
+  write(text: string): void;
+  /** Ends it and everything it started; resolves once none of it is left. */
+  stop(): Promise<void>;
+  /** Resolves when it exits, with the tail of its standard error. */
+  readonly exited: Promise<{
+    exit_code: number | null;
+    signal: string | null;
+    stderr: string;
+    spawn_error: string | null;
+  }>;
+}
+
+/**
+ * Starts a process that speaks over stdio (a host such as Codex's app-server) inside a group, at
+ * Friday's gate: the command starts only once the gate is in the group, so the host and every
+ * command it runs end with the group, whatever the host does with an interrupt (M3.5).
+ */
+export function startProcess(spec: InteractiveSpec): InteractiveProcess {
+  const max = spec.maxStderrChars ?? 64 * 1024;
+  const systemRoot = spec.env.SystemRoot ?? process.env.SystemRoot ?? 'C:\\Windows';
+  let stderr = '';
+  let failure: string | null = null;
+  let ready = false;
+  const queued: string[] = [];
+  let resolveExit!: (o: {
+    exit_code: number | null;
+    signal: string | null;
+    stderr: string;
+    spawn_error: string | null;
+  }) => void;
+  const exited = new Promise<{
+    exit_code: number | null;
+    signal: string | null;
+    stderr: string;
+    spawn_error: string | null;
+  }>((r) => {
+    resolveExit = r;
+  });
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(process.execPath, ['--no-warnings', '-e', GATE_SOURCE], {
+      cwd: spec.cwd,
+      env: gateEnv(spec.env, systemRoot),
+      windowsHide: true,
+      detached: process.platform !== 'win32',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch (e) {
+    resolveExit({ exit_code: null, signal: null, stderr: '', spawn_error: (e as Error).message });
+    return { pid: undefined, write: () => undefined, stop: async () => undefined, exited };
+  }
+  child.stdin?.on('error', () => undefined);
+  child.stderr?.on('data', (d: Buffer) => {
+    stderr += d.toString('utf8');
+    if (stderr.length > max) stderr = stderr.slice(stderr.length - max);
+  });
+  let partial = '';
+  child.stdout?.setEncoding('utf8');
+  child.stdout?.on('data', (d: string) => {
+    partial += d;
+    for (let nl = partial.indexOf('\n'); nl >= 0; nl = partial.indexOf('\n')) {
+      const line = partial.slice(0, nl).replace(/\r$/, '');
+      partial = partial.slice(nl + 1);
+      if (line) spec.onLine(line);
+    }
+  });
+  child.once('error', (e) => {
+    failure = e.message;
+  });
+  child.once('close', (code, signal) => {
+    if (partial.trim()) spec.onLine(partial.trim());
+    // What it left running ends with it.
+    spec.group.terminate().catch(() => undefined);
+    resolveExit({ exit_code: code, signal: signal ?? null, stderr, spawn_error: failure });
+  });
+  const pid = child.pid;
+  if (pid !== undefined) {
+    spec.group.adopt(pid).then(
+      () => {
+        const target = { file: spec.command, args: [...spec.args], verbatim: false };
+        child.stdin?.write(`${JSON.stringify({ ...target, cwd: spec.cwd, env: spec.env, interactive: true })}\n`);
+        ready = true;
+        for (const q of queued.splice(0)) child.stdin?.write(q);
+      },
+      (e: Error) => {
+        failure = `could not place the process in its group: ${e.message}`;
+        killTree(pid);
+      },
+    );
+  }
+  return {
+    pid,
+    write(text: string) {
+      if (ready) child.stdin?.write(text);
+      else queued.push(text);
+    },
+    async stop() {
+      await spec.group.terminate();
+      child.stdin?.end();
+      await Promise.race([exited, new Promise((r) => setTimeout(r, 5000).unref())]);
+    },
+    exited,
+  };
+}
+
 /** Runs one process and resolves with its outcome; never throws. */
 export function runProcess(spec: ProcessSpec): Promise<ProcessOutcome> {
   const started = performance.now();

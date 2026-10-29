@@ -3963,6 +3963,8 @@ export class FridayState {
       policy_profile: null,
       model: run.model_requested,
       model_binding: run.model_binding,
+      // The session to resume, as the adapter reported it when it accepted the run (ADR-0032 §3).
+      session_ref: run.session_ref ?? null,
     };
   }
 

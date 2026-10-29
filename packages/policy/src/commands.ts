@@ -86,7 +86,11 @@ function unwrap(ws: string[]): string[] {
   let w = [...ws];
   for (let guard = 0; guard < 6; guard += 1) {
     while (w.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w[0] as string)) w = w.slice(1);
-    const head = (w[0] ?? '').toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, '');
+    // A host may name the shell by its full path (`"C:\WINDOWS\…\powershell.exe" -Command …`, ADR-0032 §4).
+    const head = (w[0] ?? '')
+      .toLowerCase()
+      .replace(/^.*[\\/]/, '')
+      .replace(/\.(exe|cmd|bat|ps1)$/, '');
     if (['sudo', 'npx', 'call', '&', 'time', 'nohup', 'env'].includes(head)) {
       w = w.slice(1);
       continue;
@@ -453,6 +457,43 @@ export interface CommandClassification {
   segments: { text: string; class: CommandClass }[];
 }
 
+const SHELLS = new Set(['powershell', 'pwsh', 'cmd', 'bash', 'sh', 'zsh']);
+
+/**
+ * The command a shell wrapper runs (`"C:\WINDOWS\…\powershell.exe" -NoProfile -Command '<cmd>'`,
+ * `cmd /c "<cmd>"`, `bash -lc '<cmd>'`), or null for a segment that is not one. A host that wraps
+ * every command (Codex, ADR-0032 §4) must not hide a second command inside the quotes: the inner
+ * command is split and judged again.
+ */
+export function wrappedCommand(segment: string): string | null {
+  const m = /^\s*(?:"([^"]+)"|(\S+))\s+([\s\S]*)$/.exec(segment);
+  if (!m) return null;
+  const head = (m[1] ?? m[2] ?? '')
+    .toLowerCase()
+    .replace(/^.*[\\/]/, '')
+    .replace(/\.(exe|cmd|bat)$/, '');
+  if (!SHELLS.has(head)) return null;
+  const flag = /(?:^|\s)(-c|-command|\/c|\/k|-lc)\s+([\s\S]*)$/i.exec(m[3] as string);
+  if (!flag) return null;
+  let inner = (flag[2] as string).trim();
+  const q = inner[0];
+  if ((q === "'" || q === '"') && inner.length >= 2 && inner.endsWith(q)) {
+    const body = inner.slice(1, -1);
+    // One quoted argument; inside PowerShell's single quotes, a quote is written twice.
+    if (!body.includes(q)) inner = body;
+    else if (q === "'" && !body.replace(/''/g, '').includes("'")) inner = body.replace(/''/g, "'");
+  }
+  return inner;
+}
+
+/** A command line's segments, with every shell wrapper replaced by the segments it runs. */
+function expandedSegments(command: string, depth = 0): string[] {
+  return splitSegments(command).flatMap((s) => {
+    const inner = depth < 4 ? wrappedCommand(s) : null;
+    return inner === null ? [s] : expandedSegments(inner, depth + 1);
+  });
+}
+
 export function classifyCommand(
   command: string,
   autonomy: Partial<Record<CommandClass, Autonomy>> = {},
@@ -461,15 +502,13 @@ export function classifyCommand(
   // Classes that are never allowed cannot be relaxed by configuration.
   table['secrets.read'] = 'never';
   table['friday.internal'] = 'never';
-  const segments = splitSegments(command).map((text) => ({ text, class: classifySegment(text) }));
+  const segments = expandedSegments(command).map((text) => ({ text, class: classifySegment(text) }));
   if (segments.length === 0) return { class: 'read.local', autonomy: 'auto', segments };
   let worst = segments[0] as { text: string; class: CommandClass };
   for (const s of segments) if (RANK[table[s.class]] > RANK[table[worst.class]]) worst = s;
-  // Redirecting output into a file writes it, whatever the command.
-  if (
-    /(^|[^0-9&])>{1,2}\s*[^&\s]/.test(command.replace(/"[^"]*"|'[^']*'/g, '')) &&
-    RANK[table[worst.class]] < RANK.review
-  ) {
+  // Redirecting output into a file writes it, whatever the command; inside a wrapper too.
+  const redirects = (text: string) => /(^|[^0-9&])>{1,2}\s*[^&\s]/.test(text.replace(/"[^"]*"|'[^']*'/g, ''));
+  if ((redirects(command) || segments.some((s) => redirects(s.text))) && RANK[table[worst.class]] < RANK.review) {
     worst = { text: command, class: 'git.mutate' };
   }
   return { class: worst.class, autonomy: table[worst.class], segments };

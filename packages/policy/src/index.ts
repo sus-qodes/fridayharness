@@ -24,6 +24,7 @@ export {
   classifySegment,
   DEFAULT_AUTONOMY,
   splitSegments,
+  wrappedCommand,
 } from './commands.js';
 export {
   type ActionKind,

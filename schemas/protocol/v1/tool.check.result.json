@@ -1,0 +1,33 @@
+{
+  "$id": "urn:friday:protocol:v1:tool.check:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": [
+        "allow",
+        "deny",
+        "ask"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "rule": {
+      "type": "string"
+    },
+    "approval_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "decision",
+    "reason",
+    "rule",
+    "approval_id"
+  ]
+}

@@ -32,6 +32,16 @@ describe('capabilities', () => {
     expect(capabilityOf('teleport')).toBeNull();
   });
 
+  it('judges a request for a command as that command, whichever file capability its class needs', () => {
+    // A recursive delete needs file.delete; a host names it with its shell's full path (ADR-0032 §4).
+    const cmd =
+      '"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command \'Remove-Item -Recurse build\'';
+    // As a path, a command is outside the project: it could never be approved.
+    expect(judge('file.delete', cmd)).toEqual(['deny', 'high']);
+    expect(judge('file.delete', cmd, { command: cmd })).toEqual(['review', 'high']);
+    expect(judge('file.read', 'printenv', { command: 'printenv' })).toEqual(['deny', 'low']);
+  });
+
   it('judges a request by scope, protected files, autonomy and risk', () => {
     expect(judge('file.write', 'frontend/src/a.ts')).toEqual(['allow', 'medium']);
     expect(judge('file.write', 'backend/src/a.ts')).toEqual(['review', 'medium']);

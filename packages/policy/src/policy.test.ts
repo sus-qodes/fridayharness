@@ -9,6 +9,7 @@ import {
   type PolicyTask,
   sensitiveClassOf,
   splitSegments,
+  wrappedCommand,
 } from './index.js';
 
 const WIN: PathContext = {
@@ -146,6 +147,21 @@ describe('command classification', () => {
     expect(classifyCommand('printenv', { 'secrets.read': 'auto' }).autonomy).toBe('never');
     expect(classifyCommand('git commit -m x', { 'git.mutate': 'auto' }).autonomy).toBe('auto');
   });
+
+  it('judges every command a shell wrapper runs, as a host that wraps them sends it (ADR-0032 §4)', () => {
+    // The forms Codex used on Windows in the M3.5 transcripts, and its POSIX form.
+    const ps = '"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"';
+    expect(classifyCommand(`${ps} -Command 'node --test'`).class).toBe('test.local');
+    expect(classifyCommand(`${ps} -NoProfile -Command 'node --test; Remove-Item -Recurse src'`).class).toBe(
+      'fs.destructive',
+    );
+    expect(classifyCommand(`"C:\\WINDOWS\\system32\\cmd.exe" /c 'git push origin main'`).class).toBe('git.push');
+    expect(classifyCommand(`/bin/bash -lc 'git status && printenv'`).class).toBe('secrets.read');
+    // Output redirected inside the wrapper is a write.
+    expect(classifyCommand(`bash -lc 'echo hi > notes.txt'`).class).toBe('git.mutate');
+    expect(wrappedCommand(`${ps} -Command 'Write-Output ''hi'''`)).toBe("Write-Output 'hi'");
+    expect(wrappedCommand('node --test')).toBeNull();
+  });
 });
 
 describe('evaluate', () => {
@@ -235,6 +251,11 @@ describe('evaluate', () => {
       evaluate({ ctx: WIN, task: running([]), action: { tool: 'Bash', kind: 'command', command }, ...extra });
     expect(cmd('node --test').decision).toBe('allow');
     expect(cmd('git commit -m x').decision).toBe('ask');
+    // The approval that lets it through, for a host with nobody to ask (ADR-0032 §4).
+    expect(cmd('git commit -m x').grant).toEqual({ capability: 'shell.git.commit', target: 'git commit -m x' });
+    expect(
+      cmd('git commit -m x', { approved: (c, t) => c === 'shell.git.commit' && t === 'git commit -m x' }),
+    ).toMatchObject({ decision: 'allow', relied_on: [{ capability: 'shell.git.commit', target: 'git commit -m x' }] });
     expect(cmd('git push').decision).toBe('deny');
     expect(cmd('git push', { approved: (c, t) => c === 'shell.git.push' && t === 'git push' }).decision).toBe('allow');
     expect(cmd('cat .env').rule).toBe('sensitive.secrets');

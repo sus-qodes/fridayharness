@@ -45,6 +45,7 @@ import type { EffectivePolicy } from './policy.js';
 import type { RecoveryManager } from './recovery.js';
 import type { RoutingService } from './routing.js';
 import { type AuthInfo, callerFor, dispatchRpc } from './rpc.js';
+import type { ToolJudge } from './tool-policy.js';
 import { statusPageHtml } from './ui.js';
 import type { WorkspaceManager } from './workspaces.js';
 
@@ -88,6 +89,8 @@ export interface AppDeps {
   operations?: OperationManager;
   /** Model routing (M7, ADR-0031). */
   routing?: RoutingService;
+  /** Judges a host's tool call the way the hooks do (ADR-0032 §4). */
+  judgeTool?: ToolJudge;
   /** Laya (M7c, ADR-0031 §10). */
   laya?: LayaService;
 }
@@ -641,6 +644,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
           ...(deps.stateDir ? { stateDir: deps.stateDir } : {}),
           ...(deps.policy ? { policy: deps.policy } : {}),
           ...(deps.operations ? { operations: deps.operations } : {}),
+          ...(deps.judgeTool ? { judgeTool: deps.judgeTool } : {}),
         },
         c.get('auth'),
         body,

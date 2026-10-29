@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { useTestWorkspace } from '@friday/test-support';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ProcessGroups, runProcess } from './index.js';
+import { ProcessGroups, runProcess, startProcess } from './index.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..');
@@ -173,4 +173,38 @@ describe('process groups', () => {
     await done;
     expect(await stillWriting(marker)).toBe(false);
   });
+
+  it('runs a host Friday talks to over stdio inside its group, and ends it with all it started (ADR-0032 §2)', async () => {
+    groups = new ProcessGroups();
+    const marker = path.join(ws().root, 'host.txt');
+    const group = groups.create();
+    // Answers each line; on "work" starts a writer that outlives nothing but its group.
+    const host = [
+      "const { spawn } = require('node:child_process');",
+      "require('node:readline').createInterface({ input: process.stdin }).on('line', (l) => {",
+      `  if (l === 'work') spawn(process.execPath, ['-e', ${JSON.stringify(WRITER)}, ${JSON.stringify(marker)}], { stdio: 'ignore', windowsHide: true, detached: process.platform === 'win32' }).unref();`,
+      "  process.stdout.write(JSON.stringify({ echo: l }) + '\\n');",
+      '});',
+    ].join('\n');
+    const lines: string[] = [];
+    const p = startProcess({
+      command: process.execPath,
+      args: ['-e', host],
+      cwd: ws().root,
+      env,
+      group,
+      onLine: (l) => lines.push(l),
+    });
+    // Written before the host is in its group: delivered once it is.
+    p.write('hello\n');
+    p.write('work\n');
+    for (let i = 0; i < 100 && lines.length < 2; i++) await sleep(50);
+    expect(lines.map((l) => JSON.parse(l).echo)).toEqual(['hello', 'work']);
+    for (let i = 0; i < 100 && size(marker) < 5; i++) await sleep(50);
+    expect(await stillWriting(marker, 200)).toBe(true);
+    await p.stop();
+    expect(await group.active()).toBe(0);
+    expect(await stillWriting(marker)).toBe(false);
+    expect((await p.exited).spawn_error).toBeNull();
+  }, 60_000);
 });

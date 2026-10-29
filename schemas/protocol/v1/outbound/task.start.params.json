@@ -57,6 +57,13 @@
     "model_binding": {
       "default": false,
       "type": "boolean"
+    },
+    "session_ref": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

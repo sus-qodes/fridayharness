@@ -83,6 +83,11 @@ export interface PolicyResult {
   reserved_by?: { pattern: string; task_id: string };
   /** Approvals an allowed action relied on, to be used up by the caller (ADR-0027). */
   relied_on?: { capability: string; target: string }[];
+  /**
+   * With `ask`: the approval that lets this action through once a human grants it, so a caller
+   * without a human at the host can ask for exactly that (ADR-0032 §4).
+   */
+  grant?: { capability: string; target: string };
 }
 
 const r = (decision: Decision, rule: string, reason: string, extra: Partial<PolicyResult> = {}): PolicyResult => ({
@@ -226,7 +231,10 @@ export function evaluate(input: PolicyInput): PolicyResult {
         targets: [target],
       });
     }
-    return r('ask', 'mcp.review', `${target} is a tool of another MCP server; a human decides.`, { targets: [target] });
+    return r('ask', 'mcp.review', `${target} is a tool of another MCP server; a human decides.`, {
+      targets: [target],
+      grant: { capability: 'mcp.call', target },
+    });
   }
 
   if (action.kind === 'network') {
@@ -239,6 +247,7 @@ export function evaluate(input: PolicyInput): PolicyResult {
     return r('ask', 'network.review', `network access (${target}) needs a human decision in M1.`, {
       command_class: 'network.fetch',
       targets: [target],
+      grant: { capability: 'network.read', target },
     });
   }
 
@@ -277,6 +286,7 @@ export function evaluate(input: PolicyInput): PolicyResult {
     return r('ask', `command.${c.class}`, `${c.class} commands need a human decision.`, {
       command_class: c.class,
       targets: [target],
+      grant: { capability: CLASS_CAPABILITY[c.class], target },
     });
   }
 

@@ -277,24 +277,30 @@ function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> 
  * the job). It then starts the real command, which inherits the group and the gate's output, and
  * exits as the command does. Standard input stays open while Friday runs: on POSIX, where the gate
  * leads the process group, its end means Friday is gone, and the gate ends the whole group.
+ * An interactive command (`interactive` in the spec, ADR-0032 §2) gets what follows the spec on the
+ * gate's standard input, so a host that speaks over stdio runs inside the group too.
  */
 export const GATE_SOURCE = [
   "let buf = '';",
   'let started = false;',
+  'let child = null;',
   "const posix = process.platform !== 'win32';",
   "process.stdin.setEncoding('utf8');",
   "process.stdin.on('data', (d) => {",
-  '  if (started) return;',
+  '  if (started) { if (child && child.stdin && child.stdin.writable) child.stdin.write(d); return; }',
   '  buf += d;',
   "  const nl = buf.indexOf('\\n');",
   '  if (nl < 0) return;',
   '  started = true;',
   '  const spec = JSON.parse(buf.slice(0, nl));',
-  "  const c = require('node:child_process').spawn(spec.file, spec.args, { cwd: spec.cwd, env: spec.env, stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true, windowsVerbatimArguments: spec.verbatim });",
+  "  child = require('node:child_process').spawn(spec.file, spec.args, { cwd: spec.cwd, env: spec.env, stdio: [spec.interactive ? 'pipe' : 'ignore', 'inherit', 'inherit'], windowsHide: true, windowsVerbatimArguments: spec.verbatim });",
+  "  if (child.stdin) { child.stdin.on('error', () => {}); const rest = buf.slice(nl + 1); if (rest) child.stdin.write(rest); }",
+  '  const c = child;',
   "  c.on('error', (e) => { process.stderr.write('could not start ' + spec.file + ': ' + e.message + '\\n'); process.exit(127); });",
   "  c.on('exit', (code, signal) => { if (signal && posix) process.kill(process.pid, signal); else process.exit(code === null ? 1 : code); });",
   '});',
   "process.stdin.on('end', () => {",
+  '  if (child && child.stdin) child.stdin.end();',
   "  if (posix) { try { process.kill(-process.pid, 'SIGKILL'); } catch {} }",
   '  if (!started) process.exit(1);',
   '});',

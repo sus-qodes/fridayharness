@@ -4,6 +4,7 @@ import {
   type Capability,
   type CommandClass,
   capabilityOf,
+  DEFAULT_RISK,
   evaluateCapability,
   mcpLevel,
   type ProjectPolicy,
@@ -16,6 +17,7 @@ import {
   isFridayError,
   isMethodName,
   METHODS,
+  type ParsedParamsOf,
   RESERVED_METHODS,
   type ResultOf,
   RpcRequest,
@@ -28,6 +30,7 @@ import { type ProjectRef, policyVersion } from '@friday/sdk';
 import type { Caller, FridayState } from '@friday/state';
 import type { CompileInput } from './context.js';
 import type { OperationManager } from './operations.js';
+import type { ToolJudge } from './tool-policy.js';
 
 export interface AuthInfo {
   token_class: TokenClass;
@@ -47,6 +50,8 @@ export interface RpcDeps {
   policy?: () => ProjectPolicy;
   /** The execution gateway (ADR-0029). */
   operations?: OperationManager;
+  /** Judges a host's tool call the way the hooks do (ADR-0032 §4). */
+  judgeTool?: ToolJudge;
 }
 
 function issuesOf(err: { issues: { path: PropertyKey[]; message: string }[] }) {
@@ -114,6 +119,156 @@ function elicitedAnswer(deps: RpcDeps, c: Caller, approvalId: string, decision: 
 function gateway(deps: RpcDeps): OperationManager {
   if (!deps.operations) throw new FridayError('capability_unsupported', 'this daemon runs no operations');
   return deps.operations;
+}
+
+/**
+ * Judges a capability request and records it (ADR-0027 §3): granted when the policy allows it, denied
+ * when it never does, otherwise a pending approval bound to the task and attempt for a human.
+ */
+function requestCapability(deps: RpcDeps, c: Caller, p: ParsedParamsOf<'permission.request'>) {
+  const { state, project } = deps;
+  const pid = project.project_id;
+  // Bound to the task and attempt it is for: the named one, else the one this agent holds (ADR-0027 §4).
+  const task = p.task_id
+    ? state.q.findTask(pid, p.task_id)
+    : state.q.tasks(pid, { statuses: ['RUNNING', 'WAITING'] }).find((t) => t.assigned_agent_id === c.agent_id);
+  const run = p.run_id
+    ? state.q.findRun(p.run_id)
+    : task?.current_run_id
+      ? state.q.findRun(task.current_run_id)
+      : undefined;
+  const capability = capabilityOf(p.action_class);
+  const effective = deps.policy?.();
+  const version = effective?.version ?? policyVersion(project.config);
+  const verdict = capability
+    ? (() => {
+        const v = evaluateCapability({
+          capability,
+          target: p.resource ?? p.command ?? null,
+          // Asked for a command: judged as that command, not as a path (M8a).
+          ...(p.command && !p.resource ? { command: p.command } : {}),
+          task: task
+            ? {
+                task_id: task.task_id,
+                status: task.status,
+                scope: task.scope,
+                kind: task.kind,
+                teams: effective?.teams[state.q.findAgent(c.agent_id)?.role ?? ''] ?? [],
+              }
+            : null,
+          ctx: {
+            projectRoot: run?.execution_root ?? state.q.findHarness(c.harness_id)?.host_cwd ?? project.root,
+            mainRoot: project.root,
+            ...(deps.stateDir ? { stateDir: deps.stateDir } : {}),
+          },
+          autonomy: effective?.autonomy ?? (project.config.autonomy as Partial<Record<CommandClass, Autonomy>>),
+          risk: effective?.risk ?? (project.config.risk as Partial<Record<Capability, Risk>>),
+          ...(effective ? { deny: effective.deny } : {}),
+          // A third-party MCP tool, `<server>/<tool>`: the project's level for it (ADR-0030 §4).
+          ...(capability === 'mcp.call' && effective && p.resource?.includes('/')
+            ? {
+                mcpLevel: mcpLevel(
+                  effective,
+                  p.resource.slice(0, p.resource.indexOf('/')),
+                  p.resource.slice(p.resource.indexOf('/') + 1),
+                ),
+              }
+            : {}),
+        });
+        // An agent asking for a secret is pointed at the operations that use one (Part 12 §5).
+        const ops = capability === 'secret.resolve' ? (deps.operations?.withSecrets() ?? []) : [];
+        const reason = ops.length
+          ? `${v.reason}. Friday runs these with their secrets: ${ops
+              .map((o) => `${o.name} (${Object.keys(o.credentials).join(', ')})`)
+              .join('; ')}; call friday_run_operation`
+          : v.reason;
+        return { capability, decision: v.decision, risk: v.risk, reason, policy_version: version };
+      })()
+    : {
+        capability: p.action_class,
+        decision: 'review' as const,
+        risk: 'high' as const,
+        reason: `${p.action_class} is not a capability Friday knows; a human decides`,
+        policy_version: version,
+      };
+  return state.requestPermission(
+    pid,
+    c,
+    { ...p, task_id: p.task_id ?? task?.task_id, run_id: p.run_id ?? run?.run_id },
+    verdict,
+  );
+}
+
+/**
+ * A spawn adapter's question before its host acts (ADR-0032 §4): the same judgment as Claude Code's
+ * PreToolUse hook, for the task this session holds. Nobody is at the host to ask, so where a human
+ * decides, one pending approval for exactly this action is recorded, and the action passes once
+ * it is granted.
+ */
+function checkTool(deps: RpcDeps, c: Caller, p: ParsedParamsOf<'tool.check'>): ResultOf<'tool.check'> {
+  const { state, project } = deps;
+  const pid = project.project_id;
+  if (!deps.judgeTool) throw new FridayError('capability_unsupported', 'this daemon judges no host tool calls');
+  const held = state.q.tasks(pid, { statuses: ['RUNNING', 'WAITING'] }).find((t) => t.assigned_agent_id === c.agent_id);
+  if (p.task_id && p.task_id !== held?.task_id) {
+    throw new FridayError('permission_denied', `${p.task_id} is not a task this session holds`);
+  }
+  if (p.run_id && p.run_id !== held?.current_run_id) {
+    throw new FridayError('permission_denied', `${p.run_id} is not the run this session works in`);
+  }
+  const agent = state.q.findAgent(c.agent_id);
+  const { result, task } = deps.judgeTool({
+    harness: state.q.harness(c.harness_id),
+    agent: agent ? { agent_id: agent.agent_id, role: agent.role } : undefined,
+    action: { ...p.action, tool: p.tool },
+    actor: { kind: 'agent', id: c.agent_id },
+  });
+  let approvalId: string | null = null;
+  if (result.decision === 'ask' && result.grant && task) {
+    const { capability, target } = result.grant;
+    // One request per action: asking again while it waits does not ask a human twice.
+    const pending = (
+      state.q.approvals(pid, 'pending') as {
+        approval_id: string;
+        requested_by_id: string;
+        run_id: string | null;
+        capability: string;
+        target: string | null;
+      }[]
+    ).find(
+      (a) =>
+        a.requested_by_id === c.agent_id &&
+        a.run_id === task.current_run_id &&
+        a.capability === capability &&
+        a.target === target,
+    );
+    // The judgment above is the verdict: a human decides exactly the capability and target the
+    // policy will look for when the host tries again (not a path-based judgment of a command).
+    const effective = deps.policy?.();
+    approvalId =
+      pending?.approval_id ??
+      state.requestPermission(
+        pid,
+        c,
+        {
+          task_id: task.task_id,
+          ...(task.current_run_id ? { run_id: task.current_run_id } : {}),
+          action_class: capability,
+          resource: target,
+          justification: `${p.tool}: ${result.reason}`.slice(0, 1000),
+          ttl_s: 3600,
+          reuse: 'once',
+        },
+        {
+          capability,
+          decision: 'review',
+          risk: effective?.risk?.[capability as Capability] ?? DEFAULT_RISK[capability as Capability] ?? 'high',
+          reason: result.reason,
+          policy_version: effective?.version ?? policyVersion(project.config),
+        },
+      ).approval_id;
+  }
+  return { decision: result.decision, reason: result.reason, rule: result.rule, approval_id: approvalId };
 }
 
 /** Handles one JSON-RPC request to /protocol/v1/rpc. Errors become JSON-RPC error objects. */
@@ -336,74 +491,11 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
     }
     case 'permission.request': {
       const p = METHODS[method].params.parse(raw);
-      const c = caller();
-      // Bound to the task and attempt it is for: the named one, else the one this agent holds (ADR-0027 §4).
-      const task = p.task_id
-        ? state.q.findTask(pid, p.task_id)
-        : state.q.tasks(pid, { statuses: ['RUNNING', 'WAITING'] }).find((t) => t.assigned_agent_id === c.agent_id);
-      const run = p.run_id
-        ? state.q.findRun(p.run_id)
-        : task?.current_run_id
-          ? state.q.findRun(task.current_run_id)
-          : undefined;
-      const capability = capabilityOf(p.action_class);
-      const effective = deps.policy?.();
-      const version = effective?.version ?? policyVersion(project.config);
-      const verdict = capability
-        ? (() => {
-            const v = evaluateCapability({
-              capability,
-              target: p.resource ?? p.command ?? null,
-              task: task
-                ? {
-                    task_id: task.task_id,
-                    status: task.status,
-                    scope: task.scope,
-                    kind: task.kind,
-                    teams: effective?.teams[state.q.findAgent(c.agent_id)?.role ?? ''] ?? [],
-                  }
-                : null,
-              ctx: {
-                projectRoot: run?.execution_root ?? state.q.findHarness(c.harness_id)?.host_cwd ?? project.root,
-                mainRoot: project.root,
-                ...(deps.stateDir ? { stateDir: deps.stateDir } : {}),
-              },
-              autonomy: effective?.autonomy ?? (project.config.autonomy as Partial<Record<CommandClass, Autonomy>>),
-              risk: effective?.risk ?? (project.config.risk as Partial<Record<Capability, Risk>>),
-              ...(effective ? { deny: effective.deny } : {}),
-              // A third-party MCP tool, `<server>/<tool>`: the project's level for it (ADR-0030 §4).
-              ...(capability === 'mcp.call' && effective && p.resource?.includes('/')
-                ? {
-                    mcpLevel: mcpLevel(
-                      effective,
-                      p.resource.slice(0, p.resource.indexOf('/')),
-                      p.resource.slice(p.resource.indexOf('/') + 1),
-                    ),
-                  }
-                : {}),
-            });
-            // An agent asking for a secret is pointed at the operations that use one (Part 12 §5).
-            const ops = capability === 'secret.resolve' ? (deps.operations?.withSecrets() ?? []) : [];
-            const reason = ops.length
-              ? `${v.reason}. Friday runs these with their secrets: ${ops
-                  .map((o) => `${o.name} (${Object.keys(o.credentials).join(', ')})`)
-                  .join('; ')}; call friday_run_operation`
-              : v.reason;
-            return { capability, decision: v.decision, risk: v.risk, reason, policy_version: version };
-          })()
-        : {
-            capability: p.action_class,
-            decision: 'review' as const,
-            risk: 'high' as const,
-            reason: `${p.action_class} is not a capability Friday knows; a human decides`,
-            policy_version: version,
-          };
-      return state.requestPermission(
-        pid,
-        c,
-        { ...p, task_id: p.task_id ?? task?.task_id, run_id: p.run_id ?? run?.run_id },
-        verdict,
-      );
+      return requestCapability(deps, caller(), p);
+    }
+    case 'tool.check': {
+      const p = METHODS[method].params.parse(raw);
+      return checkTool(deps, caller(), p);
     }
     case 'task.release': {
       const p = METHODS[method].params.parse(raw);

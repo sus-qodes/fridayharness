@@ -19,6 +19,8 @@ import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
 import { FakeHarness } from '../helpers/fake-harness.js';
 
 const ws = useTestWorkspace();
+/** Deleting a lost clone: retried while Windows releases the last handles of its processes (LESSONS T-42). */
+const LOST = { recursive: true, force: true, maxRetries: 20, retryDelay: 100 } as const;
 let saved: string | undefined;
 beforeEach(() => {
   saved = process.env.FRIDAY_STATE_DIR;
@@ -211,8 +213,8 @@ describe('restored work continues where it was (review M7.1 R05)', () => {
     // (What clone A does after the backup is lost with it; its check finishes first, so its files can go.)
     await auditing;
     await td.daemon.close('the disk is lost');
-    rmSync(worktrees, { recursive: true, force: true });
-    rmSync(A, { recursive: true, force: true });
+    rmSync(worktrees, LOST);
+    rmSync(A, LOST);
 
     // A clean clone of the team's remote, the backup restored, Friday started there.
     const B = path.join(ws().root, 'b');
@@ -327,8 +329,8 @@ describe('restored work continues where it was (review M7.1 R05)', () => {
     const made = await cli(['--project', A, 'backup', '--into', backup]);
     expect(made.code, made.stderr).toBe(0);
     await td.daemon.close('the disk is lost');
-    rmSync(path.join(path.dirname(ws().stateDir), 'friday-worktrees'), { recursive: true, force: true });
-    rmSync(A, { recursive: true, force: true });
+    rmSync(path.join(path.dirname(ws().stateDir), 'friday-worktrees'), LOST);
+    rmSync(A, LOST);
 
     const B = path.join(ws().root, 'b');
     await deterministicGit(ws().root).run(['clone', '-q', remote, B]);

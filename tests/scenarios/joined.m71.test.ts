@@ -35,6 +35,8 @@ import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
 import { FakeHarness } from '../helpers/fake-harness.js';
 
 const ws = useTestWorkspace();
+/** Deleting a lost clone: retried while Windows releases the last handles of its processes (LESSONS T-42). */
+const LOST = { recursive: true, force: true, maxRetries: 20, retryDelay: 100 } as const;
 /** A dummy key in the shape of a payment sandbox key: never a real one. */
 const SECRET = `sk_test_51Hjoined${'Q7x'.repeat(10)}`;
 const saved: Record<string, string | undefined> = {};
@@ -574,9 +576,9 @@ describe('the joined scenario (M7 review §5)', () => {
     await fe1.close();
     await td.daemon.close('the disk is lost');
     for (const w of [api.working_directory, ui.working_directory, docsA.working_directory]) {
-      rmSync(w, { recursive: true, force: true });
+      rmSync(w, LOST);
     }
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, LOST);
 
     // A clean clone of the team's remote, the backup restored into it, Friday started there. A copy
     // of the backup whose database was damaged is refused first, before anything changes (review

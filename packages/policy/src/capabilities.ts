@@ -108,6 +108,11 @@ export interface CapabilityRequest {
   deny?: { write: readonly string[]; read: readonly string[] };
   /** For `mcp.call`: the target tool's level under the project's server policy (ADR-0030 §3). */
   mcpLevel?: Autonomy;
+  /**
+   * The request is for running this command. Its target is the command, never a path, even when
+   * the command's class maps onto a file capability (`fs.destructive` onto `file.delete`).
+   */
+  command?: string;
 }
 
 export interface CapabilityDecision {
@@ -131,6 +136,17 @@ export function evaluateCapability(req: CapabilityRequest): CapabilityDecision {
     reason,
   });
   const scope = req.task?.scope ?? null;
+  // A command is judged as the command it is, whichever capability its class needs (M8a).
+  if (
+    req.command &&
+    (req.capability === 'file.read' || req.capability === 'file.write' || req.capability === 'file.delete')
+  ) {
+    const c = classifyCommand(req.command, req.autonomy);
+    if (c.autonomy === 'never')
+      return d('deny', 'capability.never', `${c.class} commands are never allowed for agents`);
+    if (c.autonomy === 'auto') return d('allow', 'capability.auto', `${c.class} runs without review`);
+    return d('review', `capability.${c.autonomy}`, `${c.class} commands need a human decision (${risk} risk)`);
+  }
   switch (req.capability) {
     case 'secret.resolve':
       return d(

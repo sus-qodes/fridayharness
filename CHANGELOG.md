@@ -2,6 +2,15 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M8a, a second host
+
+- **M8a.1, one judgment for every host** (ADR-0032):
+  - **New protocol method `tool.check`.** A spawn adapter asks Friday before its host runs a command or changes a file. It gets the same answer Claude Code's hooks get, from the same code. Where a human decides, Friday records one pending approval for exactly that action; once you approve it, the action goes through once.
+  - **Commands are judged inside their shell wrapper** (`"C:\…\powershell.exe" -Command '…'`, `cmd /c`, `bash -lc`), every part of them. **Fix:** before, a redirect inside `bash -lc` counted as a read, and `printenv` inside it was not refused.
+  - **Fix:** a request to run a command is judged as that command. Before, a recursive delete naming an absolute path could not be approved.
+  - `task.resume` tells the adapter which host session to resume.
+  - Hosts that speak over stdio run inside Friday's process groups.
+
 ## Unreleased — M7.1e, the follow-up review of M7.1
 
 A follow-up review of M7.1 found 7 more gaps in authority and continuation. Each is fixed, with a regression that failed before the change ([disposition](docs/reviews/2026-10-15-m7-1-review-disposition.md)).
