@@ -14,6 +14,9 @@ import type { GraphService } from './graph-service.js';
 
 export type { CompileInput } from '@friday/context';
 
+/** The task states of an active attempt, in which read grants count. */
+const ACTIVE = new Set(['ASSIGNED', 'RUNNING', 'WAITING']);
+
 /**
  * The context compiler of the daemon (ADR-0022) over the project's execution root: the main
  * checkout until M5 (ADR-0014). Packets are cached by their key and explained.
@@ -55,6 +58,9 @@ export function createContextService(opts: {
     // The exact paths a human let this agent read for this task, under the current policy.
     readGrants: (input, task) => {
       if (input.recipient.kind !== 'agent' || !task) return [];
+      // Grants are bound to an attempt: they count only while the recipient holds the task in an
+      // active attempt, so a task cancelled or reassigned meanwhile ends them (review M7.1 R02).
+      if (task.assigned_agent_id !== input.recipient.id || !ACTIVE.has(task.status)) return [];
       return opts.state.q.usableGrants(opts.project.project_id, {
         capability: 'file.read',
         task_id: task.task_id,

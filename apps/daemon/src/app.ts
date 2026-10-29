@@ -819,7 +819,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.post(`${P}/tasks/:tid/recover`, allow(...OPERATOR), async (c) => {
     const body = z
       .object({
-        action: z.enum(['reassign', 'restart', 'needs_human', 'cancel']),
+        action: z.enum(['reassign', 'restart', 'rebind', 'needs_human', 'cancel']),
         reason: z.string().min(1).max(500).optional(),
       })
       .parse(await c.req.json());
@@ -954,7 +954,10 @@ export function buildApp(deps: AppDeps): Hono<Env> {
         `only a completed task of a goal is integrated; ${task.task_id} is ${task.status}${task.goal_id ? '' : ' without a goal'}`,
       );
     }
-    return c.json({ integration: await deps.integration.integrate(task.task_id, HUMAN) });
+    // `repaired`: a human repaired a failed or conflicted integration on the task branch (review M7.1 R04).
+    const body = await c.req.json().catch(() => ({}));
+    const repaired = z.object({ repaired: z.boolean().optional() }).parse(body ?? {}).repaired === true;
+    return c.json({ integration: await deps.integration.integrate(task.task_id, HUMAN, { repaired }) });
   });
 
   // File reservations (M5c, ADR-0025).

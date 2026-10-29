@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { cpSync, createReadStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { closeDatabase, openDatabase } from '@friday/db';
 import {
   BACKUP_PREFIX,
   checkedOutBranches,
@@ -36,6 +37,8 @@ interface Manifest {
   schema_version?: number;
   created_at?: string;
   artifacts?: { path: string; bytes: number; sha256: string }[];
+  /** Since M7.1 (review M7.1 R07): the finished database copy, checked before anything changes. */
+  database?: { file?: string; bytes?: number; sha256?: string };
   code?: {
     included?: boolean;
     reason?: string;
@@ -43,6 +46,56 @@ interface Manifest {
     sha256?: string;
     refs?: { ref: string; commit: string }[];
   };
+}
+
+/** The table replay marks its inspection copies with (ADR-0018 §6); such a copy is never a backup. */
+const INSPECTION_MARKER = 'friday_inspection';
+
+/**
+ * Examines a copy of the backup's database before anything changes (review M7.1 R07): it must be a
+ * sound SQLite file, not an inspection copy, holding this project at the event head and schema
+ * version the manifest names. Throws with the reason.
+ */
+function examineDatabase(file: string, m: Manifest): void {
+  let db: ReturnType<typeof openDatabase> | null = null;
+  try {
+    try {
+      db = openDatabase(file);
+      const check = String(db.pragma('quick_check'));
+      if (check !== 'ok') throw new Error(check);
+    } catch (e) {
+      throw refuse(`the backup's project.db is not a sound SQLite database: ${(e as Error).message}`);
+    }
+    const marked = db
+      .prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get<{ x: number }>(INSPECTION_MARKER);
+    if (marked) {
+      throw refuse("the backup's project.db is an inspection copy made by replay, not a backup; it is never restored");
+    }
+    const project = db
+      .prepare('SELECT project_id FROM projects WHERE project_id = ?')
+      .get<{ project_id: string }>(m.project_id ?? '');
+    if (!project) throw refuse(`the backup's project.db holds no project ${m.project_id}`);
+    const head =
+      db
+        .prepare('SELECT MAX(sequence) AS s FROM events WHERE project_id = ?')
+        .get<{ s: number | null }>(m.project_id ?? '')?.s ?? 0;
+    if (m.event_head !== undefined && head !== m.event_head) {
+      throw refuse(`the backup's project.db ends at event ${head}, but its manifest says ${m.event_head}`);
+    }
+    const schema = Number(db.pragma('user_version'));
+    if (m.schema_version !== undefined && schema !== m.schema_version) {
+      throw refuse(`the backup's project.db is at schema version ${schema}, but its manifest says ${m.schema_version}`);
+    }
+  } finally {
+    if (db) {
+      try {
+        closeDatabase(db);
+      } catch {
+        // A file that is not a database may not close cleanly; the reason is already known.
+      }
+    }
+  }
 }
 
 export interface RestoreReport {
@@ -102,7 +155,12 @@ export async function restoreProject(ref: ProjectRef, from: string, now: Date = 
   if (m.project_id !== ref.project_id) {
     throw refuse(`the backup belongs to project ${m.project_id}; this project is ${ref.project_id}`);
   }
-  if (!existsSync(path.join(src, 'project.db'))) throw refuse(`${src} has no project.db`);
+  const dbSource = path.join(src, 'project.db');
+  if (!existsSync(dbSource)) throw refuse(`${src} has no project.db`);
+  // A backup made since M7.1 records its database's hash (review M7.1 R07).
+  if (m.database?.sha256 && (await hashFile(dbSource)) !== m.database.sha256) {
+    throw refuse('the backup is damaged: project.db does not match its manifest');
+  }
   const artifacts = m.artifacts ?? [];
   for (const a of artifacts) {
     if (a.path.split('/').some((part) => part === '..' || part === '')) {
@@ -148,6 +206,22 @@ export async function restoreProject(ref: ProjectRef, from: string, now: Date = 
     throw refuse('Friday is running for this project; stop it first ("friday daemon stop")');
   }
 
+  // The database itself, examined in a copy so the backup is never written: a sound SQLite file of
+  // this project at the head and schema its manifest names, and no inspection copy (review M7.1
+  // R07). Nothing of the clone has changed before this passes.
+  const dir = path.join(ref.root, FRIDAY_DIR);
+  const stamp = now.toISOString().replace(/[:.]/g, '-');
+  const incoming = path.join(dir, 'cache', `restore-incoming-${stamp}`);
+  const incomingDb = path.join(incoming, 'project.db');
+  mkdirSync(incoming, { recursive: true });
+  try {
+    cpSync(dbSource, incomingDb);
+    examineDatabase(incomingDb, m);
+  } catch (e) {
+    rmSync(incoming, { recursive: true, force: true });
+    throw e;
+  }
+
   // The code goes in first. Refs are only added or moved forward, so a failure leaves the clone's
   // own refs as they were, and the database is not touched yet.
   const placed: RefPlacement[] = [];
@@ -156,7 +230,6 @@ export async function restoreProject(ref: ProjectRef, from: string, now: Date = 
     try {
       await unbundle(gitRoot, bundleFile);
       const checkedOut = await checkedOutBranches(gitRoot);
-      const stamp = now.toISOString().replace(/[:.]/g, '-');
       for (const r of bundleRefs) {
         // A worktree's uncommitted work is kept here until recovery brings it back.
         const target = r.ref.startsWith(BACKUP_PREFIX)
@@ -170,6 +243,7 @@ export async function restoreProject(ref: ProjectRef, from: string, now: Date = 
         }
       }
     } catch (e) {
+      rmSync(incoming, { recursive: true, force: true });
       const done = placed.filter((p) => p.outcome === 'created' || p.outcome === 'advanced' || p.stored_at);
       throw new FridayError(
         'internal_error',
@@ -180,15 +254,12 @@ export async function restoreProject(ref: ProjectRef, from: string, now: Date = 
     }
   }
 
-  const dir = path.join(ref.root, FRIDAY_DIR);
   const current = ['project.db', 'project.db-wal', 'project.db-shm', 'artifacts'].filter((n) =>
     existsSync(path.join(dir, n)),
   );
   // Set the current state aside first. A WAL file left next to a restored database would be
   // applied to it, so the -wal and -shm files move with their database.
-  const aside = current.length
-    ? path.join(dir, 'cache', `pre-restore-${now.toISOString().replace(/[:.]/g, '-')}`)
-    : null;
+  const aside = current.length ? path.join(dir, 'cache', `pre-restore-${stamp}`) : null;
   const moved: string[] = [];
   const putBack = () => {
     for (const n of ['project.db', 'artifacts']) rmSync(path.join(dir, n), { recursive: true, force: true });
@@ -202,7 +273,8 @@ export async function restoreProject(ref: ProjectRef, from: string, now: Date = 
         moved.push(n);
       }
     }
-    cpSync(path.join(src, 'project.db'), path.join(dir, 'project.db'));
+    // The examined copy goes in, not the backup's file again.
+    renameSync(incomingDb, path.join(dir, 'project.db'));
     if (existsSync(path.join(src, 'artifacts'))) {
       cpSync(path.join(src, 'artifacts'), path.join(dir, 'artifacts'), { recursive: true });
     }
@@ -214,6 +286,8 @@ export async function restoreProject(ref: ProjectRef, from: string, now: Date = 
     }
     const where = aside ? `; the previous state is in ${aside}` : '';
     throw new FridayError('internal_error', `the restore failed: ${(e as Error).message}${where}`);
+  } finally {
+    rmSync(incoming, { recursive: true, force: true });
   }
   return {
     project_id: ref.project_id,

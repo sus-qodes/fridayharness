@@ -4,12 +4,15 @@
  * preserved work, or Friday says the work is missing instead of starting a new branch as if it
  * were the work. The same clone never starts a task over silently when its branch is gone.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createDaemon, type Daemon } from '@friday/daemon';
+import { closeDatabase, openDatabase } from '@friday/db';
 import { runGit } from '@friday/git';
 import type { Actor, TaskStartParams, TaskView } from '@friday/protocol';
 import { DaemonClient } from '@friday/sdk';
+import { FridayState } from '@friday/state';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli } from '../helpers/cli.js';
@@ -320,5 +323,102 @@ describe('a task whose branch is gone (review F16)', () => {
     expect(fake.received.filter((m) => m.method === 'task.start' && m.params.run_id !== first.run_id)).toEqual([]);
     expect(await g.run(['branch', '--list', `friday/${id}`])).toBe('');
     await fake.close();
+  }, 120_000);
+});
+
+describe('a backup whose database is damaged (review M7.1 R07)', () => {
+  it('is refused before anything in the clone changes, and a sound backup still restores', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const dir = ws().projectDir;
+    const pid = td.project.project_id;
+    // Some state, and task work for the code bundle.
+    const fake = await FakeHarness.connect(td, { agentKey: 'be-1', role: 'backend' });
+    const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'write notes',
+      kind: 'chore',
+      scope: { write: ['notes/**'], read: [] },
+      ready: true,
+    });
+    await td.operator.post(td.operator.projectPath(`/tasks/${task.task_id}/assign`), { agent_key: 'be-1' });
+    const start = await startOf(fake, task.task_id);
+    mkdirSync(path.join(start.working_directory, 'notes'), { recursive: true });
+    writeFileSync(path.join(start.working_directory, 'notes', 'a.txt'), 'kept\n');
+    const backup = path.join(ws().root, 'backup');
+    expect((await cli(['--project', dir, 'backup', '--into', backup])).code).toBe(0);
+    await fake.close();
+    await td.daemon.close('restoring');
+
+    const dbFile = path.join(ws().fridayDir, 'project.db');
+    const hash = (f: string) => createHash('sha256').update(readFileSync(f)).digest('hex');
+    const refs = async () =>
+      (await runGit(dir, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/friday', 'refs/friday']))
+        .stdout;
+    const before = { db: hash(dbFile), refs: await refs() };
+    const variant = (name: string, damage: (d: string) => void, old = false) => {
+      const d = path.join(ws().root, name);
+      cpSync(backup, d, { recursive: true });
+      if (old) {
+        // A backup made before backups recorded their database's hash.
+        const m = JSON.parse(readFileSync(path.join(d, 'manifest.json'), 'utf8'));
+        delete m.database;
+        writeFileSync(path.join(d, 'manifest.json'), JSON.stringify(m, null, 2));
+      }
+      damage(path.join(d, 'project.db'));
+      return d;
+    };
+    const refused = async (from: string, why: RegExp) => {
+      const r = await cli(['--project', dir, 'restore', '--from', from]);
+      expect(r.code, r.stdout).not.toBe(0);
+      expect(r.stderr).toMatch(why);
+      // Nothing changed: not the database, not a ref, and nothing was set aside.
+      expect(hash(dbFile)).toBe(before.db);
+      expect(await refs()).toBe(before.refs);
+      const cache = path.join(ws().fridayDir, 'cache');
+      expect(existsSync(cache) ? readdirSync(cache).filter((n) => /restore/.test(n)) : []).toEqual([]);
+    };
+    const notSqlite = (f: string) => writeFileSync(f, 'THIS_IS_NOT_SQLITE');
+    const cutShort = (f: string) => {
+      const b = readFileSync(f);
+      writeFileSync(f, b.subarray(0, Math.floor(b.length / 2)));
+    };
+    // Another project's database: a sound SQLite file of the wrong project.
+    const foreign = (f: string) => {
+      rmSync(f);
+      const s = new FridayState({ db: openDatabase(f) });
+      s.ensureProject({ project_id: 'proj_0000000000000000000000other', name: 'other', root_path: ws().root });
+      closeDatabase(s.db);
+    };
+    // An inspection copy made by replay: never a working database.
+    const inspection = (f: string) => {
+      const db = openDatabase(f);
+      db.exec(
+        'CREATE TABLE friday_inspection (made_at TEXT NOT NULL, made_by TEXT NOT NULL, source_head INTEGER NOT NULL)',
+      );
+      closeDatabase(db);
+    };
+
+    // A backup made now records its database's hash: any change is caught before anything else.
+    for (const [name, damage] of [
+      ['not-sqlite', notSqlite],
+      ['cut-short', cutShort],
+      ['foreign', foreign],
+      ['inspection', inspection],
+    ] as const) {
+      await refused(variant(name, damage), /project\.db does not match its manifest/);
+    }
+    // Without a recorded hash, the database itself is examined.
+    await refused(variant('old-not-sqlite', notSqlite, true), /project\.db is not a sound SQLite database/);
+    await refused(variant('old-cut-short', cutShort, true), /project\.db is not a sound SQLite database/);
+    await refused(variant('old-foreign', foreign, true), /project\.db holds no project proj_/);
+    await refused(variant('old-inspection', inspection, true), /inspection copy/);
+
+    // The sound backup restores, new format and old.
+    expect(readFileSync(path.join(backup, 'manifest.json'), 'utf8')).toContain('"database"');
+    const ok = await cli(['--project', dir, 'restore', '--from', backup]);
+    expect(ok.code, ok.stderr).toBe(0);
+    const old = variant('old-sound', () => undefined, true);
+    const ok2 = await cli(['--project', dir, 'restore', '--from', old]);
+    expect(ok2.code, ok2.stderr).toBe(0);
+    expect(pid).toBe(td.project.project_id);
   }, 120_000);
 });

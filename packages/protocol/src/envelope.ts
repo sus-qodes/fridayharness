@@ -118,6 +118,8 @@ export const EVENT_TYPES = [
   'communication.resolved',
   'memory.recorded',
   'run.workspace_ready',
+  // M7.1 (review R05): a run's claimed work brought into a worktree of this clone.
+  'run.rebound',
   'worktree.allocated',
   'worktree.released',
   'worktree.removed',

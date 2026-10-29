@@ -2,9 +2,11 @@ import { existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import {
   agentIdentity,
+  changedBetween,
   commitsSince,
   GitRoot,
   listRefs,
+  parentOf,
   preserveCommit,
   preservedPrefix,
   resetWorktree,
@@ -14,7 +16,14 @@ import {
   snapshotWorktree,
   taskBranch,
 } from '@friday/git';
-import { type Actor, FridayError, type RecoveryAction, type RecoveryAssessment, type TaskView } from '@friday/protocol';
+import {
+  type Actor,
+  FridayError,
+  type RecoveryAction,
+  type RecoveryAssessment,
+  type RunView,
+  type TaskView,
+} from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
 import type { Logger } from './log.js';
@@ -33,6 +42,26 @@ function sameDir(a: string, b: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The paths a run's completion claim lists that `head` does not change since `base` (review M7.1
+ * R05). A claim brought into this clone without the uncommitted work a backup recorded is judged
+ * here on its branch alone, which must then hold what the claim describes. When the base is not
+ * here, nothing can be shown to be here.
+ */
+async function claimedNotOn(root: string, run: RunView | undefined, base: string | null, head: string) {
+  const claim = run?.claim as { changed_paths?: unknown } | null | undefined;
+  if (!claim || !Array.isArray(claim.changed_paths)) return [];
+  const fold = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
+  const claimed = claim.changed_paths
+    .filter((p): p is string => typeof p === 'string' && p.length > 0)
+    .map((p) => (path.isAbsolute(p) && run?.execution_root ? path.relative(run.execution_root, p) : p))
+    .map((p) => p.split(path.sep).join('/').replaceAll('\\', '/').replace(/^\.\//, ''));
+  const changed = base ? await changedBetween(root, base, head).catch(() => null) : null;
+  if (!changed) return claimed;
+  const here = new Set(changed.map(fold));
+  return [...new Set(claimed)].filter((p) => !here.has(fold(p))).sort();
 }
 
 /** Whether a process with this pid runs on this machine (EPERM: it does, as someone else's). */
@@ -157,6 +186,21 @@ export class RecoveryManager {
                   : null;
     // A task waiting in READY because its work is elsewhere is recovered by a human's choice too.
     const movable = active || ((elsewhere || missingCode !== null) && task.status === 'READY');
+    // Work claimed, or verified and not yet integrated, in another clone: it is brought here as it is,
+    // and its task keeps its state, to be verified or integrated here (review M7.1 R05).
+    const settled =
+      task.status === 'READY_FOR_VERIFICATION' ||
+      (task.status === 'COMPLETED' &&
+        state.awaitsIntegration(task) &&
+        !['integrated', 'not_needed'].includes(state.q.latestIntegration(this.pid, taskId)?.status ?? ''));
+    // Without the uncommitted work a backup recorded, a claim is brought over only when its branch
+    // here holds what it lists: verification must judge the work the claim describes. Verified work
+    // needs no such check, as integration accepts only the exact tree verified (ADR-0025).
+    const notHere =
+      elsewhere && task.status === 'READY_FOR_VERIFICATION' && branchHere && !restoredHere && tree
+        ? await claimedNotOn(project.root, run, tree.base_commit, branchHere)
+        : [];
+    const next = task.status === 'COMPLETED' ? 'integrate it here ("friday integrate")' : 'verify it here';
     const fromBase = `the next attempt starts over in this clone from the task's base, without the earlier attempts' work${restoredHere ? `; the uncommitted work a backup recorded is kept as a preserved state` : ''}`;
     const options: RecoveryAssessment['options'] = [
       {
@@ -192,6 +236,20 @@ export class RecoveryManager {
           : elsewhere
             ? `the next attempt starts over in this clone, from the last commit of ${branch}${restoredHere ? '; the uncommitted work a backup recorded is kept as a preserved state' : ''}`
             : 'the next attempt starts from the last commit; uncommitted work is preserved first',
+      },
+      {
+        action: 'rebind',
+        available: elsewhere && settled && branchHere !== null && notHere.length === 0,
+        recommended: elsewhere && settled && branchHere !== null && notHere.length === 0,
+        reason: !elsewhere
+          ? 'its work is in this clone already'
+          : !settled
+            ? 'only work claimed, or verified and not yet integrated, is brought here as it is; an attempt still under way is reassigned or restarted'
+            : branchHere === null
+              ? `this clone has no ${branch}: restore a backup that holds it, or fetch it from the clone that has it, first`
+              : notHere.length
+                ? `the claim lists changes ${branch} does not hold here (${notHere.slice(0, 5).join(', ')}${notHere.length > 5 ? ` and ${notHere.length - 5} more` : ''}), and no backup's record of its uncommitted work is here, so verifying it here would judge other code than the claim describes. Restore a backup that recorded that work; if it is lost, record it ("friday verify ${taskId} --result failed --note ...") and rework the task`
+                : `its work is brought into a worktree of this clone from ${branch}${restoredHere ? ' with the uncommitted work a backup recorded' : ''}, and the task stays ${task.status}; then ${next}`,
       },
       {
         action: 'needs_human',
@@ -247,6 +305,7 @@ export class RecoveryManager {
         );
       }
       const why = reason ?? option.reason;
+      if (action === 'rebind') return await this.#rebind(taskId, a, actor, why);
       let preserved: string | null = null;
       let note: string | null = null;
       const moving = action === 'reassign' || action === 'restart';
@@ -325,6 +384,69 @@ export class RecoveryManager {
     } finally {
       this.#busy.delete(taskId);
     }
+  }
+
+  /**
+   * Brings a task's claimed or verified work from another clone's worktree into one of this clone,
+   * exactly as the backup recorded it, without changing the task's state (review M7.1 R05): the
+   * task branch, with the uncommitted work on top, and the run that claimed it pointed there. The
+   * task is then verified, or integrated, here. Another clone's checkout is never written.
+   */
+  async #rebind(
+    taskId: string,
+    a: RecoveryAssessment,
+    actor: Actor,
+    why: string,
+  ): Promise<{ task: TaskView; preserved_ref: string | null; assessment: RecoveryAssessment }> {
+    const { state, project, logger, workspaces } = this.opts;
+    if (!workspaces) throw new FridayError('invalid_request', 'task worktrees are not managed here');
+    const restored = a.worktree?.restored_here ?? null;
+    // The exact work or nothing: a record whose branch moved since is not written onto other code.
+    if (restored && (await parentOf(project.root, restored)) !== a.worktree?.branch_here) {
+      throw new FridayError(
+        'invalid_request',
+        `${taskBranch(taskId)} moved since the backup recorded the uncommitted work of ${taskId}; its work cannot be brought here exactly. Compare ${restoredRef(taskId)} with the branch, then reassign or restart the task`,
+      );
+    }
+    const foreign = state.q.worktreeForTask(taskId);
+    const rebuilt = await workspaces.rebuild(taskId, actor, restored);
+    // The run that claimed the work now works from here: verification judges it in this clone.
+    const task = state.q.task(this.pid, taskId);
+    const runId = task.current_run_id ?? state.q.runs(taskId).at(-1)?.run_id ?? null;
+    if (runId) state.rebindRun(this.pid, actor, runId, rebuilt.worktree.path, why);
+    let preserved: string | null = null;
+    if (restored) {
+      preserved = await preserveCommit(project.root, preservedPrefix(taskId), 'restored', restored);
+      await runGit(project.root, ['update-ref', '-d', restoredRef(taskId), restored]);
+    }
+    if (foreign && !state.inThisClone(foreign.path)) {
+      state.releaseWorktree(
+        this.pid,
+        actor,
+        foreign.worktree_id,
+        'released',
+        `it belongs to another clone of the project; its work was brought into this clone: ${why}`,
+      );
+    }
+    for (const e of state.q.escalations(this.pid, 'pending')) {
+      if (e.task_id === taskId && e.kind === 'recovery_needed' && actor.kind === 'human') {
+        state.answerEscalation(this.pid, actor, String(e.escalation_id), `rebind: ${why}`);
+      }
+    }
+    state.recordObservation(
+      this.pid,
+      actor,
+      'recovery.performed',
+      { task_id: taskId, action: 'rebind', reason: why, preserved_ref: preserved, note: rebuilt.note },
+      [{ kind: 'task', id: taskId }],
+    );
+    logger.info('task work brought into this clone', {
+      task_id: taskId,
+      path: rebuilt.worktree.path,
+      status: task.status,
+      preserved_ref: preserved,
+    });
+    return { task: state.q.task(this.pid, taskId), preserved_ref: preserved, assessment: a };
   }
 
   /**

@@ -11,11 +11,12 @@ import {
   isAncestor,
   mergeCommits,
   moveRef,
+  parentOf,
   resolveCommit,
   sameRepository,
   treeOf,
 } from '@friday/git';
-import type { Actor, IntegrationView } from '@friday/protocol';
+import type { Actor, IntegrationView, TaskView } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
 import { selectChecks, summarizeOutcome } from '@friday/verification';
@@ -27,6 +28,15 @@ const SYSTEM: Actor = { kind: 'system', id: 'friday' };
 
 type Outcome = Omit<IntegrationView, 'integration_id' | 'created_at'>;
 
+/** How an integration attempt runs (`friday integrate <task> [--repaired]`). */
+export interface IntegrateOptions {
+  /**
+   * A human repaired a failed or conflicted integration on the task branch (review M7.1 R04): the
+   * branch's tip, which must keep the verified work, is integrated only after its checks pass.
+   */
+  repaired?: boolean;
+}
+
 /**
  * Brings each verified task branch of a goal into the goal branch `friday/goal-<goal_id>`
  * (ADR-0025 §2–§5): exactly the tree the verification judged is committed on its task branch if it
@@ -34,6 +44,11 @@ type Outcome = Omit<IntegrationView, 'integration_id' | 'created_at'>;
  * refused if the checks changed it), and only then is the goal branch moved, from the commit Friday
  * saw. One integration at a time per goal; the main checkout is never touched, and landing the goal
  * branch stays a human's step.
+ *
+ * A retry continues from the commit Friday made of the verified tree (review M7.1 R04), so a cause
+ * outside the task (a flaky check, a goal branch fixed meanwhile) needs no new verification. A goal
+ * branch only ever moves to a revision Friday verified: the verified commit itself (a
+ * fast-forward), or a revision whose checks passed in Friday's checkout (a merge, a human's repair).
  */
 export class IntegrationManager {
   readonly #chains = new Map<string, Promise<unknown>>();
@@ -66,16 +81,22 @@ export class IntegrationManager {
     return this.integrate(taskId, SYSTEM);
   }
 
-  /** Integrates a completed task now (also `friday integrate <task>` after a human resolved a conflict). */
-  integrate(taskId: string, actor: Actor): Promise<IntegrationView> {
+  /**
+   * Integrates a completed task now: again after a failure whose cause is gone, or after a human
+   * resolved a conflict (`friday integrate <task>`, with `repaired` for a repair on the task branch).
+   */
+  integrate(taskId: string, actor: Actor, opts: IntegrateOptions = {}): Promise<IntegrationView> {
     const goalId = this.opts.state.q.task(this.pid, taskId).goal_id ?? 'none';
     const prev = this.#chains.get(goalId) ?? Promise.resolve();
-    const next = prev.catch(() => undefined).then(() => this.#integrate(taskId, actor));
+    const next = prev.catch(() => undefined).then(() => this.#integrate(taskId, actor, opts));
     this.#chains.set(goalId, next);
     return next;
   }
 
-  /** Completed tasks of goals that still wait for integration (after a restart). */
+  /**
+   * Completed tasks of goals that still wait for integration (after a restart), also one whose
+   * verified work Friday had committed before it stopped (review M7.1 R04).
+   */
   async sweep(): Promise<void> {
     const { state } = this.opts;
     for (const t of state.q.tasks(this.pid, { statuses: ['COMPLETED'] })) {
@@ -84,7 +105,7 @@ export class IntegrationManager {
     }
   }
 
-  async #integrate(taskId: string, actor: Actor): Promise<IntegrationView> {
+  async #integrate(taskId: string, actor: Actor, opts: IntegrateOptions): Promise<IntegrationView> {
     const { state, project, logger, workspaces } = this.opts;
     const task = state.q.task(this.pid, taskId);
     const goalId = task.goal_id as string;
@@ -112,9 +133,16 @@ export class IntegrationManager {
     };
     const tree = state.q.worktreeForTask(taskId);
     if (!tree) return record({ ...base, status: 'not_needed', summary: 'the task did not work on a task branch' });
+    // What came before: a repair follows a failed or conflicted attempt, and keeps the commit of the
+    // verified work the last attempt that got that far made.
+    const last = state.q.latestIntegration(this.pid, taskId);
+    const unresolved = last?.status === 'failed' || last?.status === 'conflicted';
+    const verifiedCommit =
+      state.q
+        .integrations(this.pid, { task_id: taskId })
+        .filter((i) => i.task_commit)
+        .at(-1)?.task_commit ?? null;
     try {
-      // 1. The verified work, as a commit on the task branch: exactly the tree the verification
-      // judged, never what the worktree holds by the time it is committed (review F04).
       const verified = state.q.latestVerification(taskId);
       if (verified?.status !== 'PASSED') {
         return record({ ...base, summary: 'the task has no passed verification to integrate' });
@@ -123,51 +151,81 @@ export class IntegrationManager {
       if (!state.inThisClone(tree.path) || !(await sameRepository(tree.path, project.root))) {
         return record({
           ...base,
-          summary: `its worktree ${tree.path} belongs to another clone of the project, which this clone never writes; integrate it there, or verify the work again in this clone`,
+          summary: `its worktree ${tree.path} belongs to another clone of the project, which this clone never writes; bring its work into this clone with "friday recover ${taskId} --action rebind" and integrate it again`,
         });
       }
       const git = await GitRoot.open(tree.path);
-      const now = await git.identity();
+      const content = await git.contentTree();
       const changedAfter = (detail: string) =>
         record({
           ...base,
-          summary: `the worktree changed after it was verified (${detail}); verify the work again before integrating it`,
+          summary: `the worktree changed after it was verified (${detail}); verify the work again before integrating it${unresolved ? `, or, if this is your repair of the failed integration, run "friday integrate ${taskId} --repaired"` : ''}`,
         });
-      if (verified.source_version && now.version !== verified.source_version) {
-        return changedAfter(`${verified.source_version} became ${now.version}`);
-      }
-      const content = await git.contentTree();
+
+      // 1. The commit to integrate.
+      let taskCommit: string | null;
       let candidate: string;
-      let basis: string;
-      if (verified.tree) {
-        if (content.tree !== verified.tree || content.head !== verified.commit_sha) {
+      let checked: boolean;
+      if (opts.repaired) {
+        // A human's repair on the task branch: its tip, committed, keeping the verified work. Its
+        // content is new, so it is integrated only after its checks pass (review M7.1 R04).
+        if (actor.kind !== 'human') {
+          return record({ ...base, summary: 'only a human says that a task branch holds a repair' });
+        }
+        if (!unresolved || !verifiedCommit) {
+          return record({
+            ...base,
+            summary:
+              'there is no failed or conflicted integration of this task to repair; integrate it without --repaired',
+          });
+        }
+        if (!content.head || content.tree !== (await treeOf(tree.path, content.head))) {
+          return record({ ...base, summary: 'the repair is not committed: commit it on the task branch first' });
+        }
+        if (!(await isAncestor(tree.path, verifiedCommit, content.head))) {
+          return record({
+            ...base,
+            summary: `the repair must keep the verified work, but ${verifiedCommit.slice(0, 12)} is not in the history of ${content.head.slice(0, 12)}`,
+          });
+        }
+        taskCommit = content.head;
+        candidate = content.tree;
+        checked = false;
+      } else if (verified.tree) {
+        // Exactly the verified tree, never what the worktree holds by the time it is committed
+        // (review F04): the verified commit itself with the verified content on it, or the commit
+        // Friday made of exactly that tree on top of it in an earlier attempt (review M7.1 R04).
+        if (content.tree !== verified.tree) {
           const paths = await changedBetween(project.root, verified.tree, content.tree).catch(() => []);
-          return changedAfter(paths.length ? `${paths.slice(0, 5).join(', ')} changed` : 'its HEAD moved');
+          return changedAfter(paths.length ? `${paths.slice(0, 5).join(', ')} changed` : 'its files changed');
+        }
+        if (content.head !== verified.commit_sha) {
+          const own =
+            content.head !== null &&
+            (await treeOf(tree.path, content.head)) === verified.tree &&
+            (await parentOf(tree.path, content.head)) === verified.commit_sha;
+          if (!own) return changedAfter('its HEAD moved');
         }
         candidate = verified.tree;
-        basis = `verified as ${verified.source_version ?? verified.tree}`;
+        taskCommit = content.head;
+        checked = true;
+        if (!taskCommit || candidate !== (await treeOf(tree.path, taskCommit))) {
+          taskCommit = await this.#commitVerified(task, tree.path, candidate, content.head, verified.source_version);
+        }
       } else if (verified.checks.some((c) => c.kind === 'manual')) {
         // A human recorded the result: their word covers the work as it is now.
         candidate = content.tree;
-        basis = 'passed by a human result';
+        taskCommit = content.head;
+        checked = true;
+        if (!taskCommit || candidate !== (await treeOf(tree.path, taskCommit))) {
+          taskCommit = await this.#commitVerified(task, tree.path, candidate, content.head, null);
+        }
       } else {
         return record({
           ...base,
           summary:
             'the verification recorded no exact tree to integrate (it predates Friday recording one); verify the work again',
         });
-      }
-      let taskCommit = content.head;
-      if (!taskCommit || candidate !== (await treeOf(tree.path, taskCommit))) {
-        const agentId = task.assigned_agent_id ?? state.q.runs(taskId).at(-1)?.agent_id;
-        const agentKey = (agentId && state.q.findAgent(agentId)?.agent_key) || 'agent';
-        taskCommit = await commitContent(
-          tree.path,
-          candidate,
-          content.head,
-          `${task.summary}\n\nFriday task ${taskId}, ${basis}.`,
-          agentIdentity(agentKey),
-        );
       }
       if (!taskCommit) return record({ ...base, summary: 'the task branch has no commit' });
       if ((await treeOf(project.root, taskCommit)) !== candidate) {
@@ -182,19 +240,54 @@ export class IntegrationManager {
         await moveRef(project.root, ref, start, null);
         goalHead = start;
       }
+      const repair = opts.repaired ? ' (a repair by a human)' : '';
 
-      // 3. Already there, a fast-forward (the result is the verified commit itself), or a merge.
+      // 3. Already there, a fast-forward, or a merge.
       if (await isAncestor(project.root, taskCommit, goalHead)) {
+        if (!unresolved) {
+          return record({
+            ...base,
+            status: 'integrated',
+            task_commit: taskCommit,
+            base_commit: goalHead,
+            merged_commit: goalHead,
+            summary: `already contained in ${branch}`,
+          });
+        }
+        // After a failed attempt, the goal branch reached the work some other way (a human resolved
+        // it there): what it holds now is checked before the task counts as integrated.
+        const goalTree = (await treeOf(project.root, goalHead)) as string;
+        const outcome = await this.#checkRevision(task, goalId, goalHead, goalTree);
+        if (outcome.problem) {
+          return record({ ...base, task_commit: taskCommit, base_commit: goalHead, ...outcome.problem });
+        }
         return record({
           ...base,
           status: 'integrated',
           task_commit: taskCommit,
           base_commit: goalHead,
           merged_commit: goalHead,
-          summary: `already contained in ${branch}`,
+          checks: outcome.results,
+          summary: `contained in ${branch}, where it was resolved after the failed attempt; ${outcome.ran ? `${outcome.results.length} check(s) passed on it` : 'no configured check applies to this kind of task'}`,
         });
       }
       if (await isAncestor(project.root, goalHead, taskCommit)) {
+        if (checked) {
+          await moveRef(project.root, ref, taskCommit, goalHead);
+          return record({
+            ...base,
+            status: 'integrated',
+            task_commit: taskCommit,
+            base_commit: goalHead,
+            merged_commit: taskCommit,
+            summary: `fast-forward: ${branch} now points at the verified commit`,
+          });
+        }
+        // A repair is new content: its checks run before the goal branch moves to it.
+        const outcome = await this.#checkRevision(task, goalId, taskCommit, candidate);
+        if (outcome.problem) {
+          return record({ ...base, task_commit: taskCommit, base_commit: goalHead, ...outcome.problem });
+        }
         await moveRef(project.root, ref, taskCommit, goalHead);
         return record({
           ...base,
@@ -202,7 +295,8 @@ export class IntegrationManager {
           task_commit: taskCommit,
           base_commit: goalHead,
           merged_commit: taskCommit,
-          summary: `fast-forward: ${branch} now points at the verified commit`,
+          checks: outcome.results,
+          summary: `fast-forward${repair}: ${outcome.ran ? `${outcome.results.length} check(s) passed on it` : 'no configured check applies to this kind of task'}`,
         });
       }
       const merged = await mergeCommits(project.root, goalHead, taskCommit);
@@ -223,72 +317,10 @@ export class IntegrationManager {
         `Integrate ${taskId}: ${task.summary}`,
       );
 
-      // 4. Verify the merged revision in Friday's own checkout before the goal branch moves. The
-      // checks must judge exactly the merged tree and leave it as it was: a check that changes what
-      // it checks (a formatter, a generator) passed something else (review F04).
-      const checks = selectChecks(project.config.verification.checks, task.kind);
-      const results: Outcome['checks'] = [];
-      let failed = 0;
-      let altered: string[] = [];
-      if (checks.length) {
-        const dir = await checkoutForVerification(project.root, workspaces.dir, `goal-${goalId.slice(-8)}`, commit);
-        const checkout = await GitRoot.open(dir);
-        if ((await checkout.contentTree()).tree !== merged.tree) {
-          return record({
-            ...base,
-            task_commit: taskCommit,
-            base_commit: goalHead,
-            summary: `Friday's checkout of the merged revision does not hold it; ${branch} was not moved`,
-          });
-        }
-        for (const check of checks) {
-          const outcome = await runCheckInProfile(
-            this.opts.profile(),
-            {
-              name: check.name,
-              command: check.command,
-              args: check.args,
-              root: dir,
-              cwd: check.cwd ? path.resolve(dir, check.cwd) : dir,
-              env: check.env,
-              timeoutMs: check.timeout_ms,
-            },
-            this.opts.groups,
-          );
-          const artifact = state.artifacts?.storeText(
-            this.pid,
-            'verification',
-            `$ ${check.command} ${check.args.join(' ')}\n(integrated revision ${commit} in ${dir})\n${outcome.output}`,
-          );
-          results.push({
-            name: check.name,
-            status: outcome.passed ? 'PASSED' : 'FAILED',
-            exit_code: outcome.exit_code,
-            artifact_ref: artifact ? `artifact:${artifact.artifact_id}` : null,
-            summary: summarizeOutcome(outcome),
-          });
-          if (!outcome.passed && check.required) failed += 1;
-        }
-        const after = await checkout.contentTree();
-        if (after.tree !== merged.tree) altered = await changedBetween(project.root, merged.tree, after.tree);
-      }
-      if (altered.length) {
-        return record({
-          ...base,
-          task_commit: taskCommit,
-          base_commit: goalHead,
-          checks: results,
-          summary: `the checks changed ${altered.slice(0, 5).join(', ')}${altered.length > 5 ? ` and ${altered.length - 5} more` : ''} in the merged revision ${commit.slice(0, 12)}, so what passed is not what would land; ${branch} was not moved`,
-        });
-      }
-      if (failed) {
-        return record({
-          ...base,
-          task_commit: taskCommit,
-          base_commit: goalHead,
-          checks: results,
-          summary: `${failed} required check(s) failed on the merged revision ${commit.slice(0, 12)}; ${branch} was not moved`,
-        });
+      // 4. Verify the merged revision in Friday's own checkout before the goal branch moves.
+      const outcome = await this.#checkRevision(task, goalId, commit, merged.tree);
+      if (outcome.problem) {
+        return record({ ...base, task_commit: taskCommit, base_commit: goalHead, ...outcome.problem });
       }
 
       // 5. Move the goal branch, only from the commit Friday merged into.
@@ -299,14 +331,121 @@ export class IntegrationManager {
         task_commit: taskCommit,
         base_commit: goalHead,
         merged_commit: commit,
-        checks: results,
-        summary: checks.length
-          ? `${results.length} check(s) passed on the merged revision`
-          : 'merged; no configured check applies to this kind of task',
+        checks: outcome.results,
+        summary: outcome.ran
+          ? `${outcome.results.length} check(s) passed on the merged revision${repair}`
+          : `merged${repair}; no configured check applies to this kind of task`,
       });
     } catch (e) {
       logger.warn('task integration failed', { task_id: taskId, message: (e as Error).message });
       return record({ ...base, summary: (e as Error).message });
     }
+  }
+
+  /** Commits the verified tree on the task branch, in the agent's name (ADR-0025 §2, review F04). */
+  async #commitVerified(
+    task: TaskView,
+    dir: string,
+    tree: string,
+    head: string | null,
+    version: string | null,
+  ): Promise<string> {
+    const { state } = this.opts;
+    const agentId = task.assigned_agent_id ?? state.q.runs(task.task_id).at(-1)?.agent_id;
+    const agentKey = (agentId && state.q.findAgent(agentId)?.agent_key) || 'agent';
+    const basis = version ? `verified as ${version}` : 'passed by a human result';
+    return commitContent(
+      dir,
+      tree,
+      head,
+      `${task.summary}\n\nFriday task ${task.task_id}, ${basis}.`,
+      agentIdentity(agentKey),
+    );
+  }
+
+  /**
+   * Runs the task's checks on a revision in Friday's own checkout. The checks must judge exactly
+   * that tree and leave it as it was: a check that changes what it checks (a formatter, a
+   * generator) passed something else (review F04).
+   */
+  async #checkRevision(
+    task: TaskView,
+    goalId: string,
+    commit: string,
+    expected: string,
+  ): Promise<{
+    results: Outcome['checks'];
+    ran: boolean;
+    problem: Pick<Outcome, 'summary' | 'checks'> | null;
+  }> {
+    const { state, project, workspaces } = this.opts;
+    const branch = goalBranch(goalId);
+    const checks = selectChecks(project.config.verification.checks, task.kind);
+    const results: Outcome['checks'] = [];
+    if (!checks.length) return { results, ran: false, problem: null };
+    const dir = await checkoutForVerification(project.root, workspaces.dir, `goal-${goalId.slice(-8)}`, commit);
+    const checkout = await GitRoot.open(dir);
+    if ((await checkout.contentTree()).tree !== expected) {
+      return {
+        results,
+        ran: false,
+        problem: {
+          checks: [],
+          summary: `Friday's checkout of the revision ${commit.slice(0, 12)} does not hold it; ${branch} was not moved`,
+        },
+      };
+    }
+    let failed = 0;
+    for (const check of checks) {
+      const outcome = await runCheckInProfile(
+        this.opts.profile(),
+        {
+          name: check.name,
+          command: check.command,
+          args: check.args,
+          root: dir,
+          cwd: check.cwd ? path.resolve(dir, check.cwd) : dir,
+          env: check.env,
+          timeoutMs: check.timeout_ms,
+        },
+        this.opts.groups,
+      );
+      const artifact = state.artifacts?.storeText(
+        this.pid,
+        'verification',
+        `$ ${check.command} ${check.args.join(' ')}\n(integrated revision ${commit} in ${dir})\n${outcome.output}`,
+      );
+      results.push({
+        name: check.name,
+        status: outcome.passed ? 'PASSED' : 'FAILED',
+        exit_code: outcome.exit_code,
+        artifact_ref: artifact ? `artifact:${artifact.artifact_id}` : null,
+        summary: summarizeOutcome(outcome),
+      });
+      if (!outcome.passed && check.required) failed += 1;
+    }
+    const after = await checkout.contentTree();
+    const altered = after.tree !== expected ? await changedBetween(project.root, expected, after.tree) : [];
+    if (altered.length) {
+      return {
+        results,
+        ran: true,
+        problem: {
+          checks: results,
+          summary: `the checks changed ${altered.slice(0, 5).join(', ')}${altered.length > 5 ? ` and ${altered.length - 5} more` : ''} in the merged revision ${commit.slice(0, 12)}, so what passed is not what would land; ${branch} was not moved`,
+        },
+      };
+    }
+    if (failed) {
+      return {
+        results,
+        ran: true,
+        problem: {
+          checks: results,
+          summary: `${failed} required check(s) failed on the merged revision ${commit.slice(0, 12)}; ${branch} was not moved`,
+        },
+      };
+    }
+    return { results, ran: true, problem: null };
   }
 }

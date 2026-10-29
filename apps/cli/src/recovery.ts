@@ -52,11 +52,14 @@ function assessmentLines(a: RecoveryAssessment): string[] {
 export function registerRecoveryCommands(program: Command, g: () => GlobalOptions): void {
   program
     .command('recover <task>')
-    .description('assess a lost or failed attempt, or recover it: reassign, restart, needs-human, cancel')
+    .description(
+      'assess a lost or failed attempt, or recover it: reassign, restart, rebind (bring work from another clone here), needs-human, cancel',
+    )
     .addOption(
       new Option('--action <action>', 'what to do; without it, only the assessment is shown').choices([
         'reassign',
         'restart',
+        'rebind',
         'needs-human',
         'cancel',
       ]),

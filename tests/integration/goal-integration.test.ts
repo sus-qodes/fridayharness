@@ -3,7 +3,7 @@
  */
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { GitRoot } from '@friday/git';
+import { commitContent, FRIDAY_IDENTITY, GitRoot, runGit } from '@friday/git';
 import type { IntegrationView, TaskStartParams, TaskView, VerificationView } from '@friday/protocol';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -315,13 +315,13 @@ describe('goal branches', () => {
     const same = (a: string, b: string) =>
       process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
     // Right after integration reads the worktree (the task is COMPLETED by then), a writer changes it.
-    const identity = GitRoot.prototype.identity;
+    const contentTree = GitRoot.prototype.contentTree;
     let changed = false;
-    const spy = vi.spyOn(GitRoot.prototype, 'identity').mockImplementation(async function (
+    const spy = vi.spyOn(GitRoot.prototype, 'contentTree').mockImplementation(async function (
       this: GitRoot,
-      ...args: Parameters<GitRoot['identity']>
+      ...args: Parameters<GitRoot['contentTree']>
     ) {
-      const r = await identity.apply(this, args);
+      const r = await contentTree.apply(this, args);
       const status = td.daemon.state.q.task(td.project.project_id, id).status;
       if (!changed && same(this.root, dir) && status === 'COMPLETED') {
         changed = true;
@@ -333,12 +333,151 @@ describe('goal branches', () => {
       await finish(td, w, { 'src/a.mjs': 'export const a = 2;\n' });
       const one = await integrationOf(td, id);
       expect(changed).toBe(true);
+      // Integration commits the tree the verification recorded, an object, never the folder: the
+      // change made after its read cannot land, and stays in the worktree as an uncommitted edit.
+      // (Until M7.1's follow-up review, a second read made this attempt fail instead; see R04.)
       const landed = await git(['show', `friday/goal-${goalId}:src/a.mjs`]).catch(() => '');
       expect(landed).not.toContain('BAD');
-      expect(one.status).toBe('failed');
-      expect(one.summary).toMatch(/changed after it was verified/);
+      expect(landed.trim()).toBe('export const a = 2;');
+      expect(one.status).toBe('integrated');
+      expect(readFileSync(path.join(dir, 'src', 'a.mjs'), 'utf8')).toContain('BAD unverified');
     } finally {
       spy.mockRestore();
     }
+  });
+
+  /**
+   * `a + b` may not exceed 3, unless a flag outside the repository says otherwise: a condition of
+   * the merged revision that is not in the task's content, and goes away by itself.
+   */
+  const LIMIT = [
+    "const fs = require('node:fs');",
+    "const num = (f) => Number(/= (\\d+)/.exec(fs.readFileSync(f, 'utf8'))[1]);",
+    "process.exit(num('src/a.mjs') + num('src/b.mjs') <= 3 || fs.existsSync(process.env.FLAG || '') ? 0 : 1);",
+    '',
+  ].join('\n');
+  const limitChecks = (flag: string) =>
+    `  checks:\n    - name: limit\n      command: node\n      args: ["scripts/limit.cjs"]\n      env: { FLAG: "${flag}" }\n`;
+  const retry = (td: TestDaemon, taskId: string, body: Record<string, unknown> = {}) =>
+    td.operator
+      .post<{ integration: IntegrationView }>(td.operator.projectPath(`/tasks/${taskId}/integrate`), body, {
+        timeoutMs: 120_000,
+      })
+      .then((r) => r.integration);
+
+  it('retries a failed integration from the verified commit Friday made, and refuses work changed since (review M7.1 R04)', async () => {
+    const flag = path.join(ws().root, 'merged-ok').replace(/\\/g, '/');
+    const td = await project(limitChecks(flag), { 'scripts/limit.cjs': LIMIT });
+    const { goalId, ids } = await goalWith(td, [
+      { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+      { key: 'raise-b', summary: 'Raise b to 2', write: ['src/b.mjs'] },
+    ]);
+    const branch = `friday/goal-${goalId}`;
+    const ra = await begin(td, 'be-1', ids['raise-a'] as string);
+    const rb = await begin(td, 'be-2', ids['raise-b'] as string);
+    await finish(td, ra, { 'src/a.mjs': 'export const a = 2;\n' });
+    expect((await integrationOf(td, ids['raise-a'] as string)).status).toBe('integrated');
+    // Alone b = 2 passes; merged, a + b = 4 fails while the flag is absent.
+    await finish(td, rb, { 'src/b.mjs': 'export const b = 2;\n' });
+    const failed = await integrationOf(td, ids['raise-b'] as string);
+    expect(failed).toMatchObject({ status: 'failed' });
+    expect(failed.checks.map((c) => [c.name, c.status])).toEqual([['limit', 'FAILED']]);
+    // Friday committed exactly the verified tree on the task branch.
+    const worktree = rb.start.working_directory;
+    expect(failed.task_commit).toBe((await runGit(worktree, ['rev-parse', 'HEAD'])).stdout.trim());
+
+    // An edit made since the verification is still refused.
+    writeFileSync(path.join(worktree, 'src', 'b.mjs'), 'export const b = 0;\n');
+    const edited = await retry(td, ids['raise-b'] as string);
+    expect(edited.status).toBe('failed');
+    expect(edited.summary).toMatch(/changed after it was verified/);
+    await runGit(worktree, ['checkout', '--', 'src/b.mjs']);
+
+    // The cause was outside the task: once it is gone, the same verified commit is integrated.
+    writeFileSync(flag, 'ok');
+    const retried = await retry(td, ids['raise-b'] as string);
+    expect(retried).toMatchObject({ status: 'integrated', task_commit: failed.task_commit });
+    expect(retried.checks.map((c) => [c.name, c.status])).toEqual([['limit', 'PASSED']]);
+    expect((await git(['show', `${branch}:src/b.mjs`])).trim()).toBe('export const b = 2;');
+    expect((await git(['show', `${branch}:src/a.mjs`])).trim()).toBe('export const a = 2;');
+  });
+
+  it('resumes an integration interrupted after Friday committed the verified tree (review M7.1 R04)', async () => {
+    const td = await project();
+    const pid = td.project.project_id;
+    const { goalId, ids } = await goalWith(td, [{ key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] }]);
+    const id = ids['raise-a'] as string;
+    // The daemon stops right after committing the verified work, before it records the integration.
+    const integration = td.daemon.integration;
+    const real = integration.completed.bind(integration);
+    let committed = false;
+    integration.completed = async (taskId: string) => {
+      const v = td.daemon.state.q.latestVerification(taskId) as VerificationView;
+      const wt = td.daemon.state.q.worktreeForTask(taskId);
+      if (wt && v.tree) await commitContent(wt.path, v.tree, v.commit_sha, 'Raise a to 2', FRIDAY_IDENTITY);
+      committed = true;
+      return null;
+    };
+    const w = await begin(td, 'be-1', id);
+    await finish(td, w, { 'src/a.mjs': 'export const a = 2;\n' });
+    await eventually(
+      () => committed,
+      (v) => v,
+      'the verified work to be committed',
+    );
+    expect(td.daemon.state.q.latestIntegration(pid, id)).toBeUndefined();
+    // The next start sweeps completed tasks that wait for integration.
+    integration.completed = real;
+    await integration.sweep();
+    const done = await integrationOf(td, id);
+    expect(done).toMatchObject({ status: 'integrated' });
+    expect((await git(['show', `friday/goal-${goalId}:src/a.mjs`])).trim()).toBe('export const a = 2;');
+  });
+
+  it('integrates a conflict a human repaired on the task branch only after verifying the repaired revision (review M7.1 R04)', async () => {
+    const td = await project();
+    const { goalId, ids } = await goalWith(td, [
+      { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+      { key: 'reset-a', summary: 'Set a to 0', write: ['src/a.mjs'], depends_on: ['raise-a'] },
+    ]);
+    const branch = `friday/goal-${goalId}`;
+    await work(td, 'be-1', ids['raise-a'] as string, { 'src/a.mjs': 'export const a = 2;\n' });
+    expect((await integrationOf(td, ids['raise-a'] as string)).status).toBe('integrated');
+    await runOnce(td);
+    const reset = ids['reset-a'] as string;
+    const w = await begin(td, 'be-2', reset);
+    // A human changes the same line on the goal branch meanwhile.
+    const human = path.join(ws().root, 'human');
+    await git(['worktree', 'add', '-q', human, branch]);
+    writeFileSync(path.join(human, 'src', 'a.mjs'), 'export const a = 3;\n');
+    await deterministicGit(human, { startEpoch: 1_767_226_000 }).commitAll('a human sets a to 3');
+    await git(['worktree', 'remove', human]);
+    await finish(td, w, { 'src/a.mjs': 'export const a = 0;\n' });
+    const conflicted = await integrationOf(td, reset);
+    expect(conflicted).toMatchObject({ status: 'conflicted', conflicts: ['src/a.mjs'] });
+
+    // A human resolves the conflict on the task branch: the goal branch merged in, a chosen.
+    const dir = w.start.working_directory;
+    const who = {
+      GIT_AUTHOR_NAME: 'A Human',
+      GIT_AUTHOR_EMAIL: 'human@example.invalid',
+      GIT_COMMITTER_NAME: 'A Human',
+      GIT_COMMITTER_EMAIL: 'human@example.invalid',
+    };
+    expect((await runGit(dir, ['merge', '-q', branch], { okCodes: [1], env: who })).code).toBe(1);
+    writeFileSync(path.join(dir, 'src', 'a.mjs'), 'export const a = 1;\n');
+    await runGit(dir, ['add', 'src/a.mjs']);
+    await runGit(dir, ['commit', '-q', '--no-edit'], { env: who });
+    const repaired = (await runGit(dir, ['rev-parse', 'HEAD'])).stdout.trim();
+
+    // Integrating again without saying it is a repair is refused: the work changed after it was verified.
+    expect((await retry(td, reset)).summary).toMatch(/changed after it was verified/);
+    // Said to be a repair, it is verified on the merged revision before the goal branch moves.
+    const done = await retry(td, reset, { repaired: true });
+    expect(done, JSON.stringify(done)).toMatchObject({ status: 'integrated', merged_commit: repaired });
+    expect(done.checks.map((c) => [c.name, c.status])).toEqual([['tests', 'PASSED']]);
+    expect(done.summary).toMatch(/repair/);
+    expect((await git(['rev-parse', branch])).trim()).toBe(repaired);
+    expect((await git(['show', `${branch}:src/a.mjs`])).replace(/\r\n/g, '\n').trim()).toBe('export const a = 1;');
   });
 });

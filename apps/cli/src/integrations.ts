@@ -46,12 +46,18 @@ export function registerIntegrationCommands(program: Command, g: () => GlobalOpt
 
   program
     .command('integrate <task>')
-    .description('integrate a completed task into its goal branch again (after resolving a conflict)')
-    .action(async (taskId: string) => {
+    .description(
+      'integrate a completed task into its goal branch again: after a failure whose cause is gone, or a conflict you resolved',
+    )
+    .option(
+      '--repaired',
+      'you repaired the failed or conflicted integration on the task branch: its tip (keeping the verified work) is checked, then integrated',
+    )
+    .action(async (taskId: string, o: { repaired?: boolean }) => {
       const { client } = operator(g());
       const r = await client.post<{ integration: IntegrationView }>(
         client.projectPath(`/tasks/${taskId}/integrate`),
-        {},
+        o.repaired ? { repaired: true } : {},
         { timeoutMs: 3_700_000 },
       );
       out(g(), r, () =>

@@ -11,6 +11,7 @@ import {
   type ContextSection,
   FridayError,
   type GoalView,
+  isFridayError,
   type SourceRef,
   type TaskView,
 } from '@friday/protocol';
@@ -85,6 +86,8 @@ interface Candidate {
   protected: boolean;
   reason: string;
   rule: string;
+  /** Paths readable only by a grant that this line shows without naming them (a commit's files). */
+  relies?: string[];
 }
 
 /** Sections in the order they are rendered. */
@@ -142,30 +145,79 @@ const MEMORY_PRIORITY: Record<string, number> = { 'human-approved': 2, verified:
 
 /**
  * Compiles a packet, or returns the cached one for an unchanged key (ADR-0022). Gathering awaits
- * git and the graph; a policy that changed meanwhile makes the result unusable, so it is compiled
- * again under the new one (review F02).
+ * git and the graph, so what may be read can change meanwhile: the policy, the recipient's read
+ * grants, or the task it holds. A packet is delivered only under the authority it was gathered
+ * under, checked in the transaction that records it and spends the grants it relied on; otherwise
+ * it is compiled again, and after three tries refused (reviews F02, M7.1 R01, R02).
  */
 export async function compileContext(
   deps: ContextDeps,
   input: CompileInput,
   actor: Actor,
 ): Promise<{ packet: ContextPacket; explanation: ContextExplanation; cached: boolean }> {
-  for (let attempt = 0; ; attempt++) {
-    const version = deps.policy?.().version ?? null;
-    const out = await compileOnce(deps, input, actor);
-    if ((deps.policy?.().version ?? null) === version) return out;
-    if (attempt >= 2) {
-      const reason = "the project's policy kept changing while it was compiled";
-      return { ...out, packet: { ...out.packet, staleness: { is_stale: true, reason } } };
+  const pid = deps.project.project_id;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const draft = await compileOnce(deps, input, actor);
+    // Nothing is awaited from here on: what is checked now is what the packet is delivered under.
+    if (draft.cached) {
+      if (authorityOf(deps, input) === draft.authority) {
+        return { packet: draft.packet, explanation: draft.explanation, cached: true };
+      }
+      continue;
     }
+    try {
+      deps.state.recordContextPacket(pid, actor, draft.packet, draft.explanation, {
+        uses: draft.uses.map((g) => ({ approval_id: g.approval_id, tool: 'context', target: g.target })),
+        still: () =>
+          authorityOf(deps, input) === draft.authority
+            ? null
+            : 'the policy, a read grant or the task changed while the packet was compiled',
+      });
+    } catch (e) {
+      if (isFridayError(e, 'context_stale')) continue;
+      throw e;
+    }
+    if (draft.memories.length) deps.state.memory.noteUse(pid, draft.memories);
+    deps.cache.set(draft.key, { packet: draft.packet, explanation: draft.explanation });
+    return { packet: draft.packet, explanation: draft.explanation, cached: false };
   }
+  throw new FridayError(
+    'context_unavailable',
+    `the project's policy, a read grant or the task kept changing while ${input.task_id ?? 'the'} context was compiled; nothing was delivered, ask again`,
+  );
 }
 
-async function compileOnce(
-  deps: ContextDeps,
-  input: CompileInput,
-  actor: Actor,
-): Promise<{ packet: ContextPacket; explanation: ContextExplanation; cached: boolean }> {
+/**
+ * What a packet's contents depend on besides the code (reviews F02, M7.1 R02): the effective
+ * policy's version, the recipient's usable read grants, and the task's state, holder and attempt.
+ */
+export function authorityOf(deps: ContextDeps, input: CompileInput): string {
+  const task = input.task_id ? deps.state.q.findTask(deps.project.project_id, input.task_id) : undefined;
+  const grants = (deps.readGrants?.(input, task) ?? [])
+    .map((g) => g.approval_id)
+    .sort()
+    .join(',');
+  const attempt = task ? `${task.status}:${task.assigned_agent_id ?? ''}:${task.current_run_id ?? ''}` : '';
+  return `${deps.policy?.().version ?? ''}|${grants}|${attempt}`;
+}
+
+/** A compiled packet before it is delivered: recorded, and its grants spent, only under unchanged authority. */
+interface Draft {
+  packet: ContextPacket;
+  explanation: ContextExplanation;
+  cached: boolean;
+  key: string;
+  /** The authority the sources were gathered under. */
+  authority: string;
+  /** The read grants the delivered packet relies on (review M7.1 R01). */
+  uses: { approval_id: string; target: string }[];
+  /** Memories it shows, whose use is noted once it is delivered. */
+  memories: string[];
+}
+
+async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor): Promise<Draft> {
+  // Taken before anything is awaited: a change from here to delivery means compiling again.
+  const authority = authorityOf(deps, input);
   const started = performance.now();
   const timings: Record<string, number> = {};
   const lap = (name: string, from: number) => {
@@ -192,7 +244,7 @@ async function compileOnce(
   const key = await cacheKey(deps, root, input, task, goal, agent?.agent_id, identity, maxChars, maxSources);
   // An approximate identity (sizes and times) does not prove the code is unchanged (review F13).
   const hit = identity?.basis === 'approximate' ? undefined : deps.cache.get(key);
-  if (hit) return { ...hit, cached: true };
+  if (hit) return { ...hit, cached: true, key, authority, uses: [], memories: [] };
 
   const now = state.clock.now();
   const pathCtx: PathContext = {
@@ -203,15 +255,16 @@ async function compileOnce(
   let withheld = 0;
   const declaredRead = task?.scope?.read?.length ? [...task.scope.read, ...task.scope.write] : null;
   const fold = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
-  const granted = new Set(grants.map((g) => fold(g.target)));
+  const grantFor = new Map(grants.map((g) => [fold(g.target), g]));
   // The team scopes of the agent's role that name reads narrow what is gathered, as the task's own
   // read scope does (ADR-0028); `deny.read` is a permission, the same rule the hooks apply.
   const teamLayers = (agent?.role && policy?.teams[agent.role]) || [];
   const forAgents = input.recipient.kind !== 'human';
-  const allowedAs = (p: string) => {
+  const allowedAs = (p: string, useGrants = true) => {
+    const approved = (x: string) => useGrants && grantFor.has(fold(x));
     if (sensitiveClassOf(p, pathCtx, 'read')) return false;
-    if (forAgents && policy && readKeptFromAgents(p, policy.deny.read, (x) => granted.has(fold(x)))) return false;
-    if (granted.has(fold(p))) return true;
+    if (forAgents && policy && readKeptFromAgents(p, policy.deny.read, approved)) return false;
+    if (approved(p)) return true;
     if (declaredRead && !matchesAny(p, declaredRead)) return false;
     for (const layer of teamLayers) {
       if (layer.read.length && !matchesAny(p, [...layer.read, ...layer.write])) return false;
@@ -219,6 +272,8 @@ async function compileOnce(
     return true;
   };
   const judged = new Map<string, boolean>();
+  /** Paths readable only because a human granted them, with the grant: showing one spends it (review M7.1 R01). */
+  const relied = new Map<string, { approval_id: string; target: string }>();
   /**
    * Permission first (ADR-0022 §3, review F02): never gather what the recipient may not read. A
    * path behind a link is judged by its real target too, which must stay in the checkout (B19).
@@ -227,13 +282,32 @@ async function compileOnce(
     let ok = judged.get(p);
     if (ok === undefined) {
       ok = allowedAs(p);
-      if (ok) {
-        const c = canonicalize(p, pathCtx);
-        if (c.linked) ok = c.realRelative !== null && allowedAs(c.realRelative);
-      }
+      const c = ok ? canonicalize(p, pathCtx) : null;
+      const target = c?.linked ? c.realRelative : p;
+      if (c?.linked) ok = target !== null && allowedAs(target);
       judged.set(p, ok);
+      if (ok && grantFor.size && !(allowedAs(p, false) && (target === null || allowedAs(target, false)))) {
+        const g = grantFor.get(fold(p)) ?? (target ? grantFor.get(fold(target)) : undefined);
+        if (g) relied.set(fold(p), g);
+      }
     }
     return ok;
+  };
+
+  /**
+   * Commits within `paths` that change a file the recipient may read (review M7.1 R06): one that
+   * changes only files kept from it is never named. A commit's message is its author's text about
+   * everything it changed, so it is shown as written.
+   */
+  const readableLog = async (paths: string[], limit: number) => {
+    if (!git || !paths.length) return [];
+    const log = await git.log({ paths, limit: limit * 4, files: true }).catch(() => []);
+    const shown = log
+      .map((c) => ({ ...c, readable: (c.files ?? []).filter((f) => readable(f)) }))
+      .filter((c) => c.readable.length > 0);
+    withheld += log.length - shown.length;
+    // A commit shown for a file readable only by a grant relies on that grant (review M7.1 R01).
+    return shown.slice(0, limit).map((c) => ({ ...c, relies: c.readable.map(fold).filter((f) => relied.has(f)) }));
   };
 
   const candidates: Candidate[] = [];
@@ -503,7 +577,10 @@ async function compileOnce(
     }
     if (shown.length > 30) notes.push(`${shown.length - 30} more uncommitted paths are not listed`);
     if (task?.scope?.write.length && identity.head) {
-      const log = await git.log({ paths: task.scope.write.map((g) => `:(glob)${g}`), limit: 5 }).catch(() => []);
+      const log = await readableLog(
+        task.scope.write.map((g) => `:(glob)${g}`),
+        5,
+      );
       for (const c of log) {
         const line = `${c.short} ${c.subject}`;
         add({
@@ -515,6 +592,7 @@ async function compileOnce(
           protected: false,
           reason: 'recent history in your scope',
           rule: 'git state (priority 0)',
+          relies: c.relies,
         });
       }
     }
@@ -630,7 +708,7 @@ async function compileOnce(
         return false;
       });
       const paths = asked.length ? named : (task?.scope?.write ?? []).map((g) => `:(glob)${g}`);
-      const log = git && paths.length ? await git.log({ paths, limit: 15 }).catch(() => []) : [];
+      const log = await readableLog(paths, 15);
       for (const c of log) {
         const line = `${c.short} ${c.date.slice(0, 10)} ${c.author}: ${c.subject}`;
         add({
@@ -642,6 +720,7 @@ async function compileOnce(
           protected: false,
           reason: 'history you asked for',
           rule: 'requested (priority 0)',
+          relies: c.relies,
         });
       }
     } else if (request.kind === 'symbol' || request.kind === 'freeform') {
@@ -936,13 +1015,30 @@ async function compileOnce(
     notes,
     timings_ms: timings,
   };
-  state.recordContextPacket(pid, actor, packet, explanation);
-  const usedMemories = included
+  const shownMemories = included
     .filter((c) => c.section === 'memory.relevant' && c.source)
     .map((c) => c.source?.source_id as string);
-  if (usedMemories.length) state.memory.noteUse(pid, usedMemories);
-  deps.cache.set(key, { packet, explanation });
-  return { packet, explanation, cached: false };
+  // A grant is used when what it let through is delivered: the path named anywhere in the packet,
+  // or a commit shown for that file. A file cut by the budget, withheld or missing spends nothing
+  // (review M7.1 R01).
+  const shown = fold(JSON.stringify(packet.sections));
+  const uses = new Map<string, { approval_id: string; target: string }>();
+  for (const [p, g] of relied) if (shown.includes(p)) uses.set(g.approval_id, g);
+  for (const c of included) {
+    for (const p of c.relies ?? []) {
+      const g = relied.get(p);
+      if (g) uses.set(g.approval_id, g);
+    }
+  }
+  return {
+    packet,
+    explanation,
+    cached: false,
+    key,
+    authority,
+    uses: [...uses.values()],
+    memories: shownMemories,
+  };
 }
 
 /**

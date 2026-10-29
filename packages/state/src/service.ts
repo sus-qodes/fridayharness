@@ -3492,6 +3492,28 @@ export class FridayState {
   }
 
   /**
+   * A run's work now lives in a worktree of this clone (review M7.1 R05): a claim restored from a
+   * backup is verified there. The run's base commit, claim and status stay as they were.
+   */
+  rebindRun(projectId: string, actor: Actor, runId: string, executionRoot: string, reason: string): RunView {
+    return this.exec({ name: 'run.rebind', project_id: projectId, actor, params: { runId, executionRoot } }, (ctx) => {
+      const run = this.q.run(runId);
+      if (!this.inThisClone(executionRoot)) {
+        throw new FridayError('invalid_request', `${executionRoot} is not a worktree of this clone`);
+      }
+      ctx.emit({
+        type: 'run.rebound',
+        payload: { run_id: runId, task_id: run.task_id, execution_root: executionRoot, reason },
+        refs: [
+          { kind: 'run', id: runId },
+          { kind: 'task', id: run.task_id },
+        ],
+      });
+      return this.q.run(runId);
+    });
+  }
+
+  /**
    * A worktree a human asked for (`friday task worktree`), to start a session in, or one a human's
    * recovery choice rebuilt (review F16). A record at the same path with another base (a branch
    * started over) is retired in the same transaction.
@@ -3504,7 +3526,13 @@ export class FridayState {
   ): WorktreeView {
     return this.exec({ name: 'worktree.allocate', project_id: projectId, actor, params: { taskId } }, (ctx) => {
       const task = this.q.task(projectId, taskId);
-      if (TERMINAL_TASK.has(task.status)) {
+      // A completed task whose verified work still waits for its goal branch keeps a worktree, also
+      // one rebuilt in this clone from a backup (review M7.1 R05).
+      const integrating =
+        task.status === 'COMPLETED' &&
+        this.awaitsIntegration(task) &&
+        !['integrated', 'not_needed'].includes(this.q.latestIntegration(projectId, taskId)?.status ?? '');
+      if (TERMINAL_TASK.has(task.status) && !integrating) {
         throw new FridayError('invalid_state_transition', `task ${taskId} is ${task.status}`);
       }
       const existing = this.q.worktreeForTask(taskId);
@@ -5068,8 +5096,24 @@ export class FridayState {
     return todo.map((d) => d.delivery_id);
   }
 
-  recordContextPacket(projectId: string, actor: Actor, packet: ContextPacket, explanation?: unknown): void {
+  /**
+   * Records a packet as delivered. With `still`, the authority it was compiled under is checked in
+   * this transaction (a reason when it changed throws `context_stale`, and nothing is recorded); the
+   * read grants it relied on are spent in the same transaction (reviews M7.1 R01, R02).
+   */
+  recordContextPacket(
+    projectId: string,
+    actor: Actor,
+    packet: ContextPacket,
+    explanation?: unknown,
+    opts: { uses?: { approval_id: string; tool: string; target: string }[]; still?: () => string | null } = {},
+  ): void {
     this.exec({ name: 'context.compiled', project_id: projectId, actor }, (ctx) => {
+      const changed = opts.still?.();
+      if (changed) throw new FridayError('context_stale', changed);
+      for (const u of opts.uses ?? []) {
+        ctx.emit({ type: 'approval.used', payload: u, refs: [{ kind: 'approval', id: u.approval_id }] });
+      }
       ctx.emit({
         type: 'context.compiled',
         payload: explanation === undefined ? { packet } : { packet, explanation },

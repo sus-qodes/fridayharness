@@ -2,6 +2,45 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M7.1e, the follow-up review of M7.1
+
+A follow-up review of M7.1 found 7 more gaps in authority and continuation. Each is fixed, with a regression that failed before the change ([disposition](docs/reviews/2026-10-15-m7-1-review-disposition.md)).
+
+- **Context:**
+  - A packet is delivered only under the authority it was compiled under: the policy, the agent's read grants, and its task and attempt. If any of them changes meanwhile, the packet is compiled again; after three changes the request is refused (`COS-5000`) instead of answered with a stale packet.
+  - A file shown only because of your exact-path approval now spends it: a one-use approval opens one packet.
+  - History lists only commits that change a file the agent may read.
+- **Verification** checks its authority as the very last step before the verdict, so a policy tightened during its final reads of the checkout interrupts it.
+- **Integration:**
+  - `friday integrate <task>` retries a failed integration from the same verified commit, including after Friday committed the work and stopped before recording the integration.
+  - **New:** `friday integrate <task> --repaired` integrates your repair of a conflict on the task branch, after the checks pass on what would land.
+- **Restore:**
+  - **New:** `friday recover <task> --action rebind` brings finished work from a lost clone into this one and keeps the task's state: a claim waiting to be verified, a verification the backup caught midway, or verified work waiting to be integrated. A claim comes only with the work it lists.
+  - `friday restore` checks the backup's database (its hash, then a copy's integrity, project, event head and schema) before it changes anything; a damaged or swapped database is refused.
+- No migration.
+
+## Unreleased — M7.1 cross-milestone stabilization
+
+The M7 review looked at the joints between milestones and found 17 gaps; each is fixed or decided, with a regression that failed before the change ([disposition](docs/reviews/2026-10-14-m7-review-disposition.md)).
+
+- **Verified means verified:**
+  - Integration commits exactly the git tree a verification judged, never what is in the folder by then, and a merge whose checks change its checkout fails.
+  - Evidence Friday cannot read (an unreadable checkout, an unknown base, a failed read after the checks) interrupts a verification instead of passing it.
+  - Verification applies the project's deny rules and team scopes as the hooks do, honours a human's exact-path approval, records the policy version, and is interrupted by a policy change. **Breaking:** a verification recorded before M7.1 has no tree; verify such a task again before it is integrated.
+- **Operations obey their authority and their lifetime:** an operation starts only if its task, attempt, session, approval, policy, definition and role still hold when it starts; cancelling, releasing or recovering the task stops it and every process it started (a job object on Windows, a process group elsewhere), confirmed before the worktree is reused.
+- **Clones and backups:**
+  - A restored clone works only in its own checkouts and asks you about work that was in another clone.
+  - `friday backup` now also holds the code of Friday's work: its branches, preserved attempts and the uncommitted work of task worktrees (`code.bundle`, format 2). `friday restore` adds it to the clone without moving any of its refs back, and `friday recover <task> --action reassign` brings a task's work into a worktree there. Without the code, Friday says what is missing instead of starting over silently. See [docs/runbooks/backup.md](docs/runbooks/backup.md).
+- **Routing:**
+  - A route that forbids the work starts nothing (`COS-7003 routing_blocked`), is recorded once, and asks you once; a host reporting a model its constraints exclude has its attempt ended.
+  - **Breaking:** secret-sensitive work runs only on a local model you pinned for it with `--sensitive`; a general pin no longer counts.
+  - Laya is reached only at a literal loopback address, never through a redirect, within one deadline for its whole answer, and its answers are validated. Delegation waits for a task's open Laya question, bounded by its deadline.
+  - `friday models` separates measured results (a model seen running) from assumed ones, and compares results under the same checks and host version.
+- **Context:** packets apply the same read policy as the hooks and are compiled again when it changes; the size you ask for is the size of the packet delivered, or the answer says what it needs (`COS-5002`); requests for files, scope, history and decisions are honoured.
+- **Memory** keeps case: correcting `UserID` to `userId` is a new fact, not a duplicate.
+- **Fix:** a command or check argument naming a folder next to Friday's state folder whose name starts the same way was refused as private.
+- Migrations v19, v20 and v21.
+
 ## Unreleased — M7 model routing
 
 - **Every run is routed to a model, and the reason is recorded:** your pins first (`friday routing pin` for a task, role, kind or the project, with an expiry), then hard constraints (local only, sensitive work, vision, what the harness can run), then how well each model fits what the task needs, its verified track record once it has enough results, cost and speed by `routing.optimize`, and the guide's preferences. See [docs/routing.md](docs/routing.md).

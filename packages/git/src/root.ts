@@ -71,6 +71,8 @@ export interface LogEntry {
   author: string;
   date: string;
   subject: string;
+  /** With `log({ files: true })`: the paths the commit changed among those asked for. */
+  files?: string[];
 }
 
 export interface DiffEntry {
@@ -391,32 +393,50 @@ export class GitRoot {
   }
 
   /** Commits that touched `paths` (all commits without paths), newest first; no author emails. */
-  async log(opts: { paths?: string[]; limit?: number } = {}): Promise<LogEntry[]> {
+  /**
+   * Commits, newest first, optionally limited to paths. With `files`, each entry also lists the
+   * paths it changed among those asked for (none for a merge), so a caller can judge each one.
+   */
+  async log(opts: { paths?: string[]; limit?: number; files?: boolean } = {}): Promise<LogEntry[]> {
     const raw = (
       await this.git(
         [
           'log',
           `-n${opts.limit ?? 20}`,
           '-z',
-          '--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s',
+          ...(opts.files ? ['--name-only', '--format=%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s'] : []),
+          ...(opts.files ? [] : ['--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s']),
           ...(opts.paths?.length ? ['--', ...opts.paths] : []),
         ],
         { okCodes: [128] },
       )
     ).stdout;
+    const entry = (header: string, files?: string[]): LogEntry => {
+      const [commit, short, author, date, subject] = header.replace(/^\n/, '').split('\x1f');
+      return {
+        commit: commit ?? '',
+        short: short ?? '',
+        author: author ?? '',
+        date: date ?? '',
+        subject: subject ?? '',
+        ...(files ? { files } : {}),
+      };
+    };
+    if (opts.files) {
+      // Each record: \x1e, the header, NUL, then a newline and the changed paths, each ending in NUL.
+      return raw
+        .split('\x1e')
+        .filter(Boolean)
+        .map((r) => {
+          const [header = '', ...rest] = r.split('\0');
+          return entry(header, rest.map((p) => p.replace(/^\n/, '')).filter(Boolean));
+        })
+        .filter((e) => e.commit);
+    }
     return raw
       .split('\0')
       .filter(Boolean)
-      .map((r) => {
-        const [commit, short, author, date, subject] = r.replace(/^\n/, '').split('\x1f');
-        return {
-          commit: commit ?? '',
-          short: short ?? '',
-          author: author ?? '',
-          date: date ?? '',
-          subject: subject ?? '',
-        };
-      })
+      .map((r) => entry(r))
       .filter((e) => e.commit);
   }
 

@@ -275,7 +275,8 @@ export const ModelEvidenceView = z.object({
 });
 export type ModelEvidenceView = z.infer<typeof ModelEvidenceView>;
 
-export const RecoveryAction = z.enum(['reconnect', 'reassign', 'restart', 'needs_human', 'cancel']);
+/** `rebind` (review M7.1 R05): the task's work brought into a worktree of this clone, its state kept. */
+export const RecoveryAction = z.enum(['reconnect', 'reassign', 'restart', 'rebind', 'needs_human', 'cancel']);
 export type RecoveryAction = z.infer<typeof RecoveryAction>;
 
 /** What Friday knows about a task's last attempt before it recovers it (ADR-0026 §1). */

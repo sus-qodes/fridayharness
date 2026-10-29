@@ -99,6 +99,8 @@ export interface Daemon extends DaemonContext {
   brain: BrainHandle | undefined;
   /** Recovery of lost and failed attempts (M5d, ADR-0026). */
   recovery: RecoveryManager;
+  /** Integration of verified task branches into goal branches (M5c, ADR-0025). */
+  integration: IntegrationManager;
   /** The execution gateway (M6c, ADR-0029). */
   operations: OperationManager;
   close(reason?: string): Promise<void>;
@@ -613,6 +615,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     tick,
     brain,
     recovery,
+    integration,
     operations,
     close,
     closed,

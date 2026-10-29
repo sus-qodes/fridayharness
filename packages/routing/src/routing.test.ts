@@ -129,14 +129,29 @@ describe('decideRoute', () => {
       blocked: true,
       reason_codes: ['constraint.sensitive'],
     });
+    // Sensitive work runs only on an approved local model (Part 08 §11). A general pin is no consent
+    // for it, and a pin made for sensitive work cannot approve a remote model (M7 review §6; this
+    // test accepted a general pin of a remote model until M7.1).
     const pinnedOpus = [pin({ model: 'claude-opus-5-5' })];
-    expect(decideRoute(base({ settings: sensitive, pins: pinnedOpus, model_control: 'set' })).model).toBe(
-      'claude-opus-5-5',
+    expect(decideRoute(base({ settings: sensitive, pins: pinnedOpus, model_control: 'set' }))).toMatchObject({
+      model: null,
+      blocked: true,
+      reason_codes: ['constraint.sensitive'],
+    });
+    const sensitiveOpus = decideRoute(
+      base({ settings: sensitive, pins: [pin({ model: 'claude-opus-5-5', sensitive: true })], model_control: 'set' }),
     );
-    expect(decideRoute(base({ settings: sensitive, pins: pinnedOpus })).blocked).toBe(true);
-    expect(decideRoute(base({ settings: sensitive, pins: pinnedOpus, observed_model: 'claude-opus-5-5' })).model).toBe(
-      'claude-opus-5-5',
-    );
+    expect(sensitiveOpus).toMatchObject({ model: null, blocked: true });
+    expect(sensitiveOpus.excluded).toContainEqual({ model: 'claude-opus-5-5', reason: 'constraint.sensitive_local' });
+    const sensitiveLocal = [pin({ model: 'local-coder', sensitive: true })];
+    expect(
+      decideRoute(base({ models: withLocal, settings: sensitive, pins: sensitiveLocal, model_control: 'set' })),
+    ).toMatchObject({ model: 'local-coder', binding: true, blocked: false });
+    expect(decideRoute(base({ models: withLocal, settings: sensitive, pins: sensitiveLocal })).blocked).toBe(true);
+    expect(
+      decideRoute(base({ models: withLocal, settings: sensitive, pins: sensitiveLocal, observed_model: 'local-coder' }))
+        .model,
+    ).toBe('local-coder');
     const blind = mergeModels(guide.models, [{ id: 'blind', vendors: ['claude-code'], vision: false }]);
     const vision = decideRoute(base({ models: blind, pins: [pin({ needs_vision: true })] }));
     expect(vision.excluded).toContainEqual({ model: 'blind', reason: 'constraint.vision' });

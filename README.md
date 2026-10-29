@@ -4,7 +4,7 @@ Friday is a local orchestration and context control plane for AI software develo
 
 The architecture is called **ContextOS** in the original specification.
 
-**Status:** M5 built (gates pending), after two stabilizations from independent reviews (M2.5 and M3.1; see [the dispositions](docs/reviews/)).
+**Status:** M0–M7 built and tested locally, after three stabilizations from independent reviews (M2.5, M3.1 and M7.1, with its follow-up M7.1e; see [the dispositions](docs/reviews/)). The gates are pending: they need live runs with real hosts, CI on both operating systems, and the owner's acceptance of the decision records ([status table](docs/BUILD_PLAN.md#f1-status-table-updated-at-every-gate)). M8 is next.
 - **M1** gives you the event spine, the daemon, the `friday` CLI, a read-only status page, and Claude Code attached through an MCP server, a skill and policy hooks. A task runs from creation through a Claude Code session to a verified completion, with Friday's policy enforced on the session's tools.
 - **M2** adds the Master Brain. A goal becomes a versioned plan that you approve; its tasks are delegated to agents, revised when verification fails, and escalated to you when only a human can decide.
 - **M2.5** closes the twelve findings of the 2026-10-14 review:
@@ -27,6 +27,23 @@ The architecture is called **ContextOS** in the original specification.
 - **M6c** runs work that needs a secret for the agent instead of handing the secret over: the project declares an operation (such as a sandbox integration test), you trust it and approve each run, and the agent gets the outcome with the secret removed. Checks run in a minimal execution profile, secrets are encrypted with DPAPI on Windows, and claims can be verified automatically once you trust that.
 - **M6d** puts the tools of other MCP servers behind Friday's policy hook (none can reach Friday's files; the project sets a level per server), lets you answer low- and medium-risk requests in Claude Code's own dialog, and proves each security case of the spec with an end-to-end test.
 - **M7** routes each task to a model and says why: your pins first, then hard constraints, how well each model fits the task, its verified track record, and optionally the local decision model Laya once you calibrate it. A harness that applies models is bound by the choice; an attached Claude Code session gets it as advice, and Friday records which model actually ran ([docs/routing.md](docs/routing.md)).
+- **M7.1** closes the seventeen findings of the M7 review, which looked at the joints between milestones:
+  - what is integrated is exactly what was verified, and evidence Friday cannot read interrupts a verification instead of passing it;
+  - an operation starts only under the authority that holds when it starts, and stops, with every process it started, when that authority ends;
+  - a restored clone works only in its own checkouts, and a backup now holds the code of Friday's work, so a clean clone can continue it;
+  - a route that forbids the work starts nothing;
+  - context and verification apply the same effective policy as the hooks, packets keep their size budget, and context requests are honoured;
+  - Laya is asked locally, within one deadline, as part of normal delegation;
+  - memory keeps case, and only models seen running count as measured evidence.
+
+  One scenario now runs the whole chain, from an approved goal to its verified goal branch, including a restore into a clean clone ([disposition](docs/reviews/2026-10-14-m7-review-disposition.md)).
+
+  A follow-up review of M7.1 found seven more gaps, closed in M7.1e ([disposition](docs/reviews/2026-10-15-m7-1-review-disposition.md)):
+  - context is delivered only under the authority it was compiled under, and a file you approved for one read is shown once;
+  - a verification's verdict follows the policy in force when it is recorded;
+  - a failed integration can be retried, and your repair of a conflict is checked before it lands;
+  - work that was finished in a lost clone continues in the restored one (`friday recover --action rebind`);
+  - history shows only commits the agent may read about, and a restore checks the backup's database before it changes anything.
 
 See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 
@@ -45,6 +62,7 @@ See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 | [docs/policy.md](docs/policy.md) | The project's policy: what restricts at once, what needs your trust, policy files with deny rules and team scopes |
 | [docs/runbooks/recovery.md](docs/runbooks/recovery.md) | When a harness is lost or an attempt fails: what Friday does by itself, the recovery options, getting preserved work back |
 | [docs/master-brain.md](docs/master-brain.md) | Goals, plans and the Master Brain: turning planning on, approving, revisions, questions, costs |
+| [docs/routing.md](docs/routing.md) | Model routing: pins, hard constraints, the registry and guide, evidence, Laya and its calibration, what binds and what is advice |
 | [docs/protocol/README.md](docs/protocol/README.md) | The harness protocol: transport, tokens, methods, errors, versions |
 | [docs/integration/claude-code-spike.md](docs/integration/claude-code-spike.md) | Verified Claude Code hook and MCP behaviour on Windows |
 | [docs/integration/codex-spike.md](docs/integration/codex-spike.md) | The M3.5 Codex app-server spike: what works, what does not, and the contract changes before M8 |
@@ -110,9 +128,10 @@ Set `FRIDAY_TEST_TMP` to a short directory (for example `C:\t`) if your temp pat
 
 ```
 apps/        daemon, cli
-packages/    protocol, core, db, events, state, sdk, policy, verification, planner, git, code-graph, context, mcp-server, adapters/{generic,claude}
-tests/       support and helpers, cross-package suites (integration, hooks, mcp, security, scenarios), fixtures
-docs/        plan, spec, decisions, security, integration notes
+packages/    protocol, core, db, events, state, sdk, policy, verification, planner, git, code-graph, context,
+             execution, routing, mcp-server, adapters/{generic,claude}
+tests/       support and helpers, cross-package suites (integration, failure, hooks, mcp, security, conformance, scenarios), fixtures
+docs/        plan, spec, decisions, security, integration notes, runbooks, reviews
 ```
 
-Messaging and memory live in `packages/state`, because each change commits with the event log. More packages (execution, routing, more adapters, UI) arrive in later milestones as listed in the build plan.
+Messaging and memory live in `packages/state`, because each change commits with the event log. The Codex adapter and Claude spawn mode arrive in M8a, further adapters in M8b and the full UI in M9, as listed in the build plan.

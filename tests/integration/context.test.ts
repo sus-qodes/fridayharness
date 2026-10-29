@@ -119,6 +119,14 @@ describe('friday context explain (M4 gate, Part 12 §13)', () => {
     const text = JSON.stringify(third.sections);
     expect(text).toContain(client);
     expect([...new Set(text.match(/frontend\/[\w./-]+/g))]).toEqual([client]);
+
+    // The approval is revoked: the file is gone again, and the packet that showed it is stale.
+    expect((await cli(['--project', dir, 'approvals', 'revoke', asked.approval_id as string])).code).toBe(0);
+    const fourth = (await be.client.requestContext({ task_id: task.task_id, kind: 'task' })) as ContextPacket;
+    expect(fourth.context_id).not.toBe(third.context_id);
+    expect(JSON.stringify(fourth.sections)).not.toContain('frontend/');
+    const shown = await td.operator.get<ContextPacket>(td.operator.projectPath(`/context/${third.context_id}`));
+    expect(shown.staleness.is_stale).toBe(true);
   });
 
   it('answers a context request with what it asks for, or says it cannot fit (review F12, F17)', async () => {
@@ -156,5 +164,89 @@ describe('friday context explain (M4 gate, Part 12 §13)', () => {
     expect(requested(service)).toMatch(/^backend\/src\/checkout\.service\.ts:\n/);
     expect(requested(api)).toMatch(/^shared\/src\/api\.ts:\n/);
     for (const p of [service, api]) expect(JSON.stringify(p).length).toBeLessThanOrEqual(p.budget.chars ?? 0);
+  });
+
+  it('spends a read approval on each packet that shows the file, once for a one-use approval (review M7.1 R01)', async () => {
+    const td = await startTestDaemon(ws(), { git: true });
+    const dir = ws().projectDir;
+    const pid = td.project.project_id;
+    const be = await FakeHarness.connect(td, { agentKey: 'be-1', role: 'backend' });
+    const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Follow the private notes',
+      scope: { write: ['src/**'], read: [] },
+      assign_agent_key: 'be-1',
+    });
+    await be.client.call('task.claim', { task_id: task.task_id });
+    const runId = td.daemon.state.q.task(pid, task.task_id).current_run_id as string;
+    const root = td.daemon.state.q.findRun(runId)?.execution_root ?? dir;
+    mkdirSync(path.join(root, 'private'), { recursive: true });
+    const file = path.join(root, 'private', 'data.txt');
+    mkdirSync(path.join(ws().fridayDir, 'policies'), { recursive: true });
+    writeFileSync(path.join(ws().fridayDir, 'policies', 'private.yaml'), 'deny:\n  read: ["private/**"]\n');
+    await td.operator.post(td.operator.projectPath('/policy/reload'), {});
+    const ask = (maxChars?: number) =>
+      be.client.requestContext({
+        task_id: task.task_id,
+        kind: 'file',
+        paths: ['private/data.txt'],
+        ...(maxChars ? { max_chars: maxChars } : {}),
+      }) as Promise<ContextPacket>;
+    const shows = (p: ContextPacket, marker: string) => JSON.stringify(p.sections).includes(marker);
+    const approve = async (reuse: 'once' | 'task') => {
+      const asked = await be.client.requestPermission({
+        action_class: 'file.read',
+        resource: 'private/data.txt',
+        justification: 'the notes say how to do the task',
+        reuse,
+      });
+      expect(asked.status).toBe('pending');
+      expect((await cli(['--project', dir, 'approve', asked.approval_id as string])).code).toBe(0);
+      return asked.approval_id as string;
+    };
+    const approval = (id: string) =>
+      td.daemon.state.q.approvals(pid).find((a) => a.approval_id === id) as { status: string; uses: number };
+    const usedEvents = (id: string) =>
+      td.daemon.state.store.readByRef(pid, 'approval', id).filter((e) => e.type === 'approval.used');
+
+    writeFileSync(file, 'FIRST_PRIVATE_CONTENT\n');
+    expect(shows(await ask(), 'FIRST_PRIVATE_CONTENT')).toBe(false);
+
+    // One use: the first packet that shows the file spends it, with the use recorded.
+    const once = await approve('once');
+    expect(shows(await ask(), 'FIRST_PRIVATE_CONTENT')).toBe(true);
+    expect(approval(once)).toMatchObject({ status: 'used', uses: 1 });
+    expect(usedEvents(once).map((e) => (e.payload as { tool: string }).tool)).toEqual(['context']);
+    // The file changes: reading it again needs another approval.
+    writeFileSync(file, 'SECOND_PRIVATE_CONTENT\n');
+    expect(shows(await ask(), 'SECOND_PRIVATE_CONTENT')).toBe(false);
+    expect(approval(once).uses).toBe(1);
+
+    // Two requests at once under one new one-use approval: only one of them shows the file.
+    const twice = await approve('once');
+    writeFileSync(file, 'THIRD_PRIVATE_CONTENT\n');
+    const both = await Promise.all([ask(), ask()]);
+    expect(both.filter((p) => shows(p, 'THIRD_PRIVATE_CONTENT'))).toHaveLength(1);
+    expect(approval(twice)).toMatchObject({ status: 'used', uses: 1 });
+
+    // An approval for the whole task: each packet that shows fresh content records a use.
+    const whole = await approve('task');
+    writeFileSync(file, 'FOURTH_PRIVATE_CONTENT\n');
+    expect(shows(await ask(), 'FOURTH_PRIVATE_CONTENT')).toBe(true);
+    writeFileSync(file, 'FIFTH_PRIVATE_CONTENT\n');
+    expect(shows(await ask(), 'FIFTH_PRIVATE_CONTENT')).toBe(true);
+    expect(approval(whole)).toMatchObject({ status: 'granted', uses: 2 });
+    await cli(['--project', dir, 'approvals', 'revoke', whole]);
+
+    // Cut by the budget: the file is not shown, and the approval is not spent.
+    const cut = await approve('once');
+    writeFileSync(file, `SIXTH_PRIVATE_CONTENT\n${'x'.repeat(2400)}\n`);
+    const need = await ask(500).then(
+      () => 0,
+      (e: { details?: { required_chars?: number } }) => e.details?.required_chars ?? 0,
+    );
+    expect(need).toBeGreaterThan(500);
+    const small = await ask(need + 200);
+    expect(shows(small, 'SIXTH_PRIVATE_CONTENT')).toBe(false);
+    expect(approval(cut)).toMatchObject({ status: 'granted', uses: 0 });
   });
 });

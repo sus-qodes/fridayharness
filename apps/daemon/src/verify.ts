@@ -79,7 +79,9 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       if (!samePath(git.root, realpathSync(root))) throw new Error(`git sees ${git.root} as the checkout, not ${root}`);
       // A checkout of another clone (a restored database) is that clone's to judge (review F08).
       if (!shared && !(await sameRepository(root, project.root))) {
-        throw new Error(`it belongs to another clone of the project, not to ${project.root}`);
+        throw new Error(
+          `it belongs to another clone of the project, not to ${project.root}; bring its work into this clone with "friday recover ${taskId} --action rebind"`,
+        );
       }
       since = await git.changesSince(base);
       if (!since.base_found) {
@@ -95,6 +97,28 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
   const before = since?.identity ?? null;
   // The effective policy the work is judged by (review F03): the one the hooks apply, at this version.
   const policy = ctx.policy();
+  // The authority the verdict rests on: that policy, and the exact-path approvals for this attempt
+  // (review F03). It must still hold when the verdict is recorded (review M7.1 R03).
+  const writeGrants = (version: string) =>
+    run
+      ? state.q.usableGrants(pid, {
+          capability: 'file.write',
+          task_id: taskId,
+          run_id: run.run_id,
+          agent_id: run.agent_id,
+          policy_version: version,
+          now: state.clock.now(),
+          spent: true,
+        })
+      : [];
+  const authority = () => {
+    const version = ctx.policy().version;
+    return `${version}|${writeGrants(version)
+      .map((g) => g.approval_id)
+      .sort()
+      .join(',')}`;
+  };
+  const judgedBy = authority();
 
   const { verification_id } = state.startVerification(pid, actor, taskId, {
     execution_root: root,
@@ -141,20 +165,7 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     const role = run ? (state.q.findAgent(run.agent_id)?.role ?? null) : null;
     const teams = (role && policy.teams[role]) || [];
     const fold = (p: string) => (WINDOWS ? p.toLowerCase() : p);
-    const grants = new Map(
-      (run
-        ? state.q.usableGrants(pid, {
-            capability: 'file.write',
-            task_id: taskId,
-            run_id: run.run_id,
-            agent_id: run.agent_id,
-            policy_version: policy.version,
-            now: state.clock.now(),
-            spent: true,
-          })
-        : []
-      ).map((g) => [fold(g.target), g.approval_id]),
-    );
+    const grants = new Map(writeGrants(policy.version).map((g) => [fold(g.target), g.approval_id]));
     const findings: Finding[] = since
       ? analyzeDiff({
           changed: since.changes,
@@ -326,13 +337,6 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     // 4. One revision: code that changed while it was checked was not verified (ADR-0024 §2), and
     // code git can no longer read is not known to be the same (review F05). The trees compare the
     // content itself, so an approximate identity is never taken as proof (review F13).
-    // Nor was work judged by a policy that changed while it was checked (review F03).
-    if (ctx.policy().version !== policy.version) {
-      const reason = `the project's policy changed while the work was verified (${policy.version.slice(0, 12)} became ${ctx.policy().version.slice(0, 12)}); verify it again under the new one`;
-      logger.warn('verification interrupted', { task_id: taskId, reason });
-      const interrupted = state.interruptVerification(pid, actor, verification_id, reason);
-      return { task: interrupted, verification: state.q.verification(verification_id) };
-    }
     if (git && before && content) {
       let reason: string | null = null;
       try {
@@ -365,6 +369,19 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     return { task: failed, verification: state.q.verification(verification_id) };
   } finally {
     ctx.verifying.delete(verification_id);
+  }
+  // 5. Nor was work judged by an authority that changed while it was checked: the policy or an
+  // approval the verdict relied on (review F03). This is the last decision before the verdict is
+  // recorded, after every read of the checkout, with nothing awaited in between (review M7.1 R03).
+  if (authority() !== judgedBy) {
+    const now = ctx.policy().version;
+    const reason =
+      now !== policy.version
+        ? `the project's policy changed while the work was verified (${policy.version.slice(0, 12)} became ${now.slice(0, 12)}); verify it again under the new one`
+        : 'an approval this verification relied on changed while the work was verified; verify it again';
+    logger.warn('verification interrupted', { task_id: taskId, reason });
+    const interrupted = state.interruptVerification(pid, actor, verification_id, reason);
+    return { task: interrupted, verification: state.q.verification(verification_id) };
   }
   const ok = requiredFailed === 0;
   const parts = [

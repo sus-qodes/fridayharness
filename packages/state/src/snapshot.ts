@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { constants, createReadStream, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { constants, createReadStream, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { copyFile, lstat, mkdir, open, readdir, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -694,6 +694,8 @@ export async function backupTo(
       } finally {
         closeDatabase(copy);
       }
+      // The finished copy's hash: a restore checks it before it changes anything (review M7.1 R07).
+      const database = { file: 'project.db', bytes: statSync(dbFile).size, sha256: await hashFile(dbFile) };
       const files = ['project.db'];
       const inventory: BackupArtifact[] = [];
       const skipped: { path: string; reason: string }[] = [];
@@ -739,6 +741,7 @@ export async function backupTo(
             created_at: state.clock.now(),
             friday_version: opts.fridayVersion ?? null,
             files,
+            database,
             credentials: 'removed; every session registers again after a restore',
             artifacts: inventory,
             skipped,

@@ -230,7 +230,14 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     for (const m of eligible.filter((x) => !x.vision)) excluded.push({ model: m.id, reason: 'constraint.vision' });
     eligible = eligible.filter((m) => m.vision);
   }
-  if (sensitive) constraints.push('sensitive');
+  // Secret-sensitive work runs only on an approved local model (spec Part 08 §11): local here, and
+  // approved below by a pin made for sensitive work. No other pin counts as that consent (review §6).
+  if (sensitive) {
+    constraints.push('sensitive');
+    for (const m of eligible.filter((x) => !x.local))
+      excluded.push({ model: m.id, reason: 'constraint.sensitive_local' });
+    eligible = eligible.filter((m) => m.local);
+  }
   const constrained = eligible;
 
   const binding = input.model_control === 'set';
@@ -290,32 +297,36 @@ export function decideRoute(input: RouteInput): RoutingDecision {
   const blocked = (reason: string, extra: Partial<RoutingDecision> = {}) =>
     assemble(null, 'none', reason, { ...extra, blocked: true });
 
-  // A human's pinned model (or manual mode's default) is never silently replaced.
-  const wanted = pinModel?.model ?? (mode === 'manual' ? settings.default_model : null);
+  // A human's pinned model (or manual mode's default) is never silently replaced. Sensitive work
+  // takes only a pin made for it: a general pin, or manual mode's default, is no consent.
+  const chosen = sensitive ? pins.find((p) => p.model && p.sensitive) : pinModel;
+  const wanted = chosen?.model ?? (mode === 'manual' && !sensitive ? settings.default_model : null);
   if (wanted) {
-    const pin_id = pinModel?.pin_id ?? null;
-    const src = pinModel ? 'pin' : 'manual';
+    const pin_id = chosen?.pin_id ?? null;
+    const src = chosen ? 'pin' : 'manual';
     const why = excluded.find((e) => e.model === wanted)?.reason;
     if (eligible.some((m) => m.id === wanted)) {
-      codes.push(pinModel ? `pin.${pinModel.scope}` : 'manual.default');
+      codes.push(chosen ? `pin.${chosen.scope}` : 'manual.default');
       return result(
         wanted,
         src,
-        pinModel
-          ? `${wanted}, pinned by ${pinModel.source}${pinModel.until ? ` until ${pinModel.until}` : ''}`
+        chosen
+          ? `${wanted}, pinned by ${chosen.source}${chosen.until ? ` until ${chosen.until}` : ''}`
           : `${wanted}, the manual default`,
         { pin_id },
       );
     }
     codes.push('pin.unavailable');
     return blocked(
-      `${wanted} is ${pinModel ? 'pinned' : 'the manual default'} but cannot run here (${why ?? 'not in the registry'}); a human decides`,
+      `${wanted} is ${chosen ? 'pinned' : 'the manual default'} but cannot run here (${why ?? 'not in the registry'}); a human decides`,
       { pin_id },
     );
   }
   if (sensitive) {
     codes.push('constraint.sensitive');
-    return blocked('sensitive work runs only on a model a human pinned for it ("friday routing pin")');
+    return blocked(
+      'sensitive work runs only on a local model a human pinned for it ("friday routing pin --sensitive --model <local model>")',
+    );
   }
   if (mode === 'manual') {
     codes.push('manual.none');

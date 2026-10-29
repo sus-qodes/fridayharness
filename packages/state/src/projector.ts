@@ -98,6 +98,12 @@ export class StateProjector implements Projector {
           )
           .run(str(p.execution_root), opt(p.base_commit), opt(p.branch_ref), str(p.run_id));
         return;
+      case 'run.rebound':
+        // The run's work now lives in a worktree of this clone (review M7.1 R05).
+        this.db
+          .prepare('UPDATE task_runs SET execution_root = ? WHERE run_id = ?')
+          .run(str(p.execution_root), str(p.run_id));
+        return;
       case 'worktree.allocated': {
         const w = p.worktree as Payload;
         this.db

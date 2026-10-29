@@ -589,6 +589,9 @@ importers:
       '@friday/daemon':
         specifier: workspace:*
         version: link:../apps/daemon
+      '@friday/db':
+        specifier: workspace:*
+        version: link:../packages/db
       '@friday/git':
         specifier: workspace:*
         version: link:../packages/git

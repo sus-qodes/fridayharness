@@ -383,4 +383,60 @@ describe('verification at a recorded revision of the task checkout', () => {
     expect(v4.task.status).toBe('READY_FOR_VERIFICATION');
     expect(v4.verification.summary).toContain("the project's policy changed while the work was verified");
   });
+
+  it('decides under the authority current when it records the verdict, also after its last git reads (review M7.1 R03)', async () => {
+    const td = await project();
+    const policies = path.join(ws().fridayDir, 'policies');
+    mkdirSync(policies, { recursive: true });
+    // The policy tightens while verification makes its last read of the checkout: after the checks,
+    // before the verdict. Each final read is held until the change is in force.
+    const late = async (method: 'identity' | 'contentTree', file: string, taskId: string) => {
+      let done = false;
+      const tighten = async () => {
+        const v = td.daemon.state.q.latestVerification(taskId);
+        if (!done && v?.status === 'RUNNING' && v.checks.some((c) => c.name === 'tests')) {
+          done = true;
+          writeFileSync(path.join(policies, `${method}.yaml`), `deny:\n  write: ["${file}"]\n`);
+          await td.operator.post(td.operator.projectPath('/policy/reload'), {});
+        }
+      };
+      const identity = GitRoot.prototype.identity;
+      const contentTree = GitRoot.prototype.contentTree;
+      const spy =
+        method === 'identity'
+          ? vi.spyOn(GitRoot.prototype, 'identity').mockImplementation(async function (
+              this: GitRoot,
+              ...args: Parameters<GitRoot['identity']>
+            ) {
+              await tighten();
+              return identity.apply(this, args);
+            })
+          : vi.spyOn(GitRoot.prototype, 'contentTree').mockImplementation(async function (this: GitRoot) {
+              await tighten();
+              return contentTree.apply(this);
+            });
+      try {
+        const v = await verify(td, taskId);
+        expect(done).toBe(true);
+        return v;
+      } finally {
+        spy.mockRestore();
+      }
+    };
+    const one = await claimWork(td, { agent: 'be-1', files: { 'src/shared.mjs': 'export const shared = 2;\n' } });
+    const v1 = await late('identity', 'src/shared.mjs', one.task.task_id);
+    expect(v1.task.status).toBe('READY_FOR_VERIFICATION');
+    expect(v1.verification.summary).toContain("the project's policy changed while the work was verified");
+    const two = await claimWork(td, { agent: 'be-2', files: { 'src/other.mjs': 'export const other = 2;\n' } });
+    const v2 = await late('contentTree', 'src/other.mjs', two.task.task_id);
+    expect(v2.task.status).toBe('READY_FOR_VERIFICATION');
+    expect(v2.verification.summary).toContain("the project's policy changed while the work was verified");
+
+    // Verified again, the work is judged by the policy now in force.
+    const again = await verify(td, one.task.task_id);
+    expect(again.task.status).toBe('FAILED');
+    expect(
+      (again.verification.checks.find((c) => c.name === 'friday.diff')?.details?.findings ?? []).map((f) => f.rule),
+    ).toContain('diff.denied_by_policy');
+  });
 });

@@ -1,7 +1,7 @@
 /**
  * The context compiler (plan M4d, ADR-0022) on fixture-shop.
  */
-import { cpSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildGraph, type CodeGraph, memoryFactsCache } from '@friday/code-graph';
@@ -424,5 +424,116 @@ describe('cost', () => {
     console.log(
       `context: best ${Math.round(best)} ms of 5; packet ${packetChars} chars; files it points to ${pointed} bytes; ${explanation.included.length} sources`,
     );
+  });
+});
+
+describe('authority at delivery (review M7.1 R02, R06)', () => {
+  const ask = (taskId: string, request: { kind: string; paths?: string[] }) =>
+    compileContext(
+      deps,
+      {
+        recipient: { kind: 'agent', id: agent.agent_id, harness_id: agent.harness_id },
+        task_id: taskId,
+        purpose: `request:${request.kind}`,
+        request,
+      },
+      { kind: 'agent', id: agent.agent_id },
+    );
+  const client = 'frontend/src/api-client.ts';
+
+  it('delivers nothing gathered under a grant, a policy or a task that changed meanwhile (R02)', async () => {
+    const taskId = backendTask();
+    const graphOf = deps.graph;
+    // A: the human's exact-path grant is withdrawn while sources are gathered; the policy stays.
+    writeFileSync(path.join(dir, client), '// REVOKED_GRANT_CONTENT\nexport {};\n');
+    deps.policy = () => ({ version: 'v1', deny: { read: ['frontend/**'] }, teams: {} });
+    let grants = [{ approval_id: 'apr_r02', target: client }];
+    deps.readGrants = () => grants;
+    deps.graph = async (root) => {
+      const g = await graphOf(root);
+      grants = [];
+      return g;
+    };
+    const revoked = await ask(taskId, { kind: 'file', paths: [client] });
+    expect(JSON.stringify(revoked.packet)).not.toContain('REVOKED_GRANT_CONTENT');
+    expect(revoked.packet.staleness.is_stale).toBe(false);
+    expect(revoked.explanation.withheld_by_permission).toBeGreaterThan(0);
+
+    // B: the policy changes during every attempt, and the last change denies the file: nothing is
+    // delivered, not even marked stale; a calm request then follows the policy in force.
+    deps.readGrants = undefined;
+    writeFileSync(path.join(dir, client), '// CHURN_DENIED_CONTENT\nexport {};\n');
+    let n = 1;
+    let policy: ContextPolicy = { version: 'c1', deny: { read: [] }, teams: {} };
+    deps.policy = () => policy;
+    deps.graph = async (root) => {
+      const g = await graphOf(root);
+      n += 1;
+      policy = { version: `c${n}`, deny: { read: n >= 4 ? ['frontend/**'] : [] }, teams: {} };
+      return g;
+    };
+    await expect(ask(taskId, { kind: 'file', paths: [client] })).rejects.toThrow(/kept changing/);
+    deps.graph = graphOf;
+    const calm = await ask(taskId, { kind: 'file', paths: [client] });
+    expect(JSON.stringify(calm.packet)).not.toContain('CHURN_DENIED_CONTENT');
+
+    // C: the task is cancelled while its packet is compiled: the packet shows the task as it is.
+    deps.policy = undefined;
+    let cancelled = false;
+    deps.graph = async (root) => {
+      const g = await graphOf(root);
+      if (!cancelled) {
+        cancelled = true;
+        state.cancelTask(PROJECT, human, taskId, 'no longer needed');
+      }
+      return g;
+    };
+    const late = await compile(taskId, { purpose: 'during-cancel' });
+    expect(section(late.packet, 'task.contract')).toContain('CANCELLED');
+    deps.graph = graphOf;
+  });
+
+  it('history names only commits that change a file the recipient may read (R06)', async () => {
+    const g = deterministicGit(dir, { startEpoch: 1_767_300_000 });
+    const append = (rel: string, text: string) =>
+      writeFileSync(path.join(dir, rel), `${readFileSync(path.join(dir, rel), 'utf8')}${text}`);
+    append(client, '// a private change\n');
+    await g.run(['add', client]);
+    await g.run(['commit', '-q', '-m', `PRIVATE_HISTORY_MARKER: ${client} deployment`]);
+    append('backend/src/checkout.service.ts', '// a readable change\n');
+    await g.run(['add', 'backend/src/checkout.service.ts']);
+    await g.run(['commit', '-q', '-m', 'READABLE_HISTORY_MARKER: checkout']);
+    append(client, '// mixed\n');
+    append('backend/src/checkout.service.ts', '// mixed\n');
+    await g.run(['add', '-A']);
+    await g.run(['commit', '-q', '-m', 'MIXED_HISTORY_MARKER: both']);
+    const taskId = state.createTask(PROJECT, human, {
+      summary: 'Look after the whole shop',
+      acceptance_criteria: ['node --test passes'],
+      scope: { write: ['**'], read: [] },
+      assign_agent_key: 'be-1',
+    }).task_id;
+
+    // The file is kept from the agent by a pattern, by its exact path, or by its team's read scope.
+    const team = { source: 'policies/teams.yaml', write: ['backend/**'], read: ['backend/**', 'shared/**'] };
+    const policies: ContextPolicy[] = [
+      { version: 'glob', deny: { read: ['frontend/**'] }, teams: {} },
+      { version: 'path', deny: { read: [client] }, teams: {} },
+      { version: 'team', deny: { read: [] }, teams: { backend: [team] } },
+    ];
+    for (const policy of policies) {
+      deps.policy = () => policy;
+      const asked = await ask(taskId, { kind: 'history' });
+      const recent = await compile(taskId, { purpose: `recent:${policy.version}` });
+      for (const p of [asked.packet, recent.packet]) {
+        expect(JSON.stringify(p), policy.version).not.toContain('PRIVATE_HISTORY_MARKER');
+        expect(JSON.stringify(p), policy.version).not.toContain(client);
+      }
+      // A commit that changes a readable file is shown, mixed ones included: its message is the
+      // committer's text, about whatever it changed.
+      expect(section(asked.packet, 'repo.history'), policy.version).toContain('READABLE_HISTORY_MARKER');
+      expect(section(asked.packet, 'repo.history'), policy.version).toContain('MIXED_HISTORY_MARKER');
+      expect(section(recent.packet, 'repo.recent_commits'), policy.version).toContain('READABLE_HISTORY_MARKER');
+    }
   });
 });
