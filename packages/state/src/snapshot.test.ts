@@ -236,11 +236,13 @@ describe('backup', () => {
     const manifest = JSON.parse(readFileSync(path.join(ws().root, 'backup', 'manifest.json'), 'utf8'));
     expect(manifest).toMatchObject({
       format: 'friday-backup',
-      format_version: 1,
+      format_version: 2,
       project_id: PROJECT,
       event_head: head,
       friday_version: '0.1.0',
       artifacts: [{ path: stored?.path, bytes: 6, sha256: stored?.sha256 }],
+      // The state alone writes no code; the daemon adds it (review F16).
+      code: { included: false },
     });
     // Nothing but the backup is left next to it.
     expect(readdirSync(ws().root).filter((n) => n.includes('incomplete'))).toEqual([]);

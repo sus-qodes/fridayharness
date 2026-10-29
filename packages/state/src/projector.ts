@@ -380,7 +380,8 @@ export class StateProjector implements Projector {
         this.db
           .prepare(
             `INSERT INTO model_outcomes (outcome_id, project_id, task_id, run_id, model, basis, task_class, outcome,
-               attempt, duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               attempt, duration_ms, created_at, task_kind, harness_version, checks_version)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             str(o.outcome_id),
@@ -394,6 +395,9 @@ export class StateProjector implements Projector {
             Number(o.attempt ?? 1),
             opt(o.duration_ms),
             e.occurred_at,
+            opt(o.task_kind),
+            opt(o.harness_version),
+            opt(o.checks_version),
           );
         return;
       }

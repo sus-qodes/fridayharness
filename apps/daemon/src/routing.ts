@@ -13,7 +13,8 @@ import {
   type RoutingSettings,
 } from '@friday/routing';
 import type { ProjectRef } from '@friday/sdk';
-import type { FridayState, HarnessRecord, RunRouter } from '@friday/state';
+import { type FridayState, type HarnessRecord, hostCohort, type RunRouter } from '@friday/state';
+import { checksVersion } from '@friday/verification';
 import type { Logger } from './log.js';
 
 /**
@@ -27,6 +28,8 @@ export class RoutingService {
   readonly guideVersion: string;
   /** Laya's stored answer for a task (M7c), when its question still stands. */
   laya: (taskId: string) => LayaAnswer | null = () => null;
+  /** Why there is no answer, for the decision's record (review F11). */
+  layaStatus: (taskId: string) => RouteInput['laya_status'] = () => 'off';
 
   constructor(private readonly deps: { state: FridayState; project: ProjectRef; logger: Logger }) {
     const guide = loadGuide();
@@ -54,9 +57,19 @@ export class RoutingService {
     return this.deps.state.q.routingPins(this.pid, this.deps.state.clock.now());
   }
 
-  evidence(): Evidence[] {
+  /** The checks that judge each kind of task now, as versions: outcomes under others are another cohort. */
+  checksVersion = (kind: string): string => checksVersion(this.deps.project.config.verification.checks, kind);
+
+  /**
+   * Measured outcomes (review F15): runs whose model was observed, judged by the current checks,
+   * and, for a harness, on its host version.
+   */
+  evidence(harness?: HarnessRecord | null): Evidence[] {
     return this.deps.state.q
-      .modelEvidence(this.pid)
+      .modelEvidence(this.pid, {
+        checksVersion: this.checksVersion,
+        hostCohort: harness ? hostCohort(harness.vendor, harness.version) : null,
+      })
       .map((e) => ({ model: e.model, task_class: e.task_class, samples: e.samples, passed: e.passed }));
   }
 
@@ -78,10 +91,10 @@ export class RoutingService {
       guide_version: this.guideVersion,
       settings: this.settings,
       pins: this.pins(),
-      evidence: this.evidence(),
+      evidence: this.evidence(harness),
       laya: null,
     };
-    return { ...base, laya: this.laya(task.task_id) };
+    return { ...base, laya: this.laya(task.task_id), laya_status: this.layaStatus(task.task_id) };
   }
 
   /** The router the state calls for every new run (ADR-0031 §6). */

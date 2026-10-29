@@ -132,8 +132,15 @@ export function sensitiveInText(text: string, ctx: PathContext): SensitiveHit | 
   if (/(^|[\s"'=/(])\.env(\.[\w.-]+)?($|[\s"');|&])/i.test(t) || /\bid_(rsa|ed25519)\b/.test(t) || /\.pem\b/i.test(t)) {
     return { class: 'secrets', path: 'secret file' };
   }
-  if (ctx.stateDir && t.toLowerCase().includes(ctx.stateDir.replaceAll('\\', '/').toLowerCase())) {
-    return { class: 'friday.private', path: ctx.stateDir };
+  if (ctx.stateDir) {
+    // The state folder itself or anything inside it, not a sibling whose name starts the same way
+    // (`…\Friday-notes`): the match must end where a path segment ends.
+    const dir = ctx.stateDir.replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase();
+    const lower = t.toLowerCase();
+    for (let i = lower.indexOf(dir); i !== -1; i = lower.indexOf(dir, i + 1)) {
+      const next = lower[i + dir.length];
+      if (next === undefined || !/[\w.-]/.test(next)) return { class: 'friday.private', path: ctx.stateDir };
+    }
   }
   return null;
 }

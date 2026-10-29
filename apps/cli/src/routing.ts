@@ -86,15 +86,20 @@ export function registerRoutingCommands(program: Command, g: () => GlobalOptions
           lines.push(
             '',
             table(
-              ['MODEL', 'CLASS', 'OUTCOMES', 'VERIFIED', 'MEDIAN TIME'],
+              ['MODEL', 'CLASS', 'MEASURED', 'VERIFIED', 'MEDIAN TIME', 'ASSUMED', 'OTHER COHORTS'],
               r.evidence.map((e) => [
                 e.model,
                 e.task_class,
                 String(e.samples),
-                `${Math.round((e.passed / Math.max(1, e.samples)) * 100)}%${e.samples < r.min_samples ? ' (too few)' : ''}`,
+                e.samples
+                  ? `${Math.round((e.passed / e.samples) * 100)}%${e.samples < r.min_samples ? ' (too few)' : ''}`
+                  : '-',
                 e.median_duration_ms !== null ? `${Math.round(e.median_duration_ms / 1000)} s` : '-',
+                String(e.assumed ?? 0),
+                String(e.other_cohorts ?? 0),
               ]),
             ),
+            'Measured: the model was seen running, judged by the current checks. Assumed: it was only requested, so it counts for nothing. Other cohorts: other checks, another host version, or past the window.',
           );
         }
         return lines.join('\n');

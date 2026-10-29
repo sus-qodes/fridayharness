@@ -109,6 +109,8 @@ export function createMasterBrain(input: {
   policy?: () => { auto_approve: boolean };
   /** The model routing would run on an agent's harness for a task (ADR-0031 §9). */
   modelFit?: (task: TaskView, agentId: string) => { fit: number; cost: number; blocked?: string } | null;
+  /** Whether routing has Laya's answer, or its failure, for a task (review F11). */
+  routingReady?: (task: TaskView) => boolean;
 }): BrainHandle {
   const { state, project, env, logger } = input;
   const cfg = project.config.master_brain;
@@ -195,6 +197,7 @@ export function createMasterBrain(input: {
     // The daemon's recovery preserves and fences lost attempts before reassigning them (ADR-0026).
     lostWork: 'external',
     ...(input.modelFit ? { modelFit: input.modelFit } : {}),
+    ...(input.routingReady ? { routingReady: input.routingReady } : {}),
   });
 
   return {

@@ -661,13 +661,28 @@ export function buildProgram(): Command {
         artifacts: { files: number; bytes: number };
         skipped: { path: string; reason: string }[];
         problems: { artifact_id: string; path: string; problem: string }[];
+        code: {
+          included: boolean;
+          reason?: string;
+          bytes?: number;
+          refs?: { kind: string }[];
+          worktrees?: { task_id: string; files: number }[];
+          skipped?: { task_id: string; path: string; reason: string }[];
+        };
       }>('/admin/backup', { into: path.resolve(o.into) }, { timeoutMs: 600_000 });
+      const count = (kind: string) => r.code.refs?.filter((x) => x.kind === kind).length ?? 0;
       out(g(), r, () =>
         [
           `Backed up ${r.files.join(', ')} at event ${r.event_head} to ${r.into} (${r.artifacts.files} artifact file(s)).`,
           ...r.skipped.map((x) => `  skipped ${x.path}: ${x.reason}`),
           ...r.problems.map(
             (x) => `  warning: ${x.path} (${x.artifact_id}) is ${x.problem} in the project's artifacts`,
+          ),
+          r.code.included
+            ? `Code: ${count('task_branch')} task branch(es), ${count('goal_branch')} goal branch(es), ${count('preserved')} preserved state(s), the uncommitted work of ${count('uncommitted')} task worktree(s)${count('restored') ? ` and ${count('restored')} restored state(s) not used yet` : ''} (${Math.ceil((r.code.bytes ?? 0) / 1024)} KB with their history). Ignored files and your main checkout are not included.`
+            : `Code: none (${r.code.reason}).`,
+          ...(r.code.skipped ?? []).map(
+            (x) => `  warning: the worktree of ${x.task_id} (${x.path}) was not read: ${x.reason}`,
           ),
           'No credential is included: after a restore every session registers again. Provider keys stay per user.',
         ].join('\n'),
@@ -680,9 +695,20 @@ export function buildProgram(): Command {
     .requiredOption('--from <dir>', 'a folder made by "friday backup"')
     .action(async (o: { from: string }) => {
       const r = await restoreProject(project(g()), o.from);
+      const by = (outcome: string) => r.code.refs.filter((x) => x.outcome === outcome).length;
       out(g(), r, () =>
         [
           `Restored the backup of ${r.backup_created_at ?? 'unknown date'} (event ${r.event_head}, ${r.artifacts} artifact file(s)).`,
+          r.code.included
+            ? `Code: ${r.code.refs.length} ref(s) from the backup: ${by('created')} added, ${by('advanced')} moved forward, ${by('unchanged')} already here, ${by('kept')} kept as they are in this clone.`
+            : `Code: none in this backup (${r.code.reason}). Friday asks a human before it starts a task whose earlier work is not in this clone.`,
+          ...r.code.refs
+            .filter((x) => x.stored_at)
+            .map((x) => `  ${x.ref} differs here; the backup's commit is kept as ${x.stored_at}`),
+          ...r.code.uncommitted.map(
+            (x) =>
+              `  the uncommitted work of ${x.task_id} is at ${x.ref}: "friday recover ${x.task_id} --action reassign" brings it into a worktree of this clone`,
+          ),
           r.set_aside ? `The state it replaced is in ${r.set_aside}.` : 'There was no state to replace.',
           'Start Friday with "friday run"; sessions register again, and work whose session does not come back is recovered as after a crash.',
         ].join('\n'),

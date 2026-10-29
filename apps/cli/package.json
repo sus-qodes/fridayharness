@@ -24,6 +24,7 @@
     "@friday/adapter-claude": "workspace:*",
     "@friday/daemon": "workspace:*",
     "@friday/db": "workspace:*",
+    "@friday/git": "workspace:*",
     "@friday/protocol": "workspace:*",
     "@friday/sdk": "workspace:*",
     "commander": "^15.0.0",

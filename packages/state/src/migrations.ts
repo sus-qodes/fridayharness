@@ -873,6 +873,17 @@ ALTER TABLE verification_runs ADD COLUMN tree TEXT;
 ALTER TABLE verification_runs ADD COLUMN policy_version TEXT;
 `,
   },
+  {
+    // M7.1c: an outcome's cohort (F15): the host version and the checks that judged it, and the
+    // task's kind, so only comparable outcomes are counted together.
+    version: 21,
+    name: 'review_m7_outcome_cohorts',
+    up: `
+ALTER TABLE model_outcomes ADD COLUMN task_kind TEXT;
+ALTER TABLE model_outcomes ADD COLUMN harness_version TEXT;
+ALTER TABLE model_outcomes ADD COLUMN checks_version TEXT;
+`,
+  },
 ];
 
 /** Every migration for a Friday project database, in order. */

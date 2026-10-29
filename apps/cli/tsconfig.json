@@ -21,6 +21,9 @@
     },
     {
       "path": "../../packages/db"
+    },
+    {
+      "path": "../../packages/git"
     }
   ]
 }

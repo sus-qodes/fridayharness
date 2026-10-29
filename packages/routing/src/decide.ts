@@ -91,6 +91,12 @@ export interface RouteInput {
   pins: readonly RoutingPin[];
   evidence: readonly Evidence[];
   laya: LayaAnswer | null;
+  /**
+   * Why there is no Laya answer (review F11): `unavailable` (recorded as not answering) or
+   * `pending` (still asked: a human assigned the task before the answer came). Recorded as the
+   * decision's reason code; without it, `laya.none`.
+   */
+  laya_status?: 'off' | 'answered' | 'unavailable' | 'pending';
 }
 
 export interface Candidate {
@@ -449,7 +455,11 @@ export function decideRoute(input: RouteInput): RoutingDecision {
       );
     }
   } else {
-    codes.push('laya.none');
+    codes.push(
+      input.laya_status === 'unavailable' || input.laya_status === 'pending'
+        ? `laya.${input.laya_status}`
+        : 'laya.none',
+    );
   }
   codes.push('score.best');
   return scored(best.model, 'score', `${best.model} for ${task_class} tasks: ${fitText(best)}`);

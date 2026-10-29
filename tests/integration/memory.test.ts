@@ -35,9 +35,11 @@ describe('friday memory', () => {
     };
     const second = await run(['memory', 'add', '--kind', 'architecture', '--subject', 'Auth', 'Auth uses OAuth.']);
     expect(second).toContain(`It supersedes ${first.memory.memory_id}`);
-    expect(await run(['memory', 'add', '--kind', 'architecture', '--subject', 'auth', 'auth uses oauth.'])).toContain(
-      'nothing changed',
-    );
+    // The same content again, spaced differently: nothing changes. A difference in case is a
+    // different fact (review F14).
+    expect(
+      await run(['memory', 'add', '--kind', 'architecture', '--subject', 'auth', ' Auth  uses OAuth. ']),
+    ).toContain('nothing changed');
     const found = await run(['memory', 'search', 'auth']);
     expect(found).toContain('Auth uses OAuth.');
     expect(found).not.toContain('JWT');

@@ -13,14 +13,23 @@ import type { FridayState } from '@friday/state';
 import type { Logger } from './log.js';
 import type { RoutingService } from './routing.js';
 
+/** What routing knows from Laya about a task's current question (review F11). */
+export type LayaStatus = 'off' | 'answered' | 'unavailable' | 'pending';
+
 /**
  * Laya in the daemon (ADR-0031 §10): asked when a task becomes READY, outside any transaction, and
  * stored with its question's identity; at routing time a stored answer counts only while the question
  * still stands, with the threshold fitted for its checkpoint and option count. Laya runs on this
- * machine; when it does not answer, routing goes on without it.
+ * machine; when it does not answer within its deadline, that is recorded, and routing goes on
+ * without it.
+ *
+ * Automatic delegation waits for the answer, or for the record that there is none, for the task
+ * that asked only (review F11): `ready` says whether it may be routed. The deadline is Laya's own
+ * timeout, which covers the whole answer.
  */
 export class LayaService {
-  readonly #asking = new Set<string>();
+  readonly #inflight = new Map<string, { question_id: string; ctrl: AbortController }>();
+  #closed = false;
 
   constructor(
     private readonly deps: { state: FridayState; project: ProjectRef; logger: Logger; routing: RoutingService },
@@ -45,6 +54,7 @@ export class LayaService {
       this.deps.routing.settings,
       cls?.avoid ?? [],
       this.deps.routing.guideVersion,
+      this.deps.project.config.routing.laya.model ?? null,
     );
   }
 
@@ -61,18 +71,46 @@ export class LayaService {
     return mode === 'auto' || mode === 'hybrid';
   }
 
-  /** Asks Laya about a task that just became READY. Never throws. */
+  /** What routing knows from Laya about the task's current question. */
+  status(task: TaskView): LayaStatus {
+    if (!this.wanted(task)) return 'off';
+    const q = this.question(task);
+    if (!q) return 'off';
+    if (this.deps.state.q.layaAnswer(this.pid, task.task_id)?.question_id === q.question_id) return 'answered';
+    const failed = this.deps.state.store
+      .readByRef(this.pid, 'task', task.task_id, { types: ['laya.unavailable'] })
+      .some((e) => (e.payload as { question_id?: string }).question_id === q.question_id);
+    return failed ? 'unavailable' : 'pending';
+  }
+
+  /**
+   * Whether the task may be routed now (review F11): Laya is not consulted for it, answered its
+   * question, or is recorded as not answering it. Otherwise the question is asked (again, after a
+   * restart) and the task waits; Laya's deadline bounds the wait.
+   */
+  ready(task: TaskView): boolean {
+    const s = this.status(task);
+    if (s !== 'pending') return true;
+    if (!this.#inflight.has(task.task_id)) void this.ask(task.task_id);
+    return false;
+  }
+
+  /** Asks Laya about a task that just became READY (or still waits for its answer). Never throws. */
   async ask(taskId: string): Promise<void> {
-    if (this.#asking.has(taskId)) return;
+    if (this.#closed || this.#inflight.has(taskId)) return;
     const { state, logger } = this.deps;
     const task = state.q.findTask(this.pid, taskId);
     if (!task || !this.wanted(task)) return;
     const q = this.question(task);
     if (!q) return;
-    this.#asking.add(taskId);
+    const ctrl = new AbortController();
+    this.#inflight.set(taskId, { question_id: q.question_id, ctrl });
     const cfg = this.deps.project.config.routing.laya;
     try {
-      const reply = await askLaya({ url: cfg.url, model: cfg.model, timeout_ms: cfg.timeout_ms }, q);
+      const reply = await askLaya(
+        { url: cfg.url, model: cfg.model, timeout_ms: cfg.timeout_ms, signal: ctrl.signal },
+        q,
+      );
       state.recordLayaAnswer(this.pid, {
         task_id: taskId,
         question_id: q.question_id,
@@ -86,6 +124,8 @@ export class LayaService {
       });
     } catch (e) {
       const kind = e instanceof LayaError ? e.kind : 'error';
+      // Cancelled: the task or the daemon went away, and there is nothing to record.
+      if (kind === 'cancelled') return;
       logger.warn('laya did not answer; routing goes on without it', {
         task_id: taskId,
         kind,
@@ -98,6 +138,7 @@ export class LayaService {
           'laya.unavailable',
           {
             task_id: taskId,
+            question_id: q.question_id,
             kind,
             message: (e as Error).message.slice(0, 300),
           },
@@ -110,8 +151,28 @@ export class LayaService {
         });
       }
     } finally {
-      this.#asking.delete(taskId);
+      this.#inflight.delete(taskId);
     }
+  }
+
+  /** The task was cancelled: its question no longer matters. */
+  cancel(taskId: string): void {
+    this.#inflight.get(taskId)?.ctrl.abort();
+  }
+
+  /** At start: READY tasks whose question has no answer, nor a record of none, are asked. */
+  async sweep(): Promise<void> {
+    if (!this.enabled) return;
+    for (const t of this.deps.state.q.tasks(this.pid, { statuses: ['READY'] })) {
+      if (this.#closed) return;
+      if (this.status(t) === 'pending') await this.ask(t.task_id);
+    }
+  }
+
+  /** The daemon is closing: every request in flight ends now. */
+  close(): void {
+    this.#closed = true;
+    for (const f of this.#inflight.values()) f.ctrl.abort();
   }
 
   /** The stored answer for routing, when its question still stands, with its fitted threshold. */

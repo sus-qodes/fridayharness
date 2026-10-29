@@ -106,8 +106,21 @@ const HALF_LIFE_DAYS: Record<MemoryAuthority, number> = {
 const MAX_CONTENT = 4000;
 
 export const subjectKey = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
+const normalized = (s: string) => s.trim().replace(/\s+/g, ' ');
+/**
+ * The identity of a memory's content (review F14): whitespace is ignored, case is not, because
+ * identifiers, paths and literal values differ by case. Prefixed, so it never equals a hash taken
+ * before this rule, of lower-cased text (`legacyHash`).
+ */
 const contentHash = (s: string) =>
-  createHash('sha256').update(s.trim().replace(/\s+/g, ' ').toLowerCase()).digest('hex');
+  createHash('sha256')
+    .update(`v2:${normalized(s)}`)
+    .digest('hex');
+const legacyHash = (s: string) => createHash('sha256').update(normalized(s).toLowerCase()).digest('hex');
+/** Whether a stored memory holds this content: by its hash, or for an older record by its exact text. */
+const holds = (row: { content: string; content_hash: string }, content: string) =>
+  row.content_hash === contentHash(content) ||
+  (row.content_hash === legacyHash(content) && normalized(row.content) === normalized(content));
 
 interface MemoryRow {
   memory_id: string;
@@ -277,15 +290,13 @@ export class MemoryService {
           key,
           'active',
         );
-        const duplicate = same.find(
-          (r) => r.scope_type === scope.type && r.scope_id === scope.id && r.content_hash === hash,
-        );
+        const duplicate = same.find((r) => r.scope_type === scope.type && r.scope_id === scope.id && holds(r, content));
         if (duplicate) return { memory: this.view(duplicate), deduplicated: true, superseded: [], contradicts: [] };
         const superseded: string[] = [];
         const contradicts: string[] = [];
         let needsReview = false;
         for (const old of same) {
-          if (old.content_hash === hash) continue;
+          if (holds(old, content)) continue;
           const sameScope = old.scope_type === scope.type && old.scope_id === scope.id;
           const newRank = RANK[prov.authority];
           const oldRank = RANK[old.authority];

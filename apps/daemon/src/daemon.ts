@@ -254,10 +254,22 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   // Laya, when enabled: asked as a task becomes READY; its stored answer feeds routing (ADR-0031 §10).
   const laya = new LayaService({ state, project, logger, routing });
   routing.laya = (taskId) => laya.answerFor(taskId);
-  const stopLaya = state.transport.subscribe({ project_id: project.project_id, types: ['task.ready'] }, (e) => {
-    const taskId = (e.payload as { task_id?: string }).task_id;
-    if (taskId && laya.enabled) void laya.ask(taskId);
-  });
+  routing.layaStatus = (taskId) => {
+    const t = state.q.findTask(project.project_id, taskId);
+    return t ? laya.status(t) : 'off';
+  };
+  const stopLaya = state.transport.subscribe(
+    { project_id: project.project_id, types: ['task.ready', 'task.cancelled'] },
+    (e) => {
+      const taskId = (e.payload as { task_id?: string }).task_id;
+      if (!taskId || !laya.enabled) return;
+      // A cancelled task's question no longer matters (review F11).
+      if (e.type === 'task.cancelled') laya.cancel(taskId);
+      else void laya.ask(taskId);
+    },
+  );
+  // READY tasks whose question was never answered (the daemon stopped meanwhile) are asked again.
+  void laya.sweep().catch((err) => logger.warn('asking Laya again failed', { message: (err as Error).message }));
   // Every check's and operation's process tree is a group that ends with it (review F07).
   const groups = new ProcessGroups(env);
   // Set once the execution gateway exists: a task's operations stop before its worktree is reused.
@@ -302,6 +314,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     state,
     project,
     logger,
+    workspaces,
     settings: {
       maxRetries: project.config.recovery.max_retries,
       maxSameErrorRetries: project.config.recovery.max_same_error_retries,
@@ -392,6 +405,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
           logger,
           policy: () => policy,
           modelFit: (task, agentId) => routing.fitFor(task, agentId),
+          // A task Laya is still asked about waits for the answer, or its deadline (review F11).
+          routingReady: (task) => laya.ready(task),
           ...(opts.brain && opts.brain.model !== undefined ? { model: opts.brain.model } : {}),
         });
 
@@ -550,6 +565,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       stopWorkspaces();
       stopAutoVerify();
       stopLaya();
+      laya.close();
       // Every operation's processes end, confirmed, before the database closes (review F07).
       await operations
         .close()

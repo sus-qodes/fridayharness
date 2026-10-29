@@ -84,6 +84,11 @@ export interface BrainDeps {
    * start on that agent's harness, and why (review F01).
    */
   modelFit?: (task: TaskView, agentId: string) => { fit: number; cost: number; blocked?: string } | null;
+  /**
+   * Whether routing has what it waits for to route a task (Laya's answer, or that Laya did not
+   * answer within its deadline; review F11). A task that is not ready waits; other tasks go on.
+   */
+  routingReady?: (task: TaskView) => boolean;
 }
 
 export interface BrainStep {
@@ -1141,9 +1146,10 @@ export class MasterBrain {
         .filter((e) => e.kind === 'recovery_needed' || e.kind === 'routing_violated')
         .map((e) => String(e.task_id)),
     );
+    const routingReady = this.#deps.routingReady ?? (() => true);
     const ready = state.q
       .tasks(projectId, { statuses: ['READY'] })
-      .filter((t) => t.goal_id && active.has(t.goal_id) && !asked.has(t.task_id))
+      .filter((t) => t.goal_id && active.has(t.goal_id) && !asked.has(t.task_id) && routingReady(t))
       .sort(
         (a, b) => (PRIORITY[a.priority] ?? 9) - (PRIORITY[b.priority] ?? 9) || a.created_at.localeCompare(b.created_at),
       );

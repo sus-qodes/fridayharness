@@ -309,7 +309,7 @@ describe('verification at a recorded revision of the task checkout', () => {
             '      task_kinds: [implementation]',
             '    - name: slow',
             '      command: node',
-            '      args: ["-e", "setTimeout(() => {}, 2500)"]',
+            '      args: ["-e", "setTimeout(() => {}, 4000)"]',
             slow,
           ].join('\n'),
         ),
@@ -369,7 +369,14 @@ describe('verification at a recorded revision of the task checkout', () => {
     // 4. The policy tightens while the checks run: nothing is judged by the obsolete one.
     const late = await claimWork(td, { agent: 'be-3', kind: 'chore', files: { 'src/late.mjs': 'export {};\n' } });
     const running = verify(td, late.task.task_id);
-    await new Promise((r) => setTimeout(r, 800));
+    // Not a fixed delay: under a loaded machine the checks may start late (LESSONS T-38).
+    // The verification records the policy it judges by when it starts; the slow check gives the
+    // change below time to land before the verdict.
+    const until = Date.now() + 40_000;
+    while (td.daemon.state.q.latestVerification(late.task.task_id)?.status !== 'RUNNING') {
+      if (Date.now() > until) throw new Error('the verification never started');
+      await new Promise((r) => setTimeout(r, 25));
+    }
     writeFileSync(path.join(policies, 'later.yaml'), 'deny:\n  write: ["src/late.mjs"]\n');
     await td.operator.post(td.operator.projectPath('/policy/reload'), {});
     const v4 = await running;

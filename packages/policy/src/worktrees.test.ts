@@ -56,6 +56,17 @@ describe('the private folder is matched as a whole segment', () => {
     expect(sensitiveInText(text, ctx)?.class === 'friday.private').toBe(isPrivate);
     expect(sensitivePattern(text, ctx)?.class === 'friday.private').toBe(isPrivate);
   });
+
+  it('the configured state folder, not a sibling whose name starts the same way', () => {
+    const s = ctx.stateDir as string;
+    expect(sensitiveInText(`type ${s}\\projects\\p\\operator.token`, ctx)?.class).toBe('friday.private');
+    expect(sensitiveInText(`dir "${s}"`, ctx)?.class).toBe('friday.private');
+    expect(sensitiveInText(s, ctx)?.class).toBe('friday.private');
+    expect(sensitiveInText(`${s.replaceAll('\\', '/')}/projects`, ctx)?.class).toBe('friday.private');
+    expect(sensitiveInText(`notepad ${s}-notes\\todo.txt`, ctx)).toBeNull();
+    expect(sensitiveInText(`${s}Archive/x.ts`, ctx)).toBeNull();
+    expect(sensitiveInText(`${s}.old/x ${s}/y`, ctx)?.class).toBe('friday.private');
+  });
 });
 
 describe('a session in a task worktree', () => {

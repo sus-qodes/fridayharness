@@ -3,7 +3,7 @@
  * in its own checkouts. It never reuses, resets or verifies the worktree of the clone the database
  * came from, and it never starts a task over on its own when the task's work is only there.
  */
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createDaemon, type Daemon } from '@friday/daemon';
 import type { Actor, TaskStartParams, TaskView } from '@friday/protocol';
@@ -117,6 +117,15 @@ describe('a backup restored into another clone (review F08)', () => {
 
     const backup = path.join(ws().root, 'backup');
     expect((await cli(['--project', A, 'backup', '--into', backup])).code).toBe(0);
+    // A backup made before backups held code (format 1): the task's work stays only in clone A.
+    // With the code, the restored clone has it too (review F16, backup-code.test.ts).
+    const manifestFile = path.join(backup, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
+    manifest.format_version = 1;
+    manifest.files = manifest.files.filter((f: string) => f !== 'code.bundle');
+    delete manifest.code;
+    writeFileSync(manifestFile, JSON.stringify(manifest, null, 2));
+    rmSync(path.join(backup, 'code.bundle'));
     await fakeA.close();
     await a.daemon.close('moving to another clone');
 

@@ -262,10 +262,15 @@ export type RoutingPinView = z.infer<typeof RoutingPinView>;
 export const ModelEvidenceView = z.object({
   model: z.string(),
   task_class: z.string(),
+  /** Measured: verified outcomes of runs the model was observed running, in the current cohort (review F15). */
   samples: z.number().int(),
   passed: z.number().int(),
   failed: z.number().int(),
   reworked: z.number().int(),
+  /** Outcomes of runs where the model was only requested, never seen running: not measured. */
+  assumed: z.number().int().default(0),
+  /** Measured outcomes of other checks, another host version, or older than the window. */
+  other_cohorts: z.number().int().default(0),
   median_duration_ms: z.number().int().nullable(),
 });
 export type ModelEvidenceView = z.infer<typeof ModelEvidenceView>;
@@ -312,8 +317,18 @@ export const RecoveryAssessment = z.object({
        */
       elsewhere: z.boolean().default(false),
       branch_here: z.string().nullable().default(null),
+      /**
+       * The uncommitted work a backup recorded in that worktree, restored into this clone under
+       * `refs/friday/restored/<task>` (review F16): `reassign` brings it into a worktree here.
+       */
+      restored_here: z.string().nullable().default(null),
     })
     .nullable(),
+  /**
+   * Why earlier attempts' work is not in this clone, when it is not (review F16): their branch is
+   * missing here, so a new attempt would not continue from it.
+   */
+  missing_code: z.string().nullable().default(null),
   /** Fatal agent errors of the task, and how often the latest one repeated. */
   errors: z.object({ total: z.number().int(), same_as_last: z.number().int(), last: z.string().nullable() }),
   /** Refs holding the preserved state of earlier attempts (`refs/friday/preserved/<task>/…`). */

@@ -227,6 +227,16 @@ function versionAtLeast(v: string | null | undefined, min: readonly number[]): b
 }
 
 /**
+ * The host cohort an outcome is counted in (review F15): the vendor and the version's major and
+ * minor parts (`claude-code 2.1`), so a patch release does not start the evidence over while a new
+ * minor version does.
+ */
+export function hostCohort(vendor: string, version: string | null | undefined): string {
+  const m = /^(\d+)\.(\d+)/.exec(version ?? '');
+  return `${vendor} ${m ? `${m[1]}.${m[2]}` : (version ?? 'unknown')}`;
+}
+
+/**
  * The enforcement a session actually reached (ADR-0010, review F09), from evidence rather than
  * from what the client says: for a Claude Code session in attach mode, Friday hooks must have
  * reached the daemon from that session, and the host version decides whether a failing hook
@@ -939,14 +949,26 @@ export class FridayState {
     );
   }
 
-  /** The outcome of a verified run for its model (ADR-0031 §8): what ran, else what was requested. */
-  private recordOutcome(ctx: CommandContext, task: TaskView, runId: string | null, passed: boolean): void {
+  /**
+   * The outcome of a verified run for its model (ADR-0031 §8): the model observed running, else
+   * the one requested, recorded with that basis (review F15: only observed outcomes are measured
+   * evidence), the host's version and the checks that judged it, so only comparable outcomes are
+   * counted together.
+   */
+  private recordOutcome(
+    ctx: CommandContext,
+    task: TaskView,
+    runId: string | null,
+    passed: boolean,
+    checksVersion: string | null,
+  ): void {
     const run = runId ? this.q.findRun(runId) : undefined;
     const model = run?.model_observed ?? run?.model_requested;
     if (!run || !model) return;
     const decision = run.routing_decision_id ? this.q.routingDecision(run.routing_decision_id) : undefined;
     const ended = run.ended_at ?? ctx.now;
     const started = run.accepted_at ?? run.created_at;
+    const harness = this.q.findHarness(run.harness_id);
     ctx.emit({
       type: 'routing.outcome_recorded',
       payload: {
@@ -957,6 +979,9 @@ export class FridayState {
           model,
           basis: run.model_observed ? 'observed' : 'requested',
           task_class: decision?.task_class ?? task.kind,
+          task_kind: task.kind,
+          harness_version: harness ? hostCohort(harness.vendor, harness.version) : null,
+          checks_version: checksVersion,
           outcome: passed ? 'passed' : 'failed',
           attempt: run.attempt,
           duration_ms: Math.max(0, Date.parse(ended) - Date.parse(started)) || null,
@@ -2635,6 +2660,8 @@ export class FridayState {
     verificationId: string,
     passed: boolean,
     summary: string,
+    /** The checks that judged it, as a version (review F15); `manual` for a human's result. */
+    checksVersion: string | null = actor.kind === 'human' ? 'manual' : null,
   ): TaskView {
     return this.exec(
       { name: 'verification.finish', project_id: projectId, actor, params: { verificationId, passed, summary } },
@@ -2656,7 +2683,7 @@ export class FridayState {
           ],
         });
         const task = this.q.task(projectId, v.task_id);
-        this.recordOutcome(ctx, task, v.run_id ?? null, passed);
+        this.recordOutcome(ctx, task, v.run_id ?? null, passed, checksVersion);
         return this.moveTask(ctx, task, passed ? 'verification.pass' : 'verification.fail', {
           reason: summary.slice(0, 200),
           changes: { current_run_id: null },
@@ -3464,7 +3491,11 @@ export class FridayState {
     this.declineRun(projectId, runId, `the task worktree could not be prepared: ${reason}`, SYSTEM);
   }
 
-  /** A worktree a human asked for (`friday task worktree`), to start a session in. */
+  /**
+   * A worktree a human asked for (`friday task worktree`), to start a session in, or one a human's
+   * recovery choice rebuilt (review F16). A record at the same path with another base (a branch
+   * started over) is retired in the same transaction.
+   */
   recordWorktree(
     projectId: string,
     actor: Actor,
@@ -3477,7 +3508,21 @@ export class FridayState {
         throw new FridayError('invalid_state_transition', `task ${taskId} is ${task.status}`);
       }
       const existing = this.q.worktreeForTask(taskId);
-      if (existing && existing.path === alloc.path) return existing;
+      if (existing && existing.path === alloc.path && existing.base_commit === alloc.base_commit) return existing;
+      if (existing && existing.path === alloc.path) {
+        ctx.emit({
+          type: 'worktree.released',
+          payload: {
+            worktree_id: existing.worktree_id,
+            status: 'released',
+            reason: `its branch starts at ${alloc.base_commit.slice(0, 12)} now`,
+          },
+          refs: [
+            { kind: 'task', id: taskId },
+            { kind: 'worktree', id: existing.worktree_id },
+          ],
+        });
+      }
       const worktree_id = this.ids.next('wt');
       ctx.emit({
         type: 'worktree.allocated',

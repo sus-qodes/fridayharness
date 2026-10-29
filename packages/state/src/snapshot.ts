@@ -26,7 +26,8 @@ import { type FridayState, INSPECTION_MARKER } from './service.js';
 export const SNAPSHOT_FORMAT = 'friday-snapshot';
 export const SNAPSHOT_FORMAT_VERSION = 2;
 export const BACKUP_FORMAT = 'friday-backup';
-export const BACKUP_FORMAT_VERSION = 1;
+/** 2 (review F16): a backup also holds the code a clone of the project would not have. */
+export const BACKUP_FORMAT_VERSION = 2;
 /** Snapshots live in this folder of the artifacts root; `state_ref` names a file in it. */
 export const SNAPSHOT_DIR = 'snapshots';
 
@@ -562,6 +563,38 @@ export interface BackupArtifact {
   sha256: string;
 }
 
+/**
+ * What a backup holds of the project's code (review F16), written by the daemon, which runs git:
+ * Friday's branches, the preserved states of earlier attempts and the uncommitted work of task
+ * worktrees, in one git bundle with its full history. The main checkout is yours and is not copied.
+ */
+export interface BackupCode {
+  included: boolean;
+  /** Why no code is included. */
+  reason?: string;
+  /** The bundle's file name in the backup, with its size and sha256. */
+  bundle?: string;
+  bytes?: number;
+  sha256?: string;
+  refs?: {
+    ref: string;
+    commit: string;
+    kind: 'task_branch' | 'goal_branch' | 'preserved' | 'restored' | 'uncommitted';
+    task_id: string | null;
+  }[];
+  /** Task worktrees whose uncommitted work it holds, and the ref a restore puts that work under. */
+  worktrees?: {
+    task_id: string;
+    worktree_id: string;
+    path: string;
+    head: string | null;
+    files: number;
+    restores_to: string;
+  }[];
+  /** Task worktrees that may hold work it could not read. */
+  skipped?: { task_id: string; path: string; reason: string }[];
+}
+
 export interface BackupReport {
   into: string;
   project_id: string;
@@ -574,6 +607,7 @@ export interface BackupReport {
   skipped: { path: string; reason: string }[];
   /** Artifacts the database references that the backup lacks or holds with other content. */
   problems: { artifact_id: string; path: string; problem: 'missing' | 'changed' }[];
+  code: BackupCode;
   duration_ms: number;
 }
 
@@ -627,7 +661,12 @@ export async function backupTo(
   state: FridayState,
   projectId: string,
   into: string,
-  opts: { artifactsDir?: string; fridayVersion?: string } = {},
+  opts: {
+    artifactsDir?: string;
+    fridayVersion?: string;
+    /** Writes the project's code into the staging folder and describes it (the daemon; review F16). */
+    code?: (staging: string) => Promise<BackupCode>;
+  } = {},
 ): Promise<BackupReport> {
   return exclusive(state, 'backup', async () => {
     const started = Date.now();
@@ -670,6 +709,11 @@ export async function backupTo(
         if (!a) problems.push({ artifact_id: r.artifact_id, path: r.path, problem: 'missing' });
         else if (a.sha256 !== r.sha256) problems.push({ artifact_id: r.artifact_id, path: r.path, problem: 'changed' });
       }
+      // After the database, so the code holds at least every commit the copy refers to.
+      const code: BackupCode = opts.code
+        ? await opts.code(staging)
+        : { included: false, reason: "this backup was made without the project's code" };
+      if (code.included && code.bundle) files.push(code.bundle);
       files.push('manifest.json');
       const report: BackupReport = {
         into: target,
@@ -680,6 +724,7 @@ export async function backupTo(
         artifacts: { files: inventory.length, bytes: inventory.reduce((n, a) => n + a.bytes, 0) },
         skipped,
         problems,
+        code,
         duration_ms: 0,
       };
       await writeFile(
@@ -698,8 +743,9 @@ export async function backupTo(
             artifacts: inventory,
             skipped,
             problems,
+            code,
             restore:
-              'Stop the daemon, then run "friday restore --from <this folder>". It checks this manifest, sets the current state aside, and puts project.db and artifacts/ back. Provider keys and this clone\'s provider approval stay in the private directory and are not part of a backup.',
+              'Stop the daemon, then run "friday restore --from <this folder>" in a clone of the project. It checks this manifest, adds the code\'s refs to the clone without moving any of its own back, sets the current state aside, and puts project.db and artifacts/ back. A task worktree\'s uncommitted work comes back with "friday recover <task> --action reassign". Provider keys and this clone\'s provider approval stay in the private directory and are not part of a backup.',
           },
           null,
           2,

@@ -6,6 +6,20 @@
 export const PACKAGE_NAME = '@friday/git';
 
 export {
+  BACKUP_PREFIX,
+  BACKUP_REF_PREFIXES,
+  type BundleRef,
+  checkedOutBranches,
+  isFridayRef,
+  placeRef,
+  RESTORED_PREFIX,
+  type RefPlacement,
+  readBundle,
+  restoredRef,
+  unbundle,
+  writeBundle,
+} from './bundle.js';
+export {
   agentIdentity,
   type CommitIdentity,
   changedBetween,
@@ -22,8 +36,10 @@ export {
   treeOf,
 } from './integrate.js';
 export {
+  applyState,
   commitsSince,
   listRefs,
+  parentOf,
   preserveCommit,
   preservedPrefix,
   resetWorktree,

@@ -51,6 +51,22 @@ export async function commitsSince(dir: string, base: string | null): Promise<nu
 }
 
 /**
+ * Writes a recorded state (a commit made by `snapshotWorktree` on top of the checkout's HEAD) into a
+ * clean checkout as uncommitted changes: files it adds, changes or removes are added, changed or
+ * removed, and the index stays at HEAD, as it was when the state was recorded (review F16).
+ */
+export async function applyState(dir: string, commit: string): Promise<void> {
+  await runGit(dir, ['read-tree', '-m', '-u', 'HEAD', commit], { timeoutMs: 300_000 });
+  await runGit(dir, ['reset', '-q'], { timeoutMs: 300_000 });
+}
+
+/** The parent of a commit, or null for a root commit or an unknown one. */
+export async function parentOf(dir: string, commit: string): Promise<string | null> {
+  const r = await runGit(dir, ['rev-parse', '--verify', '--quiet', `${commit}^1`], { okCodes: [1, 128] });
+  return r.code === 0 ? r.stdout.trim() || null : null;
+}
+
+/**
  * Puts a checkout back at its last commit: tracked files restored, untracked ones removed, ignored
  * ones (installed dependencies, build output) kept. Only for a checkout whose state was preserved.
  */

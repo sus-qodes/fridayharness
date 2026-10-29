@@ -27,7 +27,17 @@ function assessmentLines(a: RecoveryAssessment): string[] {
         ? `  worktree: ${a.worktree.path} on ${a.worktree.branch}; ${a.worktree.commits_since_base ?? '?'} commit(s) since its base, ${a.worktree.uncommitted.length} uncommitted change(s)`
         : `  worktree: ${a.worktree.path} is gone (branch ${a.worktree.branch} remains)`,
     );
+    if (a.worktree.elsewhere) {
+      const here = a.worktree.branch_here
+        ? `${a.worktree.branch} at ${a.worktree.branch_here.slice(0, 12)}`
+        : `no ${a.worktree.branch}`;
+      const restored = a.worktree.restored_here
+        ? `, and the uncommitted work a backup recorded there (${a.worktree.restored_here.slice(0, 12)})`
+        : '';
+      lines.push(`  it belongs to another clone of the project; this clone has ${here}${restored}`);
+    }
   }
+  if (a.missing_code) lines.push(`  code: ${a.missing_code}`);
   if (a.errors.total)
     lines.push(`  agent errors: ${a.errors.total}; the last one ${a.errors.same_as_last} time(s): ${a.errors.last}`);
   for (const ref of a.preserved) lines.push(`  preserved: ${ref}`);

@@ -1,6 +1,7 @@
 /**
  * Scoped memory with provenance and authority (plan M4c, ADR-0021).
  */
+import { createHash } from 'node:crypto';
 import { sequentialIds } from '@friday/core';
 import { openDatabase, type SqlDatabase } from '@friday/db';
 import { replay } from '@friday/events';
@@ -201,14 +202,93 @@ describe('authority and scope', () => {
       content: 'Use conventional commits.',
     });
     const head = state.store.head(PROJECT);
+    // Whitespace and the subject's case do not matter; the content's case does (review F14).
     const again = state.memory.record(PROJECT, H, {
       scope_type: 'project',
       kind: 'convention',
       subject: 'commits',
-      content: '  use   conventional commits. ',
+      content: '  Use   conventional commits. ',
     });
     expect(again).toMatchObject({ deduplicated: true, memory: { memory_id: first.memory.memory_id } });
     expect(state.store.head(PROJECT)).toBe(head);
+  });
+
+  it('keeps a correction that differs only in case, and still drops a true duplicate (review F14)', () => {
+    const first = state.memory.record(PROJECT, H, {
+      scope_type: 'project',
+      kind: 'convention',
+      subject: 'api field',
+      content: 'The API property is UserID.',
+    });
+    // Identifiers, paths and literal values are case-sensitive: this is a correction, not a duplicate.
+    const fixed = state.memory.record(PROJECT, H, {
+      scope_type: 'project',
+      kind: 'convention',
+      subject: 'API field',
+      content: 'The API property is userId.',
+    });
+    expect(fixed.deduplicated).toBe(false);
+    expect(fixed.memory.content).toBe('The API property is userId.');
+    expect(fixed.superseded).toEqual([first.memory.memory_id]);
+    // Only whitespace is ignored when content is compared.
+    const again = state.memory.record(PROJECT, H, {
+      scope_type: 'project',
+      kind: 'convention',
+      subject: 'api field',
+      content: '  The API   property is userId. ',
+    });
+    expect(again).toMatchObject({ deduplicated: true, memory: { memory_id: fixed.memory.memory_id } });
+    const found = state.memory.search(PROJECT, H, { query: 'API property' });
+    expect(found.map((m) => m.content)).toEqual(['The API property is userId.']);
+
+    // A memory recorded before this rule (its hash taken of lower-cased text) is still a duplicate of
+    // exactly its own text, and not of a variant in another case.
+    state.bus.execute({ name: 'test.legacy', project_id: PROJECT, actor: human }, (ctx) => {
+      ctx.emit({
+        type: 'memory.recorded',
+        payload: {
+          memory: {
+            memory_id: 'mem_legacy00000000000000000001',
+            scope_type: 'project',
+            scope_id: PROJECT,
+            kind: 'decision',
+            subject: 'header',
+            subject_key: 'header',
+            content: 'Send X-Request-ID.',
+            content_hash: createHash('sha256').update('send x-request-id.').digest('hex'),
+            tags: [],
+            source_events: [],
+            authority: 'human-approved',
+            source_kind: 'human',
+            source_id: 'local-operator',
+            verification_status: 'verified',
+            supersedes: null,
+            needs_review: false,
+          },
+          contradicts: [],
+        },
+        refs: [{ kind: 'memory', id: 'mem_legacy00000000000000000001' }],
+      });
+    });
+    const same = state.memory.record(PROJECT, H, {
+      scope_type: 'project',
+      kind: 'decision',
+      subject: 'header',
+      content: 'Send X-Request-ID.',
+    });
+    expect(same).toMatchObject({ deduplicated: true, memory: { memory_id: 'mem_legacy00000000000000000001' } });
+    const other = state.memory.record(PROJECT, H, {
+      scope_type: 'project',
+      kind: 'decision',
+      subject: 'header',
+      content: 'Send x-request-id.',
+    });
+    expect(other.deduplicated).toBe(false);
+    // Replay rebuilds both kinds of record exactly.
+    const dump = () => Object.fromEntries(DOMAIN_TABLES.map((t) => [t, db.prepare(`SELECT * FROM ${t}`).all()]));
+    const before = dump();
+    replay(db, state.store, PROJECT, state.projector);
+    expect(dump()).toEqual(before);
   });
 
   it('keeps agents to their own task, agent and session scopes', () => {

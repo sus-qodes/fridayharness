@@ -32,6 +32,7 @@ import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
 import { ZodError, z } from 'zod';
+import { backupCode } from './backup-code.js';
 import type { BrainHandle } from './brain.js';
 import { escalationView, mountBrainRoutes } from './brain-routes.js';
 import type { CompileInput, ContextService } from './context.js';
@@ -717,7 +718,11 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.post('/admin/backup', allow(...OPERATOR), async (c) => {
     const body = await json(c);
     return c.json(
-      await backupTo(state, pid, target(body, 'a backup'), { artifactsDir, fridayVersion: FRIDAY_VERSION }),
+      await backupTo(state, pid, target(body, 'a backup'), {
+        artifactsDir,
+        fridayVersion: FRIDAY_VERSION,
+        code: (staging) => backupCode(state, project, staging),
+      }),
       201,
     );
   });
@@ -831,7 +836,8 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     const r = routingOf();
     return c.json({
       models: r.models,
-      evidence: state.q.modelEvidence(pid),
+      // Measured outcomes under the current checks; assumed ones and other cohorts are counted apart.
+      evidence: state.q.modelEvidence(pid, { checksVersion: r.checksVersion }),
       settings: r.settings,
       guide_version: r.guideVersion,
       min_samples: r.settings.min_samples,

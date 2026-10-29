@@ -491,21 +491,76 @@ export class Queries {
   }
 
   /** Measured outcomes per model and task class (ADR-0031 §8). */
-  modelEvidence(projectId: string): ModelEvidenceView[] {
+  /**
+   * Verified outcomes per model and task class (ADR-0031 §8, review F15). Only outcomes of a model
+   * observed running are measured (`samples`); one only requested is `assumed`. Measured outcomes
+   * count in one cohort: judged by the current checks for their kind (`checksVersion`; a human's
+   * own result counts in any) and, when
+   * given, on the same host version (`hostCohort`), at most the latest `window` of them; the rest
+   * are `other_cohorts`.
+   */
+  modelEvidence(
+    projectId: string,
+    cohort: { checksVersion?: (kind: string) => string | null; hostCohort?: string | null; window?: number } = {},
+  ): ModelEvidenceView[] {
     const rows = this.db
-      .prepare('SELECT model, task_class, outcome, duration_ms FROM model_outcomes WHERE project_id = ? ORDER BY rowid')
-      .all<{ model: string; task_class: string; outcome: string; duration_ms: number | null }>(projectId);
+      .prepare(
+        `SELECT model, task_class, task_kind, basis, outcome, duration_ms, harness_version, checks_version
+           FROM model_outcomes WHERE project_id = ? ORDER BY rowid DESC`,
+      )
+      .all<{
+        model: string;
+        task_class: string;
+        task_kind: string | null;
+        basis: string;
+        outcome: string;
+        duration_ms: number | null;
+        harness_version: string | null;
+        checks_version: string | null;
+      }>(projectId);
+    const window = cohort.window ?? 50;
     const groups = new Map<
       string,
-      { model: string; task_class: string; passed: number; failed: number; durations: number[] }
+      {
+        model: string;
+        task_class: string;
+        passed: number;
+        failed: number;
+        assumed: number;
+        other: number;
+        durations: number[];
+      }
     >();
     for (const r of rows) {
       const key = `${r.model} ${r.task_class}`;
-      const g = groups.get(key) ?? { model: r.model, task_class: r.task_class, passed: 0, failed: 0, durations: [] };
+      const g = groups.get(key) ?? {
+        model: r.model,
+        task_class: r.task_class,
+        passed: 0,
+        failed: 0,
+        assumed: 0,
+        other: 0,
+        durations: [],
+      };
+      groups.set(key, g);
+      if (r.basis !== 'observed') {
+        g.assumed += 1;
+        continue;
+      }
+      const checks = cohort.checksVersion ? cohort.checksVersion(r.task_kind ?? r.task_class) : undefined;
+      // A human's own verdict (`manual`) judged the work itself, not through checks: it counts in any.
+      const sameChecks =
+        checks === undefined ||
+        r.checks_version === 'manual' ||
+        (r.checks_version !== null && r.checks_version === checks);
+      const sameHost = !cohort.hostCohort || r.harness_version === cohort.hostCohort;
+      if (!sameChecks || !sameHost || g.passed + g.failed >= window) {
+        g.other += 1;
+        continue;
+      }
       if (r.outcome === 'passed') g.passed += 1;
       else g.failed += 1;
       if (r.duration_ms !== null) g.durations.push(r.duration_ms);
-      groups.set(key, g);
     }
     return [...groups.values()]
       .map((g) => {
@@ -517,6 +572,8 @@ export class Queries {
           passed: g.passed,
           failed: g.failed,
           reworked: 0,
+          assumed: g.assumed,
+          other_cohorts: g.other,
           median_duration_ms: d.length ? (d[Math.floor((d.length - 1) / 2)] ?? null) : null,
         };
       })

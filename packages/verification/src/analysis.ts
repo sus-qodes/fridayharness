@@ -3,6 +3,7 @@
  * claim, check selection by task kind, tests related to a change, and the credential scan. Pure
  * functions: the daemon reads git, the graph and the files, and passes what they said.
  */
+import { createHash } from 'node:crypto';
 
 export type Severity = 'fail' | 'warn' | 'info';
 
@@ -232,6 +233,25 @@ export interface SelectableCheck {
 /** The checks that apply to a task kind: those listing it, and those listing no kind (ADR-0024 §4). */
 export function selectChecks<T extends SelectableCheck>(checks: readonly T[], kind: string): T[] {
   return checks.filter((c) => !c.task_kinds?.length || c.task_kinds.includes(kind));
+}
+
+/**
+ * The version of the checks that judge a task kind (review F15): outcomes judged by other checks
+ * are not comparable, so they are counted in another cohort.
+ */
+export function checksVersion(checks: readonly SelectableCheck[], kind: string): string {
+  const order = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(order)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.keys(v as Record<string, unknown>)
+              .sort()
+              .map((k) => [k, order((v as Record<string, unknown>)[k])]),
+          )
+        : v;
+  const selected = selectChecks(checks, kind).map(order);
+  return createHash('sha256').update(JSON.stringify(selected)).digest('hex').slice(0, 16);
 }
 
 export interface TestGraph {

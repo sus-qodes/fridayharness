@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import path from 'node:path';
 import {
   agentIdentity,
   commitsSince,
@@ -8,6 +9,8 @@ import {
   preservedPrefix,
   resetWorktree,
   resolveCommit,
+  restoredRef,
+  runGit,
   snapshotWorktree,
   taskBranch,
 } from '@friday/git';
@@ -15,11 +18,22 @@ import { type Actor, FridayError, type RecoveryAction, type RecoveryAssessment, 
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
 import type { Logger } from './log.js';
-import { elsewhereReason } from './workspaces.js';
+import { elsewhereReason, missingCodeReason, type WorkspaceManager } from './workspaces.js';
 
 const SYSTEM: Actor = { kind: 'system', id: 'friday' };
 const ACTIVE = ['ASSIGNED', 'RUNNING', 'WAITING', 'HARNESS_LOST'];
 const TERMINAL = ['COMPLETED', 'CANCELLED', 'ABANDONED'];
+
+/** Whether two paths name one folder: as written, else by their real paths when both exist. */
+function sameDir(a: string, b: string): boolean {
+  const norm = (p: string) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
+  if (norm(a) === norm(b)) return true;
+  try {
+    return norm(realpathSync.native(a)) === norm(realpathSync.native(b));
+  } catch {
+    return false;
+  }
+}
 
 /** Whether a process with this pid runs on this machine (EPERM: it does, as someone else's). */
 export function processAlive(pid: number | null): boolean | null {
@@ -54,6 +68,8 @@ export class RecoveryManager {
       settings: RecoverySettings;
       /** Process check; tests replace it. */
       alive?: (pid: number | null) => boolean | null;
+      /** Rebuilds a task's worktree in this clone for a human's choice (review F16). */
+      workspaces?: WorkspaceManager;
     },
   ) {}
 
@@ -77,9 +93,24 @@ export class RecoveryManager {
     let worktree: RecoveryAssessment['worktree'] = null;
     // A worktree of another clone (a restored database) is only ever read from here (review F08).
     const elsewhere = tree ? !state.inThisClone(tree.path) : false;
-    const branchHere = elsewhere
-      ? await resolveCommit(project.root, `refs/heads/${taskBranch(taskId)}`).catch(() => null)
-      : null;
+    const branch = taskBranch(taskId);
+    const branchHere = await resolveCommit(project.root, `refs/heads/${branch}`).catch(() => null);
+    // A backup's record of the worktree's uncommitted work, restored into this clone (review F16).
+    const restoredHere = await resolveCommit(project.root, restoredRef(taskId)).catch(() => null);
+    // Earlier attempts worked on the task's branch, which this clone does not have (review F16).
+    const missingCode =
+      !branchHere && (elsewhere || state.q.runs(taskId).some((r) => r.branch_ref === branch))
+        ? missingCodeReason(taskId)
+        : null;
+    // The last attempt worked in a checkout that is not this clone's, and no worktree record
+    // covers it (a session in another clone's main checkout): its uncommitted changes are not here.
+    const ranElsewhere =
+      !tree &&
+      run?.execution_root &&
+      !sameDir(run.execution_root, project.root) &&
+      !state.inThisClone(run.execution_root)
+        ? run.execution_root
+        : null;
     if (tree) {
       const exists = existsSync(tree.path);
       const git = exists ? await GitRoot.open(tree.path).catch(() => null) : null;
@@ -93,7 +124,8 @@ export class RecoveryManager {
         commits_since_base: exists ? await commitsSince(tree.path, tree.base_commit).catch(() => null) : null,
         uncommitted: identity?.paths.slice(0, 50) ?? [],
         elsewhere,
-        branch_here: branchHere,
+        branch_here: elsewhere ? branchHere : null,
+        restored_here: restoredHere,
       };
     }
     const errors = state.agentErrors(this.pid, taskId);
@@ -111,16 +143,21 @@ export class RecoveryManager {
     const repeating = same > settings.maxSameErrorRetries;
     const whyHuman =
       elsewhere && tree
-        ? elsewhereReason(taskId, tree.path, branchHere)
-        : alive === true
-          ? `its host process (pid ${harness?.host_pid}) is still running on this machine, so it may still be writing`
-          : exhausted
-            ? `it has had ${attempts} attempt(s), and recovery.max_retries is ${settings.maxRetries}`
-            : repeating
-              ? `the same error repeated ${same} time(s): ${last}`
-              : null;
+        ? elsewhereReason(taskId, tree.path, branchHere, restoredHere)
+        : missingCode
+          ? missingCode
+          : ranElsewhere
+            ? `its last attempt worked in ${ranElsewhere}, which is not a checkout of this clone, so changes it did not commit to a branch this clone has are not here; a backup does not copy a main checkout. Continue in this clone as it is with "friday recover ${taskId} --action reassign"`
+            : alive === true
+              ? `its host process (pid ${harness?.host_pid}) is still running on this machine, so it may still be writing`
+              : exhausted
+                ? `it has had ${attempts} attempt(s), and recovery.max_retries is ${settings.maxRetries}`
+                : repeating
+                  ? `the same error repeated ${same} time(s): ${last}`
+                  : null;
     // A task waiting in READY because its work is elsewhere is recovered by a human's choice too.
-    const movable = active || (elsewhere && task.status === 'READY');
+    const movable = active || ((elsewhere || missingCode !== null) && task.status === 'READY');
+    const fromBase = `the next attempt starts over in this clone from the task's base, without the earlier attempts' work${restoredHere ? `; the uncommitted work a backup recorded is kept as a preserved state` : ''}`;
     const options: RecoveryAssessment['options'] = [
       {
         action: 'reconnect',
@@ -132,23 +169,29 @@ export class RecoveryManager {
       },
       {
         action: 'reassign',
-        available: movable && (!elsewhere || branchHere !== null),
+        available: movable && missingCode === null,
         recommended: active && lost && !windowOpen && whyHuman === null,
-        reason: elsewhere
-          ? branchHere
-            ? `the next attempt continues from ${taskBranch(taskId)} in this clone; uncommitted work in the other clone's worktree is not included`
-            : `this clone has no ${taskBranch(taskId)}: fetch it from the clone that has it first`
-          : worktree?.exists
-            ? 'the next attempt continues in the same worktree and branch; uncommitted work is preserved first'
-            : 'the task goes back to READY for the next agent',
+        reason: missingCode
+          ? `this clone has no ${branch}: restore a backup that holds it, or fetch it from a clone that has it, first`
+          : elsewhere
+            ? restoredHere
+              ? `the next attempt continues in a worktree of this clone, from ${branch} with the uncommitted work a backup recorded`
+              : `the next attempt continues from ${branch} in this clone; uncommitted work in the other clone's worktree is not included`
+            : worktree?.exists
+              ? 'the next attempt continues in the same worktree and branch; uncommitted work is preserved first'
+              : ranElsewhere
+                ? `the next attempt works in this clone as it is; changes that were only in ${ranElsewhere} are not included`
+                : 'the task goes back to READY for the next agent',
       },
       {
         action: 'restart',
-        available: elsewhere ? movable : active && Boolean(worktree?.exists),
+        available: elsewhere || missingCode ? movable : active && Boolean(worktree?.exists),
         recommended: false,
-        reason: elsewhere
-          ? `the next attempt starts over in this clone, from ${branchHere ? `the last commit of ${taskBranch(taskId)}` : 'its base'}`
-          : 'the next attempt starts from the last commit; uncommitted work is preserved first',
+        reason: missingCode
+          ? fromBase
+          : elsewhere
+            ? `the next attempt starts over in this clone, from the last commit of ${branch}${restoredHere ? '; the uncommitted work a backup recorded is kept as a preserved state' : ''}`
+            : 'the next attempt starts from the last commit; uncommitted work is preserved first',
       },
       {
         action: 'needs_human',
@@ -177,6 +220,7 @@ export class RecoveryManager {
         : null,
       last_activity: lastEvent ? { type: lastEvent.type, at: lastEvent.occurred_at } : null,
       worktree,
+      missing_code: missingCode,
       errors: { total: errors.length, same_as_last: same, last },
       preserved: await listRefs(project.root, preservedPrefix(taskId)).catch(() => []),
       options,
@@ -204,12 +248,27 @@ export class RecoveryManager {
       }
       const why = reason ?? option.reason;
       let preserved: string | null = null;
+      let note: string | null = null;
       const moving = action === 'reassign' || action === 'restart';
-      if (moving && a.worktree?.elsewhere) {
+      if (moving && (a.worktree?.elsewhere || a.missing_code)) {
         // Never written from this clone: the human's choice retires it here, and the next attempt
         // gets a worktree of this clone (review F08).
         const tree = state.q.worktreeForTask(taskId);
-        if (tree) {
+        const restored = a.worktree?.restored_here ?? (await resolveCommit(project.root, restoredRef(taskId)));
+        // The work comes back into a worktree of this clone (reassign with a backup's record), or
+        // the task starts over from its base when its branch is not here (restart): an explicit
+        // choice, never taken for the earlier work (review F16).
+        if ((action === 'reassign' && restored) || (action === 'restart' && a.missing_code)) {
+          if (!this.opts.workspaces) throw new FridayError('invalid_request', 'task worktrees are not managed here');
+          const rebuilt = await this.opts.workspaces.rebuild(taskId, actor, action === 'reassign' ? restored : null);
+          note = rebuilt.note;
+        }
+        // A backup's record is used once; it stays as a preserved state of the task.
+        if (restored) {
+          preserved = await preserveCommit(project.root, preservedPrefix(taskId), 'restored', restored);
+          await runGit(project.root, ['update-ref', '-d', restoredRef(taskId), restored]);
+        }
+        if (tree && !state.inThisClone(tree.path)) {
           state.releaseWorktree(
             this.pid,
             actor,
@@ -228,11 +287,11 @@ export class RecoveryManager {
             this.pid,
             actor,
             'recovery.performed',
-            { task_id: taskId, action, reason: why, preserved_ref: null },
+            { task_id: taskId, action, reason: why, preserved_ref: preserved, note },
             [{ kind: 'task', id: taskId }],
           );
-          logger.info('task recovered', { task_id: taskId, action, reason: why });
-          return { task: state.q.task(this.pid, taskId), preserved_ref: null, assessment: a };
+          logger.info('task recovered', { task_id: taskId, action, reason: why, preserved_ref: preserved, note });
+          return { task: state.q.task(this.pid, taskId), preserved_ref: preserved, assessment: a };
         }
       } else if (moving && a.worktree?.exists && a.worktree.uncommitted.length) {
         const commit = await snapshotWorktree(
@@ -258,9 +317,10 @@ export class RecoveryManager {
           harness: a.harness,
           worktree: a.worktree ? { ...a.worktree, uncommitted: a.worktree.uncommitted.length } : null,
           errors: a.errors,
+          ...(note ? { note } : {}),
         },
       });
-      logger.info('task recovered', { task_id: taskId, action, preserved_ref: preserved, reason: why });
+      logger.info('task recovered', { task_id: taskId, action, preserved_ref: preserved, reason: why, note });
       return { task, preserved_ref: preserved, assessment: a };
     } finally {
       this.#busy.delete(taskId);

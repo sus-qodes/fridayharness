@@ -7,6 +7,7 @@ import { type Actor, FridayError, isFridayError, type RunView, type Verification
 import {
   analyzeDiff,
   checkReservations,
+  checksVersion,
   type Finding,
   ownChanges,
   relatedTests,
@@ -372,7 +373,15 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     ...(warnings ? [`${warnings} warning(s)`] : []),
     ...(checks.length === 0 ? [`no configured check applies to ${task.kind} tasks`] : []),
   ];
-  const finished = state.finishVerification(pid, actor, verification_id, ok, parts.join('; '));
+  // The outcome counts with others judged by the same checks (review F15).
+  const finished = state.finishVerification(
+    pid,
+    actor,
+    verification_id,
+    ok,
+    parts.join('; '),
+    checksVersion(configured, task.kind),
+  );
   return { task: finished, verification: state.q.verification(verification_id) };
 }
 

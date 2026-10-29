@@ -204,21 +204,23 @@ describe('routing in the state', () => {
     expect(state.q.routingPins(PROJECT, clock.now())).toEqual([]);
   });
 
-  it('turns each verification into evidence for the model that ran, and rebuilds it all on replay', () => {
+  it('measures only the model seen running, in comparable cohorts, and rebuilds it all on replay (review F15)', () => {
     state.setRouter(router);
     const reg = register('cc-2', 'attach');
     const caller = { harness_id: reg.harness_id, agent_id: reg.agent_id };
-    const verify = (passed: boolean, n: number) => {
+    const system: Actor = { kind: 'system', id: 'verifier' };
+    const verify = (passed: boolean, n: number, o: { observe?: string; checks?: string } = {}) => {
       const task = state.createTask(PROJECT, human, { summary: `t${n}`, ready: true });
       const run = state.claimTask(PROJECT, caller, { task_id: task.task_id });
-      if (n === 1)
+      if (o.observe) {
         state.observeModel(
           PROJECT,
           { kind: 'harness', id: reg.harness_id },
           { run_id: run.run_id },
-          'claude-haiku-5-5',
+          o.observe,
           'reported',
         );
+      }
       state.submitResult(PROJECT, caller, {
         idempotency_key: `claim-${n}`,
         task_id: task.task_id,
@@ -230,23 +232,33 @@ describe('routing in the state', () => {
         notes: [],
         risks: [],
       });
-      const { verification_id } = state.startVerification(PROJECT, human, task.task_id);
-      state.finishVerification(PROJECT, human, verification_id, passed, passed ? 'ok' : 'failed');
+      const { verification_id } = state.startVerification(PROJECT, system, task.task_id);
+      state.finishVerification(PROJECT, system, verification_id, passed, passed ? 'ok' : 'failed', o.checks ?? 'c1');
     };
-    verify(true, 1);
+    // The host reported the model that ran: measured.
+    verify(true, 1, { observe: 'claude-haiku-5-5' });
+    // An advisory host that reported nothing: only what Friday suggested is known, so it is assumed.
     verify(false, 2);
     verify(true, 3);
-    // The first ran on what the host reported; the others on what Friday requested.
-    expect(state.q.modelEvidence(PROJECT)).toEqual([
-      expect.objectContaining({ model: 'claude-haiku-5-5', task_class: 'implementation', samples: 1, passed: 1 }),
+    // The same model judged by other checks: another cohort.
+    verify(false, 4, { observe: 'claude-haiku-5-5', checks: 'c0' });
+    const now = (kind: string) => (kind === 'implementation' ? 'c1' : null);
+    expect(state.q.modelEvidence(PROJECT, { checksVersion: now })).toEqual([
       expect.objectContaining({
-        model: 'claude-opus-5-5',
-        task_class: 'implementation',
-        samples: 2,
+        model: 'claude-haiku-5-5',
+        samples: 1,
         passed: 1,
-        failed: 1,
+        assumed: 0,
+        other_cohorts: 1,
       }),
+      expect.objectContaining({ model: 'claude-opus-5-5', samples: 0, passed: 0, failed: 0, assumed: 2 }),
     ]);
+    // A later observation counts from then on; another host version is another cohort too.
+    verify(true, 5, { observe: 'claude-opus-5-5' });
+    const opus = (cohort: Parameters<typeof state.q.modelEvidence>[1]) =>
+      state.q.modelEvidence(PROJECT, cohort).find((e) => e.model === 'claude-opus-5-5');
+    expect(opus({ checksVersion: now, hostCohort: 'claude-code unknown' })).toMatchObject({ samples: 1, assumed: 2 });
+    expect(opus({ checksVersion: now, hostCohort: 'claude-code 9.9' })).toMatchObject({ samples: 0, other_cohorts: 1 });
     const dump = () => Object.fromEntries(DOMAIN_TABLES.map((t) => [t, db.prepare(`SELECT * FROM ${t}`).all()]));
     const before = dump();
     replay(db, state.store, PROJECT, state.projector);

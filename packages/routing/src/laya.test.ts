@@ -62,6 +62,12 @@ describe('the routing question', () => {
     expect(
       layaQuestion(task, guide.models, { ...DEFAULT_ROUTING, must_use_local: true }, [], guide.version),
     ).toBeNull();
+    // The checkpoint asked for is part of the identity (review F11): another one is another question.
+    const english = layaQuestion(task, guide.models, DEFAULT_ROUTING, [], guide.version, 'english');
+    expect(english?.question_id).not.toBe(q?.question_id);
+    expect(layaQuestion(task, guide.models, DEFAULT_ROUTING, [], guide.version, 'english')?.question_id).toBe(
+      english?.question_id,
+    );
   });
 });
 
@@ -126,6 +132,105 @@ describe('askLaya', () => {
     expect(err).toBeInstanceOf(LayaError);
     expect(err.kind).toBe('timeout');
     server?.closeAllConnections();
+  });
+});
+
+describe('askLaya keeps the question local and bounded (review F09, F10)', () => {
+  const q = layaQuestion(task, guide.models, DEFAULT_ROUTING, [], guide.version);
+  if (!q) throw new Error('no question');
+  const servers: Server[] = [];
+  afterEach(async () => {
+    for (const s of servers.splice(0)) {
+      s.closeAllConnections();
+      await new Promise<void>((r) => s.close(() => r()));
+    }
+  });
+  /** A raw loopback server: the handler writes the response itself. */
+  async function raw(handler: (res: import('node:http').ServerResponse, body: string) => void) {
+    const received: string[] = [];
+    const s = createServer((req, res) => {
+      let data = '';
+      req.on('data', (c) => {
+        data += c;
+      });
+      req.on('end', () => {
+        received.push(data);
+        handler(res, data);
+      });
+    });
+    servers.push(s);
+    await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()));
+    return { url: `http://127.0.0.1:${(s.address() as { port: number }).port}`, received };
+  }
+  const answer = (route: Record<string, unknown>, model = 'typed-decisions') =>
+    JSON.stringify({ model, answers: { route } });
+
+  it('follows no redirect, so the task never reaches another address', async () => {
+    const elsewhere = await raw((res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(answer({ choice: 'claude-opus-5-5', answer_confidence: 0.9 }));
+    });
+    for (const status of [307, 308]) {
+      const hop = await raw((res) => {
+        res.writeHead(status, { location: `${elsewhere.url}/v1/systemone` });
+        res.end();
+      });
+      await expect(askLaya({ url: hop.url, timeout_ms: 2000 }, q)).rejects.toMatchObject({ kind: 'http' });
+    }
+    expect(elsewhere.received).toEqual([]);
+  });
+
+  it('sends nothing to an address that is not literally this machine', async () => {
+    const local = await raw((res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(answer({ choice: 'claude-opus-5-5', answer_confidence: 0.9 }));
+    });
+    const port = new URL(local.url).port;
+    const name = 'localhost'; // portability-allow: localhost
+    for (const url of [`http://${name}:${port}`, `ftp://127.0.0.1:${port}`, `http://user:pw@127.0.0.1:${port}`]) {
+      await expect(askLaya({ url, timeout_ms: 2000 }, q)).rejects.toMatchObject({ kind: 'refused' });
+    }
+    expect(local.received).toEqual([]);
+  });
+
+  it('holds its deadline through the whole answer, and accepts only a well-formed, bounded one', async () => {
+    // Headers at once, the body after the deadline.
+    const late = await raw((res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('{"model":"typed-decisions",');
+      setTimeout(() => res.end('"answers":{"route":{"choice":"claude-opus-5-5","answer_confidence":0.9}}}'), 250);
+    });
+    const started = Date.now();
+    await expect(askLaya({ url: late.url, timeout_ms: 40 }, q)).rejects.toMatchObject({ kind: 'timeout' });
+    expect(Date.now() - started).toBeLessThan(200);
+    // Out of range, not finite, not numbers, not JSON, too large, or from another checkpoint.
+    for (const body of [
+      answer({ choice: 'claude-opus-5-5', answer_confidence: 2 }),
+      answer({ choice: 'claude-opus-5-5', answer_confidence: -0.1 }),
+      answer({ choice: 'claude-opus-5-5', probabilities: { 'claude-opus-5-5': 1.5 } }),
+      answer({ choice: 'claude-opus-5-5', probabilities: ['0.9', 'x'] }),
+      answer({ choice: 'claude-opus-5-5', confidence: 'high' }),
+      '{"answers": ',
+      JSON.stringify({
+        answers: { route: { choice: 'claude-opus-5-5', answer_confidence: 0.9 } },
+        pad: 'x'.repeat(300_000),
+      }),
+      answer({ choice: 'claude-opus-5-5', answer_confidence: 0.9 }, 'another-checkpoint'),
+    ]) {
+      const bad = await raw((res) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(body);
+      });
+      const err = await askLaya({ url: bad.url, timeout_ms: 2000, model: 'typed-decisions' }, q).catch((e) => e);
+      expect(err, body.slice(0, 80)).toBeInstanceOf(LayaError);
+      expect(err.kind, body.slice(0, 80)).toBe('malformed');
+    }
+    // A request in flight ends when its caller goes away (the daemon closing).
+    const hang = await raw(() => undefined);
+    const ctrl = new AbortController();
+    const pending = askLaya({ url: hang.url, timeout_ms: 5000, signal: ctrl.signal }, q).catch((e) => e);
+    setTimeout(() => ctrl.abort(), 50);
+    expect(await pending).toMatchObject({ kind: 'cancelled' });
   });
 });
 
