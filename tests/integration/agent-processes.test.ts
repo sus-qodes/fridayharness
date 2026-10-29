@@ -21,10 +21,13 @@ const HOSTS: AgentHost[] = [
   { host: 'claude-code', found: false, version: null, supported: false, path: null, reason: 'not installed (test)' },
 ];
 
-function launcher() {
+function launcher(opts: { detectMs?: number } = {}) {
   const started: string[][] = [];
   const ext = createAgentLauncher({
-    detectHosts: async () => HOSTS,
+    detectHosts: async () => {
+      if (opts.detectMs) await new Promise((res) => setTimeout(res, opts.detectMs));
+      return HOSTS;
+    },
     stopGraceMs: 3000,
     child: (req, ctx) => {
       const args = [
@@ -57,6 +60,20 @@ async function until(check: () => Promise<boolean>, ms = 8000) {
 }
 
 describe('the agent launcher', () => {
+  it('refuses a second start of the same key while hosts are still being detected (review M9i)', async () => {
+    const { ext, started } = launcher({ detectMs: 300 });
+    const td = await startTestDaemon(ws(), { extensions: [ext] });
+    const post = () =>
+      raw(td, 'POST', td.operator.projectPath('/agent-processes'), {
+        token: op(td),
+        body: JSON.stringify({ host: 'codex', agent_key: 'dev-1', role: 'developer' }),
+      });
+    const [a, b] = await Promise.all([post(), post()]);
+    expect([a.status, b.status].sort()).toEqual([201, 409]);
+    expect(started).toHaveLength(1);
+    expect((await processes(td)).processes.map((p) => p.agent_key)).toEqual(['dev-1']);
+  });
+
   it('starts an agent that registers, keeps its redacted output, and stops it gracefully', async () => {
     const { ext, started } = launcher();
     const td = await startTestDaemon(ws(), { extensions: [ext] });

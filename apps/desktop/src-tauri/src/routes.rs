@@ -46,6 +46,8 @@ pub enum Confirm {
     Trust,
     Halt,
     CancelTask,
+    /// `tasks/{tid}/recover` with `action: cancel`: the cancel dialog, the recovery body.
+    RecoverCancel,
     CancelGoal,
     StopDaemon,
     LaunchAgent,
@@ -411,6 +413,15 @@ pub fn asks_for_danger(body: &Value) -> bool {
     }
 }
 
+/// Recovery's `cancel` ends a task as the cancel route does, so it needs the same dialog.
+fn recover_cancels(checked: &Checked, body: Option<&Value>) -> bool {
+    checked.route.template == "tasks/{tid}/recover"
+        && body
+            .and_then(|b| b.get("action"))
+            .and_then(Value::as_str)
+            .is_some_and(|a| a.trim().eq_ignore_ascii_case("cancel"))
+}
+
 /// What `friday_request` may send: a `Request` route, no body on a GET, no danger.
 pub fn for_request(
     method: &str,
@@ -420,6 +431,13 @@ pub fn for_request(
     port: u16,
 ) -> Result<Checked, Refusal> {
     let checked = check(method, raw, project_id, port)?;
+    if recover_cancels(&checked, body) {
+        return Err(Refusal {
+            code: CONFIRMATION_REQUIRED,
+            name: "confirmation_required",
+            message: "cancelling a task is confirmed by the desktop app; send it with confirm_and_send".into(),
+        });
+    }
     match checked.route.owner {
         Owner::Request => {}
         Owner::Confirm(_) => {
@@ -457,6 +475,9 @@ pub fn for_confirm(
 ) -> Result<(Checked, Option<Confirm>), Refusal> {
     let checked = check(method, raw, project_id, port)?;
     let danger = body.is_some_and(asks_for_danger);
+    if recover_cancels(&checked, body) {
+        return Ok((checked, Some(Confirm::RecoverCancel)));
+    }
     match checked.route.owner {
         Owner::Confirm(what) => Ok((checked, Some(what))),
         Owner::Request if danger && checked.route.method == Method::Post => Ok((checked, None)),
@@ -508,6 +529,18 @@ mod tests {
         assert!(req("GET", &p("graph/query?path=src%2Findex.ts&depth=2")).is_ok());
         assert!(req("GET", &p("events?since=4&limit=200&type=task.created&type=task.updated")).is_ok());
         assert!(req("POST", &p("agent-processes/claude-1/stop")).is_ok());
+    }
+
+    #[test]
+    fn recovery_that_cancels_needs_the_cancel_dialog() {
+        let path = p("tasks/task_1/recover");
+        let cancel = json!({"action": " Cancel "});
+        let reassign = json!({"action": "reassign"});
+        assert!(for_request("POST", &path, Some(&cancel), PID, PORT).is_err());
+        assert!(for_request("POST", &path, Some(&reassign), PID, PORT).is_ok());
+        let (_, what) = for_confirm("POST", &path, Some(&cancel), PID, PORT).unwrap();
+        assert_eq!(what, Some(Confirm::RecoverCancel));
+        assert!(for_confirm("POST", &path, Some(&reassign), PID, PORT).is_err());
     }
 
     #[test]

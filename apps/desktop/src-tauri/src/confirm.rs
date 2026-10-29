@@ -39,6 +39,8 @@ pub fn is_hidden(c: char) -> bool {
         || (0x2060..=0x2064).contains(&u)
         || (0x2066..=0x2069).contains(&u)
         || u == 0xfeff
+        // Tag characters: invisible, and able to carry a whole hidden message (the page marks them too).
+        || (0xe0000..=0xe007f).contains(&u)
 }
 
 /// The text with every hidden character shown as `⟨U+XXXX⟩`.
@@ -290,6 +292,31 @@ pub fn prepare(
                 danger: true,
             }),
         }),
+        Some(Confirm::RecoverCancel) => {
+            let tid = checked.param("tid").unwrap_or_default().to_string();
+            let detail = get(&format!("{base}tasks/{tid}"))?;
+            let summary = detail.pointer("/task/summary").and_then(Value::as_str);
+            too_long(&[summary.unwrap_or("")])?;
+            // The recovery body as recovery takes it, nothing else: the action and an optional reason.
+            let mut m = Map::new();
+            m.insert("action".into(), Value::String("cancel".into()));
+            if let Some(r) = text_field(body, "reason", 2000)? {
+                m.insert("reason".into(), Value::String(r));
+            }
+            Ok(Prepared {
+                body: Value::Object(m),
+                dialog: Some(Dialog {
+                    title: "Friday: cancel this task?".into(),
+                    text: format!(
+                        "Task {}: {}\n\nRecovery cancels the task: a cancelled task does not run again. Its worktree is kept until you prune it.\n\nCancel the task?",
+                        visible(&tid),
+                        shown(summary)
+                    ),
+                    confirm: "Cancel the task".into(),
+                    danger: true,
+                }),
+            })
+        }
         Some(Confirm::CancelTask) => {
             let tid = checked.param("tid").unwrap_or_default().to_string();
             let detail = get(&format!("{base}tasks/{tid}"))?;
@@ -334,7 +361,13 @@ pub fn prepare(
             dialog: Some(stop_dialog()),
         }),
         Some(Confirm::LaunchAgent) => {
-            let b = body.cloned().unwrap_or_else(|| json!({}));
+            let mut b = body.cloned().unwrap_or_else(|| json!({}));
+            // What the dialog says is what is sent: the daemon starts an agent with Friday unless
+            // the body says false (agent-launcher.ts), so a missing value is shown and sent as true.
+            let autostart = b.get("autostart") != Some(&Value::Bool(false));
+            if let Some(m) = b.as_object_mut() {
+                m.insert("autostart".into(), Value::Bool(autostart));
+            }
             let host = field(&b, "host");
             let key = field(&b, "agent_key");
             let role = field(&b, "role");
@@ -350,7 +383,7 @@ pub fn prepare(
                         shown(key),
                         shown(role),
                         opts,
-                        if b.get("autostart").and_then(Value::as_bool).unwrap_or(false) { "yes" } else { "no" },
+                        if autostart { "yes" } else { "no" },
                         if danger { DANGER_NOTE } else { "" }
                     ),
                     confirm: "Start the agent".into(),
@@ -406,6 +439,15 @@ pub fn prepare(
                 }),
             })
         }
+    }
+}
+
+pub fn restart_dialog() -> Dialog {
+    Dialog {
+        title: "Friday: restart Friday?".into(),
+        text: "Friday stops for this project and starts again: agents lose their connection for a moment and spawned agents stop. Work in worktrees is kept.\n\nRestart Friday?".into(),
+        confirm: "Restart Friday".into(),
+        danger: true,
     }
 }
 
@@ -556,6 +598,13 @@ mod tests {
         let p = prepare(what, &c, PID, Some(&launch), &get).unwrap();
         assert_eq!(p.body, launch);
         assert!(p.dialog.unwrap().text.contains("WARNING"));
+        // No autostart in the body: the daemon would start it with Friday, so the dialog says so
+        // and the body sent says so too (review M9i).
+        let plain = json!({"host": "codex", "agent_key": "codex-3", "role": "developer"});
+        let (c, what) = checked("agent-processes", Some(&plain));
+        let p = prepare(what, &c, PID, Some(&plain), &get).unwrap();
+        assert!(p.dialog.unwrap().text.contains("Starts with Friday: yes"));
+        assert_eq!(p.body["autostart"], json!(true));
     }
 
     #[test]

@@ -119,6 +119,32 @@ describe('SyncEngine', () => {
     expect(store.select('board')?.head).toBe(12);
   });
 
+  it('a snapshot read ahead of the stream does not swallow the events the stream delivers after it (review M9i)', async () => {
+    const t = new FakeTransport();
+    // The second read already covers 11 and 12, which the stream delivers only afterwards.
+    t.snapshots = [snapshot(10), snapshot(12, { approvals: [makeApproval({ approval_id: 'apr_9' })] })];
+    let handlers = null as StreamHandlers | null;
+    t.streams.push(
+      (h, signal) =>
+        new Promise((resolve) => {
+          handlers = h;
+          h.onOpen?.();
+          signal.addEventListener('abort', () => resolve('closed'));
+        }),
+    );
+    const { store, engine } = setup(t);
+    await engine.start();
+    await tick(5);
+    await engine.refresh();
+    expect(store.select('board')?.head).toBe(12);
+    handlers?.onEvent(event(11, 'approval.requested', { approval: { approval_id: 'apr_9', capability: 'git.push' } }));
+    handlers?.onEvent(event(12, 'task.ready'));
+    // The request's reaction plays although the snapshot already showed the approval.
+    expect(store.select('activity').reactions.map((r) => r.kind)).toContain('approval');
+    expect(store.select('system').sequence).toBe(12);
+    engine.stop();
+  });
+
   it('debounces re-reads: a burst of domain events reads the snapshot once', async () => {
     const t = new FakeTransport();
     t.snapshots = [snapshot(1)];
@@ -488,6 +514,24 @@ describe('Dispatcher (plan §7.2)', () => {
     expect(d.reconcile(newer).approvals).toHaveLength(1);
     // Once a snapshot covers the edit it is forgotten.
     expect(d.reconcile(older).approvals).toHaveLength(1);
+  });
+
+  it('keeps an approval decided on this page out of a snapshot read before the decision committed (review M9i)', () => {
+    const store = boardStore();
+    const d = new Dispatcher(store);
+    store.patch('ui', { decided: { apr_1: Date.now() } });
+    const older = snapshot(10, {
+      approvals: [makeApproval({ approval_id: 'apr_1' }), makeApproval({ approval_id: 'apr_2' })],
+    });
+    const shown = d.reconcile(older);
+    expect(shown.approvals.map((a) => a.approval_id)).toEqual(['apr_2']);
+    store.setState({ board: shown });
+    // Its request replayed by the stream does not bring it back either.
+    d.handle(event(9, 'approval.requested', { approval: { approval_id: 'apr_1', capability: 'git.push' } }));
+    expect(store.select('board')?.approvals.some((a) => a.approval_id === 'apr_1')).toBe(false);
+    // Once a snapshot no longer lists it, the mark ends.
+    d.reconcile(snapshot(11, { approvals: [makeApproval({ approval_id: 'apr_2' })] }));
+    expect(store.select('ui').decided).toEqual({});
   });
 
   it('shows a requested approval from its payload in the same tick, and keeps it over an older snapshot', () => {

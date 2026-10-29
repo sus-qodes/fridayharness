@@ -87,14 +87,27 @@ export function shortId(id: string | null | undefined, keep = 8): string {
  */
 export function cleanText(text: string): string {
   return (
-    text
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escape sequences are removed on purpose
-      .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: other escape sequences
-      .replace(/\u001b[@-_][^\u001b]*/g, '')
+    stripEscapes(text)
       // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters other than tab and newline
       .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
       .replace(/[‪-‮⁦-⁩]/g, '')
+  );
+}
+
+/**
+ * Removes terminal escape sequences only, each exactly: a CSI sequence, a terminal string (OSC,
+ * DCS, SOS, PM, APC) with its terminator, or any other escape as its two characters. Never the
+ * text after one: an unterminated string keeps its text (review M9i).
+ */
+export function stripEscapes(text: string): string {
+  return (
+    text
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escape sequences are removed on purpose
+      .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal strings with their terminator
+      .replace(/\u001b[\]PX^_][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, '')
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: any other escape: exactly two characters
+      .replace(/\u001b[@-_]/g, '')
   );
 }
 

@@ -103,6 +103,12 @@ export interface UiState {
   notchFolded: boolean;
   /** Tasks whose `+N −M` is stale after a write (plan §7.2); the canvas re-reads them. */
   staleStats: Record<string, number>;
+  /**
+   * Approvals this page decided (or is deciding), by id, with when: a snapshot read before the
+   * decision committed must not bring them back (review M9i). Cleared once a snapshot no longer
+   * lists one, or after two minutes.
+   */
+  decided: Record<string, number>;
   /** Line counts per task from `tasks/:tid/diff?stat=1`. */
   stats: Record<string, { added: number; removed: number; at: number }>;
 }
@@ -162,6 +168,7 @@ export function initialState(prefs: Prefs = DEFAULT_PREFS): RootState {
       indexing: false,
       notchFolded: false,
       staleStats: {},
+      decided: {},
       stats: {},
     },
     prefs,

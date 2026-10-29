@@ -21,6 +21,9 @@ export const ARM_DELAY_MS = 700;
  * the pointer moves onto the controls or the user focuses them; armed once both the delay passed
  * since the last reset and an engagement came after it.
  */
+/** How long after a Tab key a focus counts as the user moving it there. */
+const USER_FOCUS_MS = 600;
+
 export class Arming {
   #armed = false;
   #stable = false;
@@ -98,6 +101,12 @@ export function createPlanReviewBar(ctx: AppContext, initial: PlanBarModel): Nod
   let printed = '';
   let noteOpen = false;
   const decisions: HTMLButtonElement[] = [];
+  let last: { x: number; y: number } | null = null;
+  let lastTab = Number.NEGATIVE_INFINITY;
+  const onTab = (e: KeyboardEvent) => {
+    if (e.key === 'Tab') lastTab = performance.now();
+  };
+  document.addEventListener('keydown', onTab, true);
   const arming = new Arming((armed) => {
     for (const b of decisions) {
       b.setAttribute('aria-disabled', String(!armed));
@@ -129,8 +138,20 @@ export function createPlanReviewBar(ctx: AppContext, initial: PlanBarModel): Nod
       tabIndex: 0,
       dataset: { id: `planbar:${initial.goalId}`, kind: 'planbar' },
       on: {
-        pointermove: () => arming.engage(),
-        focusin: () => arming.engage(),
+        // Only a real move counts, and focus only right after a Tab: a click's own focus never arms.
+        pointermove: (e) => {
+          const p = e as PointerEvent;
+          const moved =
+            p.movementX !== 0 || p.movementY !== 0 || (last !== null && (last.x !== p.clientX || last.y !== p.clientY));
+          last = { x: p.clientX, y: p.clientY };
+          if (moved) arming.engage();
+        },
+        pointerleave: () => {
+          last = null;
+        },
+        focusin: () => {
+          if (performance.now() - lastTab <= USER_FOCUS_MS) arming.engage();
+        },
       },
     },
     body,
@@ -139,13 +160,6 @@ export function createPlanReviewBar(ctx: AppContext, initial: PlanBarModel): Nod
   );
 
   const decide = (run: () => unknown) => (): unknown => (arming.armed ? run() : undefined);
-
-  const approve = () => {
-    const p = model.plan;
-    return ctx
-      .act('Approve the plan', () => ctx.api.approvePlan(p.plan_id, p.version), `Plan v${p.version} approved`)
-      .then(() => ctx.refresh());
-  };
 
   function closeNote(): void {
     noteOpen = false;
@@ -224,22 +238,20 @@ export function createPlanReviewBar(ctx: AppContext, initial: PlanBarModel): Nod
       ),
     );
     decisions.length = 0;
-    const approveBtn = actionButton('Approve', 'check', decide(approve), {
-      cls: 'nd-act-primary',
-      action: 'approve',
-      busyLabel: 'Approving…',
-    });
-    const rejectBtn = actionButton('Reject…', 'cross', decide(openNote), { cls: 'nd-act-danger', action: 'reject' });
-    decisions.push(approveBtn, rejectBtn);
-    replace(
-      controls,
-      approveBtn,
-      rejectBtn,
-      actionButton('Review', 'eye', () => openModal(ctx, { kind: 'plan-review', id: model.goalId }), {
+    // A plan is approved where every task's instructions are shown in full: the review (review M9i).
+    const approveBtn = actionButton(
+      'Review and approve',
+      'check',
+      () => openModal(ctx, { kind: 'plan-review', id: model.goalId }),
+      {
+        cls: 'nd-act-primary',
         action: 'review',
-        title: 'Open the plan review with the diff',
-      }),
+        title: 'Open the plan with every task in full, the diff, and Approve',
+      },
     );
+    const rejectBtn = actionButton('Reject…', 'cross', decide(openNote), { cls: 'nd-act-danger', action: 'reject' });
+    decisions.push(rejectBtn);
+    replace(controls, approveBtn, rejectBtn);
     el.setAttribute('aria-label', `Plan version ${p.version} waits for review`);
     arming.reset();
     for (const b of decisions) {
@@ -261,6 +273,7 @@ export function createPlanReviewBar(ctx: AppContext, initial: PlanBarModel): Nod
     },
     destroy() {
       arming.destroy();
+      document.removeEventListener('keydown', onTab, true);
       el.remove();
     },
   };

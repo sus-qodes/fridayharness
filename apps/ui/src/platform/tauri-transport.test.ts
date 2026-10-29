@@ -140,6 +140,11 @@ describe.skipIf(!installed)('the desktop transport', () => {
       expect(needsConfirmation('GET', `${P}/goals`, { sandbox: 'danger-full-access' })).toBe(false);
     });
 
+    it('sends recovery that cancels through the shell, as routes.rs requires (review M9i)', () => {
+      expect(needsConfirmation('POST', `${P}/tasks/task_1/recover`, { action: ' Cancel ' })).toBe(true);
+      expect(needsConfirmation('POST', `${P}/tasks/task_1/recover`, { action: 'reassign' })).toBe(false);
+    });
+
     it('maps the daemon error passed through to ApiError, AuthError and OfflineError', async () => {
       const t = new TauriTransport();
       const body = (code: string, message: string) => ({ error: { code, name: 'x', message, retryable: true } });

@@ -138,6 +138,22 @@ describe('approval modal (macro)', () => {
     m.destroy();
   });
 
+  it('a hold that ends after the view moved authorizes nothing, resets and says so (review M9i)', async () => {
+    const m = open(makeApproval({ risk: 'high', target: 'git push origin main' }));
+    arm(m.el);
+    const holdBtn = m.el.querySelector<HTMLButtonElement>('.gv-hold') as HTMLButtonElement;
+    hold(holdBtn, 600);
+    // Content above the button changed and the dialog moved: the decision disarms mid-hold.
+    m.el.getBoundingClientRect = () =>
+      ({ x: 0, y: 60, left: 0, top: 60, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }) as DOMRect;
+    vi.advanceTimersByTime(800);
+    await flush();
+    expect(ctx.transport.calls.filter((c) => c.path.includes('/approve'))).toHaveLength(0);
+    expect(m.el.textContent).toContain('Not authorized: the view changed while you held. Hold again.');
+    expect(holdBtn.classList.contains('gv-held')).toBe(false);
+    m.destroy();
+  });
+
   it('the hold does not start before the modal armed', async () => {
     const m = open(makeApproval({ risk: 'high' }));
     const holdBtn = m.el.querySelector<HTMLButtonElement>('.gv-hold') as HTMLButtonElement;

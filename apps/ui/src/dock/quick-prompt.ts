@@ -32,6 +32,9 @@ let counter = 0;
 
 export const QUICK_PLACEHOLDER = 'pause, status, approve, open <task>, goal <text>…';
 
+/** The daemon keeps a denial reason of at most this many characters. */
+const DENY_REASON_MAX = 500;
+
 export function quickPrompt(ctx: AppContext, opts: QuickPromptOptions = {}): Component {
   const feedbackId = `dk-qp-feedback-${++counter}`;
   const input = h('input', {
@@ -185,6 +188,8 @@ export function quickPrompt(ctx: AppContext, opts: QuickPromptOptions = {}): Com
           cmd.kind === 'deny' ? cmd.reason : null,
         );
         if (!r.ok) return show('error', r.message);
+        if (cmd.kind === 'deny' && (cmd.reason ?? '').length > DENY_REASON_MAX)
+          return show('error', `A reason is at most ${DENY_REASON_MAX} characters.`);
         const raw = ctx.store.select('board')?.approvals.find((a) => a.approval_id === r.proposal.approvalId);
         const hidden =
           !!raw &&
@@ -260,6 +265,8 @@ export function quickPrompt(ctx: AppContext, opts: QuickPromptOptions = {}): Com
       // The prompt owns Enter: it never reaches an approval card's keys (plan FD-28).
       event.preventDefault();
       event.stopPropagation();
+      // A held-down Enter repeats: only a new press may confirm what the first one proposed (review M9i).
+      if (event.repeat) return;
       void onEnter();
     } else if (event.key === 'Escape' && (input.value || pending)) {
       event.preventDefault();

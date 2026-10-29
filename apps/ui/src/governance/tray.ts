@@ -43,11 +43,17 @@ export function decisionItems(board: UiSnapshot | null, now: number): TrayItem[]
       escalation: e,
     });
   }
-  const approvalTasks = new Set(approvals.map((a) => a.task_id).filter(Boolean));
+  // A task whose approval or question is listed is decided through that item, whatever its
+  // waiting reason (a spawned agent waits as blocked): it is not listed twice (review M9i).
+  const covered = new Set(
+    [
+      ...approvals.map((a) => a.task_id),
+      ...out.flatMap((i) => (i.kind === 'question' ? [i.escalation.task_id] : [])),
+    ].filter(Boolean),
+  );
   for (const t of board.tasks) {
     if (!waitsForHuman(t)) continue;
-    // A task waiting for an approval that is in the list is decided through that approval.
-    if (t.waiting_reason === 'human_approval' && approvalTasks.has(t.task_id)) continue;
+    if (covered.has(t.task_id)) continue;
     out.push({
       kind: 'waiting',
       key: `waiting:${t.task_id}`,

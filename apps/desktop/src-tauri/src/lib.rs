@@ -245,7 +245,15 @@ async fn stop_daemon(app: AppHandle) -> Result<(), CmdError> {
 
 #[tauri::command]
 async fn restart_daemon(app: AppHandle) -> Result<(), CmdError> {
-    blocking(move || restart_friday(&app)).await
+    blocking(move || {
+        // A running Friday is stopped first, so it is asked like Stop; starting a stopped one is not.
+        let project = current_project(&app)?;
+        if daemon::running(&project).is_some() && !ask(&app, &confirm::restart_dialog()) {
+            return Err(confirm::cancelled_error());
+        }
+        restart_friday(&app)
+    })
+    .await
 }
 
 // ---- commands: windows ---------------------------------------------------------------------------
@@ -279,6 +287,12 @@ pub struct DeepLink {
     pub approval_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub panel: Option<String>,
+    /// The id the panel opens on (a task for Recover, a goal for a revision).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The reach the human chose on the Notch's card, for the approval's full view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reach: Option<String>,
 }
 
 impl DeepLink {
@@ -292,8 +306,37 @@ impl DeepLink {
             .panel
             .as_ref()
             .is_none_or(|v| !v.is_empty() && v.len() <= 32 && v.chars().all(|c| c.is_ascii_lowercase() || c == '-'));
-        id(&self.focus_task) && id(&self.approval_id) && panel
+        let reach = self.reach.as_deref().is_none_or(|r| matches!(r, "once" | "run" | "task"));
+        id(&self.focus_task) && id(&self.approval_id) && id(&self.id) && panel && reach
     }
+}
+
+/// A second launch of the app: open its `--project` when none is open, or say which one is.
+fn second_launch(app: &AppHandle, argv: Vec<String>) {
+    if let Some(dir) = project_arg(&argv) {
+        let open = state(app).project.read().unwrap().clone();
+        let app2 = app.clone();
+        match open {
+            None => {
+                std::thread::spawn(move || boot(app2, Some(dir)));
+            }
+            Some(p) => {
+                let wanted = std::fs::canonicalize(&dir).unwrap_or(dir);
+                let inside = wanted.to_string_lossy().to_lowercase().starts_with(&p.root.to_string_lossy().to_lowercase());
+                if !inside {
+                    let text = format!(
+                        "The desktop app is open for {}.\n\nTo open {}, close the app (tray: Quit) and start it again from that project.",
+                        visible(&p.root.to_string_lossy()),
+                        visible(&wanted.to_string_lossy())
+                    );
+                    std::thread::spawn(move || {
+                        app2.dialog().message(text).title("Friday: another project").kind(MessageDialogKind::Info).blocking_show();
+                    });
+                }
+            }
+        }
+    }
+    show_studio_window(app, None);
 }
 
 /// Shows and focuses the Studio and sends it `studio-deeplink` with the target.
@@ -387,7 +430,10 @@ async fn set_shortcut(app: AppHandle, id: String, accel: String) -> Result<Vec<s
 async fn open_in_editor(app: AppHandle, path: String, line: Option<u32>) -> Result<(), CmdError> {
     let project = current_project(&app)?;
     blocking(move || {
-        let roots = [project.root.clone(), daemon::worktrees_dir()];
+        // This project's worktrees only: their folder is named by the last 8 characters of the
+        // project key, the same hash (`rootKey` in packages/git), not the whole shared folder.
+        let own = project.key.rsplit('-').next().unwrap_or_default().to_string();
+        let roots = [project.root.clone(), daemon::worktrees_dir().join(own)];
         let real = paths::allowed(&path, &project.root, &roots)
             .ok_or_else(|| CmdError::bad_request("only files of the project and its worktrees open in the editor"))?;
         if platform_windows::shell_open(&paths::vscode_uri(&real, line)) {
@@ -962,7 +1008,7 @@ pub fn run() {
     let args: Vec<String> = std::env::args().collect();
     let initial = project_arg(&args);
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_studio_window(app, None)))
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| second_launch(app, argv)))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(
@@ -1100,6 +1146,10 @@ mod tests {
         assert!(DeepLink { panel: Some("settings".into()), ..Default::default() }.valid());
         assert!(!DeepLink { panel: Some("<b>".into()), ..Default::default() }.valid());
         assert!(!DeepLink { approval_id: Some("a b".into()), ..Default::default() }.valid());
+        assert!(DeepLink { panel: Some("recover".into()), id: Some("task_1".into()), ..Default::default() }.valid());
+        assert!(DeepLink { approval_id: Some("apr_1".into()), reach: Some("task".into()), ..Default::default() }.valid());
+        assert!(!DeepLink { approval_id: Some("apr_1".into()), reach: Some("forever".into()), ..Default::default() }.valid());
+        assert!(!DeepLink { panel: Some("recover".into()), id: Some("../x".into()), ..Default::default() }.valid());
         assert_eq!(
             serde_json::to_value(DeepLink { approval_id: Some("a1".into()), ..Default::default() }).unwrap(),
             json!({"approval_id": "a1"})

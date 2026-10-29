@@ -17,7 +17,8 @@ export type Opener = (target: string) => void;
 export const systemOpener: Opener = (target) => {
   const [command, args] =
     process.platform === 'win32'
-      ? ['explorer.exe', [target]]
+      ? // By its absolute path, never a program of that name in the current folder (LESSONS D-52).
+        [path.join(process.env.SystemRoot ?? 'C:\\Windows', 'explorer.exe'), [target]]
       : process.platform === 'darwin'
         ? ['open', [target]]
         : ['xdg-open', [target]];
@@ -79,7 +80,9 @@ export async function startDetached(ref: ProjectRef, waitMs = 30_000): Promise<D
       stdio: ['ignore', fd, fd],
       windowsHide: true,
       shell: false,
-      cwd: ref.root,
+      // Not the project folder, and never a bare-name lookup there (LESSONS D-52).
+      cwd: path.dirname(cliEntry()),
+      env: { ...process.env, ...(process.platform === 'win32' ? { NoDefaultCurrentDirectoryInExePath: '1' } : {}) },
     });
     child.on('exit', (code) => {
       exited = code ?? -1;

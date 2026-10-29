@@ -199,9 +199,13 @@ describe.skipIf(!E2E)('the Studio with work on it', () => {
       await bar.waitFor({ timeout: 15_000 });
       await page.waitForTimeout(900);
       await rig.shot('studio-plan-proposed');
-      const approve = bar.getByRole('button', { name: 'Approve' });
+      // The plan is approved in its review, where every task's instructions are shown in full.
+      await bar.getByRole('button', { name: 'Review and approve' }).click();
+      const approve = page.locator('.sh-modal').getByRole('button', { name: 'Approve plan' });
+      await approve.waitFor({ timeout: 5000 });
+      await page.waitForTimeout(900);
       await pointAt(page, approve);
-      await expect.poll(() => approve.getAttribute('aria-disabled')).not.toBe('true');
+      await expect.poll(() => approve.getAttribute('aria-disabled')).toBe('false');
       await approve.click();
       await expect
         .poll(async () => {

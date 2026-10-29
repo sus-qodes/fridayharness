@@ -149,6 +149,9 @@ export function failureOutput(event: string, toolName: string | undefined, why: 
 const TIMEOUTS: Record<string, number> = { PreToolUse: 4000, SessionStart: 12_000, SessionEnd: 2000 };
 
 export async function main(argv: string[] = process.argv, env: NodeJS.ProcessEnv = process.env): Promise<number> {
+  // Windows looks for a program started by its bare name (git) in the current folder before PATH;
+  // a hook runs in the repository, whose content it does not trust (LESSONS D-52).
+  if (process.platform === 'win32') process.env.NoDefaultCurrentDirectoryInExePath = '1';
   const event = argv[2] ?? 'unknown';
   const hook = readStdin();
   const toolName = typeof hook.tool_name === 'string' ? hook.tool_name : undefined;

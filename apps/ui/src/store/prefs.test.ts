@@ -215,6 +215,22 @@ describe('watchPrefs', () => {
     expect(s.writes).toBe(writes);
   });
 
+  it('takes what another window saved, as the desktop Studio and Notch share one storage (review M9i)', () => {
+    vi.useFakeTimers();
+    const s = new MemoryStorage();
+    const win = new EventTarget() as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>;
+    const store = createStore();
+    const stop = watchPrefs(store, { storage: s, root: null, win });
+    // The other window turned notifications on and saved.
+    savePrefs({ ...store.select('prefs'), notifications: true }, s);
+    (win as unknown as EventTarget).dispatchEvent(Object.assign(new Event('storage'), { key: PREFS_KEY }));
+    expect(store.select('prefs').notifications).toBe(true);
+    // Another key changes nothing here.
+    (win as unknown as EventTarget).dispatchEvent(Object.assign(new Event('storage'), { key: 'something-else' }));
+    expect(store.select('prefs').notifications).toBe(true);
+    stop();
+  });
+
   it('keeps working when the storage throws', () => {
     vi.useFakeTimers();
     const store = createStore();

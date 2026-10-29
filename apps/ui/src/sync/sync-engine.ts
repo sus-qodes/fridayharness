@@ -68,6 +68,13 @@ export class SyncEngine {
   readonly #now: () => number;
 
   #running = false;
+  /**
+   * The last sequence the stream delivered, or the one it was opened from: what the next event must
+   * pass, and where a reconnect resumes. A snapshot's head is not a stream position: a snapshot read
+   * between a commit and the stream's next delivery already covers events the stream still sends,
+   * and their reactions (sounds, the Notch, log lines) would be lost (review M9i).
+   */
+  #cursor: number | null = null;
   #stream: AbortController | null = null;
   #refreshTimer: ReturnType<typeof setTimeout> | null = null;
   #firstPendingAt = 0;
@@ -229,7 +236,8 @@ export class SyncEngine {
     while (this.#running) {
       const controller = new AbortController();
       this.#stream = controller;
-      const since = this.store.select('system').sequence;
+      const since = this.#cursor ?? this.store.select('system').sequence;
+      this.#cursor = since;
       let failure: Failure = 'offline';
       this.#armStall(controller);
       try {
@@ -340,9 +348,10 @@ export class SyncEngine {
   }
 
   #ingest(event: DomainEvent): void {
+    if (typeof event?.sequence !== 'number' || event.sequence <= (this.#cursor ?? 0)) return;
+    this.#cursor = event.sequence;
     const system = this.store.select('system');
-    if (typeof event?.sequence !== 'number' || event.sequence <= system.sequence) return;
-    this.store.patch('system', { sequence: event.sequence });
+    if (event.sequence > system.sequence) this.store.patch('system', { sequence: event.sequence });
     const domain = this.dispatcher.handle(event, this.#now());
     if (domain) this.scheduleRefresh();
     for (const listener of [...this.#listeners]) listener(event);

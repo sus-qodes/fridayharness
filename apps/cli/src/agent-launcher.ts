@@ -115,6 +115,8 @@ export function createAgentLauncher(opts: LauncherOptions = {}) {
     const P = `/api/v1/projects/${pid}`;
     const profiles = new AgentProfiles(ctx.privateDir);
     const entries = new Map<string, Entry>();
+    /** Keys whose start is past its checks but not yet recorded (hosts are being detected). */
+    const starting = new Set<string>();
     const max = opts.maxProcesses ?? 8;
     const grace = opts.stopGraceMs ?? 10_000;
     const logDir = path.join(project.root, '.friday', 'logs', 'agents');
@@ -234,7 +236,19 @@ export function createAgentLauncher(opts: LauncherOptions = {}) {
 
     const start = async (req: LaunchRequest): Promise<AgentProcess> => {
       assertFree(req);
-      const list = await detect(false);
+      // The key is held from here until its entry is recorded: a second start of it while hosts
+      // are detected would start a second child the first could no longer be told apart from.
+      if (starting.has(req.agent_key)) {
+        throw new FridayError('invalid_state_transition', `${req.agent_key} is starting already`);
+      }
+      starting.add(req.agent_key);
+      let list: AgentHost[];
+      try {
+        list = await detect(false);
+      } finally {
+        starting.delete(req.agent_key);
+      }
+      assertFree(req);
       const host = list.find((h) => h.host === req.host);
       if (!opts.child && (!host?.found || !host.supported)) {
         throw new FridayError('invalid_request', `${req.host} cannot be started here: ${host?.reason ?? 'not found'}`);

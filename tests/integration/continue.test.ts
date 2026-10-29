@@ -1,9 +1,9 @@
 import { claudeCodeHooks } from '@friday/adapter-claude';
 import type { ContinueResult, EscalationView, TaskView } from '@friday/protocol';
-import { useTestWorkspace } from '@friday/test-support';
+import { FakeClock, useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
 import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
-import { attachedSession, NO_WORKTREES, nextMessage, raw, spawnedSession } from '../helpers/ui.js';
+import { attachedSession, NO_WORKTREES, nextMessage, noMessage, raw, spawnedSession } from '../helpers/ui.js';
 
 /**
  * Spawned agents carry on after a human decides (docs/frontend/PLAN.md §5.6, FD-22), denials reach
@@ -189,6 +189,60 @@ describe("an agent's own question", () => {
     await td.operator.post(td.operator.projectPath(`/escalations/${asked.escalation_id}/answer`), { answer: 'EUR' });
     const resume = await nextMessage(s.client, 'task.resume');
     expect((resume.params as { note: string }).note).toContain('EUR');
+  });
+
+  it('does not restart a later run when a question of an earlier run is answered (review M9i)', async () => {
+    const td = await startTestDaemon(ws(), { extraConfig: NO_WORKTREES });
+    const s = await spawnedSession(td, { hooks: true });
+    const asked = (await s.client.escalate({
+      task_id: s.task.task_id,
+      run_id: s.run_id,
+      question: 'EUR or USD?',
+      options: ['EUR', 'USD'],
+    })) as { escalation_id: string };
+    const blocked = (run_id: string, summary: string) =>
+      s.client.reportResult({
+        task_id: s.task.task_id,
+        run_id,
+        status: 'blocked',
+        summary,
+        changed_paths: [],
+        checks: [],
+        notes: [],
+      });
+    await blocked(s.run_id, 'waiting for the answer');
+    // The task goes to a second run, which asks for an approval and waits for it.
+    await td.operator.post(td.operator.projectPath(`/tasks/${s.task.task_id}/release`), {});
+    await td.operator.post(td.operator.projectPath(`/tasks/${s.task.task_id}/assign`), { agent_key: 'sp-1' });
+    const start = await nextMessage(s.client, 'task.start');
+    await s.client.ack([{ message_id: start.message_id, accepted: true, session_ref: 'sess-sp-2' }]);
+    const run2 = String((start.params as { run_id: string }).run_id);
+    expect(run2).not.toBe(s.run_id);
+    await s.client.requestPermission({
+      task_id: s.task.task_id,
+      run_id: run2,
+      action_class: 'git.mutate',
+      command: 'git push',
+      justification: 'publish',
+    });
+    await blocked(run2, 'waiting for the push approval');
+    await td.operator.post(td.operator.projectPath(`/escalations/${asked.escalation_id}/answer`), { answer: 'EUR' });
+    expect(await noMessage(s.client, 'task.resume')).toBe(true);
+  });
+
+  it('sends a resume held through a pause longer than its expiry once Friday resumes (review M9i)', async () => {
+    const clock = new FakeClock(new Date().toISOString());
+    const td = await startTestDaemon(ws(), { extraConfig: NO_WORKTREES, clock });
+    const s = await blockedOnApproval(td);
+    const op = (route: string) =>
+      raw(td, 'POST', td.operator.projectPath(route), { token: td.daemon.tokens.operator, body: '{}' });
+    await op('/control/pause');
+    await td.operator.post(td.operator.projectPath(`/approvals/${s.approvalId}/approve`), { reuse: 'once', via: 'ui' });
+    // Ten minutes: twice the five a queued message lives.
+    clock.advance(10 * 60_000);
+    await op('/control/resume');
+    const resume = await nextMessage(s.client, 'task.resume');
+    expect((resume.params as { note: string }).note).toContain('granted');
   });
 });
 

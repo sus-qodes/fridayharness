@@ -9,14 +9,14 @@
  */
 import type { EscalationView } from '@friday/protocol';
 import { classifyEscalation, composeAnswer, LET_AGENT_DECIDE, type QuestionSpec } from '../model/escalations.js';
-import { visible } from '../model/text.js';
+import { hasHidden, visible } from '../model/text.js';
 import { type AppContext, type Component, openDrawer, openModal } from '../shell/context.js';
 import { append, button, h, replace, setText } from '../ui/dom.js';
-import { cleanText, timeAgo, truncate } from '../ui/format.js';
+import { cleanText, stripEscapes, timeAgo, truncate } from '../ui/format.js';
 import type { Binding } from '../ui/keys.js';
 import { icon } from '../ui/svg.js';
 import { ARMING_TEXT, type ArmingController, armDecisions, type Clock } from './arming.js';
-import { agentKeyOf, agentText, nextId, taskLine, taskOf } from './common.js';
+import { agentKeyOf, agentText, decisionText, HIDDEN_WARNING, nextId, taskLine, taskOf } from './common.js';
 
 export interface QuestionCardOptions {
   /** The Notch's smaller card. */
@@ -165,20 +165,26 @@ function buildBody(kit: Kit): Built {
 
 /** The question, why, proposed action and evidence. */
 function context(spec: QuestionSpec): HTMLElement[] {
+  // What the human answers: shown with hidden characters marked, never silently shortened (FD-28).
   const out: HTMLElement[] = [];
-  out.push(h('p', { class: 'gv-question-text' }, cleanText(spec.question)));
-  if (spec.why) out.push(h('p', { class: 'gv-why' }, h('span', { class: 'gv-k' }, 'Why: '), cleanText(spec.why)));
+  out.push(h('p', { class: 'gv-question-text' }, decisionText(spec.question)));
+  if (spec.why) out.push(h('p', { class: 'gv-why' }, h('span', { class: 'gv-k' }, 'Why: '), decisionText(spec.why)));
   if (spec.proposedAction)
-    out.push(h('p', { class: 'gv-why' }, h('span', { class: 'gv-k' }, 'Proposed: '), cleanText(spec.proposedAction)));
+    out.push(
+      h('p', { class: 'gv-why' }, h('span', { class: 'gv-k' }, 'Proposed: '), decisionText(spec.proposedAction)),
+    );
   if (spec.evidence.length)
     out.push(
       h(
         'details',
         { class: 'gv-evidence' },
         h('summary', null, `Evidence (${spec.evidence.length})`),
-        h('ul', null, ...spec.evidence.slice(0, 8).map((x) => h('li', null, truncate(cleanText(x), 500)))),
+        h('ul', null, ...spec.evidence.slice(0, 8).map((x) => h('li', null, truncate(decisionText(x), 500)))),
       ),
     );
+  const seen = [spec.question, spec.why, spec.proposedAction, ...spec.evidence].filter((x): x is string => !!x);
+  if (seen.some((x) => hasHidden(stripEscapes(x))))
+    out.push(h('div', { class: 'hidden-warning', role: 'note' }, HIDDEN_WARNING));
   return out;
 }
 

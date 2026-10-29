@@ -58,7 +58,9 @@ export function pendingApprovals(board: UiSnapshot | null, now: number): Approva
     .sort((x, y) => x.created_at.localeCompare(y.created_at));
 }
 
-function removeApproval(ctx: Pick<AppContext, 'store'>, approvalId: string): number {
+function removeApproval(ctx: Pick<AppContext, 'store' | 'now'>, approvalId: string): number {
+  const ui = ctx.store.select('ui');
+  ctx.store.patch('ui', { decided: { ...ui.decided, [approvalId]: ctx.now() } });
   const board = ctx.store.select('board');
   if (!board) return -1;
   const index = board.approvals.findIndex((a) => a.approval_id === approvalId);
@@ -68,6 +70,8 @@ function removeApproval(ctx: Pick<AppContext, 'store'>, approvalId: string): num
 }
 
 function restoreApproval(ctx: Pick<AppContext, 'store'>, approval: ApprovalRow, index: number): void {
+  const { [approval.approval_id]: _gone, ...decided } = ctx.store.select('ui').decided;
+  ctx.store.patch('ui', { decided });
   const board = ctx.store.select('board');
   if (!board) return;
   // A snapshot read while the call was in flight may already have brought it back.

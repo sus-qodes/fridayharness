@@ -484,38 +484,45 @@ describe('proposed plan', () => {
     ],
   });
 
-  it('arms Approve only after 700 ms and a pointer move, then approves', async () => {
-    vi.useFakeTimers();
+  it('approves only in the review, where every task is shown in full (review M9i)', () => {
     const ctx = makeContext();
     const bar = createPlanReviewBar(ctx, { goalId: goal.goal_id, plan });
     expectNoMarkup(bar.el);
     expect(bar.el.textContent).toContain('Plan v2 proposed');
     expect(bar.el.textContent).toContain('by the Master Brain');
     expect(bar.el.textContent).toContain('1 new · 1 rework · 1 dropped');
-    const approve = actionOf(bar.el, 'approve') as HTMLButtonElement;
-    expect(approve.getAttribute('aria-disabled')).toBe('true');
-    approve.click();
-    bar.el.dispatchEvent(new Event('pointermove'));
-    approve.click();
-    await vi.advanceTimersByTimeAsync(ARM_DELAY_MS - 1);
-    approve.click();
+    expect(actionOf(bar.el, 'approve')).toBeNull();
+    click(actionOf(bar.el, 'review'));
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'plan-review', id: goal.goal_id });
     expect(ctx.transport.calls).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(approve.getAttribute('aria-disabled')).toBe('false');
-    approve.click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(ctx.transport.to('POST', `/plans/${plan.plan_id}/versions/2/approve`)).toHaveLength(1);
-    // A move re-arms.
-    bar.moved?.();
-    expect(approve.getAttribute('aria-disabled')).toBe('true');
     bar.destroy();
   });
 
-  it('rejects with a note, and opens the review', async () => {
+  it('arms Reject only after 700 ms and a real pointer move, never from the click’s own focus', async () => {
     vi.useFakeTimers();
     const ctx = makeContext();
     const bar = createPlanReviewBar(ctx, { goalId: goal.goal_id, plan });
     document.body.append(bar.el);
+    const reject = actionOf(bar.el, 'reject') as HTMLButtonElement;
+    await vi.advanceTimersByTimeAsync(ARM_DELAY_MS);
+    // Focus from a click, and a pointer event that did not move, arm nothing.
+    bar.el.dispatchEvent(new Event('focusin'));
+    bar.el.dispatchEvent(new MouseEvent('pointermove', { clientX: 10, clientY: 10 }));
+    expect(reject.getAttribute('aria-disabled')).toBe('true');
+    bar.el.dispatchEvent(new MouseEvent('pointermove', { clientX: 14, clientY: 11 }));
+    expect(reject.getAttribute('aria-disabled')).toBe('false');
+    // A move of the card re-arms.
+    bar.moved?.();
+    expect(reject.getAttribute('aria-disabled')).toBe('true');
+    bar.destroy();
+  });
+
+  it('rejects with a note', async () => {
+    vi.useFakeTimers();
+    const ctx = makeContext();
+    const bar = createPlanReviewBar(ctx, { goalId: goal.goal_id, plan });
+    document.body.append(bar.el);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }));
     bar.el.dispatchEvent(new Event('focusin'));
     await vi.advanceTimersByTimeAsync(ARM_DELAY_MS);
     click(actionOf(bar.el, 'reject'));
@@ -527,8 +534,6 @@ describe('proposed plan', () => {
     const calls = ctx.transport.to('POST', `/plans/${plan.plan_id}/versions/2/reject`);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.body).toEqual({ note: HOSTILE });
-    click(actionOf(bar.el, 'review'));
-    expect(ctx.store.select('ui').modal).toEqual({ kind: 'plan-review', id: goal.goal_id });
     bar.destroy();
   });
 

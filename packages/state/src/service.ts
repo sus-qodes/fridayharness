@@ -1325,6 +1325,13 @@ export class FridayState {
       if (!control.paused) return;
       const pausedAt = control.changed_at;
       ctx.emit({ type: 'control.resumed', payload: {}, refs: [] });
+      // Starts and resumes held during the pause go out now: they get a fresh expiry, as if queued
+      // at this moment, so a pause longer than their expiry does not drop them (review M9i).
+      this.db
+        .prepare(
+          "UPDATE outbox_messages SET expires_at = ? WHERE project_id = ? AND method IN ('task.start', 'task.resume') AND status = 'queued'",
+        )
+        .run(addMs(ctx.now, this.config.ackTimeoutMs * this.config.maxDeliveryAttempts * 2), projectId);
       if (!pausedAt) return;
       for (const t of this.q.tasks(projectId, { statuses: ['WAITING'] })) {
         if (t.waiting_reason !== 'blocked') continue;
@@ -3415,7 +3422,10 @@ export class FridayState {
         delivered_at: string | null;
         expires_at: string;
       }>(projectId);
+    // While a human has paused Friday, starts are held on purpose: none times out (review M9i).
+    const pausedNow = this.q.control(projectId).paused;
     for (const m of stale) {
+      if (pausedNow) break;
       if (held(m.delivered_at)) continue;
       const timedOut =
         Date.parse(m.expires_at) <= nowMs ||
@@ -4244,6 +4254,13 @@ export class FridayState {
     if (run?.status !== 'ACTIVE') return false;
     const h = this.q.findHarness(run.harness_id);
     if (h?.attach_mode !== 'spawn' || h.shadow || ['DISCONNECTED', 'TERMINATED'].includes(h.status)) return false;
+    // A resume that expired unsent (held through a long pause) is no resume: it is marked so, and a
+    // new one is queued, so Continue never answers "continued" while nothing goes out (review M9i).
+    this.db
+      .prepare(
+        "UPDATE outbox_messages SET status = 'expired' WHERE run_id = ? AND method = 'task.resume' AND status IN ('queued', 'delivered') AND expires_at <= ?",
+      )
+      .run(run.run_id, ctx.now);
     const queued = this.db
       .prepare(
         "SELECT 1 AS one FROM outbox_messages WHERE run_id = ? AND method = 'task.resume' AND status IN ('queued', 'delivered') LIMIT 1",
@@ -4621,7 +4638,16 @@ export class FridayState {
         const taskId = row.task_id ? String(row.task_id) : null;
         if (taskId && (row.kind === null || row.kind === 'unanswered_request')) {
           const task = this.q.findTask(projectId, taskId);
-          if (task?.status === 'WAITING') {
+          // Only the run that asked, and only when nothing else of it waits for a human (as after
+          // an approval): an older run's question does not restart the run now waiting (review M9i).
+          const runId = row.run_id ? String(row.run_id) : null;
+          const sameRun = runId === null || runId === task?.current_run_id;
+          const others = task?.current_run_id
+            ? (this.db
+                .prepare("SELECT COUNT(*) AS n FROM approvals WHERE run_id = ? AND status = 'pending'")
+                .get<{ n: number }>(task.current_run_id)?.n ?? 0)
+            : 0;
+          if (task?.status === 'WAITING' && sameRun && others === 0) {
             this.queueContinue(ctx, projectId, task, `A human answered your question: ${answer}`);
           }
         }

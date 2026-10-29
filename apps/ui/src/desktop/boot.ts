@@ -12,6 +12,7 @@ import type { UiSnapshot } from '@friday/protocol';
 import { FridayApi } from '../api/client.js';
 import { notchSlots, studioAreas } from '../areas.js';
 import { initAudio, startSound } from '../audio/index.js';
+import { requestReach, takeRequestedReach } from '../governance/decisions.js';
 import { setCursor } from '../mascot/index.js';
 import { waitingCount } from '../notch/derive.js';
 import { mountNotch, type NotchHandle } from '../notch/index.js';
@@ -61,6 +62,10 @@ export interface StudioTarget {
   focus_task?: string;
   approval_id?: string;
   panel?: string;
+  /** The id the panel opens on (a task for Recover, a goal for a revision). */
+  id?: string;
+  /** The reach the human chose on the Notch's card. */
+  reach?: 'once' | 'run' | 'task';
 }
 
 async function loadEnv(): Promise<DesktopEnv> {
@@ -221,9 +226,13 @@ export function applyDeepLink(ctx: AppContext, t: StudioTarget | null | undefine
   if (t.focus_task) ctx.store.patch('ui', { selectedTaskId: t.focus_task });
   // Only kinds this window registered are opened: the panel name came over IPC.
   const panel = t.panel;
-  if (t.approval_id) openModal(ctx, { kind: 'approval', id: t.approval_id });
-  else if (panel && ctx.registry.drawers.has(panel as DrawerKind)) openDrawer(ctx, { kind: panel as DrawerKind });
-  else if (panel && ctx.registry.modals.has(panel as ModalKind)) openModal(ctx, { kind: panel as ModalKind });
+  const id = t.id ? { id: t.id } : {};
+  if (t.approval_id) {
+    if (t.reach) requestReach(t.approval_id, t.reach);
+    openModal(ctx, { kind: 'approval', id: t.approval_id });
+  } else if (panel && ctx.registry.drawers.has(panel as DrawerKind))
+    openDrawer(ctx, { kind: panel as DrawerKind, ...id });
+  else if (panel && ctx.registry.modals.has(panel as ModalKind)) openModal(ctx, { kind: panel as ModalKind, ...id });
   else if (t.focus_task) openDrawer(ctx, { kind: 'inspector', id: t.focus_task });
 }
 
@@ -322,7 +331,12 @@ export async function bootDesktopNotch(root: HTMLElement, injected?: DesktopEnv)
       void env.core.invoke('notch_rect', { x: r.x, y: r.y, w: r.width, h: r.height }).catch(() => undefined);
     },
     onOpenStudio: (target) => {
-      void env.core.invoke('show_studio', { target }).catch(() => undefined);
+      // The shell's target names a task `focus_task` (lib.rs DeepLink).
+      const link: StudioTarget = {
+        ...(target.task_id ? { focus_task: target.task_id } : {}),
+        ...(target.approval_id ? { approval_id: target.approval_id } : {}),
+      };
+      void env.core.invoke('show_studio', { target: link }).catch(() => undefined);
     },
   });
   root.append(run.services.toasts.el, run.services.confirms.el);
@@ -346,10 +360,13 @@ export async function bootDesktopNotch(root: HTMLElement, injected?: DesktopEnv)
     const drawer = next.drawer;
     if (!modal && !drawer) return;
     let target: StudioTarget = {};
-    if (modal?.kind === 'approval' && modal.id) target = { approval_id: modal.id };
-    else if (drawer?.kind === 'inspector' && drawer.id) target = { focus_task: drawer.id };
-    else if (modal) target = { panel: modal.kind };
-    else if (drawer) target = { panel: drawer.kind };
+    if (modal?.kind === 'approval' && modal.id) {
+      // The reach chosen on the card ("Allow for this task") goes with it to the full view.
+      const reach = takeRequestedReach(modal.id);
+      target = { approval_id: modal.id, ...(reach ? { reach } : {}) };
+    } else if (drawer?.kind === 'inspector' && drawer.id) target = { focus_task: drawer.id };
+    else if (modal) target = { panel: modal.kind, ...(modal.id ? { id: modal.id } : {}) };
+    else if (drawer) target = { panel: drawer.kind, ...(drawer.id ? { id: drawer.id } : {}) };
     store.patch('ui', { modal: null, drawer: null });
     void env.core.invoke('show_studio', { target }).catch(() => undefined);
   });
@@ -367,6 +384,8 @@ export async function bootDesktopNotch(root: HTMLElement, injected?: DesktopEnv)
   store.subscribe('board', tray);
   store.subscribe('system', tray);
   store.subscribe('prefs', tray);
+  // An approval that expires changes no board: the line is read again every 15 s too.
+  setInterval(tray, 15_000);
 
   await followDaemon(env, run);
   await env.listen<{ x: number; y: number }>('cursor', (p) => setCursor(p?.x ?? null, p?.y));

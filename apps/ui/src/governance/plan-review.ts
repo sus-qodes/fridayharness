@@ -4,12 +4,12 @@
  * (`plans/:id/diff`); Approve, or Reject with a note.
  */
 import type { LivePlanTask, LivePlanVersion } from '@friday/protocol';
-import { visible } from '../model/text.js';
+import { hasHidden, visible } from '../model/text.js';
 import type { AppContext, Component, ModalRequest } from '../shell/context.js';
 import { button, h, replace, setText } from '../ui/dom.js';
-import { cleanText, plural, truncate } from '../ui/format.js';
+import { cleanText, plural, stripEscapes, truncate } from '../ui/format.js';
 import { ARMING_TEXT, armDecisions, type Clock } from './arming.js';
-import { errorText, nextId } from './common.js';
+import { decisionText, errorText, HIDDEN_WARNING, nextId } from './common.js';
 
 export interface PlanReviewOptions {
   clock?: Clock;
@@ -72,15 +72,26 @@ function taskRow(t: LivePlanTask): HTMLElement {
       { class: 'gv-plan-task-head' },
       h('span', { class: ['badge', look.tone] }, look.label),
       h('span', { class: 'mono gv-plan-key' }, visible(t.key)),
-      h('span', { class: 'gv-plan-summary' }, truncate(cleanText(t.summary), 300)),
+      h('span', { class: 'gv-plan-summary' }, decisionText(t.summary)),
     ),
     h(
       'div',
       { class: 'gv-plan-task-meta muted' },
       `${t.kind} · ${t.role} · ${t.priority} priority · ${t.risk_level} risk`,
       t.depends_on.length ? ` · after ${t.depends_on.map((d) => visible(d)).join(', ')}` : '',
-      t.acceptance_criteria.length ? ` · ${plural(t.acceptance_criteria.length, 'criterion', 'criteria')}` : '',
     ),
+    // What the agent will be told: the description becomes its instruction, in full.
+    t.description
+      ? h('div', { class: 'gv-plan-desc' }, h('span', { class: 'gv-k' }, 'Instructions: '), decisionText(t.description))
+      : null,
+    t.acceptance_criteria.length
+      ? h(
+          'div',
+          { class: 'gv-plan-criteria' },
+          h('span', { class: 'gv-k' }, plural(t.acceptance_criteria.length, 'Criterion', 'Criteria')),
+          h('ul', null, ...t.acceptance_criteria.map((c) => h('li', null, decisionText(c)))),
+        )
+      : null,
     t.scope?.write?.length
       ? h(
           'div',
@@ -89,8 +100,32 @@ function taskRow(t: LivePlanTask): HTMLElement {
           ...t.scope.write.map((g) => h('span', { class: 'pill mono' }, visible(g))),
         )
       : null,
-    t.note ? h('p', { class: 'gv-plan-note' }, h('span', { class: 'gv-k' }, 'Note: '), cleanText(t.note)) : null,
+    t.scope?.read?.length
+      ? h(
+          'div',
+          { class: 'gv-plan-scope' },
+          h('span', { class: 'gv-k' }, 'Reads '),
+          ...t.scope.read.map((g) => h('span', { class: 'pill mono' }, visible(g))),
+        )
+      : null,
+    t.note ? h('p', { class: 'gv-plan-note' }, h('span', { class: 'gv-k' }, 'Note: '), decisionText(t.note)) : null,
+    hasHidden(stripEscapes(planTaskText(t)))
+      ? h('div', { class: 'hidden-warning', role: 'note' }, HIDDEN_WARNING)
+      : null,
   );
+}
+
+/** Everything of a task the human approves, as one string (what arming watches, what is checked for marks). */
+function planTaskText(t: LivePlanTask): string {
+  return [
+    t.key,
+    t.summary,
+    t.description ?? '',
+    ...t.acceptance_criteria,
+    ...(t.scope?.write ?? []),
+    ...(t.scope?.read ?? []),
+    t.note ?? '',
+  ].join('\n');
 }
 
 function diffView(d: PlanDiffView): HTMLElement {
@@ -186,9 +221,9 @@ export function planReview(
       ),
     ),
     goal ? h('p', { class: 'gv-from' }, 'Goal: ', truncate(cleanText(goal.request), 300)) : null,
-    p.summary ? h('p', { class: 'gv-question-text' }, cleanText(p.summary)) : null,
+    p.summary ? h('p', { class: 'gv-question-text' }, decisionText(p.summary)) : null,
     p.rationale
-      ? h('p', { class: 'gv-why' }, h('span', { class: 'gv-k' }, 'Rationale: '), cleanText(p.rationale))
+      ? h('p', { class: 'gv-why' }, h('span', { class: 'gv-k' }, 'Rationale: '), decisionText(p.rationale))
       : null,
     h('p', { class: 'field-hint' }, `Trigger: ${cleanText(p.trigger)}`),
     p.needs_human
@@ -230,7 +265,8 @@ export function planReview(
   }
 
   const arming = armDecisions(el, {
-    key: JSON.stringify([p.plan_id, p.version, p.tasks.length]),
+    // Any change to what is approved, a task's instructions included, re-arms the decision.
+    key: JSON.stringify([p.plan_id, p.version, p.summary, p.rationale, tasks.map(planTaskText)]),
     hint,
     ...(opts.clock ? { clock: opts.clock } : {}),
   });

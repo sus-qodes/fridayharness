@@ -81,7 +81,8 @@ export function approvalCard(ctx: AppContext, approval: ApprovalRow, opts: Appro
     id: reasonId,
     type: 'text',
     placeholder: 'Reason for the agent (optional)',
-    maxLength: 2000,
+    // The daemon keeps a reason of at most 500 characters.
+    maxLength: 500,
     autocomplete: 'off',
   });
   const sendDeny = button('Send denial', () => undefined, { class: 'btn btn-danger gv-decide' });

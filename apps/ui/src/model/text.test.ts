@@ -18,6 +18,17 @@ describe('visible escapes (plan §6.2)', () => {
     expect(hasHidden('a‮b')).toBe(true);
   });
 
+  it('marks every character the desktop dialog marks, and the tag characters (review M9i)', () => {
+    // The Arabic letter mark reorders "1 2" to read "2 1"; separators hide a tail; tags hide a message.
+    expect(visible('cp ؜1 2')).toBe('cp ⟨U+061C⟩1 2');
+    expect(visible('a­b᠎c')).toBe('a⟨U+00AD⟩b⟨U+180E⟩c');
+    expect(visible('ok rm -rf / ')).toBe('ok⟨U+2028⟩rm -rf /⟨U+2029⟩');
+    expect(visible('yes\u{e0041}\u{e0042}')).toBe('yes⟨U+E0041⟩⟨U+E0042⟩');
+    expect(hasHidden('cp ؜1 2')).toBe(true);
+    // Line separators no longer count as one line: their marks are counted where they stand.
+    expect(fits(`ok${' '.repeat(60)}`)).toBe(false);
+  });
+
   it('judges whether a target fits the card', () => {
     expect(fits('npm test')).toBe(true);
     expect(fits('x'.repeat(48 * 6))).toBe(true);

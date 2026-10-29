@@ -119,6 +119,9 @@ interface LocalEdit {
   row: ApprovalRow | null;
 }
 
+/** How long an approval decided here stays out of older snapshots. */
+const DECIDED_TTL_MS = 120_000;
+
 export class Dispatcher {
   /** Per agent key: the tool the host asked about, waiting for its completion. */
   readonly #toolStart = new Map<string, { tool: string; at: number }>();
@@ -236,7 +239,8 @@ export class Dispatcher {
    * The snapshot with the approval edits of events it does not include yet (its `head` is before
    * them); edits it covers are forgotten.
    */
-  reconcile(board: UiSnapshot): UiSnapshot {
+  reconcile(raw: UiSnapshot): UiSnapshot {
+    const board = this.#withoutDecided(raw);
     if (!this.#local.size) return board;
     let approvals = board.approvals;
     let changed = false;
@@ -255,6 +259,25 @@ export class Dispatcher {
       }
     }
     return changed ? { ...board, approvals } : board;
+  }
+
+  /**
+   * Leaves out approvals this page decided while a snapshot older than the decision was read; a
+   * mark ends once a snapshot no longer lists its approval, or after two minutes.
+   */
+  #withoutDecided(board: UiSnapshot): UiSnapshot {
+    const decided = this.store.select('ui').decided;
+    const ids = Object.keys(decided);
+    if (!ids.length) return board;
+    const now = Date.now();
+    const keep: Record<string, number> = {};
+    for (const id of ids) {
+      const at = decided[id] ?? 0;
+      if (now - at < DECIDED_TTL_MS && board.approvals.some((a) => a.approval_id === id)) keep[id] = at;
+    }
+    if (Object.keys(keep).length !== ids.length) this.store.patch('ui', { decided: keep });
+    if (!Object.keys(keep).length) return board;
+    return { ...board, approvals: board.approvals.filter((a) => !(a.approval_id in keep)) };
   }
 
   /** Drops pulses older than `maxAgeMs` (the canvas calls this as it draws). */
@@ -283,6 +306,11 @@ export class Dispatcher {
   #addApproval(row: ApprovalRow, sequence: number): void {
     const removed = this.#local.get(row.approval_id);
     if (removed && !removed.row) return; // decided before this arrived (replayed out of order)
+    if (row.approval_id in this.store.select('ui').decided) return; // decided here
+    const current = this.store.select('board');
+    // A snapshot that already covers this event and does not list the approval: it was decided.
+    if (current && sequence <= current.head && !current.approvals.some((a) => a.approval_id === row.approval_id))
+      return;
     this.#remember(row.approval_id, { sequence, row });
     const board = this.store.select('board');
     if (!board || board.approvals.some((a) => a.approval_id === row.approval_id)) return;

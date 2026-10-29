@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { ObservableStore } from './store/store.js';
 import { button, h, replace } from './ui/dom.js';
-import { cleanText, duration, shortId, timeAgo, timeUntil, truncate, usd } from './ui/format.js';
+import { cleanText, duration, shortId, stripEscapes, timeAgo, timeUntil, truncate, usd } from './ui/format.js';
 import { Keyboard } from './ui/keys.js';
 import { icon, s } from './ui/svg.js';
 
@@ -107,6 +107,15 @@ describe('format', () => {
   it('cleans terminal escapes, control characters and bidi overrides', () => {
     expect(cleanText('\u001b[31mred\u001b[0m\u0007 ok‮!')).toBe('red ok!');
     expect(cleanText('tab\tand\nnewline')).toBe('tab\tand\nnewline');
+  });
+
+  it('removes an escape sequence exactly, never the text after it (review M9i)', () => {
+    const tail = 'Run the migration on the staging copy\u001b_ and then drop the production orders table';
+    expect(cleanText(tail)).toBe('Run the migration on the staging copy and then drop the production orders table');
+    expect(cleanText('a\u001bPpayload b')).toBe('apayload b');
+    expect(cleanText('title\u001b]0;set title\u0007 shown')).toBe('title shown');
+    expect(cleanText('x\u001b]2;t\u001b\\ y')).toBe('x y');
+    expect(stripEscapes('keep‮ marks')).toBe('keep‮ marks');
   });
 
   it('truncates by code points and shortens ids', () => {

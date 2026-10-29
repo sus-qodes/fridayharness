@@ -6,7 +6,7 @@ import type { ApprovalRow, SnapshotTask, UiSnapshot } from '@friday/protocol';
 import { hasHidden, visible } from '../model/text.js';
 import type { AppContext } from '../shell/context.js';
 import { h } from '../ui/dom.js';
-import { cleanText, shortId, truncate } from '../ui/format.js';
+import { cleanText, shortId, stripEscapes, truncate } from '../ui/format.js';
 
 export type Risk = 'low' | 'medium' | 'high';
 
@@ -83,6 +83,14 @@ export function agentText(label: string | null, text: string | null | undefined,
       : h('div', { class: 'gv-none muted' }, 'none given'),
     hasHidden(value) ? h('div', { class: 'hidden-warning', role: 'note' }, HIDDEN_WARNING) : null,
   );
+}
+
+/**
+ * Text a human decides on that is prose (a question, a plan's summary, a task's instructions):
+ * terminal escapes removed, every other hidden character shown as a visible mark (FD-28).
+ */
+export function decisionText(text: string | null | undefined): string {
+  return text ? visible(stripEscapes(text)) : '';
 }
 
 /** Prose an agent or Friday wrote (a question, a reason): cleaned of escapes, shown as text. */

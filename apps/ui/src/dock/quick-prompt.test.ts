@@ -112,6 +112,28 @@ describe('quick prompt', () => {
     expect(t.onDone).toHaveBeenCalledTimes(1);
   });
 
+  it('a held-down Enter repeats, and never confirms what the first Enter proposed (review M9i)', async () => {
+    const board = makeSnapshot({ approvals: [makeApproval({ approval_id: 'apr_a', risk: 'medium' })] });
+    const t = track(setup(board));
+    await t.type('approve');
+    await t.enter();
+    t.input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', repeat: true, bubbles: true, cancelable: true }),
+    );
+    await flush();
+    expect(posts(t.ctx, '/approvals/apr_a/approve')).toHaveLength(0);
+    await t.enter();
+    expect(posts(t.ctx, '/approvals/apr_a/approve')).toHaveLength(1);
+  });
+
+  it('refuses a denial reason longer than the daemon keeps', async () => {
+    const board = makeSnapshot({ approvals: [makeApproval({ approval_id: 'apr_a', risk: 'medium' })] });
+    const t = track(setup(board));
+    await t.type(`deny ${'x'.repeat(501)}`);
+    await t.enter();
+    expect(t.feedback.textContent).toContain('A reason is at most 500 characters.');
+  });
+
   it('refuses the second Enter when the waiting set changed since it was shown', async () => {
     const a = makeApproval({ approval_id: 'apr_a', created_at: '2026-10-17T09:00:00.000Z' });
     const t = track(setup(makeSnapshot({ approvals: [a] })));

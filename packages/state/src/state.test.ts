@@ -192,6 +192,27 @@ describe('task lifecycle through Claude-Code-style attach mode', () => {
   });
 });
 
+describe('the board query', () => {
+  it('chooses live tasks before the limit, so old finished ones never push newer work out (review M9i)', () => {
+    const old = [
+      state.createTask(PROJECT, human, { summary: 'old 1' }),
+      state.createTask(PROJECT, human, { summary: 'old 2' }),
+    ];
+    for (const t of old) state.cancelTask(PROJECT, human, t.task_id, 'done with it');
+    clock.advance(3 * 86_400_000);
+    const live = [
+      state.createTask(PROJECT, human, { summary: 'new 1' }),
+      state.createTask(PROJECT, human, { summary: 'new 2' }),
+    ];
+    const since = new Date(Date.parse(clock.now()) - 86_400_000).toISOString();
+    // Oldest first, two at most: without the filter these would be the two cancelled tasks.
+    expect(state.q.tasks(PROJECT, { limit: 2 }).map((t) => t.summary)).toEqual(['old 1', 'old 2']);
+    expect(state.q.tasks(PROJECT, { limit: 2, liveSince: since }).map((t) => t.task_id)).toEqual(
+      live.map((t) => t.task_id),
+    );
+  });
+});
+
 describe('idempotency and replay', () => {
   it('returns the stored response for a repeated key and rejects a reused key with different content', () => {
     const a = state.createTask(PROJECT, human, { summary: 'same' }, { idempotency_key: 'create-1' });

@@ -7,6 +7,10 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createFridayMcpServer } from './server.js';
 import { FridaySession } from './session.js';
 
+// Windows looks for a program started by its bare name (git) in the current folder before PATH;
+// this server runs inside a repository, whose content it does not trust (LESSONS D-52).
+if (process.platform === 'win32') process.env.NoDefaultCurrentDirectoryInExePath = '1';
+
 const log = (msg: string) => process.stderr.write(`[friday-mcp] ${msg}\n`);
 
 const session = new FridaySession({

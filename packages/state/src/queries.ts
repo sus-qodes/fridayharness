@@ -148,12 +148,14 @@ export class Queries {
     return t;
   }
 
-  tasks(projectId: string, opts: { statuses?: TaskStatus[]; limit?: number } = {}): TaskView[] {
+  tasks(projectId: string, opts: { statuses?: TaskStatus[]; limit?: number; liveSince?: string } = {}): TaskView[] {
     const statuses = opts.statuses ?? [];
     const filter = statuses.length ? ` AND status IN (${statuses.map(() => '?').join(',')})` : '';
+    // `liveSince`: tasks not finished, or finished after that time, selected before the limit applies.
+    const live = opts.liveSince ? " AND (status NOT IN ('COMPLETED','CANCELLED','ABANDONED') OR updated_at > ?)" : '';
     return this.db
-      .prepare(`SELECT * FROM tasks WHERE project_id = ?${filter} ORDER BY created_at, task_id LIMIT ?`)
-      .all<TaskRow>(projectId, ...statuses, opts.limit ?? 500)
+      .prepare(`SELECT * FROM tasks WHERE project_id = ?${filter}${live} ORDER BY created_at, task_id LIMIT ?`)
+      .all<TaskRow>(projectId, ...statuses, ...(opts.liveSince ? [opts.liveSince] : []), opts.limit ?? 500)
       .map((r) => toTaskView(r, this.deps(r.task_id)));
   }
 
@@ -858,12 +860,14 @@ export class Queries {
     return g;
   }
 
-  goals(projectId: string, opts: { statuses?: string[]; limit?: number } = {}): GoalView[] {
+  goals(projectId: string, opts: { statuses?: string[]; limit?: number; liveSince?: string } = {}): GoalView[] {
     const statuses = opts.statuses ?? [];
     const filter = statuses.length ? ` AND status IN (${statuses.map(() => '?').join(',')})` : '';
+    // `liveSince`: goals open or active, or changed after that time, selected before the limit applies.
+    const live = opts.liveSince ? " AND (status IN ('OPEN','ACTIVE') OR updated_at > ?)" : '';
     return this.db
-      .prepare(`SELECT * FROM goals WHERE project_id = ?${filter} ORDER BY created_at, goal_id LIMIT ?`)
-      .all<GoalRow>(projectId, ...statuses, opts.limit ?? 200)
+      .prepare(`SELECT * FROM goals WHERE project_id = ?${filter}${live} ORDER BY created_at, goal_id LIMIT ?`)
+      .all<GoalRow>(projectId, ...statuses, ...(opts.liveSince ? [opts.liveSince] : []), opts.limit ?? 200)
       .map(toGoalView);
   }
 

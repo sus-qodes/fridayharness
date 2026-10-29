@@ -36,6 +36,14 @@ describe('decisionItems', () => {
     expect(decisionItems(makeSnapshot({ tasks: [dep] }), NOW)).toEqual([]);
   });
 
+  it('lists a spawned agent once when its approval or question is listed (it waits as blocked; review M9i)', () => {
+    const t = makeTask({ status: 'WAITING', waiting_reason: 'blocked' });
+    const asked = makeSnapshot({ tasks: [t], approvals: [makeApproval({ task_id: t.task_id })] });
+    expect(decisionItems(asked, NOW).map((i) => i.kind)).toEqual(['approval']);
+    const question = makeSnapshot({ tasks: [t], escalations: [makeEscalation({ task_id: t.task_id })] });
+    expect(decisionItems(question, NOW).map((i) => i.kind)).toEqual(['question']);
+  });
+
   it('ignores proposals of finished goals and answered questions', () => {
     const goal = makeGoal({ status: 'CANCELLED' });
     const board = makeSnapshot({

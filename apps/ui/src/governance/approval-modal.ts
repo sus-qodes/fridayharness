@@ -195,7 +195,8 @@ export function approvalModal(
     class: 'textarea gv-reject-note',
     id: noteId,
     rows: 3,
-    maxLength: 2000,
+    // The daemon keeps a reason of at most 500 characters.
+    maxLength: 500,
     placeholder: 'e.g. “Do not hardcode secrets; read them from the environment.”',
   });
   const reject = button('Reject with feedback', () => undefined, { class: 'btn btn-danger gv-decide' });
@@ -249,7 +250,12 @@ export function approvalModal(
   };
 
   const approve = async (): Promise<void> => {
-    if (!live()) return;
+    if (!live()) {
+      // The view changed while it was held: nothing was authorized; it can be held again.
+      hold?.reset();
+      setText(status, 'Not authorized: the view changed while you held. Hold again.');
+      return;
+    }
     busy = true;
     setText(status, `Allowing ${REACH_LABEL[reach]}…`);
     const outcome = await decideApproval(ctx, a, { allow: true, reuse: reach });

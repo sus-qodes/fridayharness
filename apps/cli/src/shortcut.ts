@@ -67,7 +67,8 @@ export function createShortcut(ref: ProjectRef, o: ShortcutOptions = {}): string
         `$s = $ws.CreateShortcut(${psq(file)})`,
         `$s.TargetPath = ${psq(process.execPath)}`,
         `$s.Arguments = ${psq(quoted)}`,
-        `$s.WorkingDirectory = ${psq(ref.root)}`,
+        // The CLI's folder, never the project's (LESSONS D-52).
+        `$s.WorkingDirectory = ${psq(path.dirname(cliEntry()))}`,
         '$s.WindowStyle = 7',
         `$s.Description = ${psq(`Open Friday for ${ref.name}`)}`,
         '$s.Save()',

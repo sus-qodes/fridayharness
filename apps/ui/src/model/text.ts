@@ -5,10 +5,16 @@
  * them (the caller checks `fits` and offers no one-click decision when they do not).
  */
 
-/** Characters that change how text looks without being seen. */
+/**
+ * Characters that change how text looks without being seen: C0 and C1 controls (tab and newline
+ * kept), the soft hyphen, the Arabic letter mark and the Mongolian vowel separator, zero-width
+ * and directional marks, line and paragraph separators, bidirectional embeddings, overrides and
+ * isolates, invisible operators, the byte-order mark, and the tag characters. The same set as the
+ * desktop dialog (`apps/desktop/src-tauri/src/confirm.rs`).
+ */
 const HIDDEN =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: these characters are what is being found
-  /[\u0000-\u0008\u000b-\u001f\u007f-\u009f​-‏‪-‮⁠-⁤⁦-⁩﻿]/gu;
+  /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff\u{e0000}-\u{e007f}]/gu;
 
 /** One visible mark for one hidden character. */
 export function mark(ch: string): string {

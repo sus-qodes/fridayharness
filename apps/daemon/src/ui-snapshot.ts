@@ -113,8 +113,13 @@ export function buildUiSnapshot(deps: {
   const allAgents = state.q.agents(pid);
   const agentKey = (id: string | null) => (id ? (allAgents.find((a) => a.agent_id === id)?.agent_key ?? null) : null);
 
+  // What the board shows is chosen in SQL before the limit, so the newest work is never the part
+  // left out; reaching the limit is flagged like any other cap (review M9i).
+  const SQL_LIMIT = 5000;
+  const liveTasks = state.q.tasks(pid, { limit: SQL_LIMIT, liveSince: new Date(deps.nowMs - DAY_MS).toISOString() });
+  if (liveTasks.length >= SQL_LIMIT) truncated.tasks = true;
   const tasks: SnapshotTask[] = cap(
-    state.q.tasks(pid, { limit: 5000 }).filter((t) => !TERMINAL.has(t.status) || recent(t.updated_at, DAY_MS)),
+    liveTasks.filter((t) => !TERMINAL.has(t.status) || recent(t.updated_at, DAY_MS)),
     'tasks',
     'last',
   ).map((t) => ({
@@ -136,10 +141,10 @@ export function buildUiSnapshot(deps: {
     if (i) integrations[t.task_id] = i;
   }
 
+  const liveGoals = state.q.goals(pid, { limit: 1000, liveSince: new Date(deps.nowMs - 7 * DAY_MS).toISOString() });
+  if (liveGoals.length >= 1000) truncated.goals = true;
   const goals = cap(
-    state.q
-      .goals(pid, { limit: 1000 })
-      .filter((g) => g.status === 'OPEN' || g.status === 'ACTIVE' || recent(g.updated_at, 7 * DAY_MS)),
+    liveGoals.filter((g) => g.status === 'OPEN' || g.status === 'ACTIVE' || recent(g.updated_at, 7 * DAY_MS)),
     'goals',
     'last',
   );

@@ -54,6 +54,13 @@ export const DESKTOP_CONFIRMED: readonly { method: 'POST'; path: RegExp }[] = [
 
 const DANGER = 'danger-full-access';
 
+const RECOVER = /^\/api\/v1\/projects\/[^/?]+\/tasks\/[^/?]+\/recover$/;
+
+function recoverAction(body: unknown): string | null {
+  const a = body && typeof body === 'object' ? (body as { action?: unknown }).action : null;
+  return typeof a === 'string' ? a.trim().toLowerCase() : null;
+}
+
 /** True when any key or string in the body is `danger-full-access` (as routes.rs judges it). */
 export function asksForDanger(body: unknown): boolean {
   if (typeof body === 'string') return body.trim().toLowerCase() === DANGER;
@@ -68,6 +75,8 @@ export function asksForDanger(body: unknown): boolean {
 export function needsConfirmation(method: 'GET' | 'POST', path: string, body?: unknown): boolean {
   const bare = path.split('?')[0] ?? path;
   if (DESKTOP_CONFIRMED.some((r) => r.method === method && r.path.test(bare))) return true;
+  // Recovery's cancel ends the task as the cancel route does (`recover_cancels` in routes.rs).
+  if (method === 'POST' && RECOVER.test(bare) && recoverAction(body) === 'cancel') return true;
   return method === 'POST' && asksForDanger(body);
 }
 

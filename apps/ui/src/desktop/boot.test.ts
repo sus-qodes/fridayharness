@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { takeRequestedReach } from '../governance/decisions.js';
 import { makeContext } from '../test/context.js';
 import { makeApproval, makeSnapshot, makeTask } from '../test/fixtures.js';
 import {
@@ -109,6 +110,16 @@ describe('the desktop Studio', () => {
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents' });
     applyDeepLink(ctx, { panel: 'not-a-panel' });
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents' });
+  });
+
+  it('carries the reach chosen on the Notch, and the id a panel opens on (review M9i)', () => {
+    const ctx = makeContext({ snapshot: makeSnapshot({ approvals: [makeApproval()] }) });
+    ctx.registry.modal('recover', () => ({ el: document.createElement('div'), title: 'Recover', destroy() {} }));
+    applyDeepLink(ctx, { approval_id: 'apr_1', reach: 'task' });
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'approval', id: 'apr_1' });
+    expect(takeRequestedReach('apr_1')).toBe('task');
+    applyDeepLink(ctx, { panel: 'recover', id: 'task_7' });
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'recover', id: 'task_7' });
   });
 });
 

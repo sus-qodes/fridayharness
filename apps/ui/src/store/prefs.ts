@@ -168,12 +168,21 @@ export function watchPrefs(store: FridayStore, opts: WatchOptions = {}): () => v
     if (timer) flush();
   };
   win?.addEventListener('pagehide', onHide);
+  // The desktop's two windows (and a browser's tabs) share one storage: take what another saved.
+  // Writing an equal value fires no event, so the windows do not echo each other (review M9i).
+  const onStorage = (e: StorageEvent) => {
+    if (e.key !== PREFS_KEY && e.key !== MUTED_KEY) return;
+    if (timer) return; // a change of this window waits to be saved; it wins
+    store.patch('prefs', loadPrefs(storage));
+  };
+  win?.addEventListener('storage', onStorage as EventListener);
 
   return () => {
     if (stopped) return;
     stopped = true;
     unsubscribe();
     win?.removeEventListener('pagehide', onHide);
+    win?.removeEventListener('storage', onStorage as EventListener);
     if (timer) flush();
   };
 }
