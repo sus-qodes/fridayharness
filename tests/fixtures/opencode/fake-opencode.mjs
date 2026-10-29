@@ -62,8 +62,8 @@ async function exercise() {
         if (call.mutate) output.args.filePath = call.mutate;
         if (call.effect) fs.writeFileSync(path.join(process.cwd(), call.effect), 'fixture side effect\n');
         record({ op: 'tool', id: call.callID, decision: 'allow', args: output.args });
-      } catch {
-        record({ op: 'tool', id: call.callID, decision: 'deny' });
+      } catch (error) {
+        record({ op: 'tool', id: call.callID, decision: 'deny', reason: String(error?.message ?? error) });
       }
     }
   } finally { busy = false; }

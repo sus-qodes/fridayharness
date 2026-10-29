@@ -205,5 +205,5 @@ describe('a real repository: Friday itself', () => {
       `friday repo: ${graph.stats.files} files, ${JSON.stringify(graph.stats.edges)} edges, ${graph.stats.contracts} contracts, built in ${graph.stats.ms} ms`,
     );
     // The build grows with this repository and slows under the parallel suite; only queries are timed (LESSONS T-61).
-  }, 60_000);
+  }, 180_000);
 });

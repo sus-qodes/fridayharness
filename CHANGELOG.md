@@ -2,6 +2,16 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M14.1, the leftovers
+
+- **Settings Hub:** the trust question lists exactly what is trusted and its hash; Stop Friday says how to start it again; the Friday and About pages follow the board; the notification refusals say where to allow them again; the browser session note and the clean-up hint are back.
+- **OpenCode refusals say why:** a session Friday did not bind, a call it does not judge, a replayed call, a check that failed or came late, and Friday's own policy reason, instead of one generic message.
+- **Tests that only timed out on a busy machine** wait for their state or have ceilings that hold under load (LESSONS T-109, T-110).
+
+## Unreleased — the Settings Hub completed
+
+- **What the Settings drawer offered is back in the Settings Hub:** in the desktop app, Planner stores the provider key in Windows' own prompt and allows spending with its own dialog, with the daily budget box and *Open config.yaml in VS Code*; the Planner page follows the planner's state; shortcuts are named by what they do and say why one is not active; starting at sign-in shows the shell's answer and puts a refused change back. Leaving Settings by Esc or Ctrl+comma no longer leaves the old Settings panel over the canvas.
+
 ## Unreleased — OpenCode checkpoint C (experimental)
 
 - **Friday's refusals shown in front of a live model:** with the owner's permission, OpenCode 1.19.3 ran with Ollama's `qwen2.5:7b` on this machine, its own permissions open, and Friday's plugin as the only gate. The allowed write happened; a write outside the task's scope, a read of a fake `.env`, a shell write, a mock MCP tool, and writes under a failing check, a hanging check, an unbound session, a cancelled task and a stopped daemon were all refused with nothing written (`tests/scenarios/opencode-c.live.test.ts`, `docs/integration/opencode.md`). OpenCode stays experimental and L1 unverified until its lifecycle (checkpoint D) is recorded.

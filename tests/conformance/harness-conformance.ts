@@ -40,7 +40,8 @@ export interface ConformanceSubject {
   attach(opts?: { key?: string; agentKey?: string }): Promise<ConformanceHarness>;
 }
 
-async function eventually<T>(fn: () => Promise<T>, ok: (v: T) => boolean, timeoutMs = 5000): Promise<T> {
+/** Waits for a state: 30 s, since a scripted host starting its work on a busy machine can take far longer than 5 s (LESSONS T-110). */
+async function eventually<T>(fn: () => Promise<T>, ok: (v: T) => boolean, timeoutMs = 30_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const v = await fn();

@@ -180,7 +180,7 @@ export function worktreesInUse(board: UiSnapshot | null | undefined): number {
 }
 
 /** What each desktop shortcut does (the shell's ids, FD-16). */
-const SHORTCUT_LABELS: Record<string, string> = {
+export const SHORTCUT_LABELS: Record<string, string> = {
   notch: 'Open the Notch and give it the keyboard',
   studio: 'Show the Studio',
   halt: 'Open the halt dialog',

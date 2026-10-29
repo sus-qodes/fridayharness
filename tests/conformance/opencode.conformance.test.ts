@@ -157,6 +157,26 @@ describe('OpenCode A/B no-model conformance', () => {
     expect(existsSync(path.join(ws().projectDir, 'allowed.marker'))).toBe(true);
     spy.mockRestore();
   });
+  it('says why it refuses each call: unsupported, unbound, replayed, or Friday’s own reason (plan M14.1)', async () => {
+    const s = await subject();
+    await s.adapter.start();
+    const results = await invoke(s, [
+      { tool: 'read', callID: 'secret', args: { filePath: '.env' } },
+      { tool: 'new_tool', callID: 'unknown', args: {} },
+      { tool: 'read', callID: 'child', sessionID: 'ses_child', args: { filePath: 'src/a.ts' } },
+      { tool: 'read', callID: 'first', args: { filePath: 'src/a.ts' } },
+      { tool: 'read', callID: 'first', args: { filePath: 'src/a.ts' } },
+    ]);
+    expect(results.map((e) => e.decision)).toEqual(['deny', 'deny', 'deny', 'allow', 'deny']);
+    const reasons = results.map((e) => String(e.reason ?? ''));
+    expect(reasons[0]).toMatch(/^Friday: .*\.env/);
+    expect(reasons[1]).toBe('Friday: Friday does not judge this call: unsupported OpenCode tool');
+    expect(reasons[2]).toBe('Friday: this session is not the one Friday bound to the task');
+    expect(reasons[4]).toBe('Friday: a call with this id was already judged');
+    // Nothing reads as the bridge being unavailable when it answered.
+    expect(reasons.join(' ')).not.toMatch(/bridge unavailable/);
+  });
+
   it('checks the task write scope for every patch target', async () => {
     const s = await subject();
     await s.adapter.start();

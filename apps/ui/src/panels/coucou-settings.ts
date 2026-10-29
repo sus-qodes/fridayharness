@@ -34,6 +34,7 @@ import {
   note,
   plain,
   plannerState,
+  projectPath,
   segmented,
   select,
   Teardown,
@@ -46,6 +47,7 @@ import {
   pageActions,
   plannerSteps,
   readLoosening,
+  SHORTCUT_LABELS,
   worktreesInUse,
 } from './settings.js';
 
@@ -424,7 +426,11 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
         notifyState.textContent =
           result === 'unsupported'
             ? 'This environment does not support notifications.'
-            : 'Notifications were not allowed; grant permission in system settings.';
+            : result === 'denied'
+              ? nativeNotify
+                ? 'Windows refused notifications for Friday; allow them in Windows Settings → System → Notifications, then turn this on again.'
+                : 'The browser refused notifications for this page; allow them in its site settings, then turn this on again.'
+              : 'Notifications were not allowed; turn this on again to be asked once more.';
       }
     }
 
@@ -590,25 +596,91 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
 
     const cardActions = h('div', { class: 'hub-card' });
     const rootPath = ctx.store.select('board')?.project.root ?? '';
-    const budget = Number.isFinite(brain?.daily_budget_usd) ? (brain?.daily_budget_usd as number) : 5;
-    const steps = plannerSteps(brain, budget);
-
-    const stepsList = h(
-      'ul',
-      { class: 'pn-list' },
-      rootPath ? h('li', null, 'Project folder: ', copyLine(ctx, `cd "${rootPath}"`)) : null,
-      steps.map((s) => h('li', null, s.text, s.command ? copyLine(ctx, s.command) : null)),
+    const local = brain?.provider === 'local';
+    let budget = Number.isFinite(brain?.daily_budget_usd) ? (brain?.daily_budget_usd as number) : 5;
+    const stepsList = h('ol', { class: 'pn-list' });
+    // The daily budget the `allow-remote` command and the desktop's spending dialog use.
+    const budgetInput = input({ type: 'number', min: '0', step: '1', value: String(budget) });
+    budgetInput.addEventListener('input', () => {
+      const v = clampNumber(budgetInput.value, 0, 100_000);
+      if (v !== null) {
+        budget = v;
+        renderSteps();
+      }
+    });
+    const openConfig = button(
+      [icon('file', 14), 'Open config.yaml in VS Code'],
+      () => {
+        if (rootPath) ctx.platform.openInEditor(projectPath(rootPath, '.friday/config.yaml'));
+      },
+      { class: 'hub-btn' },
     );
+    openConfig.disabled = !rootPath;
+    // The desktop app does the first two steps with its own dialogs: the key goes into Windows'
+    // password prompt and only the provider's name passes through the page (FD-26).
+    const native = ctx.platform.desktop ?? null;
+    const keyBtn = button([icon('shield', 14), 'Store the key…'], () => void storeKey(), { class: 'hub-btn' });
+    const spendBtn = button('', () => void allowSpending(), { class: 'hub-btn' });
+    // A cancelled dialog answers false: nothing changed, nothing to say. Once done, the board is read
+    // again, and the page follows the planner's new state (below).
+    async function storeKey() {
+      if (!native) return;
+      keyBtn.disabled = true;
+      const done = await ctx.act('Store the provider key', () => native.storeKey('anthropic'));
+      if (done) {
+        ctx.toast({ kind: 'success', text: 'The key is stored' });
+        ctx.refresh();
+      }
+      if (!td.done) keyBtn.disabled = false;
+    }
+    async function allowSpending() {
+      if (!native) return;
+      spendBtn.disabled = true;
+      const amount = budget;
+      const done = await ctx.act('Allow this clone to spend', () => native.allowSpending(amount));
+      if (done) {
+        ctx.toast({ kind: 'success', text: `This clone may spend up to ${usd(amount)} a day` });
+        ctx.refresh();
+      }
+      if (!td.done) spendBtn.disabled = false;
+    }
+    function renderSteps() {
+      replace(
+        stepsList,
+        rootPath
+          ? h('li', null, 'Go to the project folder:', copyLine(ctx, `cd "${rootPath}"`, 'folder command'))
+          : null,
+        plannerSteps(brain, budget).map((s) => h('li', null, s.text, s.command ? copyLine(ctx, s.command) : null)),
+      );
+      // Each native step is offered while it is still needed; a planner on this machine needs neither.
+      keyBtn.hidden = local || brain?.key === 'not needed' || (!!brain?.remote && brain.key !== 'missing');
+      spendBtn.hidden = local || !!brain?.approved_here;
+      replace(spendBtn, icon('check', 14), `Allow spending up to ${usd(budget)} a day…`);
+    }
+    renderSteps();
 
-    cardActions.append(
+    const actionParts: (HTMLElement | null)[] = [
       h('div', { class: 'hub-card-title' }, 'Configuration & Spending Bounds'),
       note(
-        brain?.provider === 'local'
-          ? 'The planner runs on this machine, with no key and no spending budget. To make it ready:'
-          : 'Anthropic credentials and daily spending limits are managed securely:',
+        local
+          ? 'The planner runs on this machine, with no key and no spending budget. To make it ready, run this in a terminal in the project folder:'
+          : 'You can always write plans yourself. To let the Master Brain plan, run these in a terminal in the project folder:',
       ),
+      local ? null : field('Daily budget (USD) for the command below', budgetInput).el,
+      native && !local
+        ? h(
+            'div',
+            { class: 'pn-planner-native' },
+            note(
+              'The desktop app can do the first two steps with its own dialogs; the key goes into Windows’ password prompt, never into this page.',
+            ),
+            h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, keyBtn, spendBtn),
+          )
+        : null,
       stepsList,
-    );
+      h('div', { style: { display: 'flex', gap: '8px' } }, openConfig),
+    ];
+    cardActions.append(...actionParts.filter((x): x is HTMLElement => x !== null));
 
     // The steps are offered while the planner is not ready, as in the Settings drawer.
     return st.ready ? [cardStatus] : [cardStatus, cardActions];
@@ -697,10 +769,14 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
       );
     }
 
-    async function trustPolicy(hash: string, items: unknown[]) {
+    async function trustPolicy(hash: string, items: ReturnType<typeof readLoosening>['items']) {
+      // The question lists exactly what is trusted, so nothing is trusted unseen.
       const ok = await ctx.confirm({
         title: 'Trust security loosening on this clone?',
-        body: ['Friday records trust in this exact hash; if policy files change, it asks again.'],
+        body: [
+          ...items.map((l) => `${visible(l.setting)}: ${visible(l.from)} → ${visible(l.to)} (${visible(l.source)})`),
+          `Friday records trust in exactly this list (hash ${visible(hash)}); if policy files change, it asks again.`,
+        ],
         confirmLabel: 'Trust Policy',
         danger: true,
       });
@@ -728,6 +804,8 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
     const count = worktreesInUse(ctx.store.select('board'));
     const cleanBtn = button([icon('branch', 14), 'Clean up released worktrees'], () => void cleanUp(), {
       class: 'hub-btn',
+      title:
+        'Removes the worktrees of finished tasks that hold no uncommitted work (the same as Prune clean worktrees in the palette)',
     });
 
     async function cleanUp() {
@@ -745,7 +823,11 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
           'div',
           { class: 'text' },
           h('span', { class: 'title' }, `Active Worktrees (${count})`),
-          h('span', { class: 'detail' }, 'Running task attempts execute in dedicated isolated worktrees'),
+          h(
+            'span',
+            { class: 'detail' },
+            'Each running attempt works in its own worktree; a released one is kept until it is cleaned up.',
+          ),
         ),
         cleanBtn,
       ),
@@ -758,9 +840,11 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
       ? button([icon('rework', 14), 'Restart Friday'], () => void restart(), { class: 'hub-btn' })
       : null;
     async function restart() {
-      if (!desktop) return;
+      if (!desktop || !restartBtn) return;
+      restartBtn.disabled = true;
       const done = await ctx.act('Restart Friday', () => desktop.restart());
       if (done) ctx.toast({ kind: 'success', text: 'Friday is restarting' });
+      if (!td.done) restartBtn.disabled = false;
     }
 
     const logoutBtn = inBrowser
@@ -778,12 +862,17 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
     async function stopDaemon() {
       const ok = await ctx.confirm({
         title: 'Stop Friday Daemon?',
-        body: ['Active agents will disconnect. Work in progress is safely preserved in worktrees.'],
+        body: [
+          'Friday stops for this project: agents it started disconnect, and nothing is assigned or verified until it runs again.',
+          'Work in worktrees is kept. Start it again from its shortcut, the desktop app, or friday run.',
+        ],
         confirmLabel: 'Stop Friday',
         danger: true,
       });
       if (!ok) return;
-      await ctx.act('Stop Friday', () => ctx.api.stopDaemon(), 'Friday daemon is stopping');
+      stopBtn.disabled = true;
+      const r = await ctx.act('Stop Friday', () => ctx.api.stopDaemon(), 'Friday daemon is stopping');
+      if (!td.done && !r) stopBtn.disabled = false;
     }
 
     cardLifecycle.append(
@@ -800,6 +889,12 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
         h('div', { style: { display: 'flex', gap: '8px' } }, restartBtn, logoutBtn, stopBtn),
       ),
     );
+    if (inBrowser)
+      cardLifecycle.append(
+        note(
+          'This page signed in with a one-time link; the session ends after 12 hours, when Friday restarts, or when you log out.',
+        ),
+      );
 
     return [cardWorktrees, cardLifecycle];
   }
@@ -817,44 +912,82 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
     }
 
     const shortcutList = h('div', { class: 'pn-shortcuts' }, note('Reading registered hotkeys…'));
+    // Each shortcut by what it does, and why one is not active, as the shell reports it (FD-16).
+    const renderShortcuts = (items: DesktopShortcut[]) => {
+      if (td.done) return;
+      replace(
+        shortcutList,
+        items.map((s) => {
+          const label = SHORTCUT_LABELS[s.id] ?? plain(s.id, 40);
+          const accel = input({ value: s.accel, class: 'hub-keycap', aria: { label: `Keys for: ${label}` } });
+          const saveBtn = button('Set', () => void setKey(s.id, accel.value.trim()), {
+            class: 'hub-btn small',
+          });
+          return h(
+            'div',
+            { class: 'hub-row', style: { padding: '4px 0' } },
+            h(
+              'div',
+              { class: 'text' },
+              h('span', { class: 'title' }, label),
+              s.state === 'registered'
+                ? null
+                : h(
+                    'span',
+                    { class: 'detail' },
+                    `Not active: ${plain(s.state.replace(/_/g, ' '), 40)}${s.note ? `. ${plain(s.note, 200)}` : ''}`,
+                  ),
+            ),
+            h('div', { style: { display: 'flex', gap: '6px' } }, accel, saveBtn),
+          );
+        }),
+      );
+    };
     desktop
       .shortcuts()
-      .then((items) => {
-        if (td.done) return;
-        replace(
-          shortcutList,
-          items.map((s) => {
-            const accel = input({ value: s.accel, class: 'hub-keycap' });
-            const saveBtn = button('Set', () => void setKey(s.id, accel.value.trim()), {
-              class: 'hub-btn small',
-            });
-            return h(
-              'div',
-              { class: 'hub-row', style: { padding: '4px 0' } },
-              h('div', { class: 'text' }, h('span', { class: 'title' }, s.id), h('span', { class: 'detail' }, s.state)),
-              h('div', { style: { display: 'flex', gap: '6px' } }, accel, saveBtn),
-            );
-          }),
-        );
-      })
+      .then(renderShortcuts)
       .catch(() => {
         if (!td.done) replace(shortcutList, note('Could not read desktop hotkeys.'));
       });
 
+    // The list is drawn again from what the shell answers, so a shortcut it could not register says so.
     async function setKey(id: string, accel: string) {
       if (!accel || !desktop) return;
-      await ctx.act('Change shortcut', () => desktop.setShortcut(id, accel), 'Shortcut updated');
+      const r = await ctx.act('Change shortcut', () => desktop.setShortcut(id, accel), 'Shortcut updated');
+      if (r) renderShortcuts(r);
     }
 
+    // Starting at sign-in: the box is usable once the shell has said what it is, and always shows
+    // the shell's answer, so a refused change is put back.
+    const startState = h('div', { class: 'detail', aria: { live: 'polite' } });
     const startBox = checkbox('Start Friday when I sign in to Windows', false, (on) => void setStart(on));
     const startInput = startBox.querySelector('input') as HTMLInputElement;
-    desktop.autostart().then((on) => {
-      if (!td.done) startInput.checked = on;
-    });
+    startInput.disabled = true;
+    desktop.autostart().then(
+      (on) => {
+        if (td.done) return;
+        startInput.checked = on;
+        startInput.disabled = false;
+      },
+      () => {
+        if (td.done) return;
+        startInput.disabled = false;
+        startState.textContent = 'The desktop app did not say whether it starts when you sign in.';
+      },
+    );
 
     async function setStart(on: boolean) {
       if (!desktop) return;
-      await ctx.act('Set autostart', () => desktop.setAutostart(on));
+      startInput.disabled = true;
+      startState.textContent = '';
+      const r = await ctx.act(
+        'Change starting at sign-in',
+        () => desktop.setAutostart(on),
+        (now) => (now ? 'Friday starts when you sign in to Windows' : 'Friday no longer starts when you sign in'),
+      );
+      if (td.done) return;
+      startInput.disabled = false;
+      startInput.checked = r ?? !on;
     }
 
     card.append(
@@ -863,6 +996,7 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
       shortcutList,
       h('div', { class: 'hub-divider' }),
       h('div', { class: 'hub-row' }, startBox),
+      startState,
     );
 
     return [card];
@@ -906,6 +1040,31 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
       if (target !== currentTab) {
         renderActiveTab(target);
       }
+    }),
+  );
+
+  // The planner page is drawn again when the planner's state changes (a key stored, spending
+  // allowed, a provider configured), not on every board change, so a budget being typed stays.
+  let brainSeen = JSON.stringify(ctx.store.select('board')?.brain ?? null);
+  td.add(
+    ctx.store.subscribe('board', (board) => {
+      const now = JSON.stringify(board?.brain ?? null);
+      if (now === brainSeen) return;
+      brainSeen = now;
+      if (currentTab === 'planner') renderActiveTab('planner');
+    }),
+  );
+  // The Friday and About pages are drawn again when what they show changes: the worktrees in use,
+  // the project's versions, folder and address.
+  const facts = (board: UiSnapshot | null | undefined) =>
+    JSON.stringify([worktreesInUse(board), board?.project ?? null, board?.ui_api ?? null]);
+  let factsSeen = facts(ctx.store.select('board'));
+  td.add(
+    ctx.store.subscribe('board', (board) => {
+      const now = facts(board);
+      if (now === factsSeen) return;
+      factsSeen = now;
+      if (currentTab === 'friday' || currentTab === 'about') renderActiveTab(currentTab);
     }),
   );
 

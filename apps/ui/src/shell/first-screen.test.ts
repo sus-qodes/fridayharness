@@ -9,7 +9,7 @@ import { makeContext } from '../test/context.js';
 import { makeScenario } from '../test/fixtures.js';
 import { h } from '../ui/dom.js';
 import { createShellServices, mountShell, type ShellHandle } from './app.js';
-import type { AppContext } from './context.js';
+import { type AppContext, openDrawer } from './context.js';
 
 /** Every element gets a 1200×800 box, as a real window would (the canvas measures itself). */
 function withSize(): void {
@@ -214,5 +214,18 @@ describe('every door that left the first screen still opens (review §6)', () =>
     type('zoom');
     expect(listed()).not.toContain('cmd:zoom-in');
     expect(listed()).not.toContain('cmd:zoom-out');
+  });
+
+  it('closes the Settings drawer with the Settings view, so leaving by a key leaves nothing over the canvas', () => {
+    const { ctx } = mount();
+    for (const leave of [
+      () => ctx.keys.handle(keyEvent('Escape')),
+      () => ctx.keys.handle(keyEvent(',', { ctrlKey: true })),
+    ]) {
+      openDrawer(ctx, { kind: 'settings' });
+      expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', drawer: { kind: 'settings' } });
+      leave();
+      expect(ctx.store.select('ui')).toMatchObject({ activeView: 'canvas', drawer: null });
+    }
   });
 });

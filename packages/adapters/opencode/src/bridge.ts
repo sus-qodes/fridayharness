@@ -6,6 +6,7 @@ import type { ControlledProfile } from './profile.js';
 import { type OpenCodeCall, translateOpenCode } from './translate.js';
 
 export type ToolCheck = (params: ParamsOf<'tool.check'>) => Promise<ResultOf<'tool.check'>>;
+class TimeoutError extends Error {}
 /** One host/session/nonce only; no bootstrap credential or general RPC surface reaches the host. */
 export class PolicyBridge {
   #server: Server | undefined;
@@ -69,47 +70,57 @@ export class PolicyBridge {
           this.#ready = true;
           return reply(200, { ok: true });
         }
-        if (
-          body.kind !== 'check' ||
-          !this.#ready ||
-          !this.#session ||
-          body.sessionID !== this.#session ||
-          typeof body.callID !== 'string' ||
-          !body.callID ||
-          body.callID.length > 200 ||
-          this.#calls.has(body.callID) ||
-          this.#calls.size >= 2000 ||
-          typeof body.tool !== 'string' ||
-          !body.args ||
-          typeof body.args !== 'object' ||
-          Array.isArray(body.args)
-        )
-          return reply(403, { ok: false });
+        if (body.kind !== 'check' || !this.#ready) return reply(403, { ok: false });
+        // From here the caller is Friday's own plugin in its own profile: each refusal says why, so
+        // the model and the record read the reason instead of a bare failure (plan M14.1).
+        const deny = (reason: string) => reply(200, { ok: true, decision: 'deny', reason });
+        if (!this.#session || body.sessionID !== this.#session)
+          return deny('this session is not the one Friday bound to the task');
+        if (typeof body.callID !== 'string' || !body.callID || body.callID.length > 200)
+          return deny('the call has no usable call id');
+        if (this.#calls.has(body.callID)) return deny('a call with this id was already judged');
+        if (this.#calls.size >= 2000) return deny('this session has made more calls than Friday judges');
+        if (typeof body.tool !== 'string' || !body.args || typeof body.args !== 'object' || Array.isArray(body.args))
+          return deny('the call is malformed');
         this.#calls.add(body.callID);
-        const action = translateOpenCode(body as unknown as OpenCodeCall, p.cwd);
-        let timer: NodeJS.Timeout | undefined;
+        let action: ReturnType<typeof translateOpenCode>;
         try {
-          const verdict = ToolCheckResult.parse(
+          action = translateOpenCode(body as unknown as OpenCodeCall, p.cwd);
+        } catch (e) {
+          return deny(`Friday does not judge this call: ${(e as Error).message}`);
+        }
+        let timer: NodeJS.Timeout | undefined;
+        let verdict: ReturnType<typeof ToolCheckResult.parse>;
+        try {
+          verdict = ToolCheckResult.parse(
             await Promise.race([
               this.check({
                 tool: body.tool === 'bash' ? (process.platform === 'win32' ? 'PowerShell' : 'Bash') : body.tool,
                 action,
               }),
               new Promise<never>((_resolve, reject) => {
-                timer = setTimeout(() => reject(new Error('check timed out')), this.timeoutMs);
+                timer = setTimeout(() => reject(new TimeoutError()), this.timeoutMs);
               }),
             ]),
           );
-          p.verify();
-          // A malformed/missing verdict and every native ask stay blocked.
-          return reply(200, {
-            ok: true,
-            decision: verdict?.decision === 'allow' ? 'allow' : 'deny',
-            reason: verdict?.decision === 'allow' ? '' : 'Friday policy did not allow this call',
-          });
+        } catch (e) {
+          return deny(
+            e instanceof TimeoutError
+              ? `Friday did not answer within ${this.timeoutMs} ms`
+              : 'Friday could not judge the call (it is out of reach or the check failed)',
+          );
         } finally {
           clearTimeout(timer);
         }
+        p.verify();
+        // Only an explicit allow proceeds; a refusal or a question for a human carries Friday's reason.
+        if (verdict?.decision === 'allow') return reply(200, { ok: true, decision: 'allow', reason: '' });
+        const why = typeof verdict?.reason === 'string' && verdict.reason ? verdict.reason.slice(0, 300) : '';
+        return deny(
+          verdict?.decision === 'ask'
+            ? `a human decides this, and no human answers this session${why ? `: ${why}` : ''}`
+            : why || 'Friday policy did not allow this call',
+        );
       })().catch(() => {
         if (!res.headersSent) res.writeHead(403, { 'content-type': 'application/json' }).end('{"ok":false}');
         else res.destroy();

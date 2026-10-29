@@ -109,7 +109,8 @@ function claude(
   return { adapter, entries, workDone, dir, sent };
 }
 
-async function eventually<T>(fn: () => T | Promise<T>, ok: (v: T) => boolean, what: string, ms = 30_000): Promise<T> {
+/** Waits for a state; 60 s, since a scripted host on a busy machine is several times slower (LESSONS T-110). */
+async function eventually<T>(fn: () => T | Promise<T>, ok: (v: T) => boolean, what: string, ms = 60_000): Promise<T> {
   const end = Date.now() + ms;
   for (;;) {
     const v = await fn();

@@ -22,9 +22,10 @@ function suite(name: string, dirs: string[], overrides: SuiteOverrides = {}) {
 export const rootSuites = [
   suite('protocol', ['protocol']),
   // Starts daemons and spawns the CLI, MCP servers and git: under a full parallel run on a busy
-  // machine a 15 s test took 25 s, so these get the same ceiling as the failure suite.
-  suite('integration', ['integration'], { testTimeout: 60_000 }),
-  suite('failure', ['failure'], { testTimeout: 60_000 }),
+  // machine a 15 s test took 25 s, and git-heavy goal and verification cases passed 60 s while they
+  // take seconds alone (LESSONS T-63, T-110), so these get a ceiling of two minutes.
+  suite('integration', ['integration'], { testTimeout: 120_000 }),
+  suite('failure', ['failure'], { testTimeout: 120_000 }),
   suite('security', ['security']),
   // Spawns real processes (daemon, friday-mcp, hooks): run files one at a time.
   suite('e2e', ['conformance', 'mcp', 'hooks', 'scenarios'], { fileParallelism: false, testTimeout: 90_000 }),

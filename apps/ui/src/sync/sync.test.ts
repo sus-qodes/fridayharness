@@ -230,12 +230,13 @@ describe('SyncEngine', () => {
     });
     const { store, engine } = setup(t);
     await engine.start();
-    await tick(100);
+    // The engine reconnects on its own timers: wait for the state it ends in, not a fixed time, which
+    // a busy machine outruns (LESSONS T-109).
+    await vi.waitFor(() => expect(store.select('system').connection).toBe('stopped'), { timeout: 10_000 });
     expect(t.streamPaths).toEqual([
       '/api/v1/projects/proj_1/events/stream?since=5',
       '/api/v1/projects/proj_1/events/stream?since=6',
     ]);
-    expect(store.select('system').connection).toBe('stopped');
   });
 
   it('drops a stream that sent no bytes for 45 s and opens it again', async () => {

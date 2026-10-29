@@ -291,8 +291,14 @@ export function mountShell(
         key: ',',
         ctrl: true,
         run: () => {
-          const cur = ctx.store.select('ui').activeView;
-          ctx.store.patch('ui', { activeView: cur === 'settings' ? 'canvas' : 'settings' });
+          const ui = ctx.store.select('ui');
+          // Leaving Settings closes its drawer too, or it would stay open over the canvas.
+          ctx.store.patch(
+            'ui',
+            ui.activeView === 'settings'
+              ? { activeView: 'canvas', ...(ui.drawer?.kind === 'settings' ? { drawer: null } : {}) }
+              : { activeView: 'settings' },
+          );
         },
         description: 'Toggle Settings Hub',
       },
@@ -336,7 +342,12 @@ export function mountShell(
               key: 'Escape',
               inFields: false,
               run: () => {
-                ctx.store.patch('ui', { activeView: 'canvas' });
+                const drawer = ctx.store.select('ui').drawer;
+                // The Settings drawer closes with the view, or it would stay open over the canvas.
+                ctx.store.patch('ui', {
+                  activeView: 'canvas',
+                  ...(drawer?.kind === 'settings' ? { drawer: null } : {}),
+                });
               },
               description: 'Return to Canvas',
             },

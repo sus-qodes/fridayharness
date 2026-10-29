@@ -13,7 +13,8 @@ export default async function FridayPolicy(context) {
     const response = await fetch(SETTINGS.url, {
       method: 'POST', redirect: 'error',
       headers: { authorization: 'Bearer ' + SETTINGS.secret, 'content-type': 'application/json' },
-      signal: AbortSignal.timeout(SETTINGS.timeoutMs),
+      // A little past the bridge's own deadline, so the bridge's reason for a late check arrives.
+      signal: AbortSignal.timeout(SETTINGS.timeoutMs + 1500),
       body: JSON.stringify({ ...body, nonce: SETTINGS.nonce, directory, pluginHash })
     });
     if (!response.ok) throw new Error('Friday: policy bridge unavailable');
