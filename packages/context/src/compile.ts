@@ -103,7 +103,6 @@ const SECTION_ORDER = [
   'task.requirements',
   'task.plan',
   'task.progress',
-  'task.files',
   'repo.head',
   'repo.dirty',
   'repo.recent_commits',
@@ -126,7 +125,6 @@ const SECTION_AUTHORITY: Record<string, Authority> = {
   'task.requirements': 'human',
   'task.plan': 'human',
   'task.progress': 'agent',
-  'task.files': 'git',
   'repo.head': 'git',
   'repo.dirty': 'git',
   'repo.recent_commits': 'git',
@@ -668,9 +666,8 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
   t = performance.now();
   const unsupportedEdges: ContextExplanation['unsupported_edges'] = [];
   let related = 0;
-  let graph: CodeGraph | null = null;
   if (task?.scope?.write.length) {
-    graph = await deps.graph(root, identity).catch(() => null);
+    const graph = await deps.graph(root, identity).catch(() => null);
     if (!graph) notes.push('the code graph is not available; no related files were gathered');
     else {
       related = gatherGraph(
@@ -686,99 +683,6 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
     }
   }
   lap('graph', t);
-
-  // 4a. The files the task's own text names, then the tests of each named source file that lie in
-  // its write scope (plan M10b.1): what a host's first call would otherwise spend only reading. A file is shown whole when
-  // it is small, within a cap of the section's own, judged by the one read rule and redacted as a
-  // file request is (review F17); a withheld file is counted, never named (review F02).
-  t = performance.now();
-  if (task) {
-    // Judged by permission alone, as the hooks judge a read: the declared read scope and a role's
-    // read layers narrow what Friday gathers on its own initiative, and these files the task's own
-    // text names. A file readable only through a human's grant is not shown here (no grant is spent).
-    const permittedAs = (p: string) =>
-      !sensitiveClassOf(p, pathCtx, 'read') &&
-      !(forAgents && policy && readKeptFromAgents(p, policy.deny.read, () => false));
-    const permitted = (p: string) => {
-      if (!permittedAs(p)) return false;
-      const c = canonicalize(p, pathCtx);
-      return !c.linked || (c.realRelative !== null && permittedAs(c.realRelative));
-    };
-    const cap = Math.min(TASK_FILES_CHARS, Math.floor(maxChars / 2));
-    const named = namedPaths([task.summary, task.description ?? '', ...task.acceptance_criteria].join('\n'));
-    const order = named.map((rel) => ({ rel, why: 'named by the task' }));
-    if (graph) {
-      for (const rel of named) {
-        for (const e of graph.consumers(rel)) {
-          // The tests in the task's own write scope: the ones it extends, or copies for a new file.
-          if (
-            e.certainty !== 'unsupported' &&
-            graph.nodes.get(e.from)?.test &&
-            matchesAny(e.from, task.scope?.write ?? [])
-          ) {
-            order.push({ rel: e.from, why: `tests ${rel}, which the task names` });
-          }
-        }
-      }
-    }
-    const done = new Set<string>();
-    let shownChars = 0;
-    for (const { rel, why } of order) {
-      if (done.has(fold(rel))) continue;
-      done.add(fold(rel));
-      const file = await wholeFileOf(root, rel, permitted, TASK_FILE_CHARS);
-      if (file === 'withheld') {
-        withheld += 1;
-        continue;
-      }
-      // A file the task is to create, and a binary one, have nothing to show.
-      if (file === 'missing' || file === 'binary') continue;
-      const ref = (content: string) =>
-        src({
-          source_id: rel,
-          source_type: 'file',
-          authority: 'git',
-          relevance: 1,
-          relationship_distance: 0,
-          verification_status: 'verified',
-          selection_reason: why,
-          content,
-        });
-      if ('size' in file) {
-        const line = `- ${rel} (${why}): ${file.size} characters, more than the ${TASK_FILE_CHARS} shown whole; read the part you need`;
-        add({
-          section: 'task.files',
-          line,
-          source: ref(line),
-          priority: 0,
-          relevance: 0.9,
-          protected: false,
-          reason: why,
-          rule: 'task files, too large to show (plan M10b.1)',
-        });
-        continue;
-      }
-      // Stored with the packet: credentials in well-known formats never reach the database.
-      const text = state.redactor.redactString(file.text).value;
-      if (shownChars + text.length > cap) {
-        notes.push(`${rel} (${why}) is not shown: the files before it fill the ${cap} characters this section holds`);
-        continue;
-      }
-      shownChars += text.length;
-      const fence = fenceFor(text);
-      add({
-        section: 'task.files',
-        line: `${rel} (${why}):\n${fence}\n${text}\n${fence}`,
-        source: ref(text),
-        priority: 0,
-        relevance: why === 'named by the task' ? 0.99 : 0.97,
-        protected: false,
-        reason: why,
-        rule: 'task files (priority 0, plan M10b.1)',
-      });
-    }
-  }
-  lap('task_files', t);
 
   // 4b. What the recipient asked for (review F17), within the same permission and budget.
   t = performance.now();
@@ -1251,72 +1155,6 @@ export function executionRootOf(deps: ContextDeps, input: CompileInput, task: Ta
 /** At most this much of a requested file goes into a packet (review F17). */
 const EXCERPT_LINES = 80;
 const EXCERPT_CHARS = 3000;
-/** The largest file `task.files` shows whole, and what the section holds at most (plan M10b.1). */
-export const TASK_FILE_CHARS = 4000;
-export const TASK_FILES_CHARS = 8000;
-
-/**
- * The paths a task's own text names (plan M10b.1): tokens shaped like a relative file path with an
- * extension that starts with a letter (so not a price), without a glob, a parent step or a leading slash, in the order they first appear; at
- * most 20. Whether each exists is for the caller to find out.
- */
-export function namedPaths(text: string): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const m of text.matchAll(
-    /(?<![\w@./*\\-])((?:[\w@.-]+\/)*[\w@-][\w@.-]*\.[A-Za-z][A-Za-z0-9]{0,9})(?![\w@/*\\-])/g,
-  )) {
-    const p = (m[1] ?? '').replace(/^\.\//, '').replace(/\.+$/, '');
-    if (!p.includes('.') || p.split('/').includes('..') || p.split('/').includes('.')) continue;
-    if (seen.has(p)) continue;
-    seen.add(p);
-    out.push(p);
-    if (out.length >= 20) break;
-  }
-  return out;
-}
-
-/** A Markdown fence longer than any run of backticks in the text, so the text cannot close it. */
-function fenceFor(text: string): string {
-  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
-  return '`'.repeat(Math.max(3, longest + 1));
-}
-
-/**
- * A whole file for `task.files`, judged as `excerptOf` judges an excerpt: the path and its real
- * target must be readable and inside the checkout. Larger than `limit` characters, only its size.
- */
-async function wholeFileOf(
-  root: string,
-  rel: string,
-  readable: (p: string) => boolean,
-  limit: number,
-): Promise<{ text: string } | { size: number } | 'withheld' | 'missing' | 'binary'> {
-  if (!rel || path.isAbsolute(rel) || rel.split('/').includes('..') || !readable(rel)) return 'withheld';
-  let real: string;
-  let top: string;
-  try {
-    [real, top] = await Promise.all([realpath(path.join(root, rel)), realpath(root)]);
-  } catch {
-    return 'missing';
-  }
-  const target = path.relative(top, real).split(path.sep).join('/');
-  if (!target || target.startsWith('..') || path.isAbsolute(target) || !readable(target)) return 'withheld';
-  const st = await stat(real).catch(() => null);
-  if (!st?.isFile()) return 'missing';
-  if (st.size > limit * 4) return { size: st.size };
-  const handle = await open(real, 'r');
-  try {
-    const buf = Buffer.alloc(st.size);
-    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
-    const bytes = buf.subarray(0, bytesRead);
-    if (bytes.includes(0)) return 'binary';
-    const text = bytes.toString('utf8').replace(/\r\n/g, '\n');
-    return text.length > limit ? { size: text.length } : { text };
-  } finally {
-    await handle.close();
-  }
-}
 
 /**
  * The beginning of a file the recipient asked for (review F17), when it may read it: the path as

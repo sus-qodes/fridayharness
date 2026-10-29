@@ -291,6 +291,28 @@ export class Queries {
     return row ? toRecord(row) : undefined;
   }
 
+  /**
+   * The live attached session of `vendor` working as `agentKey` that no hook has reached and no
+   * host session is bound to yet (plan M8b): the MCP server of a host that runs its hooks through a
+   * shell, whose hooks therefore report another parent's pid. A non-shadow one first, then the newest.
+   */
+  hooklessAttachHarness(
+    projectId: string,
+    vendor: string,
+    agentKey: string,
+    nowIso: string,
+  ): HarnessRecord | undefined {
+    const row = this.db
+      .prepare(
+        `${this.harnessSelect} WHERE h.project_id = ? AND h.vendor = ? AND h.attach_mode = 'attach'
+           AND h.hooks_seen_at IS NULL AND h.host_session_id IS NULL AND h.requested_agent_key = ?
+           AND h.status IN ${LIVE_HARNESS} AND l.lease_expires_at > ?
+         ORDER BY h.shadow ASC, h.registered_at DESC LIMIT 1`,
+      )
+      .get<HarnessRow>(projectId, vendor, agentKey, nowIso);
+    return row ? toRecord(row) : undefined;
+  }
+
   harnesses(projectId: string, opts: { all?: boolean } = {}): HarnessView[] {
     const filter = opts.all ? '' : " AND h.status <> 'TERMINATED'";
     return this.db

@@ -1,0 +1,26 @@
+{
+  "host": "antigravity",
+  "host_version": "1.4",
+  "written_at": "2026-10-18",
+  "event": "PreToolUse",
+  "note": "a new file",
+  "input": {
+    "conversationId": "conv-fixture-1",
+    "workspacePaths": [
+      "${PROJECT_DIR}"
+    ],
+    "transcriptPath": "${HOME}/.gemini/antigravity-cli/brain/conv-fixture-1/.system_generated/logs/transcript.jsonl",
+    "artifactDirectoryPath": "${HOME}/.gemini/antigravity-cli/brain/conv-fixture-1",
+    "modelName": "fixture-model",
+    "toolCall": {
+      "name": "write_to_file",
+      "args": {
+        "TargetFile": "${PROJECT_DIR}/src/a.ts",
+        "Overwrite": true,
+        "CodeContent": "FILE BODY THAT MUST NOT LEAVE THE LAUNCHER",
+        "Description": "write the file"
+      }
+    },
+    "stepIdx": 1
+  }
+}

@@ -2,7 +2,13 @@ import type { TaskScope } from '@friday/protocol';
 import { CLASS_CAPABILITY } from './capabilities.js';
 import { type Autonomy, type CommandClass, classifyCommand } from './commands.js';
 import { canonicalize, globsOverlap, matchesAny, type PathContext } from './paths.js';
-import { type SensitiveClass, sensitiveClassOf, sensitiveInText, sensitivePattern } from './sensitive.js';
+import {
+  type SensitiveClass,
+  sensitiveClassOf,
+  sensitiveInText,
+  sensitivePattern,
+  sensitiveWorkingFolder,
+} from './sensitive.js';
 
 export type ActionKind = 'read' | 'search' | 'write' | 'command' | 'network' | 'mcp';
 
@@ -14,6 +20,11 @@ export interface PolicyAction {
   /** Glob or regex patterns (Glob, Grep). */
   patterns?: string[];
   command?: string;
+  /**
+   * The folder the command runs in, when the host names it (Gemini CLI's `dir_path`, Antigravity's
+   * `Cwd`, Cursor's `cwd`); relative names in the command are read from there.
+   */
+  cwd?: string;
   url?: string;
   /** A third-party MCP tool (ADR-0030): its server and tool name. */
   server?: string;
@@ -145,6 +156,17 @@ export function evaluateSensitive(action: PolicyAction, ctx: PathContext): Polic
         sensitive_class: hit.class,
         targets: [hit.path],
       });
+    }
+  }
+  if (action.cwd) {
+    const hit = sensitiveWorkingFolder(action.cwd, ctx);
+    if (hit) {
+      return r(
+        'deny',
+        `sensitive.${hit.class}`,
+        `this command would run inside ${hit.path}, a folder Friday protects (${hit.class}); run it from the project's own folders.`,
+        { sensitive_class: hit.class, targets: [hit.path] },
+      );
     }
   }
   // A third-party MCP tool: Friday cannot know what it does with its input (ADR-0030 §2).

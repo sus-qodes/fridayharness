@@ -348,9 +348,12 @@ export interface GoalDiff {
   notes: string[];
 }
 
+/** The hosts the agent launcher can start (plan §5.9, M8b): each one's `friday harness run <host>`. */
+export type AgentHostName = 'claude-code' | 'codex' | 'cursor' | 'gemini';
+
 /** A coding host the agent launcher can start (plan §5.9). */
 export interface AgentHost {
-  host: 'claude-code' | 'codex';
+  host: AgentHostName;
   found: boolean;
   version: string | null;
   supported: boolean;
@@ -371,7 +374,7 @@ export interface AgentOptions {
 }
 
 export interface AgentLaunchRequest {
-  host: 'claude-code' | 'codex';
+  host: AgentHostName;
   agent_key: string;
   role: string;
   options?: AgentOptions;
@@ -381,7 +384,7 @@ export interface AgentLaunchRequest {
 
 export interface AgentProcess {
   agent_key: string;
-  host: 'claude-code' | 'codex';
+  host: AgentHostName;
   role: string;
   pid: number | null;
   status: 'starting' | 'running' | 'stopping' | 'exited';
@@ -397,7 +400,7 @@ export interface AgentProcess {
 /** A remembered agent of this project (plan FD-24). */
 export interface AgentProfile {
   agent_key: string;
-  host: 'claude-code' | 'codex';
+  host: AgentHostName;
   role: string;
   options: AgentOptions;
   autostart: boolean;

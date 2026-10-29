@@ -1,0 +1,23 @@
+{
+  "host": "cursor",
+  "host_version": "3.24",
+  "written_at": "2026-10-18",
+  "event": "beforeReadFile",
+  "note": "a read of a secret file; the file content is in the input and must stay in the launcher",
+  "input": {
+    "conversation_id": "conv_fixture_1",
+    "generation_id": "gen_fixture_1",
+    "model": "fixture-model",
+    "model_id": "fixture-model-id",
+    "cursor_version": "3.24.0",
+    "workspace_roots": [
+      "${PROJECT_DIR}"
+    ],
+    "user_email": "someone@example.invalid",
+    "transcript_path": "${HOME}/.cursor/projects/fixture/transcript.jsonl",
+    "hook_event_name": "beforeReadFile",
+    "file_path": "${PROJECT_DIR}/.env",
+    "content": "SECRET_IN_THE_FILE=1",
+    "attachments": []
+  }
+}

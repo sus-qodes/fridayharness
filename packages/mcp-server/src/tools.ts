@@ -915,7 +915,7 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
       name: 'friday_session_bind',
       title: 'Link this session',
       description:
-        'Repair tool: links this MCP session to the Claude Code session id when Friday reports the hooks and tools as unlinked.',
+        "Repair tool: links this MCP session to the host's session id when Friday reports the hooks and tools as unlinked.",
       shape: { host_session_id: z.string().min(1).max(200) },
       alwaysLoad: false,
       readOnly: false,
@@ -923,7 +923,8 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
         await session.ready();
         const reg = session.registration;
         await session.bootstrapPost('/harness-sessions/bind', {
-          vendor: 'claude-code',
+          // The session's own host: its hooks look the link up under that vendor.
+          vendor: session.vendor,
           host_session_id: a.host_session_id,
           harness_id: reg?.harness_id,
         });

@@ -10,6 +10,15 @@ export const MCP_ALLOW_RULE = 'mcp__friday';
 // biome-ignore lint/suspicious/noTemplateCurlyInString: Claude Code substitutes ${CLAUDE_PROJECT_DIR} in hook args.
 export const HOOK_PATH_ARG = '${CLAUDE_PROJECT_DIR}/.friday/harness/claude-code/hook.mjs';
 
+/**
+ * Set by a spawn adapter in the environment of a session it starts (Cursor's, Gemini CLI's). That
+ * session gets Friday's tools from its adapter, for its own task and run; a project `friday`
+ * server it would start too (Cursor imports `.mcp.json` with Claude Code's files) would register
+ * an attached session under this machine's agent key, so it does not start. The hook launcher
+ * reads it too: such a session has no human to answer an "ask".
+ */
+export const SPAWN_RUN_ENV = 'FRIDAY_SPAWN_RUN';
+
 /** `.friday/harness/claude-code/launch-mcp.mjs`: tracked, machine-neutral, no secrets. */
 export const LAUNCH_MCP = `#!/usr/bin/env node
 // Friday MCP launcher, written by "friday harness config claude-code". Safe to commit:
@@ -19,6 +28,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+if (process.env.${SPAWN_RUN_ENV}) {
+  process.stderr.write('[friday] This session was started by Friday, which gives it Friday\\'s tools itself.\\n');
+  process.exit(0);
+}
 const stateDir =
   process.env.FRIDAY_STATE_DIR ||
   (process.platform === 'win32'

@@ -12,7 +12,7 @@ import { type Actor, FridayError, HarnessRegisterParams } from '@friday/protocol
 import { FridayState } from '@friday/state';
 import { deterministicGit, FakeClock, useTestWorkspace } from '@friday/test-support';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { HANDOFF_MAX_CHARS, namedPaths, TASK_FILE_CHARS } from './compile.js';
+import { HANDOFF_MAX_CHARS } from './compile.js';
 import {
   boundRecord,
   ContextCache,
@@ -368,137 +368,6 @@ describe('what a request asks for (review F17)', () => {
     expect(section(symbol.packet, 'request.note')).toContain('Not supported yet');
     expect(section(symbol.packet, 'request.note')).toContain('applyDiscount');
     expect(symbol.explanation.notes).toContain('symbol requests are not supported yet');
-  });
-});
-
-describe('the files a task names (plan M10b.1)', () => {
-  const namedTask = (description: string, write = ['backend/**'], read = ['backend/**', 'shared/**']) =>
-    state.createTask(PROJECT, human, {
-      summary: 'Redeem a gift card at checkout',
-      description,
-      acceptance_criteria: ['node --test passes'],
-      scope: { write, read },
-      assign_agent_key: 'be-1',
-    }).task_id;
-  const shownIn = (files: string) =>
-    [...files.matchAll(/^(\S+) \((?:named by the task|tests [^)]*)\):$/gm)].map((m) => m[1] ?? '');
-  const fileText = (rel: string) => readFileSync(path.join(dir, rel), 'utf8').replace(/\r\n/g, '\n');
-
-  it('reads only path-shaped names from the text, in order, without globs, parent steps or sentence ends', () => {
-    expect(
-      namedPaths(
-        'Add backend/src/gift-card.ts; it throws CheckoutError from backend/src/checkout.service.ts. Amounts follow DECISIONS.md ADR-001. Import \'../../shared/src/api.ts\', not ./shared/src/api.ts. Run node --test "**/test/*.test.ts" (see backend/src/checkout.service.ts).',
-      ),
-    ).toEqual(['backend/src/gift-card.ts', 'backend/src/checkout.service.ts', 'DECISIONS.md', 'shared/src/api.ts']);
-    expect(namedPaths('Give 12.50 EUR, e.g. node:test or node:assert/strict')).toEqual(['e.g']);
-  });
-
-  it('shows the files the task names and the tests it extends, whole, before related code, as a host reads them first', async () => {
-    const taskId = namedTask(
-      "Add backend/src/gift-card.ts. A currency mismatch throws CheckoutError from backend/src/checkout.service.ts. Amounts are integers in minor units (DECISIONS.md ADR-001). Import types from '../../shared/src/api.ts' and do not change shared/src/api.ts.",
-    );
-    const { packet, explanation } = await compile(taskId, { max_chars: 16_000 });
-    const files = section(packet, 'task.files');
-    // The files the M10a baseline's backend agent read in its first call, and nothing else: the
-    // file to create has nothing to show, and the contract's own test lies outside the write scope.
-    expect(shownIn(files)).toEqual([
-      'backend/src/checkout.service.ts',
-      'DECISIONS.md',
-      'shared/src/api.ts',
-      'backend/test/checkout.service.test.ts',
-    ]);
-    for (const rel of shownIn(files)) expect(files).toContain(fileText(rel));
-    expect(files).toContain(
-      'backend/test/checkout.service.test.ts (tests backend/src/checkout.service.ts, which the task names):',
-    );
-    expect(files).not.toContain('gift-card.ts');
-    expect(files).not.toContain('shared/test/api.test.ts');
-    // DECISIONS.md lies outside the declared read scope, which narrows only what Friday gathers on
-    // its own: the hooks let the agent read it, and the task's text names it.
-    const kinds = packet.sections.map((s) => s.kind);
-    expect(kinds.indexOf('task.files')).toBeGreaterThan(kinds.indexOf('task.scope'));
-    expect(kinds.indexOf('task.files')).toBeLessThan(kinds.indexOf('code.related'));
-    expect(new Set(explanation.included.filter((i) => i.section === 'task.files').map((i) => i.source_id))).toEqual(
-      new Set(shownIn(files)),
-    );
-  });
-
-  it('never shows or names a file kept from agents, also behind a link, and redacts credentials', async () => {
-    deps.policy = () => ({ version: 'v1', deny: { read: ['infra/**'] }, teams: {} });
-    symlinkSync(path.join(dir, 'infra'), path.join(dir, 'backend', 'linked'), 'junction');
-    const key = `sk-ant-api03-${'A'.repeat(40)}`;
-    writeFileSync(path.join(dir, 'backend', 'src', 'keys.ts'), `export const KEY = '${key}';\n`);
-    const taskId = namedTask(
-      'Read infra/deploy.config.json and backend/linked/deploy.config.json, then change backend/src/keys.ts.',
-    );
-    const { packet, explanation } = await compile(taskId, { max_chars: 16_000 });
-    // The task's own contract quotes the paths; their content and their names as sources never appear.
-    const text = JSON.stringify(packet);
-    expect(text).not.toContain('healthcheck');
-    expect(text).not.toContain(key);
-    const sources = packet.sections.flatMap((x) => x.sources.map((y) => y.source_id));
-    expect(sources.filter((id) => id.includes('deploy.config.json'))).toEqual([]);
-    expect(section(packet, 'task.files')).not.toContain('deploy.config.json');
-    expect(shownIn(section(packet, 'task.files'))).toEqual(['backend/src/keys.ts']);
-    expect(explanation.withheld_by_permission).toBeGreaterThanOrEqual(2);
-  });
-
-  it('names a file too large to show whole, and stops at the share of the budget the section may take', async () => {
-    const body = (n: number) => `${'// filler line of a source file\n'.repeat(Math.ceil(n / 32))}`.slice(0, n);
-    writeFileSync(path.join(dir, 'backend', 'src', 'big.ts'), body(TASK_FILE_CHARS + 500));
-    for (const name of ['a', 'b', 'c']) writeFileSync(path.join(dir, 'backend', 'src', `${name}.ts`), body(3500));
-    const taskId = namedTask('Change backend/src/big.ts, backend/src/a.ts, backend/src/b.ts and backend/src/c.ts.');
-    const { packet, explanation } = await compile(taskId, { max_chars: 20_000 });
-    const files = section(packet, 'task.files');
-    expect(files).toContain(
-      `- backend/src/big.ts (named by the task): ${TASK_FILE_CHARS + 500} characters, more than the ${TASK_FILE_CHARS} shown whole; read the part you need`,
-    );
-    // 8,000 characters at most: a and b fit, c does not, and the explanation says why.
-    expect(shownIn(files)).toEqual(['backend/src/a.ts', 'backend/src/b.ts']);
-    expect(explanation.notes.some((n) => n.startsWith('backend/src/c.ts (named by the task) is not shown'))).toBe(true);
-    // A smaller budget gives the section half of it.
-    const small = await compile(taskId, { max_chars: 9_000 });
-    expect(shownIn(section(small.packet, 'task.files'))).toEqual(['backend/src/a.ts']);
-  });
-
-  it('holds, for each task of the token baseline, exactly the files its agent read in its first call (plan M10a record)', async () => {
-    const plan = JSON.parse(
-      readFileSync(path.join(REPO, 'tests', 'fixtures', 'baseline', 'giftcard-plan.json'), 'utf8'),
-    ) as {
-      tasks: {
-        key: string;
-        summary: string;
-        description: string;
-        acceptance_criteria?: string[];
-        scope: { write: string[]; read: string[] };
-      }[];
-    };
-    const read: Record<string, string[]> = {
-      'giftcard-frontend': ['shared/src/api.ts', 'frontend/src/format-price.ts', 'frontend/test/format-price.test.ts'],
-      'giftcard-backend': [
-        'backend/src/checkout.service.ts',
-        'DECISIONS.md',
-        'shared/src/api.ts',
-        'backend/test/checkout.service.test.ts',
-      ],
-    };
-    for (const task of plan.tasks) {
-      const taskId = state.createTask(PROJECT, human, {
-        summary: task.summary,
-        description: task.description,
-        acceptance_criteria: task.acceptance_criteria ?? [],
-        scope: task.scope,
-        assign_agent_key: 'be-1',
-      }).task_id;
-      // The size the spawn adapters ask for (SPAWN_PACKET_CHARS).
-      const { packet } = await compile(taskId, { max_chars: 16_000 });
-      expect(shownIn(section(packet, 'task.files')), task.key).toEqual(read[task.key]);
-    }
-  });
-
-  it('gives a task whose text names no file no such section', async () => {
-    const { packet } = await compile(backendTask(), { max_chars: 16_000 });
-    expect(packet.sections.some((s) => s.kind === 'task.files')).toBe(false);
   });
 });
 

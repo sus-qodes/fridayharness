@@ -11,6 +11,8 @@
   "devDependencies": {
     "@friday/adapter-claude": "workspace:*",
     "@friday/adapter-codex": "workspace:*",
+    "@friday/adapter-cursor": "workspace:*",
+    "@friday/adapter-gemini": "workspace:*",
     "@friday/adapter-generic": "workspace:*",
     "@friday/cli": "workspace:*",
     "@friday/code-graph": "workspace:*",

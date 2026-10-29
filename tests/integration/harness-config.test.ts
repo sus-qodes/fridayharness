@@ -239,17 +239,43 @@ describe('friday harness config claude-code', () => {
     expect(exists('.claude', 'skills', 'friday', 'reference.md')).toBe(false);
   });
 
-  it('rejects hosts other than claude-code with a usage error', async () => {
+  it('rejects a host it has no adapter for with a usage error that names every host it configures', async () => {
     await gitProject();
     // Codex is a spawn-mode harness since M8a.2: it has a doctor, and nothing to configure in the project.
+    // October is a host Friday knows by name and has no adapter for.
     for (const args of [
-      ['harness', 'config', 'cursor'],
+      ['harness', 'config', 'october'],
       ['harness', 'config', 'codex'],
-      ['harness', 'doctor', 'cursor'],
+      ['harness', 'doctor', 'october'],
     ]) {
       const res = await cli(['--project', ws().projectDir, ...args]);
       expect(res.code, args.join(' ')).toBe(2);
-      expect(res.stderr).toContain('claude-code');
+      for (const host of ['claude-code', 'cursor', 'antigravity', 'gemini']) expect(res.stderr).toContain(host);
     }
+  });
+
+  it('reaches each other host’s own adapter from the host argument (plan M8b)', async () => {
+    await gitProject();
+    // --remove --print changes nothing and starts no host: no host is looked for when removing.
+    for (const host of ['cursor', 'antigravity', 'gemini']) {
+      const res = await cli(['--project', ws().projectDir, '--json', 'harness', 'config', host, '--remove', '--print']);
+      expect(res.code, `${host}: ${res.stderr}`).toBe(0);
+      expect(JSON.parse(res.stdout), host).toMatchObject({ host, applied: false, removed: true, experimental: true });
+    }
+    // Each host's own options stay its own.
+    const wrong = await cli(['--project', ws().projectDir, 'harness', 'config', 'cursor', '--no-gemini-md']);
+    expect([wrong.code, wrong.stderr]).toEqual([2, expect.stringContaining('--no-gemini-md is for gemini')]);
+    const local = await cli(['--project', ws().projectDir, 'harness', 'config', 'gemini', '--scope', 'local']);
+    expect([local.code, local.stderr]).toEqual([2, expect.stringContaining('--scope local is for claude-code')]);
+  });
+
+  it('keeps .friday/.gitignore complete for every host it configures', async () => {
+    await gitProject({ '.friday/.gitignore': '/run/\n' });
+    const res = await cli(['--project', ws().projectDir, '--json', 'harness', 'config', 'gemini', '--print']);
+    expect(res.code, res.stderr).toBe(0);
+    const changes = (JSON.parse(res.stdout) as { changes: { path: string; action: string }[] }).changes;
+    expect(changes).toContainEqual(expect.objectContaining({ path: '.friday/.gitignore', action: 'update' }));
+    // --print wrote nothing.
+    expect(read('.friday', '.gitignore')).toBe('/run/\n');
   });
 });

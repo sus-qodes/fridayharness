@@ -1,0 +1,26 @@
+{
+  "host": "antigravity",
+  "host_version": "1.4",
+  "written_at": "2026-10-18",
+  "event": "PreToolUse",
+  "note": "a read of some lines of a file",
+  "input": {
+    "toolCall": {
+      "name": "view_file",
+      "args": {
+        "AbsolutePath": "${PROJECT_DIR}/src/cart.ts",
+        "StartLine": 10,
+        "EndLine": 29,
+        "IsSkillFile": false
+      }
+    },
+    "stepIdx": 3,
+    "conversationId": "conv-fixture-1",
+    "workspacePaths": [
+      "${PROJECT_DIR}"
+    ],
+    "transcriptPath": "${HOME}/.gemini/antigravity-cli/brain/conv-fixture-1/.system_generated/logs/transcript.jsonl",
+    "artifactDirectoryPath": "${HOME}/.gemini/antigravity-cli/brain/conv-fixture-1",
+    "modelName": "fixture-model"
+  }
+}

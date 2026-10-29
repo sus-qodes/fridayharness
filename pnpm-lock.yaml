@@ -190,12 +190,21 @@ importers:
 
   apps/cli:
     dependencies:
+      '@friday/adapter-antigravity':
+        specifier: workspace:*
+        version: link:../../packages/adapters/antigravity
       '@friday/adapter-claude':
         specifier: workspace:*
         version: link:../../packages/adapters/claude
       '@friday/adapter-codex':
         specifier: workspace:*
         version: link:../../packages/adapters/codex
+      '@friday/adapter-cursor':
+        specifier: workspace:*
+        version: link:../../packages/adapters/cursor
+      '@friday/adapter-gemini':
+        specifier: workspace:*
+        version: link:../../packages/adapters/gemini
       '@friday/daemon':
         specifier: workspace:*
         version: link:../daemon
@@ -297,6 +306,25 @@ importers:
         specifier: ^8.3.4
         version: 8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1)
 
+  packages/adapters/antigravity:
+    dependencies:
+      '@friday/adapter-claude':
+        specifier: workspace:*
+        version: link:../claude
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+      '@friday/sdk':
+        specifier: workspace:*
+        version: link:../../sdk
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.32.1
+        version: 1.32.1(zod@4.6.6)
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../../tests/support
+
   packages/adapters/claude:
     dependencies:
       '@friday/adapter-generic':
@@ -345,6 +373,65 @@ importers:
 
   packages/adapters/codex:
     dependencies:
+      '@friday/adapter-generic':
+        specifier: workspace:*
+        version: link:../generic
+      '@friday/execution':
+        specifier: workspace:*
+        version: link:../../execution
+      '@friday/git':
+        specifier: workspace:*
+        version: link:../../git
+      '@friday/mcp-server':
+        specifier: workspace:*
+        version: link:../../mcp-server
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+      '@friday/sdk':
+        specifier: workspace:*
+        version: link:../../sdk
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../../tests/support
+
+  packages/adapters/cursor:
+    dependencies:
+      '@friday/adapter-claude':
+        specifier: workspace:*
+        version: link:../claude
+      '@friday/adapter-generic':
+        specifier: workspace:*
+        version: link:../generic
+      '@friday/execution':
+        specifier: workspace:*
+        version: link:../../execution
+      '@friday/git':
+        specifier: workspace:*
+        version: link:../../git
+      '@friday/mcp-server':
+        specifier: workspace:*
+        version: link:../../mcp-server
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+      '@friday/sdk':
+        specifier: workspace:*
+        version: link:../../sdk
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.32.1
+        version: 1.32.1(zod@4.6.6)
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../../tests/support
+
+  packages/adapters/gemini:
+    dependencies:
+      '@friday/adapter-claude':
+        specifier: workspace:*
+        version: link:../claude
       '@friday/adapter-generic':
         specifier: workspace:*
         version: link:../generic
@@ -638,6 +725,12 @@ importers:
       '@friday/adapter-codex':
         specifier: workspace:*
         version: link:../packages/adapters/codex
+      '@friday/adapter-cursor':
+        specifier: workspace:*
+        version: link:../packages/adapters/cursor
+      '@friday/adapter-gemini':
+        specifier: workspace:*
+        version: link:../packages/adapters/gemini
       '@friday/adapter-generic':
         specifier: workspace:*
         version: link:../packages/adapters/generic

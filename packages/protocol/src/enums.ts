@@ -84,7 +84,8 @@ export type RiskLevel = z.infer<typeof RiskLevel>;
 export const TaskKind = z.enum(['implementation', 'verification', 'review', 'research', 'docs', 'chore']);
 export type TaskKind = z.infer<typeof TaskKind>;
 
-export const Vendor = z.enum(['claude-code', 'codex', 'cursor', 'october', 'generic']);
+/** The hosts Friday knows; `antigravity` and `gemini` (Gemini CLI) from M8b, with Cursor's hooks. */
+export const Vendor = z.enum(['claude-code', 'codex', 'cursor', 'antigravity', 'gemini', 'october', 'generic']);
 export type Vendor = z.infer<typeof Vendor>;
 
 export const AttachMode = z.enum(['attach', 'spawn']);

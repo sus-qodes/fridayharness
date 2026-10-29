@@ -2,6 +2,22 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M10b, fewer tokens per call
+
+- **The first message of a spawned attempt says it once:** a spawned Claude Code or Codex attempt is told which task to start and that its contract, acceptance criteria and scope are in its instructions, instead of being given the task's text a second time. Measured twice against the token baseline, every call of an attempt is 413 tokens smaller (`docs/measurements/2026-10-18-token-baseline-m10b.md`). When the packet cannot be compiled, the message still carries the task's text.
+- **Measured:** of a spawned Claude Code call (about 16,350 tokens at the first call), Friday sends about 2,000; the rest is the host's own prompt, tools and per-session context.
+
+## Unreleased — M8b, three further hosts
+
+Cursor, Antigravity and Gemini CLI can work under Friday, each `experimental` until it is tried with a real login; nothing signs in on its own.
+
+- **One hook launcher for every host:** `node hook.mjs <vendor> <event>` (Claude Code's form unchanged), a small module per host that reads its input and writes its reply, and one judgment for all; Friday's answer is deny, ask where the host honours it, context at session start, or nothing, never allow. The daemon's route is `/hooks/<vendor>/<event>`. A host's hooks and its `friday` MCP server make one session whichever reaches Friday first, and each session's level comes from its own hooks.
+- **Cursor** (attach and spawn): `friday harness config cursor` writes fail-closed hooks for every tool, the `friday` server and an always-applied rule; `friday harness doctor cursor` checks them without starting Cursor; `friday harness run cursor` drives the Cursor CLI headless in a task's worktree, with Friday's hooks and its tools for spawned agents from a plugin folder. Cursor is `enforcing` on 3.24 or later (CLI 2026.10.16 or later).
+- **Antigravity** (attach only): `friday harness config antigravity` writes Friday's hook group, the `friday` server and an `AGENTS.md` block; Friday answers deny or `force_ask`, never an approval. It is `unverified` until a run shows what a failing hook does.
+- **Gemini CLI** (attach and spawn): `friday harness config gemini` writes Friday's hooks and the `friday` server into `.gemini/settings.json` and a `GEMINI.md` block; `friday harness run gemini` drives Gemini CLI headless with Friday's hooks, its own approvals off and the tools Friday cannot judge denied. It is `degraded`: a hook that fails lets the call through. Gemini CLI no longer serves consumer accounts, so a paid key is needed.
+- **Protections for every host:** the folders where Gemini CLI and Antigravity read hook commands (`.gemini/`, `.agents/`) and programs named `node` or `git` at the project root are protected like Claude Code's settings; a shell call that runs inside, or changes into, `.friday`, `.git` or Friday's state folder is refused; Gemini CLI's `web_fetch` is judged by every URL it would fetch; a stop is held only when the agent ended its own turn, never after a human's abort; with Friday down, a session Friday spawned is refused at once.
+- **The CLI and the Studio** list all four hosts: `friday harness hosts`, the start-agent dialog, the agent cards and `friday doctor`.
+
 ## Unreleased — M12, the optimizations
 
 What already exists became cheaper to run or quicker to start; Friday's role does not change, and nothing here spends model tokens beyond the Master Brain's bounded calls.

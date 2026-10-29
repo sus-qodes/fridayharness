@@ -41,6 +41,8 @@ export {
   type Caller,
   DEFAULT_STATE_CONFIG,
   FridayState,
+  type HookEvidence,
+  hookEvidenceOf,
   hostCohort,
   INSPECTION_MARKER,
   isInspectionCopy,

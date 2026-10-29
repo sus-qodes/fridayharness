@@ -1,0 +1,23 @@
+{
+  "host": "gemini",
+  "host_version": "0.64",
+  "written_at": "2026-10-18",
+  "event": "AfterTool",
+  "note": "after a write",
+  "input": {
+    "session_id": "gemini-session-fixture-1",
+    "transcript_path": "${HOME}/.gemini/tmp/fixture/chats/session.json",
+    "cwd": "${PROJECT_DIR}",
+    "timestamp": "2026-10-18T12:00:00.000Z",
+    "hook_event_name": "AfterTool",
+    "tool_name": "write_file",
+    "tool_input": {
+      "file_path": "${PROJECT_DIR}/src/a.ts",
+      "content": "FILE BODY THAT MUST NOT LEAVE THE LAUNCHER"
+    },
+    "tool_response": {
+      "llmContent": "wrote the file",
+      "returnDisplay": "wrote the file"
+    }
+  }
+}

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { ProjectRef } from '@friday/sdk';
 import { afterEach, describe, expect, it } from 'vitest';
+import { harnessKeyOf } from './agent-launcher.js';
 import { optionFlags, validateOptions } from './agent-profiles.js';
 import { createShortcut } from './shortcut.js';
 
@@ -55,5 +56,22 @@ describe('agent options (plan M9 §5.9)', () => {
       '--sandbox=read-only',
     ]);
     expect(optionFlags('claude-code', { max_budget_usd: 2 })).toEqual(['--max-budget-usd=2']);
+  });
+
+  it('give the Cursor CLI and Gemini CLI none, and refuse any (plan M8b)', () => {
+    for (const host of ['cursor', 'gemini'] as const) {
+      expect(validateOptions(host, {}), host).toEqual({});
+      expect(optionFlags(host, {}), host).toEqual([]);
+      for (const bad of [{ effort: 'high' }, { max_budget_usd: 1 }, { sandbox: 'read-only' }, { service_tier: 'x' }]) {
+        expect(() => validateOptions(host, bad), `${host} ${JSON.stringify(bad)}`).toThrow();
+      }
+    }
+  });
+
+  it('spot a key another session holds by the harness key each host’s adapter registers with', () => {
+    expect(harnessKeyOf('codex', 'proj_x', 'codex-1')).toBe('codex:proj_x:codex-1');
+    for (const host of ['claude-code', 'cursor', 'gemini'] as const) {
+      expect(harnessKeyOf(host, 'proj_x', 'a-1')).toBe(`${host}:proj_x:spawn:a-1`);
+    }
   });
 });

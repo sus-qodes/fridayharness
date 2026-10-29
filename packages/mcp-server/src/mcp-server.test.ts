@@ -3,7 +3,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { type ProjectRef, privateDirFor, writePrivateFile } from '@friday/sdk';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createFridayTools, type FridaySession, resolveAgentKey, SERVER_INSTRUCTIONS } from './index.js';
+import {
+  createFridayTools,
+  type FridaySession,
+  resolveAgentKey,
+  SERVER_INSTRUCTIONS,
+  SESSION_HOSTS,
+  sessionVendor,
+} from './index.js';
 
 describe('friday MCP server definition', () => {
   it('keeps its instructions within what Claude Code always loads, critical lines first', () => {
@@ -71,5 +78,34 @@ describe('resolveAgentKey', () => {
     expect(resolveAgentKey(ref)).toBe('dev-7');
     expect(resolveAgentKey(ref, 'reviewer-2')).toBe('reviewer-2');
     expect(resolveAgentKey(undefined)).toBe('dev-1');
+  });
+});
+
+describe('the host a friday server serves (plan M8b)', () => {
+  it('takes it from FRIDAY_HARNESS, with its own name; Claude Code when none Friday knows is named', () => {
+    expect(sessionVendor('cursor')).toBe('cursor');
+    expect(sessionVendor('antigravity')).toBe('antigravity');
+    expect(sessionVendor('gemini')).toBe('gemini');
+    expect(sessionVendor('generic')).toBe('generic');
+    for (const other of [undefined, '', 'claude-code', 'october', 'toString']) {
+      expect(sessionVendor(other), String(other)).toBe('claude-code');
+    }
+    expect(SESSION_HOSTS).toMatchObject({ cursor: 'Cursor', antigravity: 'Antigravity', gemini: 'Gemini CLI' });
+  });
+
+  it('links a session under its own host when friday_session_bind repairs the link', async () => {
+    const posted: unknown[] = [];
+    const session = {
+      vendor: 'gemini',
+      registration: { harness_id: 'har_x' },
+      ready: async () => undefined,
+      bootstrapPost: async (_sub: string, body: unknown) => {
+        posted.push(body);
+        return {};
+      },
+    } as unknown as FridaySession;
+    const bind = createFridayTools(session).find((t) => t.name === 'friday_session_bind');
+    await bind?.handler({ host_session_id: 'g-1' });
+    expect(posted).toEqual([{ vendor: 'gemini', host_session_id: 'g-1', harness_id: 'har_x' }]);
   });
 });

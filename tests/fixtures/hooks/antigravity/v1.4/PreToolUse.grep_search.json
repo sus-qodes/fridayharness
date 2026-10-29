@@ -1,0 +1,28 @@
+{
+  "host": "antigravity",
+  "host_version": "1.4",
+  "written_at": "2026-10-18",
+  "event": "PreToolUse",
+  "note": "a search",
+  "input": {
+    "conversationId": "conv-fixture-1",
+    "workspacePaths": [
+      "${PROJECT_DIR}"
+    ],
+    "transcriptPath": "${HOME}/.gemini/antigravity-cli/brain/conv-fixture-1/.system_generated/logs/transcript.jsonl",
+    "artifactDirectoryPath": "${HOME}/.gemini/antigravity-cli/brain/conv-fixture-1",
+    "modelName": "fixture-model",
+    "toolCall": {
+      "name": "grep_search",
+      "args": {
+        "SearchPath": "${PROJECT_DIR}",
+        "Query": "TODO",
+        "Includes": [
+          "*.ts",
+          "*.md"
+        ]
+      }
+    },
+    "stepIdx": 1
+  }
+}

@@ -111,7 +111,10 @@ export interface StateConfig {
   reservationTtlMs: number;
   /** `security.enforcement_required`: the level a session must reach before it may take work (review F09). */
   enforcementRequired: EnforcementLevel;
-  /** `security.require_enforcing_hooks`: Claude Code sessions must run on a host that blocks when a hook fails. */
+  /**
+   * `security.require_enforcing_hooks`: sessions of a host that runs Friday's hooks (Claude Code,
+   * Cursor, Antigravity, Gemini CLI) must run where a failing hook blocks the call.
+   */
   requireEnforcingHooks: boolean;
   /** Agent messaging (ADR-0017, `communication.*`). */
   allowBroadcast: boolean;
@@ -223,15 +226,76 @@ const LEVEL_RANK: Record<EnforcementLevel, number> = { L0: 0, L1: 1, L2: 2 };
 /** Claude Code versions that block an action when a hook fails (`onFailure: block`), and that run hooks at all. */
 const CLAUDE_ENFORCING = [2, 1, 295] as const;
 const CLAUDE_HOOKS = [2, 1, 232] as const;
+/**
+ * The first Cursor whose documentation describes `failClosed` on a permission hook (its hooks page,
+ * read for 3.24). When Cursor added the key is not documented: an older Cursor may ignore it and
+ * let a call through when the hook fails, so its level stays unverified (plan B21).
+ */
+const CURSOR_FAIL_CLOSED = [3, 24] as const;
+/** The same for the Cursor CLI (`agent`), whose versions are dates: the release its documentation was read for. */
+const CURSOR_CLI_FAIL_CLOSED = [2026, 10, 16] as const;
+/** The hosts other than Claude Code whose Friday hooks reach the daemon in attach mode (plan M8b). */
+const HOOKED_HOSTS: Record<string, string> = { cursor: 'Cursor', antigravity: 'Antigravity', gemini: 'Gemini CLI' };
+/** What reaches an enforcing level on each host whose sessions run Friday's hooks (`security.require_enforcing_hooks`). */
+const ENFORCING_FIX: Record<string, string> = {
+  'claude-code': 'Update Claude Code to 2.1.295 or later.',
+  cursor: `Use Cursor ${CURSOR_FAIL_CLOSED.join('.')} or later with the hooks "friday harness config cursor" writes (each permission hook fails closed).`,
+  antigravity:
+    'What Antigravity does when a hook fails is not documented, so no Antigravity session counts as enforcing yet.',
+  gemini: 'Gemini CLI lets a call through when a hook fails, so no Gemini CLI session counts as enforcing.',
+};
 
+/**
+ * Whether `v` is at least `min`. A three-part minimum needs a three-part version (`2.1` is not
+ * read as 2.1.0); a two-part minimum takes `3.24` and `3.24.1` alike. Null when `v` does not say.
+ */
 function versionAtLeast(v: string | null | undefined, min: readonly number[]): boolean | null {
-  const m = /(\d+)\.(\d+)\.(\d+)/.exec(v ?? '');
-  if (!m) return null;
-  const parts = [Number(m[1]), Number(m[2]), Number(m[3])];
-  for (let i = 0; i < 3; i += 1) {
+  const m = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(v ?? '');
+  if (!m || (min.length > 2 && m[3] === undefined)) return null;
+  const parts = [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)];
+  for (let i = 0; i < min.length; i += 1) {
     if ((parts[i] ?? 0) !== (min[i] ?? 0)) return (parts[i] ?? 0) > (min[i] ?? 0);
   }
   return true;
+}
+
+/**
+ * What the hooks route learned about an attached session's hooks (`capabilities.hook_evidence`):
+ * the host version its hooks report (Cursor's `cursor_version`), and whether the project's hook
+ * file makes a failing permission hook block (`fail-closed`), let the call through (`fail-open`),
+ * or could not be read (null). Unknown values are null.
+ */
+export interface HookEvidence {
+  host_version: string | null;
+  hook_failure: 'fail-closed' | 'fail-open' | null;
+}
+
+/**
+ * Whether a registering MCP server takes over the session its hooks registered first (plan M8b):
+ * the same host, both attached, a harness the hooks route made (it has no tools), and a server
+ * with tools. Claude Code's hooks and MCP server share one harness key, so they never register apart.
+ */
+function takesOverHooksSession(
+  holder: { vendor: string; attach_mode: string; capabilities?: Record<string, unknown> | null },
+  params: { vendor: string; attach_mode: string; capabilities: Record<string, unknown> },
+): boolean {
+  return (
+    holder.vendor === params.vendor &&
+    params.vendor !== 'claude-code' &&
+    holder.attach_mode === 'attach' &&
+    params.attach_mode === 'attach' &&
+    holder.capabilities?.hooks_route === true &&
+    params.capabilities.mcp_tools === true
+  );
+}
+
+export function hookEvidenceOf(capabilities: Record<string, unknown> | null | undefined): HookEvidence {
+  const e = (capabilities?.hook_evidence ?? {}) as Record<string, unknown>;
+  const failure = e.hook_failure === 'fail-closed' || e.hook_failure === 'fail-open' ? e.hook_failure : null;
+  return {
+    host_version: typeof e.host_version === 'string' && e.host_version ? e.host_version : null,
+    hook_failure: failure,
+  };
 }
 
 /**
@@ -245,10 +309,13 @@ export function hostCohort(vendor: string, version: string | null | undefined): 
 }
 
 /**
- * The enforcement a session actually reached (ADR-0010, review F09), from evidence rather than
- * from what the client says: for a Claude Code session in attach mode, Friday hooks must have
- * reached the daemon from that session, and the host version decides whether a failing hook
- * blocks. Adapters that run the host themselves (spawn mode, FakeHarness) report their level.
+ * The enforcement a session actually reached (ADR-0010, review F09, plan B21), from evidence
+ * rather than from what the client says. A session attached to a host with Friday hooks (Claude
+ * Code, Cursor, Antigravity, Gemini CLI) reaches L1 once Friday hooks reached the daemon from it,
+ * and what the host does with a failing hook decides its status: enforcing where it blocks the
+ * call, degraded where it lets the call through, unverified where that is not known. Adapters that
+ * run the host themselves (spawn mode, FakeHarness) report their level; one whose capabilities say
+ * its hooks fail open (`hook_failure: "fail-open"`) is degraded, not reported.
  */
 export function achievedEnforcement(h: {
   vendor: string;
@@ -256,7 +323,59 @@ export function achievedEnforcement(h: {
   claimed: EnforcementLevel | null;
   hooks_seen: boolean;
   host_version: string | null;
+  capabilities?: Record<string, unknown> | null;
 }): { level: EnforcementLevel; status: EnforcementStatus; basis: string } {
+  const hooked = HOOKED_HOSTS[h.vendor];
+  if (hooked && h.attach_mode === 'attach') {
+    if (!h.hooks_seen) {
+      return { level: 'L0', status: 'observed', basis: 'no Friday hook has reached the daemon from this session' };
+    }
+    if (h.vendor === 'gemini') {
+      return {
+        level: 'L1',
+        status: 'degraded',
+        basis:
+          'Friday hooks from this session; Gemini CLI lets a call through when a hook fails, and no setting changes that',
+      };
+    }
+    if (h.vendor === 'antigravity') {
+      return {
+        level: 'L1',
+        status: 'unverified',
+        basis: 'Friday hooks from this session; what Antigravity does when a hook fails is not documented',
+      };
+    }
+    const evidence = hookEvidenceOf(h.capabilities);
+    const version = evidence.host_version ?? h.host_version;
+    const host = version ? `Cursor ${version}` : 'Cursor (version unknown)';
+    if (evidence.hook_failure === 'fail-open') {
+      return {
+        level: 'L1',
+        status: 'degraded',
+        basis: `Friday hooks from this session; a permission hook in .cursor/hooks.json has no failClosed, so ${host} lets that call through when the hook fails`,
+      };
+    }
+    if (evidence.hook_failure !== 'fail-closed') {
+      return {
+        level: 'L1',
+        status: 'unverified',
+        basis: `Friday hooks from this session; ${host}, and Friday could not read whether .cursor/hooks.json runs each permission hook with failClosed`,
+      };
+    }
+    const cli = /^\d{4}\./.test(version ?? '');
+    if (versionAtLeast(version, cli ? CURSOR_CLI_FAIL_CLOSED : CURSOR_FAIL_CLOSED)) {
+      return {
+        level: 'L1',
+        status: 'enforcing',
+        basis: `Friday hooks from this session; ${host} blocks a call when its failClosed permission hook fails`,
+      };
+    }
+    return {
+      level: 'L1',
+      status: 'unverified',
+      basis: `Friday hooks from this session; ${host}: failClosed is documented from Cursor ${CURSOR_FAIL_CLOSED.join('.')} (CLI ${CURSOR_CLI_FAIL_CLOSED.join('.')}), and whether this version honours it is not known`,
+    };
+  }
   if (h.vendor === 'claude-code' && h.attach_mode === 'attach') {
     if (!h.hooks_seen) {
       return { level: 'L0', status: 'observed', basis: 'no Friday hook has reached the daemon from this session' };
@@ -282,6 +401,14 @@ export function achievedEnforcement(h: {
     return { level: 'L0', status: 'observed', basis: `${host} is too old for Friday hooks` };
   }
   if (h.claimed && h.claimed !== 'L0') {
+    // An adapter whose host lets a call through when a hook fails says so (Gemini CLI's spawn adapter).
+    if (h.capabilities?.hook_failure === 'fail-open') {
+      return {
+        level: h.claimed,
+        status: 'degraded',
+        basis: `reported by the ${h.vendor} adapter; its host lets a call through when a hook fails`,
+      };
+    }
     return { level: h.claimed, status: 'reported', basis: `reported by the ${h.vendor} adapter` };
   }
   return { level: 'L0', status: 'observed', basis: `the ${h.vendor} client has no Friday policy hooks` };
@@ -3338,6 +3465,13 @@ export class FridayState {
     return this.exec({ name: 'harness.register', project_id: projectId, actor }, (ctx) => {
       const host = params.host ?? {};
       const previous = this.q.harnessByKey(projectId, params.harness_key);
+      // What the hooks route learned about this session's hooks stays with it when its MCP server
+      // registers again (a restarted daemon, a lost lease).
+      const kept = previous?.capabilities?.hook_evidence;
+      const capabilities =
+        kept !== undefined && params.capabilities.hook_evidence === undefined
+          ? { ...params.capabilities, hook_evidence: kept }
+          : params.capabilities;
       const enforcement = achievedEnforcement({
         vendor: params.vendor,
         attach_mode: params.attach_mode,
@@ -3345,6 +3479,7 @@ export class FridayState {
         hooks_seen: Boolean(previous?.hooks_seen_at),
         // A client that cannot tell (a hook arriving first) keeps the version already known.
         host_version: params.version ?? previous?.version ?? null,
+        capabilities,
       });
       const hostChanges = {
         host_pid: host.pid ?? null,
@@ -3353,7 +3488,7 @@ export class FridayState {
         version: params.version ?? previous?.version ?? null,
         adapter_version: params.adapter_version ?? previous?.adapter_version ?? null,
         protocol_version,
-        capabilities: params.capabilities,
+        capabilities,
         enforcement_level: enforcement.level,
         enforcement_status: enforcement.status,
         enforcement_basis: enforcement.basis,
@@ -3425,7 +3560,13 @@ export class FridayState {
       } else if (agent.harness_id === harness_id || !agent.harness_id) {
         agent = this.reattachAgent(ctx, agent, harness_id);
       } else if (this.q.isHarnessLive(agent.harness_id, ctx.now) && agent.harness_id !== harness_id) {
-        shadow = true;
+        const holder = this.q.harness(agent.harness_id);
+        if (takesOverHooksSession(holder, params)) {
+          this.adoptHooksSession(ctx, holder, harness_id, params.enforcement_level ?? null);
+          agent = this.reattachAgent(ctx, this.q.agent(agent.agent_id), harness_id);
+        } else {
+          shadow = true;
+        }
       } else {
         agent = this.reattachAgent(ctx, agent, harness_id);
       }
@@ -3469,22 +3610,79 @@ export class FridayState {
   }
 
   /**
-   * A Friday hook reached the daemon from this harness's session: evidence that its tool calls
-   * pass the policy hook (review F09). Recomputes the achieved enforcement once.
+   * The hooks of a session reached Friday before its MCP server registered (plan M8b): a host
+   * that runs its hooks through a shell gives them another parent than its MCP server, so the two
+   * registered apart. The server's harness takes the session over, with what its hooks showed,
+   * and the hooks' own harness ends: it had no tools, so it held no work. One agent, one harness.
    */
-  noteHookEvidence(projectId: string, harnessId: string): HarnessRecord {
+  private adoptHooksSession(
+    ctx: CommandContext,
+    holder: HarnessRecord,
+    harnessId: string,
+    claimed: EnforcementLevel | null,
+  ): void {
+    const h = this.q.harness(harnessId);
+    const evidence = holder.capabilities?.hook_evidence;
+    const capabilities = evidence !== undefined ? { ...h.capabilities, hook_evidence: evidence } : h.capabilities;
+    const version = h.version ?? holder.version ?? null;
+    const e = achievedEnforcement({
+      vendor: h.vendor,
+      attach_mode: h.attach_mode,
+      claimed,
+      hooks_seen: Boolean(holder.hooks_seen_at),
+      host_version: version,
+      capabilities,
+    });
+    this.moveHarness(ctx, h, h.status, 'hooks session', {
+      hooks_seen_at: holder.hooks_seen_at,
+      host_session_id: holder.host_session_id,
+      version,
+      capabilities,
+      enforcement_level: e.level,
+      enforcement_status: e.status,
+      enforcement_basis: e.basis,
+    });
+    if (holder.host_session_id) {
+      ctx.emit({
+        type: 'harness.session_bound',
+        payload: {
+          vendor: h.vendor,
+          host_session_id: holder.host_session_id,
+          harness_id: harnessId,
+          transcript_path: null,
+        },
+        refs: [{ kind: 'harness', id: harnessId }],
+      });
+    }
+    this.loseRuns(ctx, holder.harness_id, 'its session was taken over by its MCP server');
+    this.moveHarness(ctx, holder, 'DISCONNECTED', 'taken over by its MCP server', { disconnected_at: ctx.now });
+    this.moveHarness(ctx, this.q.harness(holder.harness_id), 'TERMINATED', 'taken over by its MCP server', {
+      terminated_at: ctx.now,
+    });
+    this.revokeTokens({ harness_id: holder.harness_id }, 'taken over by its MCP server');
+  }
+
+  /**
+   * A Friday hook reached the daemon from this harness's session: evidence that its tool calls
+   * pass the policy hook (review F09). Recomputes the achieved enforcement once. `evidence` is what
+   * the hooks route read about the session's hooks (Cursor: its version and its hook file).
+   */
+  noteHookEvidence(projectId: string, harnessId: string, evidence?: HookEvidence): HarnessRecord {
     const h = this.q.harness(harnessId);
     if (h.hooks_seen_at) return h;
     this.exec({ name: 'harness.hooks_seen', project_id: projectId, actor: SYSTEM }, (ctx) => {
+      const capabilities = evidence ? { ...h.capabilities, hook_evidence: evidence } : h.capabilities;
       const e = achievedEnforcement({
         vendor: h.vendor,
         attach_mode: h.attach_mode,
         claimed: h.enforcement_level,
         hooks_seen: true,
         host_version: h.version,
+        capabilities,
       });
       this.moveHarness(ctx, h, h.status, 'hooks seen', {
         hooks_seen_at: ctx.now,
+        ...(evidence ? { capabilities } : {}),
         enforcement_level: e.level,
         enforcement_status: e.status,
         enforcement_basis: e.basis,
@@ -3501,16 +3699,20 @@ export class FridayState {
     const level = h.enforcement_level ?? 'L0';
     const need = this.config.enforcementRequired;
     if (LEVEL_RANK[level] < LEVEL_RANK[need]) {
+      const hooked = h.vendor === 'claude-code' ? 'Claude Code' : HOOKED_HOSTS[h.vendor];
       const hint =
         need === 'L2'
           ? 'No adapter in this version of Friday provides L2 (isolated execution); lower security.enforcement_required or wait for M6.'
-          : h.vendor === 'claude-code'
-            ? 'Run "friday harness config claude-code" in the project and start a new Claude Code session, so its tool calls pass Friday\'s policy hook.'
+          : hooked && h.attach_mode === 'attach'
+            ? `Run "friday harness config ${h.vendor}" in the project and start a new ${hooked} session, so its tool calls pass Friday's policy hook.`
             : 'Use a harness with Friday policy hooks, or lower security.enforcement_required in .friday/config.yaml.';
       return `this project requires ${need} enforcement (security.enforcement_required), but this session has ${level}: ${h.enforcement_basis ?? 'no evidence'}. ${hint}`;
     }
-    if (this.config.requireEnforcingHooks && h.vendor === 'claude-code' && h.enforcement_status !== 'enforcing') {
-      return `this project requires hooks that block when they fail (security.require_enforcing_hooks), but this session is ${h.enforcement_status ?? 'unknown'}: ${h.enforcement_basis ?? 'no evidence'}. Update Claude Code to 2.1.295 or later.`;
+    // Every host whose sessions run Friday's hooks: a Gemini CLI or Antigravity session is never
+    // taken for one whose failing hook blocks the call (plan B21).
+    const fix = ENFORCING_FIX[h.vendor];
+    if (this.config.requireEnforcingHooks && fix && h.enforcement_status !== 'enforcing') {
+      return `this project requires hooks that block when they fail (security.require_enforcing_hooks), but this session is ${h.enforcement_status ?? 'unknown'}: ${h.enforcement_basis ?? 'no evidence'}. ${fix}`;
     }
     return null;
   }
