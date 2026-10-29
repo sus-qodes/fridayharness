@@ -50,11 +50,35 @@ export const ContextExplanation = z.object({
   context_id: z.string(),
   cache_key: z.string(),
   source_version: z.string().nullable(),
+  /**
+   * The version of the project's effective policy the packet was compiled under (review F02); a
+   * packet compiled under another version no longer stands. Null without a project policy.
+   */
+  policy_version: z.string().nullable().default(null),
+  /**
+   * How the code was identified (review F13): `content` (a hash of its content), `approximate`
+   * (sizes and times: not proof that it is unchanged, so never a cache hit) or `none` (no git).
+   */
+  source_basis: z.enum(['content', 'approximate', 'none']).default('none'),
+  /** How the packet was asked for (reviews F12, F17), so its key can be computed again. */
+  asked: z
+    .object({
+      overflow: z.enum(['refuse', 'raise']).nullable(),
+      request: z
+        .object({ kind: z.string(), query: z.string().optional(), paths: z.array(z.string()).optional() })
+        .nullable(),
+    })
+    .default({ overflow: null, request: null }),
   budget: z.object({
+    /** The budget the packet fits (review F12): what was asked for, or more when its protected sections needed it. */
     chars: z.number().int(),
+    /** The JSON packet's actual size, sources included. */
     used_chars: z.number().int(),
     max_sources: z.number().int(),
     sources: z.number().int(),
+    /** What the caller asked for, when the budget was raised above it. */
+    asked_chars: z.number().int().nullable().default(null),
+    asked_sources: z.number().int().nullable().default(null),
   }),
   included: z.array(
     z.object({

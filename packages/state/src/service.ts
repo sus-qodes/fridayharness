@@ -286,6 +286,8 @@ export interface VerificationRevision {
   task_kind?: string | null;
   /** The exact content judged, as a git tree; integration lands only this (review F04). */
   tree?: string | null;
+  /** The version of the effective policy the work was judged by (review F03). */
+  policy_version?: string | null;
 }
 
 /** Identity of a protocol caller, derived from its harness token (never from request fields). */

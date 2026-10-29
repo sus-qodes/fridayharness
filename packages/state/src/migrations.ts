@@ -854,8 +854,9 @@ CREATE INDEX ix_laya_calibrations ON laya_calibrations(project_id, checkpoint, s
 ];
 
 /**
- * M7.1: the M7 review's stabilization (docs/reviews/2026-10-14-m7-review-disposition.md): the
- * exact tree a verification judged (F04).
+ * M7.1: the M7 review's stabilization (docs/reviews/2026-10-14-m7-review-disposition.md). v19
+ * (M7.1a, released): the exact tree a verification judged (F04). v20 (M7.1b): the policy version
+ * it judged by (F03). An applied migration never changes; later columns take the next version.
  */
 export const REVIEW_M7_MIGRATIONS: Migration[] = [
   {
@@ -863,6 +864,13 @@ export const REVIEW_M7_MIGRATIONS: Migration[] = [
     name: 'review_m7',
     up: `
 ALTER TABLE verification_runs ADD COLUMN tree TEXT;
+`,
+  },
+  {
+    version: 20,
+    name: 'review_m7_policy',
+    up: `
+ALTER TABLE verification_runs ADD COLUMN policy_version TEXT;
 `,
   },
 ];

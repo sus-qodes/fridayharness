@@ -2,7 +2,7 @@
  * The context compiler through the daemon (plan M4d, ADR-0022): the M4 gate's
  * `friday context explain <task>` on fixture-shop (Part 12 §13), and agent memory over the protocol.
  */
-import { cpSync } from 'node:fs';
+import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ContextPacket, TaskView } from '@friday/protocol';
 import { useTestWorkspace } from '@friday/test-support';
@@ -72,5 +72,89 @@ describe('friday context explain (M4 gate, Part 12 §13)', () => {
     // What the agent just remembered changes what a packet would hold: the stored one says it is stale.
     const stored = await td.operator.get<ContextPacket>(td.operator.projectPath(`/context/${packet.context_id}`));
     expect(stored.staleness).toMatchObject({ is_stale: true, reason: expect.stringContaining('memory') });
+  });
+
+  it('never names what the project policy keeps from agents, also after a tightening, except a path a human approved (review F02)', async () => {
+    const td = await startTestDaemon(ws(), { git: true });
+    const dir = ws().projectDir;
+    for (const part of ['backend', 'frontend', 'shared', 'infra', 'tsconfig.json']) {
+      cpSync(path.join(REPO_ROOT, 'tests', 'fixtures', 'fixture-shop', part), path.join(dir, part), {
+        recursive: true,
+      });
+    }
+    const be = await FakeHarness.connect(td, { agentKey: 'be-1', role: 'backend' });
+    const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Add discount codes to checkout',
+      scope: { write: ['backend/**'], read: [] },
+      assign_agent_key: 'be-1',
+    });
+    await be.client.call('task.claim', { task_id: task.task_id });
+    const client = 'frontend/src/api-client.ts';
+    const first = (await be.client.requestContext({ task_id: task.task_id, kind: 'task' })) as ContextPacket;
+    expect(JSON.stringify(first.sections)).toContain(client);
+
+    // The project now keeps the frontend from agents; tightening applies at once.
+    mkdirSync(path.join(ws().fridayDir, 'policies'), { recursive: true });
+    writeFileSync(path.join(ws().fridayDir, 'policies', 'private.yaml'), 'deny:\n  read: ["frontend/**"]\n');
+    await td.operator.post(td.operator.projectPath('/policy/reload'), {});
+    const second = (await be.client.requestContext({ task_id: task.task_id, kind: 'task' })) as ContextPacket;
+    expect(second.context_id).not.toBe(first.context_id);
+    expect(JSON.stringify(second.sections)).not.toContain('frontend/');
+    const explained = await cli(['--project', dir, 'context', 'explain', second.context_id]);
+    expect(explained.stdout).not.toContain('frontend/');
+    // The packet compiled before says it no longer stands.
+    const stored = await td.operator.get<ContextPacket>(td.operator.projectPath(`/context/${first.context_id}`));
+    expect(stored.staleness).toMatchObject({ is_stale: true, reason: expect.stringContaining('policy') });
+
+    // A human approves reading that one file for this task: it is back, and nothing else of the frontend.
+    const asked = await be.client.requestPermission({
+      action_class: 'file.read',
+      resource: client,
+      justification: 'the client shows how the contract is used',
+      reuse: 'task',
+    });
+    expect(asked.status).toBe('pending');
+    expect((await cli(['--project', dir, 'approve', asked.approval_id as string])).code).toBe(0);
+    const third = (await be.client.requestContext({ task_id: task.task_id, kind: 'task' })) as ContextPacket;
+    const text = JSON.stringify(third.sections);
+    expect(text).toContain(client);
+    expect([...new Set(text.match(/frontend\/[\w./-]+/g))]).toEqual([client]);
+  });
+
+  it('answers a context request with what it asks for, or says it cannot fit (review F12, F17)', async () => {
+    const td = await startTestDaemon(ws(), { git: true });
+    const dir = ws().projectDir;
+    for (const part of ['backend', 'frontend', 'shared', 'tsconfig.json']) {
+      cpSync(path.join(REPO_ROOT, 'tests', 'fixtures', 'fixture-shop', part), path.join(dir, part), {
+        recursive: true,
+      });
+    }
+    const be = await FakeHarness.connect(td, { agentKey: 'be-1', role: 'backend' });
+    const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Add discount codes to checkout',
+      scope: { write: ['backend/**'], read: [] },
+      assign_agent_key: 'be-1',
+    });
+    await be.client.call('task.claim', { task_id: task.task_id });
+    // 500 characters cannot hold the task's protected context: the answer says what it needs.
+    await expect(
+      be.client.requestContext({ task_id: task.task_id, kind: 'task', max_chars: 500 }),
+    ).rejects.toMatchObject({ code: 'COS-5002' });
+    // Two different files asked for: two different answers, each within its advertised budget.
+    const service = (await be.client.requestContext({
+      task_id: task.task_id,
+      kind: 'file',
+      paths: ['backend/src/checkout.service.ts'],
+    })) as ContextPacket;
+    const api = (await be.client.requestContext({
+      task_id: task.task_id,
+      kind: 'file',
+      paths: ['shared/src/api.ts'],
+    })) as ContextPacket;
+    expect(service.context_id).not.toBe(api.context_id);
+    const requested = (p: ContextPacket) => p.sections.find((s) => s.kind === 'code.requested')?.content ?? '';
+    expect(requested(service)).toMatch(/^backend\/src\/checkout\.service\.ts:\n/);
+    expect(requested(api)).toMatch(/^shared\/src\/api\.ts:\n/);
+    for (const p of [service, api]) expect(JSON.stringify(p).length).toBeLessThanOrEqual(p.budget.chars ?? 0);
   });
 });

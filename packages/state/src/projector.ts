@@ -170,8 +170,8 @@ export class StateProjector implements Projector {
         this.db
           .prepare(
             `INSERT INTO verification_runs (verification_id, project_id, task_id, run_id, status, started_at,
-               execution_root, commit_sha, source_version, base_commit, task_kind, tree)
-             VALUES (?, ?, ?, ?, 'RUNNING', ?, ?, ?, ?, ?, ?, ?)`,
+               execution_root, commit_sha, source_version, base_commit, task_kind, tree, policy_version)
+             VALUES (?, ?, ?, ?, 'RUNNING', ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             str(p.verification_id),
@@ -185,6 +185,7 @@ export class StateProjector implements Projector {
             opt(p.base_commit),
             opt(p.task_kind),
             opt(p.tree),
+            opt(p.policy_version),
           );
         return;
       case 'verification.check_completed': {

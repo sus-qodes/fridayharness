@@ -41,12 +41,16 @@ export class GraphService {
     return e;
   }
 
-  /** The graph of a checkout (the main one by default) at its current version; one build at a time. */
+  /**
+   * The graph of a checkout (the main one by default) at its current version; one build at a time.
+   * An approximate identity (sizes and times) does not prove the code is unchanged, so its graph is
+   * built again; the content-addressed parse cache keeps that cheap (review F13).
+   */
   async graph(root: string = this.opts.root): Promise<CodeGraph> {
     const e = this.entry(root);
     const git = await e.root;
-    const version = (await git.identity()).version;
-    if (e.latest?.version === version) return e.latest;
+    const identity = await git.identity();
+    if (e.latest?.version === identity.version && identity.basis === 'content') return e.latest;
     e.building ??= buildGraph(git, { cache: this.cache() }).finally(() => {
       e.building = undefined;
     });

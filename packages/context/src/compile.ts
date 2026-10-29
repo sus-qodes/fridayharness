@@ -1,15 +1,18 @@
 import { createHash } from 'node:crypto';
+import { open, realpath, stat } from 'node:fs/promises';
+import path from 'node:path';
 import type { CodeGraph, GraphEdge } from '@friday/code-graph';
 import type { GitRoot, SourceIdentity } from '@friday/git';
-import { matchesAny, type PathContext, sensitiveClassOf } from '@friday/policy';
-import type {
-  Actor,
-  ContextExplanation,
-  ContextPacket,
-  ContextSection,
-  GoalView,
-  SourceRef,
-  TaskView,
+import { canonicalize, matchesAny, type PathContext, readKeptFromAgents, sensitiveClassOf } from '@friday/policy';
+import {
+  type Actor,
+  type ContextExplanation,
+  type ContextPacket,
+  type ContextSection,
+  FridayError,
+  type GoalView,
+  type SourceRef,
+  type TaskView,
 } from '@friday/protocol';
 import { type FridayState, type MemoryActor, type SearchHit, stableStringify } from '@friday/state';
 import type { ContextCache } from './cache.js';
@@ -35,14 +38,38 @@ export interface ContextDeps {
   /** Friday's per-user state directory, so private paths are never gathered. */
   stateDir?: string;
   cache: ContextCache;
+  /**
+   * The project's effective policy (ADR-0028) as the context needs it (review F02): what
+   * `deny.read` keeps from agents, the team scopes of each role, and the version, which is part of
+   * every packet's key. Without it, only Friday's protected classes and the task's scope apply.
+   */
+  policy?: () => ContextPolicy;
+  /** The recipient's usable `file.read` grants for the task: exact paths a human let it read anyway. */
+  readGrants?: (input: CompileInput, task: TaskView | undefined) => { approval_id: string; target: string }[];
+}
+
+/** What the compiler takes from the effective policy (review F02). */
+export interface ContextPolicy {
+  version: string;
+  deny: { read: readonly string[] };
+  teams: Readonly<Record<string, readonly { source: string; write: readonly string[]; read: readonly string[] }[]>>;
 }
 
 export interface CompileInput {
   recipient: { kind: 'agent' | 'human' | 'master_brain'; id: string; harness_id?: string; run_id?: string };
   task_id?: string | undefined;
   purpose: string;
+  /** What the delivered JSON packet may hold, sources included (review F12). */
   max_chars?: number;
   max_sources?: number;
+  /**
+   * When the protected sections alone need more than `max_chars` or `max_sources` (review F12):
+   * `refuse` answers COS-5002 with what they need (a caller that asked for a size); `raise` (Friday's
+   * own deliveries) raises the budget to what they need and says so in the packet.
+   */
+  overflow?: 'refuse' | 'raise';
+  /** What was asked for, beyond the task (review F17). */
+  request?: { kind: string; query?: string | undefined; paths?: string[] | undefined };
 }
 
 type Authority = ContextSection['authority'];
@@ -63,6 +90,7 @@ interface Candidate {
 /** Sections in the order they are rendered. */
 const SECTION_ORDER = [
   'agent.identity',
+  'request.note',
   'task.contract',
   'task.acceptance',
   'task.scope',
@@ -72,6 +100,8 @@ const SECTION_ORDER = [
   'repo.head',
   'repo.dirty',
   'repo.recent_commits',
+  'repo.history',
+  'code.requested',
   'code.related',
   'memory.relevant',
   'inbox.summary',
@@ -80,6 +110,9 @@ const SECTION_ORDER = [
 ];
 const SECTION_AUTHORITY: Record<string, Authority> = {
   'agent.identity': 'system',
+  'request.note': 'system',
+  'repo.history': 'git',
+  'code.requested': 'git',
   'task.contract': 'task',
   'task.acceptance': 'task',
   'task.scope': 'task',
@@ -100,10 +133,35 @@ const REMINDER =
   'Claim a task before editing (friday_task_claim). Edit only inside scope.write; ask with friday_request_permission otherwise. Report progress with friday_report_progress. Never message other agents directly (friday_communicate). Remember what others should know with friday_remember. Finish with friday_claim_done listing the exact changed paths and the checks you actually ran: it is a claim that Friday verifies, not a completion.';
 
 const tokens = (s: string) => Math.ceil(s.length / 4);
+/**
+ * What a deterministic compile should take (plan E.1); a packet's `budget.latency_ms` is this
+ * target, and a compile that took longer says so in its notes (review F12).
+ */
+const COMPILE_TARGET_MS = 300;
 const MEMORY_PRIORITY: Record<string, number> = { 'human-approved': 2, verified: 3, system: 4, agent: 7 };
 
-/** Compiles a packet, or returns the cached one for an unchanged key (ADR-0022). */
+/**
+ * Compiles a packet, or returns the cached one for an unchanged key (ADR-0022). Gathering awaits
+ * git and the graph; a policy that changed meanwhile makes the result unusable, so it is compiled
+ * again under the new one (review F02).
+ */
 export async function compileContext(
+  deps: ContextDeps,
+  input: CompileInput,
+  actor: Actor,
+): Promise<{ packet: ContextPacket; explanation: ContextExplanation; cached: boolean }> {
+  for (let attempt = 0; ; attempt++) {
+    const version = deps.policy?.().version ?? null;
+    const out = await compileOnce(deps, input, actor);
+    if ((deps.policy?.().version ?? null) === version) return out;
+    if (attempt >= 2) {
+      const reason = "the project's policy kept changing while it was compiled";
+      return { ...out, packet: { ...out.packet, staleness: { is_stale: true, reason } } };
+    }
+  }
+}
+
+async function compileOnce(
   deps: ContextDeps,
   input: CompileInput,
   actor: Actor,
@@ -129,8 +187,11 @@ export async function compileContext(
   const identity: SourceIdentity | null = git ? await git.identity().catch(() => null) : null;
   lap('git_identity', t);
 
+  const policy = deps.policy?.() ?? null;
+  const grants = deps.readGrants?.(input, task) ?? [];
   const key = await cacheKey(deps, root, input, task, goal, agent?.agent_id, identity, maxChars, maxSources);
-  const hit = deps.cache.get(key);
+  // An approximate identity (sizes and times) does not prove the code is unchanged (review F13).
+  const hit = identity?.basis === 'approximate' ? undefined : deps.cache.get(key);
   if (hit) return { ...hit, cached: true };
 
   const now = state.clock.now();
@@ -141,11 +202,38 @@ export async function compileContext(
   };
   let withheld = 0;
   const declaredRead = task?.scope?.read?.length ? [...task.scope.read, ...task.scope.write] : null;
-  /** Permission first (ADR-0022 §3): never gather what the recipient may not read. */
-  const readable = (path: string) => {
-    if (sensitiveClassOf(path, pathCtx, 'read')) return false;
-    if (declaredRead && !matchesAny(path, declaredRead)) return false;
+  const fold = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
+  const granted = new Set(grants.map((g) => fold(g.target)));
+  // The team scopes of the agent's role that name reads narrow what is gathered, as the task's own
+  // read scope does (ADR-0028); `deny.read` is a permission, the same rule the hooks apply.
+  const teamLayers = (agent?.role && policy?.teams[agent.role]) || [];
+  const forAgents = input.recipient.kind !== 'human';
+  const allowedAs = (p: string) => {
+    if (sensitiveClassOf(p, pathCtx, 'read')) return false;
+    if (forAgents && policy && readKeptFromAgents(p, policy.deny.read, (x) => granted.has(fold(x)))) return false;
+    if (granted.has(fold(p))) return true;
+    if (declaredRead && !matchesAny(p, declaredRead)) return false;
+    for (const layer of teamLayers) {
+      if (layer.read.length && !matchesAny(p, [...layer.read, ...layer.write])) return false;
+    }
     return true;
+  };
+  const judged = new Map<string, boolean>();
+  /**
+   * Permission first (ADR-0022 §3, review F02): never gather what the recipient may not read. A
+   * path behind a link is judged by its real target too, which must stay in the checkout (B19).
+   */
+  const readable = (p: string) => {
+    let ok = judged.get(p);
+    if (ok === undefined) {
+      ok = allowedAs(p);
+      if (ok) {
+        const c = canonicalize(p, pathCtx);
+        if (c.linked) ok = c.realRelative !== null && allowedAs(c.realRelative);
+      }
+      judged.set(p, ok);
+    }
+    return ok;
   };
 
   const candidates: Candidate[] = [];
@@ -158,6 +246,11 @@ export async function compileContext(
   const add = (c: Omit<Candidate, 'authority'> & { authority?: Authority }) =>
     candidates.push({ authority: SECTION_AUTHORITY[c.section] ?? 'system', ...c });
   const notes: string[] = [];
+  if (identity?.basis === 'approximate') {
+    notes.push(
+      `the code is identified only approximately (${identity.reason ?? 'sizes and times'}): this packet is never reused, and a stored copy reads as stale`,
+    );
+  }
 
   // 1–2. Identity and task state.
   if (agent) {
@@ -462,6 +555,116 @@ export async function compileContext(
   }
   lap('graph', t);
 
+  // 4b. What the recipient asked for (review F17), within the same permission and budget.
+  t = performance.now();
+  const request = input.request ?? null;
+  if (request && request.kind !== 'task') {
+    const asked = (request.paths ?? []).map((p) => p.replaceAll('\\', '/').replace(/^\.\//, ''));
+    const fileRef = (rel: string, reason: string, content: string) =>
+      src({
+        source_id: rel,
+        source_type: 'file',
+        authority: 'git',
+        relevance: 1,
+        relationship_distance: 0,
+        verification_status: 'verified',
+        selection_reason: reason,
+        content,
+      });
+    if ((request.kind === 'file' || request.kind === 'history') && !asked.length) {
+      notes.push(
+        `a ${request.kind} request names no paths${request.kind === 'history' ? ': the history of the write scope is given' : ''}`,
+      );
+    }
+    if (request.kind === 'file') {
+      for (const rel of asked) {
+        const ex = await excerptOf(root, rel, readable);
+        if (ex === 'withheld') {
+          withheld += 1;
+          continue;
+        }
+        if (ex === 'missing') {
+          notes.push(`asked for ${rel}: there is no such file in this checkout`);
+          continue;
+        }
+        // Stored with the packet: credentials in well-known formats never reach the database.
+        const text = state.redactor.redactString(ex.text).value;
+        const line = `${rel}${ex.truncated ? ` (its first ${ex.lines} lines)` : ''}:\n${text}`;
+        add({
+          section: 'code.requested',
+          line,
+          source: fileRef(rel, 'you asked for this file', text),
+          priority: 0,
+          relevance: 1,
+          protected: false,
+          reason: 'you asked for this file',
+          rule: 'requested (priority 0)',
+        });
+      }
+    } else if (request.kind === 'scope_files') {
+      const write = task?.scope?.write ?? [];
+      const files = git && write.length ? (await git.files().catch(() => [])).filter((f) => matchesAny(f, write)) : [];
+      if (!write.length) notes.push('the task declares no write scope, so it has no scope files');
+      const shown = files.filter((f) => {
+        if (readable(f)) return true;
+        withheld += 1;
+        return false;
+      });
+      for (const f of shown.slice(0, 100)) {
+        add({
+          section: 'code.requested',
+          line: `- ${f}`,
+          source: fileRef(f, 'a file in your write scope', f),
+          priority: 0,
+          relevance: 0.95,
+          protected: false,
+          reason: 'a file in your write scope',
+          rule: 'requested (priority 0)',
+        });
+      }
+      if (shown.length > 100) notes.push(`${shown.length - 100} more files in the write scope are not listed`);
+    } else if (request.kind === 'history') {
+      const named = asked.filter((p) => {
+        if (readable(p)) return true;
+        withheld += 1;
+        return false;
+      });
+      const paths = asked.length ? named : (task?.scope?.write ?? []).map((g) => `:(glob)${g}`);
+      const log = git && paths.length ? await git.log({ paths, limit: 15 }).catch(() => []) : [];
+      for (const c of log) {
+        const line = `${c.short} ${c.date.slice(0, 10)} ${c.author}: ${c.subject}`;
+        add({
+          section: 'repo.history',
+          line,
+          source: gitSrc('history you asked for', line, 1),
+          priority: 0,
+          relevance: 0.95,
+          protected: false,
+          reason: 'history you asked for',
+          rule: 'requested (priority 0)',
+        });
+      }
+    } else if (request.kind === 'symbol' || request.kind === 'freeform') {
+      // Not ignored in silence: the recipient is told what this packet cannot answer.
+      const why =
+        request.kind === 'symbol'
+          ? 'looking up a symbol needs the symbol graph, which Friday builds only from M9 on'
+          : 'a free-form question needs semantic retrieval, which is off until M9';
+      add({
+        section: 'request.note',
+        line: `Not supported yet: ${why}. This packet holds the task's own context instead${request.query ? ` (you asked: "${request.query.slice(0, 200)}")` : ''}. Ask for files by path (kind "file"), their history ("history") or decisions ("decision").`,
+        source: null,
+        priority: 0,
+        relevance: 1,
+        protected: true,
+        reason: 'what this request could not get',
+        rule: 'protected: request limitation',
+      });
+      notes.push(`${request.kind} requests are not supported yet`);
+    }
+  }
+  lap('request', t);
+
   // 5. Memory within the recipient's read scopes.
   t = performance.now();
   const memoryConflicts: ContextExplanation['memory_conflicts'] = [];
@@ -469,10 +672,20 @@ export async function compileContext(
     agent && input.recipient.harness_id
       ? { kind: 'agent', caller: { agent_id: agent.agent_id, harness_id: input.recipient.harness_id } }
       : { kind: 'human', actor };
-  const query = task ? [task.summary, task.description ?? '', task.plan_key ?? ''].join(' ') : '';
+  const decisions = request?.kind === 'decision';
+  const query =
+    decisions && request?.query
+      ? request.query
+      : task
+        ? [task.summary, task.description ?? '', task.plan_key ?? ''].join(' ')
+        : '';
   let memories: SearchHit[] = [];
   try {
-    memories = state.memory.search(pid, reader, { query, limit: task ? 10 : 5 });
+    memories = state.memory.search(pid, reader, {
+      query,
+      limit: task || decisions ? 10 : 5,
+      ...(decisions ? { kinds: ['decision', 'constraint', 'convention'] } : {}),
+    });
     if (task && memories.length < 3) {
       // Project decisions and constraints apply even when no word matches.
       const general = state.memory.search(pid, reader, { kinds: ['decision', 'constraint', 'convention'], limit: 5 });
@@ -607,57 +820,97 @@ export async function compileContext(
   const escalate = Boolean(task?.scope?.write.length) && related === 0;
   if (escalate) notes.push("nothing in the code graph relates to the task's write scope");
 
-  // Budget (ADR-0022 §6): protected first, then by priority and relevance.
-  const included: Candidate[] = [];
-  const cut: Candidate[] = [];
-  let used = 0;
-  for (const c of candidates.filter((x) => x.protected)) {
-    included.push(c);
-    used += c.line.length + 1;
+  // Budget (ADR-0022 §6, review F12): the packet as it is delivered, JSON with its sources, fits
+  // the budget. Protected sections are never cut; when they alone need more, the caller hears how
+  // much (`refuse`), or Friday's own delivery raises the budget to that and says so (`raise`).
+  const context_id = state.ids.next('ctx');
+  const assemble = (chosen: Candidate[], chars: number): ContextPacket => {
+    const sections: ContextSection[] = [];
+    for (const kind of SECTION_ORDER) {
+      const lines = chosen.filter((c) => c.section === kind);
+      if (!lines.length) continue;
+      sections.push({
+        kind,
+        content: lines.map((l) => l.line).join('\n'),
+        authority: lines[0]?.authority ?? SECTION_AUTHORITY[kind] ?? 'system',
+        sources: lines.flatMap((l) => (l.source ? [l.source] : [])),
+      });
+    }
+    const p: ContextPacket = {
+      context_id,
+      project_id: pid,
+      recipient: input.recipient,
+      purpose: input.purpose,
+      created_at: now,
+      state_version: state.store.head(pid),
+      budget: { tokens: Math.ceil(chars / 4), latency_ms: COMPILE_TARGET_MS, chars },
+      sections,
+      staleness: { is_stale: false },
+      explain_uri: `friday://context/${context_id}/explain`,
+      ...(identity ? { source_version: identity.version } : {}),
+    };
+    if (task) p.task_id = task.task_id;
+    return p;
+  };
+  const size = (p: ContextPacket) => JSON.stringify(p).length;
+  const ranked = (list: Candidate[]) => [...list].sort((a, b) => a.priority - b.priority || b.relevance - a.relevance);
+  const protectedOnes = candidates.filter((x) => x.protected);
+  // The digits of the budget itself are part of the packet: measured with a budget as long as any.
+  const required = size(assemble(protectedOnes, 10 ** 9));
+  let budgetChars = maxChars;
+  let budgetSources = maxSources;
+  if (required > maxChars || protectedOnes.length > maxSources) {
+    if (input.overflow === 'refuse') {
+      throw new FridayError(
+        'context_budget_exceeded',
+        `the protected context of ${task?.task_id ?? 'this request'} (its contract, scope and requirements) needs at least ${required} characters and ${protectedOnes.length} sources; this request allows ${maxChars} and ${maxSources}`,
+        {
+          required_chars: required,
+          required_sources: protectedOnes.length,
+          max_chars: maxChars,
+          max_sources: maxSources,
+        },
+      );
+    }
+    budgetChars = Math.max(maxChars, required);
+    budgetSources = Math.max(maxSources, protectedOnes.length);
+    notes.push(
+      `the protected context needs ${required} characters and ${protectedOnes.length} sources, more than the ${maxChars} and ${maxSources} asked for: the budget was raised to that`,
+    );
   }
-  const rest = candidates
-    .filter((x) => !x.protected)
-    .sort((a, b) => a.priority - b.priority || b.relevance - a.relevance);
-  for (const c of rest) {
-    if (used + c.line.length + 1 <= maxChars && included.length < maxSources) {
+  const included: Candidate[] = [...protectedOnes];
+  const cut: Candidate[] = [];
+  for (const c of ranked(candidates.filter((x) => !x.protected))) {
+    if (included.length < budgetSources && size(assemble([...included, c], budgetChars)) <= budgetChars) {
       included.push(c);
-      used += c.line.length + 1;
     } else cut.push(c);
   }
-
-  const sections: ContextSection[] = [];
-  for (const kind of SECTION_ORDER) {
-    const lines = included.filter((c) => c.section === kind);
-    if (!lines.length) continue;
-    sections.push({
-      kind,
-      content: lines.map((l) => l.line).join('\n'),
-      authority: lines[0]?.authority ?? SECTION_AUTHORITY[kind] ?? 'system',
-      sources: lines.flatMap((l) => (l.source ? [l.source] : [])),
-    });
+  const packet = assemble(included, budgetChars);
+  const used = size(packet);
+  const missed = cut.filter((c) => c.rule.startsWith('requested'));
+  if (missed.length) {
+    notes.push(
+      `${missed.length} item(s) asked for did not fit the budget of ${budgetChars} characters; ask with a larger max_chars or fewer paths`,
+    );
   }
-
-  const context_id = state.ids.next('ctx');
-  const packet: ContextPacket = {
-    context_id,
-    project_id: pid,
-    recipient: input.recipient,
-    purpose: input.purpose,
-    created_at: now,
-    state_version: state.store.head(pid),
-    budget: { tokens: Math.ceil(maxChars / 4), latency_ms: Math.round(performance.now() - started), chars: maxChars },
-    sections,
-    staleness: { is_stale: false },
-    explain_uri: `friday://context/${context_id}/explain`,
-    ...(identity ? { source_version: identity.version } : {}),
-  };
-  if (task) packet.task_id = task.task_id;
   timings.total = Math.round(performance.now() - started);
+  if (timings.total > COMPILE_TARGET_MS)
+    notes.push(`compiled in ${timings.total} ms, over its ${COMPILE_TARGET_MS} ms target`);
   const explanation: ContextExplanation = {
     context_id,
     cache_key: key,
     source_version: identity?.version ?? null,
-    budget: { chars: maxChars, used_chars: used, max_sources: maxSources, sources: included.length },
+    policy_version: policy?.version ?? null,
+    source_basis: identity ? identity.basis : 'none',
+    asked: { overflow: input.overflow ?? null, request: input.request ?? null },
+    budget: {
+      chars: budgetChars,
+      used_chars: used,
+      max_sources: budgetSources,
+      sources: included.length,
+      asked_chars: maxChars,
+      asked_sources: maxSources,
+    },
     included: included.slice(0, 200).map((c) => ({
       section: c.section,
       source_id: c.source?.source_id ?? c.section,
@@ -706,6 +959,49 @@ export function executionRootOf(deps: ContextDeps, input: CompileInput, task: Ta
   }
   const worktree = task ? state.q.worktreeForTask(task.task_id) : undefined;
   return worktree?.path ?? project.root;
+}
+
+/** At most this much of a requested file goes into a packet (review F17). */
+const EXCERPT_LINES = 80;
+const EXCERPT_CHARS = 3000;
+
+/**
+ * The beginning of a file the recipient asked for (review F17), when it may read it: the path as
+ * given and its real target (a link may point anywhere) are both judged, and both stay inside the
+ * checkout.
+ */
+async function excerptOf(
+  root: string,
+  rel: string,
+  readable: (p: string) => boolean,
+): Promise<{ text: string; truncated: boolean; lines: number } | 'withheld' | 'missing'> {
+  if (!rel || path.isAbsolute(rel) || rel.split('/').includes('..') || !readable(rel)) return 'withheld';
+  let real: string;
+  let top: string;
+  try {
+    [real, top] = await Promise.all([realpath(path.join(root, rel)), realpath(root)]);
+  } catch {
+    return 'missing';
+  }
+  const target = path.relative(top, real).split(path.sep).join('/');
+  if (!target || target.startsWith('..') || path.isAbsolute(target) || !readable(target)) return 'withheld';
+  const st = await stat(real).catch(() => null);
+  if (!st?.isFile()) return 'missing';
+  const handle = await open(real, 'r');
+  try {
+    const buf = Buffer.alloc(Math.min(st.size, EXCERPT_CHARS * 4));
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+    const bytes = buf.subarray(0, bytesRead);
+    if (bytes.includes(0)) return { text: '(a binary file: not shown)', truncated: false, lines: 0 };
+    const all = bytes.toString('utf8').replace(/\r\n/g, '\n');
+    const lines = all.split('\n').slice(0, EXCERPT_LINES);
+    let text = lines.join('\n');
+    if (text.length > EXCERPT_CHARS) text = text.slice(0, EXCERPT_CHARS);
+    const truncated = st.size > bytesRead || text.length < all.length;
+    return { text, truncated, lines: text.split('\n').length };
+  } finally {
+    await handle.close();
+  }
 }
 
 function progressEvents(state: FridayState, pid: string, taskId: string) {
@@ -785,14 +1081,17 @@ function gatherGraph(
       best.set(path, { distance, reason, certainty, edge });
     }
   };
+  // Relations are followed only through files the recipient may read: a reason never names one it
+  // may not (review F02).
   for (const s of seeds) {
+    if (!readable(s)) continue;
     for (const e of graph.dependencies(s)) if (e.to) consider(e.to, 1, `${s} imports it`, e);
     for (const e of graph.consumers(s))
       consider(e.from, 1, graph.nodes.get(e.from)?.test ? `tests ${s}` : `imports ${s}`, e);
   }
   for (const [p] of [...best].filter(([, v]) => v.distance === 1)) {
     const node = graph.nodes.get(p);
-    if (!node?.contract) continue;
+    if (!node?.contract || !readable(p)) continue;
     // Who else depends on a contract you use or change: they break when it changes.
     for (const e of graph.consumers(p))
       consider(e.from, 2, `${graph.nodes.get(e.from)?.test ? 'tests' : 'uses'} the shared contract ${p}`, e);
@@ -854,9 +1153,16 @@ async function cacheKey(
   const decisions = goal ? state.q.escalations(pid, 'answered').filter((r) => r.goal_id === goal.goal_id).length : 0;
   const claimable =
     agentId && !task ? state.claimableTasks(pid, state.q.agent(agentId).agent_key, 5).map((x) => x.task_id) : [];
+  // What the recipient may read is part of what the packet is (review F02): the effective policy's
+  // version, and the exact-path grants a human gave it.
+  const policyVersion = deps.policy?.().version ?? null;
+  const grants = (deps.readGrants?.(input, task) ?? []).map((g) => g.approval_id).sort();
   const parts = {
     root,
     source: identity?.version ?? null,
+    basis: identity?.basis ?? null,
+    policy: policyVersion,
+    grants,
     task: task
       ? {
           id: task.task_id,
@@ -879,6 +1185,8 @@ async function cacheKey(
     claimable,
     recipient: input.recipient,
     purpose: input.purpose,
+    overflow: input.overflow ?? null,
+    request: input.request ?? null,
     budget: [maxChars, maxSources],
     config: { context: project.config.context, security: project.config.security ?? null },
   };
@@ -898,7 +1206,14 @@ export async function packetStaleness(
   const { state, project } = deps;
   const task = packet.task_id ? state.q.findTask(project.project_id, packet.task_id) : undefined;
   const goal = task?.goal_id ? state.q.findGoal(project.project_id, task.goal_id) : undefined;
-  const input: CompileInput = { recipient: packet.recipient, task_id: packet.task_id, purpose: packet.purpose ?? '' };
+  const asked = explanation.asked ?? { overflow: null, request: null };
+  const input: CompileInput = {
+    recipient: packet.recipient,
+    task_id: packet.task_id,
+    purpose: packet.purpose ?? '',
+    ...(asked.overflow ? { overflow: asked.overflow } : {}),
+    ...(asked.request ? { request: asked.request } : {}),
+  };
   const root = executionRootOf(deps, input, task);
   const git = await deps.git(root).catch(() => null);
   const identity = git ? await git.identity().catch(() => null) : null;
@@ -911,13 +1226,26 @@ export async function packetStaleness(
     goal,
     agentId,
     identity,
-    explanation.budget.chars,
-    explanation.budget.max_sources,
+    explanation.budget.asked_chars ?? explanation.budget.chars,
+    explanation.budget.asked_sources ?? explanation.budget.max_sources,
   );
-  if (key === explanation.cache_key) return packet;
-  const reason =
-    identity?.version !== explanation.source_version
-      ? `the code changed: ${explanation.source_version ?? 'unknown'} -> ${identity?.version ?? 'unknown'}`
-      : 'task, goal, memory, inbox or configuration changed since it was compiled';
+  // Sizes and times do not prove the code is unchanged (review F13): such a packet stays uncertain.
+  if (key === explanation.cache_key && identity?.basis !== 'approximate') return packet;
+  const policyNow = deps.policy?.().version ?? null;
+  const reasons = [
+    ...(identity?.version !== explanation.source_version
+      ? [`the code changed: ${explanation.source_version ?? 'unknown'} -> ${identity?.version ?? 'unknown'}`]
+      : identity?.basis === 'approximate'
+        ? [
+            `the code is identified only approximately (${identity.reason ?? 'sizes and times'}), so it may have changed`,
+          ]
+        : []),
+    ...(policyNow !== (explanation.policy_version ?? null)
+      ? ["the project's policy changed since it was compiled, so what the recipient may read may differ"]
+      : []),
+  ];
+  const reason = reasons.length
+    ? reasons.join('; ')
+    : 'task, goal, memory, inbox, read grants or configuration changed since it was compiled';
   return { ...packet, staleness: { is_stale: true, reason } };
 }

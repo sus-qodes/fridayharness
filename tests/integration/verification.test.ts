@@ -82,9 +82,18 @@ const taskOf = (td: TestDaemon, id: string) =>
 /** A spawn agent works on a task in its worktree, writes `files` there and claims completion. */
 async function claimWork(
   td: TestDaemon,
-  o: { agent: string; kind?: string; write?: string[]; files: Record<string, string>; claim?: string[] },
+  o: {
+    agent: string;
+    kind?: string;
+    write?: string[];
+    files: Record<string, string>;
+    claim?: string[];
+    role?: string;
+    /** Runs while the task is RUNNING, before the files are written. */
+    meanwhile?: (fake: FakeHarness, start: TaskStartParams) => Promise<void>;
+  },
 ) {
-  const fake = await FakeHarness.connect(td, { agentKey: o.agent });
+  const fake = await FakeHarness.connect(td, { agentKey: o.agent, ...(o.role ? { role: o.role } : {}) });
   const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
     summary: `work of ${o.agent}`,
     kind: o.kind ?? 'implementation',
@@ -98,6 +107,7 @@ async function claimWork(
     (t) => t.status === 'RUNNING',
     `${o.agent}'s task to run`,
   );
+  await o.meanwhile?.(fake, start);
   for (const [rel, text] of Object.entries(o.files)) {
     mkdirSync(path.dirname(path.join(start.working_directory, rel)), { recursive: true });
     writeFileSync(path.join(start.working_directory, rel), text);
@@ -282,5 +292,88 @@ describe('verification at a recorded revision of the task checkout', () => {
     expect(ok.task.status).toBe('COMPLETED');
     expect(ok.verification.source_version).toMatch(/^[0-9a-f]{40}\+[0-9a-f]{12}$/);
     expect(ok.verification.tree).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("judges changes by the project's effective policy, as the hooks do, with a human's exact-path approval (review F03)", async () => {
+    const slow = '      task_kinds: [chore]\n';
+    const td = await startTestDaemon(ws(), {
+      git: true,
+      editConfig: (y) =>
+        y.replace(
+          '  checks: []\n',
+          [
+            '  checks:',
+            '    - name: tests',
+            '      command: node',
+            '      args: ["-e", "process.exit(0)"]',
+            '      task_kinds: [implementation]',
+            '    - name: slow',
+            '      command: node',
+            '      args: ["-e", "setTimeout(() => {}, 2500)"]',
+            slow,
+          ].join('\n'),
+        ),
+    });
+    const dir = ws().projectDir;
+    mkdirSync(path.join(dir, 'src'), { recursive: true });
+    writeFileSync(path.join(dir, 'src', 'shared.mjs'), 'export const shared = 1;\n');
+    await deterministicGit(dir, { startEpoch: 1_767_225_700 }).commitAll('source');
+    const policies = path.join(ws().fridayDir, 'policies');
+    mkdirSync(policies, { recursive: true });
+    writeFileSync(
+      path.join(policies, 'tight.yaml'),
+      'deny:\n  write: ["src/private/**"]\nteams:\n  frontend:\n    write: ["src/ui/**"]\n',
+    );
+    await td.operator.post(td.operator.projectPath('/policy/reload'), {});
+
+    // 1. A write the policy keeps from agents, made around the hooks: verification fails it.
+    const denied = await claimWork(td, { agent: 'be-1', files: { 'src/private/restricted.mjs': 'export {};\n' } });
+    const v1 = await verify(td, denied.task.task_id);
+    expect(v1.task.status).toBe('FAILED');
+    const f1 = v1.verification.checks.find((c) => c.name === 'friday.diff')?.details?.findings ?? [];
+    expect(f1.map((f) => [f.rule, f.severity, f.paths])).toContainEqual([
+      'diff.denied_by_policy',
+      'fail',
+      ['src/private/restricted.mjs'],
+    ]);
+    expect(v1.verification.policy_version).toMatch(/^[0-9a-f]{12,}$/);
+
+    // 2. Outside the team scope of the agent's role: failed too.
+    const team = await claimWork(td, { agent: 'fe-1', role: 'frontend', files: { 'src/api.mjs': 'export {};\n' } });
+    const v2 = await verify(td, team.task.task_id);
+    expect(v2.task.status).toBe('FAILED');
+    expect(
+      (v2.verification.checks.find((c) => c.name === 'friday.diff')?.details?.findings ?? []).map((f) => f.rule),
+    ).toContain('diff.outside_team_scope');
+
+    // 3. The same kind of write, approved by a human for that exact path and attempt: it stands.
+    const approved = await claimWork(td, {
+      agent: 'be-2',
+      write: ['src/lib/**'],
+      files: { 'src/private/allowed.mjs': 'export {};\n' },
+      meanwhile: async (fake) => {
+        const asked = await fake.client.requestPermission({
+          action_class: 'file.write',
+          resource: 'src/private/allowed.mjs',
+          justification: 'the key rotation lives here',
+        });
+        expect(asked.status).toBe('pending');
+        expect((await cli(['--project', dir, 'approve', asked.approval_id as string])).code).toBe(0);
+      },
+    });
+    const v3 = await verify(td, approved.task.task_id);
+    expect(v3.task.status, JSON.stringify(v3.verification.checks)).toBe('COMPLETED');
+    const f3 = v3.verification.checks.find((c) => c.name === 'friday.diff')?.details?.findings ?? [];
+    expect(f3.find((f) => f.rule === 'diff.approved')?.message).toMatch(/src\/private\/allowed\.mjs \(apr_/);
+
+    // 4. The policy tightens while the checks run: nothing is judged by the obsolete one.
+    const late = await claimWork(td, { agent: 'be-3', kind: 'chore', files: { 'src/late.mjs': 'export {};\n' } });
+    const running = verify(td, late.task.task_id);
+    await new Promise((r) => setTimeout(r, 800));
+    writeFileSync(path.join(policies, 'later.yaml'), 'deny:\n  write: ["src/late.mjs"]\n');
+    await td.operator.post(td.operator.projectPath('/policy/reload'), {});
+    const v4 = await running;
+    expect(v4.task.status).toBe('READY_FOR_VERIFICATION');
+    expect(v4.verification.summary).toContain("the project's policy changed while the work was verified");
   });
 });

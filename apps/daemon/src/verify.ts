@@ -92,6 +92,8 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     }
   }
   const before = since?.identity ?? null;
+  // The effective policy the work is judged by (review F03): the one the hooks apply, at this version.
+  const policy = ctx.policy();
 
   const { verification_id } = state.startVerification(pid, actor, taskId, {
     execution_root: root,
@@ -100,6 +102,7 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     base_commit: base,
     task_kind: task.kind,
     tree: content?.tree ?? null,
+    policy_version: policy.version,
   });
   if (unreadable !== null) {
     const reason = `the checkout ${root} could not be verified here: ${unreadable}; nothing was verified (verify again once it can be, or record a result with --result passed|failed)`;
@@ -132,6 +135,25 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       : [];
     const pathCtx = { projectRoot: root, mainRoot: project.root, stateDir: path.dirname(path.dirname(ctx.privateDir)) };
     const write = task.scope?.write ?? null;
+    // The project's deny rules and the team scopes of the agent's role, as the hooks apply them; a
+    // human's approval of an exact path for this attempt lets that write stand (review F03).
+    const role = run ? (state.q.findAgent(run.agent_id)?.role ?? null) : null;
+    const teams = (role && policy.teams[role]) || [];
+    const fold = (p: string) => (WINDOWS ? p.toLowerCase() : p);
+    const grants = new Map(
+      (run
+        ? state.q.usableGrants(pid, {
+            capability: 'file.write',
+            task_id: taskId,
+            run_id: run.run_id,
+            agent_id: run.agent_id,
+            policy_version: policy.version,
+            now: state.clock.now(),
+            spent: true,
+          })
+        : []
+      ).map((g) => [fold(g.target), g.approval_id]),
+    );
     const findings: Finding[] = since
       ? analyzeDiff({
           changed: since.changes,
@@ -143,6 +165,22 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
           protectedClass: (p) => sensitiveClassOf(p, pathCtx, 'write')?.class ?? null,
           expectsChanges: task.kind === 'implementation',
           caseInsensitive: WINDOWS,
+          policyRule: (p) => {
+            if (policy.deny.write.length && matchesAny(p, policy.deny.write)) {
+              return {
+                rule: 'diff.denied_by_policy',
+                message: "changed what the project's policy keeps agents from changing",
+              };
+            }
+            const team = teams.find((t) => t.write.length > 0 && !matchesAny(p, t.write));
+            return team
+              ? {
+                  rule: 'diff.outside_team_scope',
+                  message: `changed outside the team scope of the ${role} role (${team.write.join(', ')}, from ${team.source})`,
+                }
+              : null;
+          },
+          approved: (p) => grants.get(fold(p)) ?? null,
         })
       : [
           {
@@ -287,6 +325,13 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     // 4. One revision: code that changed while it was checked was not verified (ADR-0024 §2), and
     // code git can no longer read is not known to be the same (review F05). The trees compare the
     // content itself, so an approximate identity is never taken as proof (review F13).
+    // Nor was work judged by a policy that changed while it was checked (review F03).
+    if (ctx.policy().version !== policy.version) {
+      const reason = `the project's policy changed while the work was verified (${policy.version.slice(0, 12)} became ${ctx.policy().version.slice(0, 12)}); verify it again under the new one`;
+      logger.warn('verification interrupted', { task_id: taskId, reason });
+      const interrupted = state.interruptVerification(pid, actor, verification_id, reason);
+      return { task: interrupted, verification: state.q.verification(verification_id) };
+    }
     if (git && before && content) {
       let reason: string | null = null;
       try {

@@ -45,6 +45,14 @@ export interface DiffInput {
   expectsChanges: boolean;
   /** Compare paths without case (Windows). */
   caseInsensitive?: boolean;
+  /**
+   * The project's effective policy for a write (ADR-0028, review F03): the rule that forbids the
+   * path (its `deny.write`, or a team scope of the agent's role), or null. The hooks apply the same
+   * rule; verification is the second defence for writes that went around them.
+   */
+  policyRule?: (path: string) => { rule: string; message: string } | null;
+  /** The exact-path approval a human gave this task's attempt for writing the path, or null. */
+  approved?: (path: string) => string | null;
 }
 
 /**
@@ -92,7 +100,37 @@ export function analyzeDiff(input: DiffInput): Finding[] {
   }
   const isProtected = new Set(protectedPaths.map((x) => x.path));
   const writable = Boolean(input.write?.length);
-  const outside = touched.filter((p) => !isProtected.has(p) && (!writable || !input.inScope(p)));
+  // A human's exact-path approval lets a write outside the scope, or under a deny rule, stand.
+  const grant = new Map<string, string>();
+  for (const p of touched) {
+    const id = isProtected.has(p) ? null : (input.approved?.(p) ?? null);
+    if (id) grant.set(p, id);
+  }
+  const outside = touched.filter((p) => !isProtected.has(p) && !grant.has(p) && (!writable || !input.inScope(p)));
+  const isOutside = new Set(outside);
+  const byRule = new Map<string, { message: string; paths: string[] }>();
+  for (const p of touched) {
+    if (isProtected.has(p) || isOutside.has(p) || grant.has(p)) continue;
+    const hit = input.policyRule?.(p);
+    if (!hit) continue;
+    const entry = byRule.get(hit.rule) ?? { message: hit.message, paths: [] };
+    entry.paths.push(p);
+    byRule.set(hit.rule, entry);
+  }
+  for (const [rule, { message, paths }] of byRule) {
+    findings.push({ rule, severity: 'fail', message: `${message}: ${show(paths)}.`, paths: listed(paths) });
+  }
+  if (grant.size) {
+    const paths = [...grant.keys()];
+    findings.push({
+      rule: 'diff.approved',
+      severity: 'info',
+      message: `changed with a human's approval of that exact path: ${listed(paths)
+        .map((p) => `${p} (${grant.get(p)})`)
+        .join(', ')}${more(paths)}.`,
+      paths: listed(paths),
+    });
+  }
   if (outside.length) {
     findings.push(
       writable

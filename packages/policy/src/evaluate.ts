@@ -165,6 +165,21 @@ export function evaluateSensitive(action: PolicyAction, ctx: PathContext): Polic
 }
 
 /**
+ * The project's read rule (ADR-0028, review F02): a project-relative path its policy keeps from
+ * agents (`deny.read`) stays kept unless a human approved reading that exact path. The hooks and
+ * the context compiler apply this one rule, so what an agent may not read is never gathered for it.
+ */
+export function readKeptFromAgents(
+  rel: string,
+  denyRead: readonly string[],
+  approved?: (rel: string) => boolean,
+  windows?: boolean,
+): boolean {
+  if (!denyRead.length || !matchesAny(rel, denyRead, windows)) return false;
+  return !approved?.(rel);
+}
+
+/**
  * Friday's M1 policy for one intercepted host action (spec Part 07, plan M1.8). The result is
  * only ever used to restrict: "allow" means Friday does not object, and the host's own
  * permission rules still apply.
@@ -178,7 +193,7 @@ export function evaluate(input: PolicyInput): PolicyResult {
     // Paths the project keeps from agents (ADR-0028), unless a human approved that exact path.
     for (const p of input.deny?.read.length ? (action.paths ?? []) : []) {
       const rel = canonicalize(p, ctx).relative;
-      if (rel === null || !matchesAny(rel, input.deny?.read ?? [], ctx.windows)) continue;
+      if (rel === null || !readKeptFromAgents(rel, input.deny?.read ?? [], undefined, ctx.windows)) continue;
       if (input.approved?.('file.read', rel)) {
         return r('allow', 'read.approved', `a human approved reading ${rel}.`, {
           targets: [rel],

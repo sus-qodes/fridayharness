@@ -411,6 +411,8 @@ export const VerificationView = z.object({
    * for manual results, checkouts outside git and older records.
    */
   tree: z.string().nullable().default(null),
+  /** The version of the effective policy the work was judged by (review F03). */
+  policy_version: z.string().nullable().default(null),
   checks: z.array(VerificationCheckView),
 });
 export type VerificationView = z.infer<typeof VerificationView>;

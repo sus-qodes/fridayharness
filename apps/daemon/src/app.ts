@@ -529,7 +529,8 @@ export function buildApp(deps: AppDeps): Hono<Env> {
           recipient: { kind: 'agent', id: caller.agent_id, harness_id: auth.harness_id },
           task_id: taskId ?? state.q.agent(caller.agent_id).current_task_id ?? undefined,
           purpose,
-          ...(maxChars ? { max_chars: maxChars } : {}),
+          // A size the caller asked for is kept, or the answer says what fits (review F12).
+          ...(maxChars ? { max_chars: maxChars, overflow: 'refuse' as const } : {}),
         },
         { kind: 'agent', id: caller.agent_id },
       );
@@ -542,7 +543,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
           recipient: { kind: 'human', id: recipientId },
           task_id: taskId,
           purpose,
-          ...(maxChars ? { max_chars: maxChars } : {}),
+          ...(maxChars ? { max_chars: maxChars, overflow: 'refuse' as const } : {}),
         },
         HUMAN,
       ),

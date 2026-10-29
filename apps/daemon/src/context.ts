@@ -1,4 +1,11 @@
-import { type CompileInput, ContextCache, type ContextDeps, compileContext, packetStaleness } from '@friday/context';
+import {
+  type CompileInput,
+  ContextCache,
+  type ContextDeps,
+  type ContextPolicy,
+  compileContext,
+  packetStaleness,
+} from '@friday/context';
 import { GitRoot } from '@friday/git';
 import type { Actor, ContextExplanation, ContextPacket } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
@@ -23,6 +30,8 @@ export function createContextService(opts: {
   project: ProjectRef;
   graph: GraphService;
   stateDir?: string;
+  /** The effective policy (ADR-0028): context applies its read rule and keys packets by its version (review F02). */
+  policy?: () => ContextPolicy;
 }): ContextService {
   // One git view per checkout: the main one and each task worktree (ADR-0023).
   const roots = new Map<string, Promise<GitRoot | null>>();
@@ -42,6 +51,19 @@ export function createContextService(opts: {
     graph: (dir) => opts.graph.graph(dir),
     ...(opts.stateDir ? { stateDir: opts.stateDir } : {}),
     cache: new ContextCache(),
+    ...(opts.policy ? { policy: opts.policy } : {}),
+    // The exact paths a human let this agent read for this task, under the current policy.
+    readGrants: (input, task) => {
+      if (input.recipient.kind !== 'agent' || !task) return [];
+      return opts.state.q.usableGrants(opts.project.project_id, {
+        capability: 'file.read',
+        task_id: task.task_id,
+        run_id: task.current_run_id,
+        agent_id: input.recipient.id,
+        policy_version: opts.policy?.().version ?? null,
+        now: opts.state.clock.now(),
+      });
+    },
   };
   const explanation = (id: string) => opts.state.q.contextExplanation(id) as ContextExplanation | undefined;
   return {

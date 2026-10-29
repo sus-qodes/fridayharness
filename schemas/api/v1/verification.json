@@ -82,6 +82,13 @@
         "null"
       ]
     },
+    "policy_version": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "checks": {
       "type": "array",
       "items": {

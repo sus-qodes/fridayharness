@@ -35,6 +35,7 @@ export {
   type PolicyInput,
   type PolicyResult,
   type PolicyTask,
+  readKeptFromAgents,
 } from './evaluate.js';
 export {
   type CanonicalPath,

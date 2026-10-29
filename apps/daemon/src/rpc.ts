@@ -228,6 +228,10 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
           task_id: p.task_id ?? agent.current_task_id ?? undefined,
           purpose: `request:${p.kind}`,
           max_chars: p.max_chars,
+          // The size was asked for: a packet that cannot fit says so (review F12); and what was
+          // asked for is gathered, or the answer says why not (review F17).
+          overflow: 'refuse',
+          request: { kind: p.kind, query: p.query, paths: p.paths },
         },
         { kind: 'agent', id: c.agent_id },
       );

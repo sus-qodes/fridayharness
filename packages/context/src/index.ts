@@ -10,6 +10,7 @@ export { ContextCache } from './cache.js';
 export {
   type CompileInput,
   type ContextDeps,
+  type ContextPolicy,
   type ContextProject,
   compileContext,
   packetStaleness,

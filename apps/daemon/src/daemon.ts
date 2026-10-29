@@ -312,7 +312,13 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     .sweep()
     .catch((err) => logger.warn('integrating completed tasks failed', { message: (err as Error).message }));
   // The per-user state folder (it holds every project's private folder): never gathered into context.
-  const context = createContextService({ state, project, graph, stateDir: path.dirname(path.dirname(privateDir)) });
+  const context = createContextService({
+    state,
+    project,
+    graph,
+    stateDir: path.dirname(path.dirname(privateDir)),
+    policy: () => policy,
+  });
   const ctx: DaemonContext = {
     state,
     project,

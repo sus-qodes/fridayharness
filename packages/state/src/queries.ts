@@ -95,6 +95,28 @@ export interface LayaCalibrationRecord {
 
 const LIVE_HARNESS = "('REGISTERED','READY','BUSY','DEGRADED','RECONNECTING')";
 
+/**
+ * Whether a granted approval covers a use (ADR-0027 §4–§5): under the current policy version,
+ * bound to this task, and for `once` and `run` grants to this attempt and agent.
+ */
+function covers(
+  a: {
+    task_id: string | null;
+    run_id: string | null;
+    requested_by_kind: string;
+    requested_by_id: string;
+    reuse: string;
+    policy_version: string | null;
+  },
+  use: { task_id: string | null; run_id: string | null; agent_id: string | null; policy_version: string | null },
+): boolean {
+  if (a.policy_version && use.policy_version && a.policy_version !== use.policy_version) return false;
+  if (a.task_id && a.task_id !== use.task_id) return false;
+  if (a.reuse === 'task') return true;
+  if (a.run_id && a.run_id !== use.run_id) return false;
+  return a.requested_by_kind !== 'agent' || a.requested_by_id === use.agent_id;
+}
+
 /** Read-only access to domain and operational tables. */
 export class Queries {
   constructor(private readonly db: SqlDatabase) {}
@@ -642,13 +664,48 @@ export class Queries {
     // When several grants cover a use, the narrowest is spent first and broader ones are kept.
     const reach: Record<string, number> = { once: 0, run: 1, task: 2 };
     rows.sort((x, y) => (reach[x.reuse] ?? 0) - (reach[y.reuse] ?? 0));
-    return rows.find((a) => {
-      if (a.policy_version && use.policy_version && a.policy_version !== use.policy_version) return false;
-      if (a.task_id && a.task_id !== use.task_id) return false;
-      if (a.reuse === 'task') return true;
-      if (a.run_id && a.run_id !== use.run_id) return false;
-      return a.requested_by_kind !== 'agent' || a.requested_by_id === use.agent_id;
-    })?.approval_id;
+    return rows.find((a) => covers(a, use))?.approval_id;
+  }
+
+  /**
+   * Every grant of a capability that covers this task's uses right now, whatever its target (the
+   * rule of `usableApproval`), oldest first: what the context compiler may show anyway (review F02).
+   */
+  usableGrants(
+    projectId: string,
+    use: {
+      capability: string;
+      task_id: string | null;
+      run_id: string | null;
+      agent_id: string | null;
+      policy_version: string | null;
+      now: string;
+      /**
+       * Also grants already spent on the use they allowed (`used`): what verification needs to know
+       * the write it judges was approved (review F03). Default: only grants still usable.
+       */
+      spent?: boolean;
+    },
+  ): { approval_id: string; target: string }[] {
+    const statuses = use.spent ? "('granted', 'used')" : "('granted')";
+    return this.db
+      .prepare(
+        `SELECT approval_id, target, task_id, run_id, requested_by_kind, requested_by_id, reuse, policy_version FROM approvals
+         WHERE project_id = ? AND capability = ? AND status IN ${statuses} AND target IS NOT NULL
+           AND (status = 'used' OR expires_at IS NULL OR expires_at > ?) ORDER BY created_at, approval_id`,
+      )
+      .all<{
+        approval_id: string;
+        target: string;
+        task_id: string | null;
+        run_id: string | null;
+        requested_by_kind: string;
+        requested_by_id: string;
+        reuse: string;
+        policy_version: string | null;
+      }>(projectId, use.capability, use.now)
+      .filter((a) => covers(a, use))
+      .map((a) => ({ approval_id: a.approval_id, target: a.target }));
   }
 
   grantedApproval(projectId: string, capability: string, target: string, nowIso: string): boolean {
