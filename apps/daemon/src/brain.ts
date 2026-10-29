@@ -108,7 +108,7 @@ export function createMasterBrain(input: {
   /** The effective policy: whether plans are approved without a human comes from it (ADR-0028). */
   policy?: () => { auto_approve: boolean };
   /** The model routing would run on an agent's harness for a task (ADR-0031 §9). */
-  modelFit?: (task: TaskView, agentId: string) => { fit: number; cost: number } | null;
+  modelFit?: (task: TaskView, agentId: string) => { fit: number; cost: number; blocked?: string } | null;
 }): BrainHandle {
   const { state, project, env, logger } = input;
   const cfg = project.config.master_brain;

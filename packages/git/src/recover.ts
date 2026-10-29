@@ -1,7 +1,4 @@
-import { randomBytes } from 'node:crypto';
-import { rmSync } from 'node:fs';
-import path from 'node:path';
-import { type CommitIdentity, FRIDAY_IDENTITY, identityEnv, moveRef, resolveCommit } from './integrate.js';
+import { type CommitIdentity, commitTree, FRIDAY_IDENTITY, moveRef, resolveCommit } from './integrate.js';
 import { GitRoot } from './root.js';
 import { runGit } from './run.js';
 
@@ -24,26 +21,9 @@ export async function snapshotWorktree(
   author: CommitIdentity = FRIDAY_IDENTITY,
 ): Promise<string | null> {
   const root = await GitRoot.open(dir);
-  const identity = await root.identity();
-  const head = identity.head;
-  if (!identity.dirty) return null;
-  const refs = await root.refs();
-  const index = path.join(refs.gitDir, `friday-snapshot-${randomBytes(4).toString('hex')}.index`);
-  const env = { GIT_INDEX_FILE: index };
-  try {
-    if (head) await runGit(root.root, ['read-tree', head], { env });
-    await runGit(root.root, ['add', '-A'], { env, timeoutMs: 300_000 });
-    const tree = (await runGit(root.root, ['write-tree'], { env })).stdout.trim();
-    const parents = head ? ['-p', head] : [];
-    return (
-      await runGit(root.root, ['commit-tree', tree, ...parents, '-F', '-'], {
-        input: message,
-        env: identityEnv(author),
-      })
-    ).stdout.trim();
-  } finally {
-    rmSync(index, { force: true });
-  }
+  if (!(await root.identity()).dirty) return null;
+  const { head, tree } = await root.contentTree();
+  return commitTree(root.root, tree, head ? [head] : [], message, author);
 }
 
 /** Stores `commit` under `<prefix><name>`, adding a suffix when that name is taken. */

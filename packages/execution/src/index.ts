@@ -6,6 +6,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { ProcessGroup } from './groups.js';
 import {
   checkArguments,
   type ExecutionProfile,
@@ -19,6 +20,7 @@ import { MIN_SECRET_LENGTH, sanitizeOutput } from './sanitize.js';
 
 export const PACKAGE_NAME = '@friday/execution';
 
+export * from './groups.js';
 export * from './profile.js';
 export * from './runner.js';
 export * from './sanitize.js';
@@ -69,7 +71,9 @@ export async function executeRun(
     /** Variable name → value, with the secret's name for the redaction marker. */
     credentials?: readonly { variable: string; name: string; value: string }[];
     maxOutputChars?: number;
-    onStart?: (pid: number | undefined, stop: () => void) => void;
+    /** The group the run's whole process tree belongs to (review F07). */
+    group?: ProcessGroup;
+    onStart?: (pid: number | undefined, stop: () => Promise<void>) => void;
   },
 ): Promise<ProfileOutcome> {
   const credentials = opts.credentials ?? [];
@@ -95,6 +99,7 @@ export async function executeRun(
       viaCmd: run.binary.viaCmd,
       timeoutMs: opts.timeoutMs,
       ...(opts.maxOutputChars ? { maxOutputChars: opts.maxOutputChars } : {}),
+      ...(opts.group ? { group: opts.group } : {}),
       ...(opts.onStart ? { onStart: opts.onStart } : {}),
     });
     // A tail cut in the middle of a line could start inside a value, which no variant would match.

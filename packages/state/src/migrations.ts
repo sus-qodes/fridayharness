@@ -853,6 +853,20 @@ CREATE INDEX ix_laya_calibrations ON laya_calibrations(project_id, checkpoint, s
   },
 ];
 
+/**
+ * M7.1: the M7 review's stabilization (docs/reviews/2026-10-14-m7-review-disposition.md): the
+ * exact tree a verification judged (F04).
+ */
+export const REVIEW_M7_MIGRATIONS: Migration[] = [
+  {
+    version: 19,
+    name: 'review_m7',
+    up: `
+ALTER TABLE verification_runs ADD COLUMN tree TEXT;
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -872,6 +886,7 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...MEMORY_INDEX_MIGRATIONS,
   ...ROUTING_MIGRATIONS,
   ...LAYA_MIGRATIONS,
+  ...REVIEW_M7_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */

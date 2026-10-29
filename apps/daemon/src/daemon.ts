@@ -3,8 +3,8 @@ import type { Server } from 'node:http';
 import path from 'node:path';
 import type { Clock, IdGenerator } from '@friday/core';
 import { closeDatabase, openDatabase } from '@friday/db';
-import type { ExecutionProfile } from '@friday/execution';
-import { GitRoot } from '@friday/git';
+import { type ExecutionProfile, ProcessGroups } from '@friday/execution';
+import { GitRoot, rootKey, worktreesDir } from '@friday/git';
 import type { PlannerModel } from '@friday/planner';
 import { type Actor, API_VERSION, type ContextPacket, FridayError, PROTOCOL_VERSIONS } from '@friday/protocol';
 import {
@@ -83,6 +83,10 @@ export interface DaemonContext {
   reloadPolicy: () => EffectivePolicy;
   /** The execution profile checks and operations run in (ADR-0029 §4). */
   profile: () => ExecutionProfile;
+  /** Process groups: a check's or an operation's whole process tree ends with it (review F07). */
+  groups: ProcessGroups;
+  /** Stops a task's gateway operations, confirmed, before its checkout is judged or reused. */
+  quiesce: (taskId: string, reason: string) => Promise<void>;
 }
 
 export interface Daemon extends DaemonContext {
@@ -183,6 +187,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     blockingReplyMs: project.config.communication.blocking_reply_ms,
     maxOpenPerRecipient: project.config.communication.max_open_per_recipient,
     worktreeMode,
+    // This clone's worktree folder: a worktree recorded anywhere else is another clone's (review F08).
+    worktreeRoot: gitRoot ? path.join(worktreesDir(env), rootKey(gitRoot.root)) : null,
     fileReservationTtlMs: project.config.reservations.ttl_ms,
     ...opts.state,
   };
@@ -252,14 +258,24 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     const taskId = (e.payload as { task_id?: string }).task_id;
     if (taskId && laya.enabled) void laya.ask(taskId);
   });
+  // Every check's and operation's process tree is a group that ends with it (review F07).
+  const groups = new ProcessGroups(env);
+  // Set once the execution gateway exists: a task's operations stop before its worktree is reused.
+  let quiesce: DaemonContext['quiesce'] = async () => undefined;
   // Task worktrees: prepared as soon as a run needs one, released when its task ends (ADR-0023).
-  const workspaces = new WorkspaceManager({ state, project, logger, env });
+  const workspaces = new WorkspaceManager({
+    state,
+    project,
+    logger,
+    env,
+    quiesce: (taskId) => quiesce(taskId, 'a new attempt needs its worktree'),
+  });
   // Checks and operations run in the execution profile of the effective policy (ADR-0029 §4).
   const stateRoot = path.dirname(path.dirname(privateDir));
   const profileOf = profileCache({ forbiddenRoots: () => [project.root, workspaces.dir], stateDir: stateRoot, env });
   const profile = () => profileOf(policy);
   // A completed goal task's verified work goes to its goal branch before its worktree is released (ADR-0025).
-  const integration = new IntegrationManager({ state, project, logger, workspaces, profile });
+  const integration = new IntegrationManager({ state, project, logger, workspaces, profile, groups });
   const stopWorkspaces = state.transport.subscribe(
     { project_id: project.project_id, types: ['run.created', 'task.cancelled', 'task.completed'] },
     (e) => {
@@ -273,7 +289,9 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       const done =
         e.type === 'task.completed'
           ? integration.completed(taskId)
-          : workspaces.release(taskId, 'the task was cancelled');
+          : quiesce(taskId, 'the task was cancelled')
+              .catch(() => undefined)
+              .then(() => workspaces.release(taskId, 'the task was cancelled'));
       void Promise.resolve(done).catch((err) =>
         logger.warn('finishing a task worktree failed', { task_id: taskId, message: (err as Error).message }),
       );
@@ -318,6 +336,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       return policy;
     },
     profile,
+    groups,
+    quiesce: (taskId, reason) => quiesce(taskId, reason),
   };
   for (const e of policy.errors) logger.error('policy file not applied', e);
   if (!policy.trusted) logger.warn('policy settings wait for "friday policy trust"', { loosening: policy.loosening });
@@ -330,7 +350,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     logger.warn('verification interrupted at start', { verification_id: id });
   }
   // The execution gateway (ADR-0029): operations a project declared, run with stored secrets.
-  const operations = new OperationManager({ state, project, logger, policy: () => policy, profile, env });
+  const operations = new OperationManager({ state, project, logger, policy: () => policy, profile, env, groups });
+  quiesce = (taskId, reason) => operations.stopTask(taskId, reason);
   for (const id of operations.sweep()) logger.warn('operation interrupted at start', { operation_run_id: id });
   // Automatic verification, once this clone trusted it (ADR-0029 §6): a claim is verified at once.
   const verify = (taskId: string, actor: Actor) => (opts.verify ?? runVerification)(ctx, taskId, actor);
@@ -523,7 +544,11 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       stopWorkspaces();
       stopAutoVerify();
       stopLaya();
-      operations.close();
+      // Every operation's processes end, confirmed, before the database closes (review F07).
+      await operations
+        .close()
+        .catch((e: unknown) => logger.error('stopping operations failed', { message: (e as Error).message }));
+      await groups.close().catch(() => undefined);
       graph.close();
       for (const s of streams) s.abort();
       await new Promise((r) => setTimeout(r, 30));

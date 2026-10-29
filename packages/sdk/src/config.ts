@@ -114,17 +114,21 @@ export const McpSettings = z
   .strict()
   .prefault({});
 
-/** A URL on this machine: task text never leaves it for a service a tracked file chose (ADR-0031 §10). */
+/**
+ * A URL on this machine: task text never leaves it for a service a tracked file chose (ADR-0031 §10).
+ * A literal loopback address only: a name may resolve to an IPv6 address a service listening on
+ * IPv4 does not answer (plan E.3).
+ */
 const LoopbackUrl = z
   .string()
   .url()
   .refine((u) => {
     try {
-      return ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(new URL(u).hostname);
+      return ['127.0.0.1', '[::1]'].includes(new URL(u).hostname);
     } catch {
       return false;
     }
-  }, 'Laya must run on this machine (127.0.0.1)');
+  }, 'Laya must run on this machine: use http://127.0.0.1:<port>');
 
 /** Model routing (ADR-0031). */
 export const RoutingSettings = z

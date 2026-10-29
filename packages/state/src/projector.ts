@@ -75,6 +75,11 @@ export class StateProjector implements Projector {
           .prepare('INSERT INTO projects (project_id, name, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
           .run(e.project_id, str(p.name), str(p.root_path), e.occurred_at, e.occurred_at);
         return;
+      case 'project.relocated':
+        this.db
+          .prepare('UPDATE projects SET root_path = ?, updated_at = ? WHERE project_id = ?')
+          .run(str(p.to), e.occurred_at, e.project_id);
+        return;
       case 'task.created':
         this.insertTask(e, p.task as Payload);
         return;
@@ -165,8 +170,8 @@ export class StateProjector implements Projector {
         this.db
           .prepare(
             `INSERT INTO verification_runs (verification_id, project_id, task_id, run_id, status, started_at,
-               execution_root, commit_sha, source_version, base_commit, task_kind)
-             VALUES (?, ?, ?, ?, 'RUNNING', ?, ?, ?, ?, ?, ?)`,
+               execution_root, commit_sha, source_version, base_commit, task_kind, tree)
+             VALUES (?, ?, ?, ?, 'RUNNING', ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             str(p.verification_id),
@@ -179,6 +184,7 @@ export class StateProjector implements Projector {
             opt(p.source_version),
             opt(p.base_commit),
             opt(p.task_kind),
+            opt(p.tree),
           );
         return;
       case 'verification.check_completed': {

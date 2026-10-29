@@ -1,10 +1,30 @@
-import { allocateWorktree, GitRoot, goalBranch, removeWorktree, resolveCommit, worktreesDir } from '@friday/git';
-import type { Actor, WorktreeView } from '@friday/protocol';
+import {
+  allocateWorktree,
+  GitRoot,
+  goalBranch,
+  removeWorktree,
+  resolveCommit,
+  taskBranch,
+  worktreesDir,
+} from '@friday/git';
+import { type Actor, FridayError, type WorktreeView } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
 import type { Logger } from './log.js';
 
 const SYSTEM: Actor = { kind: 'system', id: 'friday' };
+
+/**
+ * Why a task whose worktree belongs to another clone of the project waits for a human, and what
+ * the human can do (review F08). This clone never writes that worktree, and never starts the task
+ * over on its own: the work may only be there.
+ */
+export function elsewhereReason(taskId: string, dir: string, branchHere: string | null): string {
+  const branch = taskBranch(taskId);
+  return branchHere
+    ? `its worktree belongs to another clone of the project (${dir}); this clone has its branch ${branch} at ${branchHere.slice(0, 12)}, but not the uncommitted work that may be there. Continue from the branch with "friday recover ${taskId} --action reassign", or start over with "friday recover ${taskId} --action restart"`
+    : `its worktree belongs to another clone of the project (${dir}), and this clone has no branch ${branch}, so its work is not here. Fetch it from that clone (git fetch <that clone> ${branch}:${branch}) and continue with "friday recover ${taskId} --action reassign", or start over with "friday recover ${taskId} --action restart"`;
+}
 
 /**
  * Task worktrees for the daemon (ADR-0023): prepares the worktree of every spawn run that waits
@@ -15,7 +35,14 @@ export class WorkspaceManager {
   readonly #preparing = new Set<string>();
 
   constructor(
-    private readonly opts: { state: FridayState; project: ProjectRef; logger: Logger; env: NodeJS.ProcessEnv },
+    private readonly opts: {
+      state: FridayState;
+      project: ProjectRef;
+      logger: Logger;
+      env: NodeJS.ProcessEnv;
+      /** Stops the task's gateway operations, confirmed (review F07). */
+      quiesce?: (taskId: string) => Promise<void>;
+    },
   ) {}
 
   /** Where this machine keeps task worktrees. */
@@ -50,6 +77,18 @@ export class WorkspaceManager {
     try {
       const run = state.q.findRun(runId);
       if (run?.workspace !== 'pending' || run.status !== 'STARTING') return;
+      // The task's work is in another clone's worktree: a human decides (review F08).
+      const prev = state.q.worktreeForTask(run.task_id);
+      if (prev && !state.inThisClone(prev.path)) {
+        const here = await resolveCommit(project.root, `refs/heads/${taskBranch(run.task_id)}`);
+        const reason = elsewhereReason(run.task_id, prev.path, here);
+        this.#askHuman(run.task_id, reason, { worktree: prev.path, branch_here: here });
+        throw new FridayError('invalid_request', reason);
+      }
+      // A gateway operation of an earlier attempt still works there: it ends first (review F07).
+      if (state.q.operationRuns(this.pid, { task_id: run.task_id, status: 'running', limit: 1 }).length) {
+        await this.opts.quiesce?.(run.task_id);
+      }
       const alloc = await allocateWorktree({
         mainRoot: project.root,
         worktreesDir: this.dir,
@@ -76,6 +115,15 @@ export class WorkspaceManager {
     } finally {
       this.#preparing.delete(runId);
     }
+  }
+
+  /** Asks a human once; the Master Brain does not delegate the task while the question is open. */
+  #askHuman(taskId: string, reason: string, details: Record<string, unknown>): void {
+    const { state } = this.opts;
+    const asked = state.q
+      .escalations(this.pid, 'pending')
+      .some((e) => e.task_id === taskId && e.kind === 'recovery_needed');
+    if (!asked) state.recoverTask(this.pid, SYSTEM, taskId, 'needs_human', { reason, details });
   }
 
   /** A worktree for a human to start a session in (`friday task worktree <task>`). */
@@ -121,6 +169,10 @@ export class WorkspaceManager {
     const removed: string[] = [];
     const kept: { path: string; reason: string }[] = [];
     for (const w of state.q.worktrees(this.pid, ['released'])) {
+      if (!state.inThisClone(w.path)) {
+        kept.push({ path: w.path, reason: 'it belongs to another clone of the project; this clone never touches it' });
+        continue;
+      }
       try {
         await removeWorktree(project.root, w.path);
         state.worktreeRemoved(this.pid, actor, w.worktree_id);

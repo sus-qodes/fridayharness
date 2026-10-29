@@ -586,6 +586,9 @@ importers:
       '@friday/daemon':
         specifier: workspace:*
         version: link:../apps/daemon
+      '@friday/git':
+        specifier: workspace:*
+        version: link:../packages/git
       '@friday/mcp-server':
         specifier: workspace:*
         version: link:../packages/mcp-server

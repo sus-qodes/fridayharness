@@ -7,12 +7,15 @@ import {
   preserveCommit,
   preservedPrefix,
   resetWorktree,
+  resolveCommit,
   snapshotWorktree,
+  taskBranch,
 } from '@friday/git';
 import { type Actor, FridayError, type RecoveryAction, type RecoveryAssessment, type TaskView } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
 import type { Logger } from './log.js';
+import { elsewhereReason } from './workspaces.js';
 
 const SYSTEM: Actor = { kind: 'system', id: 'friday' };
 const ACTIVE = ['ASSIGNED', 'RUNNING', 'WAITING', 'HARNESS_LOST'];
@@ -72,6 +75,11 @@ export class RecoveryManager {
 
     const tree = state.q.worktreeForTask(taskId);
     let worktree: RecoveryAssessment['worktree'] = null;
+    // A worktree of another clone (a restored database) is only ever read from here (review F08).
+    const elsewhere = tree ? !state.inThisClone(tree.path) : false;
+    const branchHere = elsewhere
+      ? await resolveCommit(project.root, `refs/heads/${taskBranch(taskId)}`).catch(() => null)
+      : null;
     if (tree) {
       const exists = existsSync(tree.path);
       const git = exists ? await GitRoot.open(tree.path).catch(() => null) : null;
@@ -84,6 +92,8 @@ export class RecoveryManager {
         head: identity?.head ?? null,
         commits_since_base: exists ? await commitsSince(tree.path, tree.base_commit).catch(() => null) : null,
         uncommitted: identity?.paths.slice(0, 50) ?? [],
+        elsewhere,
+        branch_here: branchHere,
       };
     }
     const errors = state.agentErrors(this.pid, taskId);
@@ -100,13 +110,17 @@ export class RecoveryManager {
     const exhausted = attempts > settings.maxRetries;
     const repeating = same > settings.maxSameErrorRetries;
     const whyHuman =
-      alive === true
-        ? `its host process (pid ${harness?.host_pid}) is still running on this machine, so it may still be writing`
-        : exhausted
-          ? `it has had ${attempts} attempt(s), and recovery.max_retries is ${settings.maxRetries}`
-          : repeating
-            ? `the same error repeated ${same} time(s): ${last}`
-            : null;
+      elsewhere && tree
+        ? elsewhereReason(taskId, tree.path, branchHere)
+        : alive === true
+          ? `its host process (pid ${harness?.host_pid}) is still running on this machine, so it may still be writing`
+          : exhausted
+            ? `it has had ${attempts} attempt(s), and recovery.max_retries is ${settings.maxRetries}`
+            : repeating
+              ? `the same error repeated ${same} time(s): ${last}`
+              : null;
+    // A task waiting in READY because its work is elsewhere is recovered by a human's choice too.
+    const movable = active || (elsewhere && task.status === 'READY');
     const options: RecoveryAssessment['options'] = [
       {
         action: 'reconnect',
@@ -118,17 +132,23 @@ export class RecoveryManager {
       },
       {
         action: 'reassign',
-        available: active,
+        available: movable && (!elsewhere || branchHere !== null),
         recommended: active && lost && !windowOpen && whyHuman === null,
-        reason: worktree?.exists
-          ? 'the next attempt continues in the same worktree and branch; uncommitted work is preserved first'
-          : 'the task goes back to READY for the next agent',
+        reason: elsewhere
+          ? branchHere
+            ? `the next attempt continues from ${taskBranch(taskId)} in this clone; uncommitted work in the other clone's worktree is not included`
+            : `this clone has no ${taskBranch(taskId)}: fetch it from the clone that has it first`
+          : worktree?.exists
+            ? 'the next attempt continues in the same worktree and branch; uncommitted work is preserved first'
+            : 'the task goes back to READY for the next agent',
       },
       {
         action: 'restart',
-        available: active && Boolean(worktree?.exists),
+        available: elsewhere ? movable : active && Boolean(worktree?.exists),
         recommended: false,
-        reason: 'the next attempt starts from the last commit; uncommitted work is preserved first',
+        reason: elsewhere
+          ? `the next attempt starts over in this clone, from ${branchHere ? `the last commit of ${taskBranch(taskId)}` : 'its base'}`
+          : 'the next attempt starts from the last commit; uncommitted work is preserved first',
       },
       {
         action: 'needs_human',
@@ -184,7 +204,37 @@ export class RecoveryManager {
       }
       const why = reason ?? option.reason;
       let preserved: string | null = null;
-      if ((action === 'reassign' || action === 'restart') && a.worktree?.exists && a.worktree.uncommitted.length) {
+      const moving = action === 'reassign' || action === 'restart';
+      if (moving && a.worktree?.elsewhere) {
+        // Never written from this clone: the human's choice retires it here, and the next attempt
+        // gets a worktree of this clone (review F08).
+        const tree = state.q.worktreeForTask(taskId);
+        if (tree) {
+          state.releaseWorktree(
+            this.pid,
+            actor,
+            tree.worktree_id,
+            'released',
+            `it belongs to another clone of the project; ${action} here: ${why}`,
+          );
+        }
+        for (const e of state.q.escalations(this.pid, 'pending')) {
+          if (e.task_id === taskId && e.kind === 'recovery_needed' && actor.kind === 'human') {
+            state.answerEscalation(this.pid, actor, String(e.escalation_id), `${action}: ${why}`);
+          }
+        }
+        if (a.task_status === 'READY') {
+          state.recordObservation(
+            this.pid,
+            actor,
+            'recovery.performed',
+            { task_id: taskId, action, reason: why, preserved_ref: null },
+            [{ kind: 'task', id: taskId }],
+          );
+          logger.info('task recovered', { task_id: taskId, action, reason: why });
+          return { task: state.q.task(this.pid, taskId), preserved_ref: null, assessment: a };
+        }
+      } else if (moving && a.worktree?.exists && a.worktree.uncommitted.length) {
         const commit = await snapshotWorktree(
           a.worktree.path,
           `Preserved work of ${taskId}, attempt ${a.run?.attempt ?? 0}\n\n${why}`,
@@ -199,7 +249,7 @@ export class RecoveryManager {
           );
         }
       }
-      if (action === 'restart' && a.worktree?.exists) await resetWorktree(a.worktree.path);
+      if (action === 'restart' && a.worktree?.exists && !a.worktree.elsewhere) await resetWorktree(a.worktree.path);
       const task = state.recoverTask(this.pid, actor, taskId, action, {
         reason: why,
         preserved_ref: preserved,

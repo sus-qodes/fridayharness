@@ -46,6 +46,8 @@ export const ERROR_CODES = {
   routing_unavailable: { code: 'COS-7000', http: 503, retryable: true },
   model_unavailable: { code: 'COS-7001', http: 503, retryable: true },
   routing_confidence_low: { code: 'COS-7002', http: 409, retryable: false },
+  /** Routing does not let the work start on this harness (review F01); a human can change that. */
+  routing_blocked: { code: 'COS-7003', http: 409, retryable: true },
 
   git_conflict: { code: 'COS-8000', http: 409, retryable: false },
   worktree_dirty: { code: 'COS-8001', http: 409, retryable: false },

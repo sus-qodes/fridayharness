@@ -4,9 +4,10 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createDaemon } from '@friday/daemon';
+import { GitRoot } from '@friday/git';
 import type { Actor, TaskStartParams, TaskView, VerificationView } from '@friday/protocol';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cli } from '../helpers/cli.js';
 import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
 import { FakeHarness } from '../helpers/fake-harness.js';
@@ -229,5 +230,57 @@ describe('verification at a recorded revision of the task checkout', () => {
       status: 'CANCELLED',
       summary: 'interrupted: the daemon stopped while its checks ran',
     });
+  });
+
+  it('judges nothing when git cannot read the task checkout, before or after the checks (review F05)', async () => {
+    const td = await project();
+    const w = await claimWork(td, { agent: 'be-1', files: { 'src/shared.mjs': 'export const shared = 2;\n' } });
+    // Before the checks: what the task changed cannot be read.
+    const before = vi
+      .spyOn(GitRoot.prototype, 'changesSince')
+      .mockRejectedValueOnce(new Error('simulated: git could not read the index'));
+    try {
+      const v = await verify(td, w.task.task_id);
+      expect(v.task.status).toBe('READY_FOR_VERIFICATION');
+      expect(v.verification).toMatchObject({ status: 'CANCELLED' });
+      expect(v.verification.summary).toContain('simulated: git could not read the index');
+    } finally {
+      before.mockRestore();
+    }
+    // After the checks: whether the code stayed the same cannot be read.
+    const identity = GitRoot.prototype.identity;
+    let calls = 0;
+    const after = vi.spyOn(GitRoot.prototype, 'identity').mockImplementation(async function (
+      this: GitRoot,
+      ...args: Parameters<GitRoot['identity']>
+    ) {
+      calls += 1;
+      if (calls > 1) throw new Error('simulated: git stopped answering');
+      return identity.apply(this, args);
+    });
+    try {
+      const v = await verify(td, w.task.task_id);
+      expect(v.task.status).toBe('READY_FOR_VERIFICATION');
+      expect(v.verification).toMatchObject({ status: 'CANCELLED' });
+      expect(v.verification.summary).toContain('simulated: git stopped answering');
+    } finally {
+      after.mockRestore();
+    }
+    // A base commit the repository does not have: the task's commits cannot be judged against it.
+    const realBase = td.daemon.state.q.findRun(w.start.run_id)?.base_commit;
+    expect(realBase).toMatch(/^[0-9a-f]{40}$/);
+    td.daemon.state.db
+      .prepare('UPDATE task_runs SET base_commit = ? WHERE run_id = ?')
+      .run('0'.repeat(40), w.start.run_id);
+    const lost = await verify(td, w.task.task_id);
+    expect(lost.task.status).toBe('READY_FOR_VERIFICATION');
+    expect(lost.verification.summary).toContain(`base commit ${'0'.repeat(40)} is not in this repository`);
+    td.daemon.state.db.prepare('UPDATE task_runs SET base_commit = ? WHERE run_id = ?').run(realBase, w.start.run_id);
+
+    // Readable again: verified, at a revision known by its content and its exact tree.
+    const ok = await verify(td, w.task.task_id);
+    expect(ok.task.status).toBe('COMPLETED');
+    expect(ok.verification.source_version).toMatch(/^[0-9a-f]{40}\+[0-9a-f]{12}$/);
+    expect(ok.verification.tree).toMatch(/^[0-9a-f]{40}$/);
   });
 });

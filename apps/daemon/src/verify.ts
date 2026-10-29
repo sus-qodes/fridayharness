@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { findCredentials } from '@friday/events';
-import { GitRoot } from '@friday/git';
+import { type ContentTree, changedBetween, GitRoot, sameRepository } from '@friday/git';
 import { matchesAny, patternsOverlap, sensitiveClassOf } from '@friday/policy';
 import { type Actor, FridayError, isFridayError, type RunView, type VerificationFinding } from '@friday/protocol';
 import {
@@ -50,6 +50,9 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       `${taskId} is ${task.status}; only a task READY_FOR_VERIFICATION can be verified`,
     );
   }
+  // The claim ended the attempt; a gateway operation it started is stopped, confirmed, before the
+  // checkout is read (review F07).
+  await ctx.quiesce(taskId, 'its task is being verified');
   const run = task.current_run_id ? state.q.findRun(task.current_run_id) : undefined;
   const root = run?.execution_root ?? project.root;
   if (!existsSync(root)) {
@@ -58,20 +61,52 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       `the checkout ${taskId} worked in is gone (${root}); restore it from its branch with "friday task worktree ${taskId}", or record a result with --result passed|failed`,
     );
   }
-  const git = await GitRoot.open(root).catch(() => null);
   const base = run?.base_commit ?? null;
-  const since = git ? await git.changesSince(base).catch(() => null) : null;
-  const before = since?.identity ?? null;
   const shared = samePath(root, project.root);
   const checks = selectChecks(configured, task.kind);
+  // What is verified must be read from git: every task worktree, and the main checkout of a project
+  // kept in git. A checkout git cannot read is not verified at all (review F05); only a project
+  // outside git is judged without a diff.
+  const gitRequired = !shared || existsSync(path.join(project.root, '.git'));
+  let git: GitRoot | null = null;
+  let since: Awaited<ReturnType<GitRoot['changesSince']>> | null = null;
+  let content: ContentTree | null = null;
+  let unreadable: string | null = null;
+  if (gitRequired) {
+    try {
+      git = await GitRoot.open(root);
+      if (!samePath(git.root, realpathSync(root))) throw new Error(`git sees ${git.root} as the checkout, not ${root}`);
+      // A checkout of another clone (a restored database) is that clone's to judge (review F08).
+      if (!shared && !(await sameRepository(root, project.root))) {
+        throw new Error(`it belongs to another clone of the project, not to ${project.root}`);
+      }
+      since = await git.changesSince(base);
+      if (!since.base_found) {
+        throw new Error(
+          `the task's base commit ${base} is not in this repository, so its committed changes cannot be judged`,
+        );
+      }
+      content = await git.contentTree();
+    } catch (e) {
+      unreadable = (e as Error).message;
+    }
+  }
+  const before = since?.identity ?? null;
 
   const { verification_id } = state.startVerification(pid, actor, taskId, {
     execution_root: root,
-    commit_sha: before?.head ?? null,
+    commit_sha: content?.head ?? before?.head ?? null,
     source_version: before?.version ?? null,
     base_commit: base,
     task_kind: task.kind,
+    tree: content?.tree ?? null,
   });
+  if (unreadable !== null) {
+    const reason = `the checkout ${root} could not be verified here: ${unreadable}; nothing was verified (verify again once it can be, or record a result with --result passed|failed)`;
+    logger.warn('verification interrupted', { task_id: taskId, reason });
+    const interrupted = state.interruptVerification(pid, actor, verification_id, reason);
+    return { task: interrupted, verification: state.q.verification(verification_id) };
+  }
   ctx.verifying.add(verification_id);
   let requiredFailed = 0;
   let requiredRan = 0;
@@ -117,14 +152,6 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
             paths: [],
           },
         ];
-    if (since && !since.base_found) {
-      findings.push({
-        rule: 'diff.base_missing',
-        severity: 'warn',
-        message: `the base commit ${base} is not in this repository; only uncommitted changes were analyzed`,
-        paths: [],
-      });
-    }
     if (before?.dirty) {
       findings.push({
         rule: 'diff.uncommitted',
@@ -189,20 +216,34 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       true,
     );
 
-    // 2. Credentials written into changed files.
-    const scanned = readChangedText(root, changes);
-    const secrets = scanCredentials(scanned, findCredentials);
+    // 2. Credentials written into changed files. What could not be read is said, not presented as
+    // scanned (review F05).
+    const { scanned, skipped } = readChangedText(root, changes);
+    const secrets: Finding[] = scanCredentials(scanned, findCredentials);
+    const total = scanned.length + skipped.length;
+    if (skipped.length) {
+      secrets.push({
+        rule: 'secrets.not_scanned',
+        severity: 'warn',
+        message: `${skipped.length} of ${total} changed file(s) were not scanned: ${skipped
+          .slice(0, 10)
+          .map((s) => `${s.path} (${s.why})`)
+          .join(', ')}${skipped.length > 10 ? `, and ${skipped.length - 10} more` : ''}`,
+        paths: skipped.slice(0, 20).map((s) => s.path),
+      });
+    }
+    const leaked = secrets.filter((f) => f.severity === 'fail');
     record(
       {
         name: 'friday.secrets',
         kind: 'security',
         origin: 'friday',
-        status: secrets.length ? 'FAILED' : 'PASSED',
+        status: leaked.length ? 'FAILED' : 'PASSED',
         exit_code: null,
         artifact_ref: null,
-        summary: secrets.length
-          ? `credentials in ${secrets[0]?.paths.length ?? 0} of ${scanned.length} changed file(s)`
-          : `no credentials in ${scanned.length} changed file(s)`,
+        summary: leaked.length
+          ? `credentials in ${leaked[0]?.paths.length ?? 0} of ${scanned.length} scanned file(s)`
+          : `no credentials in ${scanned.length} of ${total} changed file(s)${skipped.length ? `; ${skipped.length} not scanned` : ''}`,
         details: { findings: secrets as VerificationFinding[] },
       },
       true,
@@ -243,11 +284,24 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       });
     }
 
-    // 4. One revision: code that changed while it was checked was not verified (ADR-0024 §2).
-    if (git && before) {
-      const after = await git.identity().catch(() => null);
-      if (after && after.version !== before.version) {
-        const reason = `the code changed while it was verified (${before.version} became ${after.version}); verify it again`;
+    // 4. One revision: code that changed while it was checked was not verified (ADR-0024 §2), and
+    // code git can no longer read is not known to be the same (review F05). The trees compare the
+    // content itself, so an approximate identity is never taken as proof (review F13).
+    if (git && before && content) {
+      let reason: string | null = null;
+      try {
+        const after = await git.identity();
+        const afterContent = await git.contentTree();
+        if (after.version !== before.version || afterContent.head !== content.head) {
+          reason = `the code changed while it was verified (${before.version} became ${after.version}); verify it again`;
+        } else if (afterContent.tree !== content.tree) {
+          const paths = await changedBetween(git.root, content.tree, afterContent.tree).catch(() => []);
+          reason = `the code changed while it was verified (${paths.slice(0, 5).join(', ') || 'its files'} changed); verify it again`;
+        }
+      } catch (e) {
+        reason = `git could not read the checkout after the checks: ${(e as Error).message}; verify it again`;
+      }
+      if (reason) {
         logger.warn('verification interrupted', { task_id: taskId, reason });
         const interrupted = state.interruptVerification(pid, actor, verification_id, reason);
         return { task: interrupted, verification: state.q.verification(verification_id) };
@@ -297,15 +351,19 @@ async function runConfigured(
 ): Promise<boolean> {
   const { state, project, logger } = ctx;
   // In the execution profile (ADR-0029 §6): the checks run code an agent may have written.
-  const outcome = await runCheckInProfile(ctx.profile(), {
-    name: c.name,
-    command: c.command,
-    args: c.args,
-    root: c.root,
-    cwd: c.cwd,
-    env: c.env,
-    timeoutMs: c.timeoutMs,
-  });
+  const outcome = await runCheckInProfile(
+    ctx.profile(),
+    {
+      name: c.name,
+      command: c.command,
+      args: c.args,
+      root: c.root,
+      cwd: c.cwd,
+      env: c.env,
+      timeoutMs: c.timeoutMs,
+    },
+    ctx.groups,
+  );
   const artifact = state.artifacts?.storeText(
     project.project_id,
     'verification',
@@ -338,24 +396,38 @@ function claimedPaths(run: RunView | undefined, root: string): string[] | null {
     });
 }
 
-/** Text of changed files for the credential scan: bounded, binary files skipped. */
+/** Text of changed files for the credential scan: bounded; what was not read is listed with why. */
 function readChangedText(root: string, changes: readonly { path: string; change: string }[]) {
-  const out: { path: string; text: string }[] = [];
+  const scanned: { path: string; text: string }[] = [];
+  const skipped: { path: string; why: string }[] = [];
   for (const c of changes) {
-    if (out.length >= SCAN_MAX_FILES) break;
     if (c.change === 'deleted') continue;
+    if (scanned.length >= SCAN_MAX_FILES) {
+      skipped.push({ path: c.path, why: `past the first ${SCAN_MAX_FILES}` });
+      continue;
+    }
     const abs = path.join(root, c.path);
     try {
       const st = statSync(abs);
-      if (!st.isFile() || st.size > SCAN_MAX_BYTES) continue;
+      if (!st.isFile()) {
+        skipped.push({ path: c.path, why: 'not a regular file' });
+        continue;
+      }
+      if (st.size > SCAN_MAX_BYTES) {
+        skipped.push({ path: c.path, why: 'larger than 1 MB' });
+        continue;
+      }
       const bytes = readFileSync(abs);
-      if (bytes.subarray(0, 8000).includes(0)) continue;
-      out.push({ path: c.path, text: bytes.toString('utf8') });
-    } catch {
-      // gone since git listed it
+      if (bytes.subarray(0, 8000).includes(0)) {
+        skipped.push({ path: c.path, why: 'binary' });
+        continue;
+      }
+      scanned.push({ path: c.path, text: bytes.toString('utf8') });
+    } catch (e) {
+      skipped.push({ path: c.path, why: `unreadable: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}` });
     }
   }
-  return out;
+  return { scanned, skipped };
 }
 
 function diffSummary(changed: number, findings: readonly Finding[]): string {

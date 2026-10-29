@@ -72,6 +72,7 @@ export class RoutingService {
       vendor: harness?.vendor ?? null,
       harness_models: declared,
       model_control: caps.model_control === 'set' ? 'set' : 'none',
+      observed_model: harness?.observed_model ?? null,
       models: this.models,
       guide: guide.classes,
       guide_version: this.guideVersion,
@@ -96,11 +97,12 @@ export class RoutingService {
    * How well the model routing would run on an agent's harness fits a task, and its cost relative to
    * the dearest model Friday knows (ADR-0031 §9): what delegation weighs.
    */
-  fitFor(task: TaskView, agentId: string): { fit: number; cost: number } | null {
+  fitFor(task: TaskView, agentId: string): { fit: number; cost: number; blocked?: string } | null {
     const agent = this.deps.state.q.findAgent(agentId);
     const harness = agent?.harness_id ? this.deps.state.q.findHarness(agent.harness_id) : undefined;
     if (!agent || !harness) return null;
     const d = decideRoute(this.input({ task_id: task.task_id, kind: task.kind, role: agent.role }, harness));
+    if (d.blocked) return { fit: 0, cost: 0, blocked: d.reason };
     const chosen = d.candidates.find((c) => c.model === d.model);
     const model = this.models.find((m) => m.id === d.model);
     const dearest = Math.max(0, ...this.models.map((m) => (m.price ? (m.price.input + m.price.output) / 2 : 0)));

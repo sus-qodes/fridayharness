@@ -306,6 +306,12 @@ export const RecoveryAssessment = z.object({
       head: z.string().nullable(),
       commits_since_base: z.number().int().nullable(),
       uncommitted: z.array(z.string()),
+      /**
+       * The worktree belongs to another clone of the project (a restored database, review F08):
+       * this clone never writes it. `branch_here` is the task branch's commit in this clone, if any.
+       */
+      elsewhere: z.boolean().default(false),
+      branch_here: z.string().nullable().default(null),
     })
     .nullable(),
   /** Fatal agent errors of the task, and how often the latest one repeated. */
@@ -400,6 +406,11 @@ export const VerificationView = z.object({
   source_version: z.string().nullable(),
   base_commit: z.string().nullable(),
   task_kind: z.string().nullable(),
+  /**
+   * The exact content judged, as a git tree id (review F04): integration lands only this tree. Null
+   * for manual results, checkouts outside git and older records.
+   */
+  tree: z.string().nullable().default(null),
   checks: z.array(VerificationCheckView),
 });
 export type VerificationView = z.infer<typeof VerificationView>;

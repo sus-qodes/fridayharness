@@ -234,6 +234,7 @@ export interface VerificationRow {
   source_version?: string | null;
   base_commit?: string | null;
   task_kind?: string | null;
+  tree?: string | null;
 }
 
 export interface CheckRow {
@@ -263,6 +264,7 @@ export function toVerificationView(row: VerificationRow, checks: CheckRow[]): Ve
     source_version: row.source_version ?? null,
     base_commit: row.base_commit ?? null,
     task_kind: row.task_kind ?? null,
+    tree: row.tree ?? null,
     checks: checks.map((c) => ({
       name: c.name,
       kind: c.kind,

@@ -56,7 +56,8 @@ describe('config', () => {
     const laya = (url: string) => () =>
       parseConfig(`${renderInitialConfig(PID, 'shop')}\nrouting:\n  laya:\n    enabled: true\n    url: ${url}\n`);
     expect(laya('http://127.0.0.1:9000')).not.toThrow();
-    expect(laya('http://localhost:9000')).not.toThrow();
+    expect(laya('http://[::1]:9000')).not.toThrow();
+    expect(laya('http://localhost:9000')).toThrow(/127\.0\.0\.1/); // portability-allow: localhost
     expect(laya('https://laya.example.com')).toThrow(/on this machine/);
   });
 

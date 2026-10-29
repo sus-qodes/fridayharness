@@ -1,4 +1,11 @@
-import { type Actor, FridayError, type GoalView, type PlanVersionView, type TaskView } from '@friday/protocol';
+import {
+  type Actor,
+  FridayError,
+  type GoalView,
+  isFridayError,
+  type PlanVersionView,
+  type TaskView,
+} from '@friday/protocol';
 import type { BrainJob, BrainJobInput, FridayState } from '@friday/state';
 import { type DelegationCandidate, delegate } from './delegate.js';
 import { buildEscalation, type EscalationReason } from './escalate.js';
@@ -73,9 +80,10 @@ export interface BrainDeps {
   lostWork?: 'release' | 'external';
   /**
    * How well the model routing would run on an agent's harness fits a task, and its relative cost
-   * (ADR-0031 §9); without it, delegation ignores models.
+   * (ADR-0031 §9); without it, delegation ignores models. `blocked`: routing does not let the task
+   * start on that agent's harness, and why (review F01).
    */
-  modelFit?: (task: TaskView, agentId: string) => { fit: number; cost: number } | null;
+  modelFit?: (task: TaskView, agentId: string) => { fit: number; cost: number; blocked?: string } | null;
 }
 
 export interface BrainStep {
@@ -1125,9 +1133,17 @@ export class MasterBrain {
     const { state, projectId } = this.#deps;
     const now = state.clock.now();
     const active = new Set(state.q.goals(projectId, { statuses: ['ACTIVE'] }).map((g) => g.goal_id));
+    // A human was asked how the task goes on (its work is in another clone, review F08; its host ran
+    // a model its constraints forbid, review F01): it waits for the answer.
+    const asked = new Set(
+      state.q
+        .escalations(projectId, 'pending')
+        .filter((e) => e.kind === 'recovery_needed' || e.kind === 'routing_violated')
+        .map((e) => String(e.task_id)),
+    );
     const ready = state.q
       .tasks(projectId, { statuses: ['READY'] })
-      .filter((t) => t.goal_id && active.has(t.goal_id))
+      .filter((t) => t.goal_id && active.has(t.goal_id) && !asked.has(t.task_id))
       .sort(
         (a, b) => (PRIORITY[a.priority] ?? 9) - (PRIORITY[b.priority] ?? 9) || a.created_at.localeCompare(b.created_at),
       );
@@ -1151,6 +1167,15 @@ export class MasterBrain {
       const running = state.q
         .tasks(projectId, { statuses: ['ASSIGNED', 'RUNNING', 'WAITING'] })
         .map((t) => t.scope?.write ?? []);
+      // The model each agent's harness would run for this task, and its cost (ADR-0031 §9). An
+      // agent whose route blocks the task is no candidate (review F01).
+      const fitted = candidates.map((x) => ({ x, fit: this.#deps.modelFit?.(task, x.c.agent_id) ?? null }));
+      const open = fitted.filter((f) => !f.fit?.blocked);
+      const blockedFit = fitted.find((f) => f.fit?.blocked)?.fit;
+      if (!open.length && blockedFit?.blocked) {
+        state.noteRoutingBlocked(projectId, task.task_id, blockedFit.blocked);
+        continue;
+      }
       const decision = delegate(
         {
           task_id: task.task_id,
@@ -1158,18 +1183,21 @@ export class MasterBrain {
           role: task.role ?? 'developer',
           write: task.scope?.write ?? [],
         },
-        // The model each agent's harness would run for this task, and its cost (ADR-0031 §9).
-        candidates.map((x) => {
-          const fit = this.#deps.modelFit?.(task, x.c.agent_id);
-          return fit ? { ...x.c, model_fit: fit.fit, cost: fit.cost } : x.c;
-        }),
+        open.map(({ x, fit }) => (fit ? { ...x.c, model_fit: fit.fit, cost: fit.cost } : x.c)),
         running,
       );
-      const r = state.delegateTask(projectId, MASTER_BRAIN, task.task_id, {
-        agent_key: decision.agent_key,
-        reason: decision.reason,
-        scores: decision.scores.slice(0, 5),
-      });
+      let r: ReturnType<typeof state.delegateTask>;
+      try {
+        r = state.delegateTask(projectId, MASTER_BRAIN, task.task_id, {
+          agent_key: decision.agent_key,
+          reason: decision.reason,
+          scores: decision.scores.slice(0, 5),
+        });
+      } catch (e) {
+        // Routing changed between the fit and the assignment; the state recorded the block.
+        if (isFridayError(e, 'routing_blocked')) continue;
+        throw e;
+      }
       if (r.mode !== 'none' && r.mode !== 'waiting')
         out.push(`${task.task_id}: ${r.mode}${decision.agent_key ? ` to ${decision.agent_key}` : ''}`);
     }

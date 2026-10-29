@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { type FSWatcher, watch as fsWatch } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { copyFileSync, existsSync, type FSWatcher, watch as fsWatch, rmSync, statSync, utimesSync } from 'node:fs';
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { FridayError } from '@friday/protocol';
@@ -43,6 +43,14 @@ export interface SourceIdentity {
   reason?: string;
   /** Compact form for cache keys: `<head>` or `<head>+<first 12 of hash>`. */
   version: string;
+}
+
+/** What a checkout holds, as git objects (review F04). */
+export interface ContentTree {
+  /** The commit its HEAD names; null on a branch with no commit yet. */
+  head: string | null;
+  /** The tree of every file git sees in it: tracked ones, and untracked ones that are not ignored. */
+  tree: string;
 }
 
 /** A path changed since a base commit (ADR-0024 §3). Paths are root-relative with forward slashes. */
@@ -220,6 +228,35 @@ export class GitRoot {
       ...(reason ? { reason } : {}),
       version: `${headText}+${basis === 'approximate' ? '~' : ''}${hash.slice(0, 12)}`,
     };
+  }
+
+  /**
+   * The exact content of the checkout as a git tree: what a commit of everything in it would hold
+   * (review F04). Unlike the identity it has no approximate form: it is the content itself, so
+   * equal trees are equal files. It is written through a temporary copy of the checkout's index, so
+   * the checkout, its index and its branch stay untouched; the copy keeps the index's file data, so
+   * git reads only the files that changed. A file git cannot read makes it fail.
+   */
+  async contentTree(): Promise<ContentTree> {
+    const refs = await this.refs();
+    const index = path.join(refs.gitDir, `friday-tree-${randomBytes(4).toString('hex')}.index`);
+    const env = { GIT_INDEX_FILE: index };
+    try {
+      const own = path.join(refs.gitDir, 'index');
+      if (existsSync(own)) {
+        copyFileSync(own, index);
+        // The original's time, so a file changed in the same instant as the index is still re-read.
+        const st = statSync(own);
+        utimesSync(index, st.atimeMs / 1000, st.mtimeMs / 1000);
+      } else if (refs.head) {
+        await this.git(['read-tree', refs.head], { env });
+      }
+      await this.git(['add', '-A'], { env, timeoutMs: Math.max(this.opts.timeoutMs ?? 15_000, 300_000) });
+      const tree = (await this.git(['write-tree'], { env })).stdout.trim();
+      return { head: refs.head, tree };
+    } finally {
+      rmSync(index, { force: true });
+    }
   }
 
   /**

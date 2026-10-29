@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { FridayError } from '@friday/protocol';
@@ -29,6 +30,21 @@ export function rootKey(mainRoot: string): string {
 }
 
 export const taskBranch = (taskId: string) => `friday/${taskId}`;
+
+/**
+ * Whether two checkouts are of one repository: they share a git common directory (review F08). A
+ * clone of the project has its own, so a worktree of another clone is never taken for this one's.
+ * Throws when either is not a git checkout.
+ */
+export async function sameRepository(a: string, b: string): Promise<boolean> {
+  const common = async (dir: string) => {
+    const refs = await (await GitRoot.open(dir)).refs();
+    const real = await realpath(refs.commonDir);
+    return process.platform === 'win32' ? real.toLowerCase() : real;
+  };
+  const [x, y] = await Promise.all([common(a), common(b)]);
+  return x === y;
+}
 
 const samePath = (a: string, b: string) =>
   process.platform === 'win32'

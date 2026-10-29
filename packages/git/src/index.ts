@@ -8,8 +8,9 @@ export const PACKAGE_NAME = '@friday/git';
 export {
   agentIdentity,
   type CommitIdentity,
+  changedBetween,
   checkoutForVerification,
-  commitAll,
+  commitContent,
   commitTree,
   FRIDAY_IDENTITY,
   goalBranch,
@@ -18,6 +19,7 @@ export {
   mergeCommits,
   moveRef,
   resolveCommit,
+  treeOf,
 } from './integrate.js';
 export {
   commitsSince,
@@ -29,6 +31,7 @@ export {
 } from './recover.js';
 export {
   type ChangedPath,
+  type ContentTree,
   type DiffEntry,
   GitRoot,
   type LogEntry,
@@ -45,6 +48,7 @@ export {
   allocateWorktree,
   removeWorktree,
   rootKey,
+  sameRepository,
   taskBranch,
   worktreesDir,
 } from './worktree.js';

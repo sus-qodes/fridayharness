@@ -1,9 +1,10 @@
 import path from 'node:path';
-import type { ExecutionProfile } from '@friday/execution';
+import type { ExecutionProfile, ProcessGroups } from '@friday/execution';
 import {
   agentIdentity,
+  changedBetween,
   checkoutForVerification,
-  commitAll,
+  commitContent,
   commitTree,
   GitRoot,
   goalBranch,
@@ -11,6 +12,8 @@ import {
   mergeCommits,
   moveRef,
   resolveCommit,
+  sameRepository,
+  treeOf,
 } from '@friday/git';
 import type { Actor, IntegrationView } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
@@ -26,10 +29,11 @@ type Outcome = Omit<IntegrationView, 'integration_id' | 'created_at'>;
 
 /**
  * Brings each verified task branch of a goal into the goal branch `friday/goal-<goal_id>`
- * (ADR-0025 §2–§5): the verified work is committed on its task branch if it is not yet, merged
- * without a checkout, the merged revision verified in Friday's own checkout, and only then is the
- * goal branch moved, from the commit Friday saw. One integration at a time per goal; the main
- * checkout is never touched, and landing the goal branch stays a human's step.
+ * (ADR-0025 §2–§5): exactly the tree the verification judged is committed on its task branch if it
+ * is not yet, merged without a checkout, the merged revision verified in Friday's own checkout (and
+ * refused if the checks changed it), and only then is the goal branch moved, from the commit Friday
+ * saw. One integration at a time per goal; the main checkout is never touched, and landing the goal
+ * branch stays a human's step.
  */
 export class IntegrationManager {
   readonly #chains = new Map<string, Promise<unknown>>();
@@ -42,6 +46,8 @@ export class IntegrationManager {
       workspaces: WorkspaceManager;
       /** The execution profile the merged revision's checks run in (ADR-0029 §6). */
       profile: () => ExecutionProfile;
+      /** Each check's process tree ends with it (review F07). */
+      groups?: ProcessGroups;
     },
   ) {}
 
@@ -107,30 +113,66 @@ export class IntegrationManager {
     const tree = state.q.worktreeForTask(taskId);
     if (!tree) return record({ ...base, status: 'not_needed', summary: 'the task did not work on a task branch' });
     try {
-      // 1. The verified work, as a commit on the task branch.
+      // 1. The verified work, as a commit on the task branch: exactly the tree the verification
+      // judged, never what the worktree holds by the time it is committed (review F04).
       const verified = state.q.latestVerification(taskId);
       if (verified?.status !== 'PASSED') {
         return record({ ...base, summary: 'the task has no passed verification to integrate' });
       }
-      const git = await GitRoot.open(tree.path);
-      const now = await git.identity();
-      if (verified.source_version && now.version !== verified.source_version) {
+      // A worktree of another clone (a restored database) is never written from here (review F08).
+      if (!state.inThisClone(tree.path) || !(await sameRepository(tree.path, project.root))) {
         return record({
           ...base,
-          summary: `the worktree changed after it was verified (${verified.source_version} became ${now.version}); verify the work again before integrating it`,
+          summary: `its worktree ${tree.path} belongs to another clone of the project, which this clone never writes; integrate it there, or verify the work again in this clone`,
         });
       }
-      let taskCommit = now.head;
-      if (now.dirty) {
+      const git = await GitRoot.open(tree.path);
+      const now = await git.identity();
+      const changedAfter = (detail: string) =>
+        record({
+          ...base,
+          summary: `the worktree changed after it was verified (${detail}); verify the work again before integrating it`,
+        });
+      if (verified.source_version && now.version !== verified.source_version) {
+        return changedAfter(`${verified.source_version} became ${now.version}`);
+      }
+      const content = await git.contentTree();
+      let candidate: string;
+      let basis: string;
+      if (verified.tree) {
+        if (content.tree !== verified.tree || content.head !== verified.commit_sha) {
+          const paths = await changedBetween(project.root, verified.tree, content.tree).catch(() => []);
+          return changedAfter(paths.length ? `${paths.slice(0, 5).join(', ')} changed` : 'its HEAD moved');
+        }
+        candidate = verified.tree;
+        basis = `verified as ${verified.source_version ?? verified.tree}`;
+      } else if (verified.checks.some((c) => c.kind === 'manual')) {
+        // A human recorded the result: their word covers the work as it is now.
+        candidate = content.tree;
+        basis = 'passed by a human result';
+      } else {
+        return record({
+          ...base,
+          summary:
+            'the verification recorded no exact tree to integrate (it predates Friday recording one); verify the work again',
+        });
+      }
+      let taskCommit = content.head;
+      if (!taskCommit || candidate !== (await treeOf(tree.path, taskCommit))) {
         const agentId = task.assigned_agent_id ?? state.q.runs(taskId).at(-1)?.agent_id;
         const agentKey = (agentId && state.q.findAgent(agentId)?.agent_key) || 'agent';
-        taskCommit = await commitAll(
+        taskCommit = await commitContent(
           tree.path,
-          `${task.summary}\n\nFriday task ${taskId}, verified as ${verified.source_version}.`,
+          candidate,
+          content.head,
+          `${task.summary}\n\nFriday task ${taskId}, ${basis}.`,
           agentIdentity(agentKey),
         );
       }
       if (!taskCommit) return record({ ...base, summary: 'the task branch has no commit' });
+      if ((await treeOf(project.root, taskCommit)) !== candidate) {
+        return record({ ...base, task_commit: taskCommit, summary: 'the task commit does not hold the verified tree' });
+      }
 
       // 2. The goal branch, created from the main checkout's HEAD the first time.
       let goalHead = await resolveCommit(project.root, ref);
@@ -181,22 +223,38 @@ export class IntegrationManager {
         `Integrate ${taskId}: ${task.summary}`,
       );
 
-      // 4. Verify the merged revision in Friday's own checkout before the goal branch moves.
+      // 4. Verify the merged revision in Friday's own checkout before the goal branch moves. The
+      // checks must judge exactly the merged tree and leave it as it was: a check that changes what
+      // it checks (a formatter, a generator) passed something else (review F04).
       const checks = selectChecks(project.config.verification.checks, task.kind);
       const results: Outcome['checks'] = [];
       let failed = 0;
+      let altered: string[] = [];
       if (checks.length) {
         const dir = await checkoutForVerification(project.root, workspaces.dir, `goal-${goalId.slice(-8)}`, commit);
-        for (const check of checks) {
-          const outcome = await runCheckInProfile(this.opts.profile(), {
-            name: check.name,
-            command: check.command,
-            args: check.args,
-            root: dir,
-            cwd: check.cwd ? path.resolve(dir, check.cwd) : dir,
-            env: check.env,
-            timeoutMs: check.timeout_ms,
+        const checkout = await GitRoot.open(dir);
+        if ((await checkout.contentTree()).tree !== merged.tree) {
+          return record({
+            ...base,
+            task_commit: taskCommit,
+            base_commit: goalHead,
+            summary: `Friday's checkout of the merged revision does not hold it; ${branch} was not moved`,
           });
+        }
+        for (const check of checks) {
+          const outcome = await runCheckInProfile(
+            this.opts.profile(),
+            {
+              name: check.name,
+              command: check.command,
+              args: check.args,
+              root: dir,
+              cwd: check.cwd ? path.resolve(dir, check.cwd) : dir,
+              env: check.env,
+              timeoutMs: check.timeout_ms,
+            },
+            this.opts.groups,
+          );
           const artifact = state.artifacts?.storeText(
             this.pid,
             'verification',
@@ -211,6 +269,17 @@ export class IntegrationManager {
           });
           if (!outcome.passed && check.required) failed += 1;
         }
+        const after = await checkout.contentTree();
+        if (after.tree !== merged.tree) altered = await changedBetween(project.root, merged.tree, after.tree);
+      }
+      if (altered.length) {
+        return record({
+          ...base,
+          task_commit: taskCommit,
+          base_commit: goalHead,
+          checks: results,
+          summary: `the checks changed ${altered.slice(0, 5).join(', ')}${altered.length > 5 ? ` and ${altered.length - 5} more` : ''} in the merged revision ${commit.slice(0, 12)}, so what passed is not what would land; ${branch} was not moved`,
+        });
       }
       if (failed) {
         return record({

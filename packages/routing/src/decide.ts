@@ -78,6 +78,11 @@ export interface RouteInput {
   harness_models: readonly string[] | null;
   /** `set`: the harness applies the model it is given (spawn adapters); `none`: advice only. */
   model_control: 'set' | 'none';
+  /**
+   * The model the harness reports running (an attached session at its start), if any: an advisory
+   * host meets a hard constraint only when it is seen running a model that does (review F01).
+   */
+  observed_model?: string | null;
   models: readonly ModelRecord[];
   guide: Readonly<Record<string, GuideClass>>;
   guide_version: string;
@@ -106,6 +111,13 @@ export interface RoutingDecision {
   model: string | null;
   /** The harness applies it (true) or may ignore it (false). */
   binding: boolean;
+  /**
+   * The work must not start here (review F01): a pinned model that cannot run, a hard constraint
+   * no runnable model meets, manual mode without a model, an unreliable Laya answer configured to
+   * stop, or an advisory host not seen running a model that meets the constraints. `model: null`
+   * without `blocked` means routing has no opinion: Friday knows no model this harness runs.
+   */
+  blocked: boolean;
   source: 'pin' | 'manual' | 'laya' | 'score' | 'guide' | 'fallback' | 'none';
   reason: string;
   reason_codes: string[];
@@ -213,9 +225,11 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     eligible = eligible.filter((m) => m.vision);
   }
   if (sensitive) constraints.push('sensitive');
+  const constrained = eligible;
 
   const binding = input.model_control === 'set';
-  const result = (
+  const observed = input.observed_model ?? null;
+  const assemble = (
     model: string | null,
     source: RoutingDecision['source'],
     reason: string,
@@ -225,6 +239,7 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     task_class,
     model,
     binding: model !== null && binding,
+    blocked: false,
     source,
     reason: model && !binding ? `${reason}; advisory: this session's host chooses its own model` : reason,
     reason_codes: codes,
@@ -238,6 +253,36 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     guide_version: input.guide_version,
     ...extra,
   });
+  /**
+   * A host that chooses its own model meets a hard constraint only when it is seen running a model
+   * that does; otherwise the work does not start there (review F01).
+   */
+  const result = (...args: Parameters<typeof assemble>): RoutingDecision => {
+    const d = assemble(...args);
+    if (d.blocked || d.model === null || binding || !constraints.length) return d;
+    const meets = observed !== null && (sensitive ? observed === d.model : constrained.some((m) => m.id === observed));
+    if (meets && observed !== null) {
+      // The host runs its own model; it meets the constraints, so that model is the route.
+      return observed === d.model
+        ? d
+        : {
+            ...d,
+            model: observed,
+            reason: `${observed}, which this session runs and which meets ${constraints.join(', ')}`,
+          };
+    }
+    codes.push('advisory.unverified');
+    return {
+      ...d,
+      model: null,
+      binding: false,
+      blocked: true,
+      source: 'none',
+      reason: `${constraints.join(', ')} must hold, but this session's host chooses its own model and ${observed ? `reports ${observed}, which does not meet them` : 'has not reported one'}; ${sensitive ? `run it where ${d.model} is applied, ` : ''}a human decides`,
+    };
+  };
+  const blocked = (reason: string, extra: Partial<RoutingDecision> = {}) =>
+    assemble(null, 'none', reason, { ...extra, blocked: true });
 
   // A human's pinned model (or manual mode's default) is never silently replaced.
   const wanted = pinModel?.model ?? (mode === 'manual' ? settings.default_model : null);
@@ -257,20 +302,23 @@ export function decideRoute(input: RouteInput): RoutingDecision {
       );
     }
     codes.push('pin.unavailable');
-    return result(
-      null,
-      'none',
+    return blocked(
       `${wanted} is ${pinModel ? 'pinned' : 'the manual default'} but cannot run here (${why ?? 'not in the registry'}); a human decides`,
       { pin_id },
     );
   }
   if (sensitive) {
     codes.push('constraint.sensitive');
-    return result(null, 'none', 'sensitive work runs only on a model a human pinned for it ("friday routing pin")');
+    return blocked('sensitive work runs only on a model a human pinned for it ("friday routing pin")');
   }
   if (mode === 'manual') {
     codes.push('manual.none');
-    return result(null, 'none', 'manual routing: no model is pinned or set as routing.default_model');
+    return blocked('manual routing: no model is pinned or set as routing.default_model');
+  }
+  if (!runnable.length && !constraints.length) {
+    // Nothing to judge: the harness declares no models and runs none Friday knows (a generic host).
+    codes.push('harness.models_unknown');
+    return assemble(null, 'none', 'Friday knows no model this harness runs; the harness uses its own');
   }
 
   // The guide's avoid list; scores for the rest.
@@ -279,7 +327,7 @@ export function decideRoute(input: RouteInput): RoutingDecision {
   eligible = eligible.filter((m) => !guide?.avoid.includes(m.id));
   if (!eligible.length) {
     codes.push('none.eligible');
-    return result(null, 'none', 'no eligible model can run this task here; a human decides');
+    return blocked('no eligible model can run this task here; a human decides');
   }
   // Relative to the dearest and slowest model in the registry, not among these candidates: a
   // model's cost rating must not change with what else one harness happens to run.
@@ -387,9 +435,7 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     }
     codes.push(!usable ? 'laya.ineligible_choice' : a.threshold === null ? 'laya.uncalibrated' : 'laya.low_confidence');
     if (settings.low_confidence === 'human' || settings.low_confidence === 'block') {
-      return result(
-        null,
-        'none',
+      return blocked(
         `Laya's answer is not reliable enough (${codes.at(-1)}); ${settings.low_confidence === 'human' ? 'a human decides' : 'autonomous routing is blocked'}`,
         { candidates, confidence: a.confidence },
       );

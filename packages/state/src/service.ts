@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import path from 'node:path';
 import {
   addMs,
   type Clock,
@@ -39,6 +40,7 @@ import {
   type HarnessView,
   type InboxItem,
   type IntegrationView,
+  isFridayError,
   negotiateProtocolVersion,
   type OperationRunView,
   type OutboundMessage,
@@ -77,6 +79,8 @@ export interface RunRouting {
     task_class: string;
     model: string | null;
     binding: boolean;
+    /** The work must not start on this harness (review F01): no run is created. */
+    blocked?: boolean;
     source: string;
     reason: string;
     reason_codes: string[];
@@ -84,6 +88,13 @@ export interface RunRouting {
   };
 }
 export type RunRouter = (args: { task: TaskView; harness: HarnessRecord; agent: AgentView }) => RunRouting | null;
+
+/** What a `routing_blocked` error carries (review F01). */
+interface RoutingBlock {
+  task_id: string;
+  harness_id: string | null;
+  decision: RunRouting['decision'];
+}
 
 export interface StateConfig {
   heartbeatIntervalMs: number;
@@ -119,6 +130,12 @@ export interface StateConfig {
    * turns it on for git projects with a commit.
    */
   worktreeMode: 'per_task' | 'off';
+  /**
+   * This clone's folder of task worktrees (`<worktrees dir>/<root key>`, ADR-0023 §4). A recorded
+   * worktree anywhere else belongs to another clone of the project (a restored database, review
+   * F08): it is never reused, and the daemon decides with git what the run gets instead.
+   */
+  worktreeRoot: string | null;
   /** How long a run may wait for its worktree before it is declined. */
   workspaceTimeoutMs: number;
   /**
@@ -148,6 +165,7 @@ export const DEFAULT_STATE_CONFIG: StateConfig = {
   blockingReplyMs: 30 * 60 * 1000,
   maxOpenPerRecipient: 50,
   worktreeMode: 'off',
+  worktreeRoot: null,
   workspaceTimeoutMs: 10 * 60 * 1000,
   fileReservationTtlMs: 30 * 60 * 1000,
 };
@@ -266,6 +284,8 @@ export interface VerificationRevision {
   source_version?: string | null;
   base_commit?: string | null;
   task_kind?: string | null;
+  /** The exact content judged, as a git tree; integration lands only this (review F04). */
+  tree?: string | null;
 }
 
 /** Identity of a protocol caller, derived from its harness token (never from request fields). */
@@ -569,8 +589,12 @@ export class FridayState {
       return { execution_root: root, base_commit: null, branch_ref: null, workspace: 'ready' };
     }
     const wt = this.q.worktreeForTask(task.task_id);
-    if (wt && existsSync(wt.path)) {
-      if (wt.status === 'preserved') {
+    // An operation of an earlier attempt still owns the worktree: the daemon stops it, and only
+    // then prepares the worktree for this run (review F07). A worktree of another clone is never
+    // reused (review F08): the daemon decides what the run gets.
+    const owned = this.q.operationRuns(projectId, { task_id: task.task_id, status: 'running', limit: 1 }).length > 0;
+    if (wt && existsSync(wt.path) && !owned && this.inThisClone(wt.path)) {
+      if (wt.status !== 'active') {
         ctx.emit({
           type: 'worktree.released',
           payload: { worktree_id: wt.worktree_id, status: 'active', reason: 'reused by a new attempt' },
@@ -585,6 +609,18 @@ export class FridayState {
     return { execution_root: null, base_commit: null, branch_ref: null, workspace: 'pending' };
   }
 
+  /** Whether a task worktree's path is in this clone's worktree folder (review F08). */
+  inThisClone(dir: string): boolean {
+    const root = this.config.worktreeRoot;
+    if (!root) return true;
+    const norm = (p: string) => {
+      const r = path.resolve(p);
+      return process.platform === 'win32' ? r.toLowerCase() : r;
+    };
+    const rel = path.relative(norm(root), norm(dir));
+    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  }
+
   private createRun(
     ctx: CommandContext,
     task: TaskView,
@@ -592,6 +628,14 @@ export class FridayState {
     agentId: string,
     ws: Workspace = { execution_root: null, base_commit: null, branch_ref: null, workspace: 'ready' },
   ): RunView {
+    // Nobody else works where an operation of an earlier attempt still runs (review F07).
+    const owner = this.q.operationRuns(ctx.project_id, { task_id: task.task_id, status: 'running', limit: 1 })[0];
+    if (owner && ws.workspace === 'ready') {
+      throw new FridayError(
+        'invalid_state_transition',
+        `${owner.operation} (${owner.operation_run_id}) of an earlier attempt of ${task.task_id} is still being stopped; try again in a moment`,
+      );
+    }
     const run_id = this.ids.next('run');
     const attempt = this.q.maxAttempt(task.task_id) + 1;
     ctx.emit({
@@ -621,7 +665,9 @@ export class FridayState {
 
   /**
    * The model a new run should use (ADR-0031 §6), decided by the daemon's router in the run's own
-   * transaction. Routing never stops a run: a router that fails records why, and the run goes on.
+   * transaction. A decision that blocks the work stops the run before it exists (review F01): the
+   * transaction is abandoned with `routing_blocked`, and the caller records the block. A router
+   * that fails cannot show that the work may run here, so it blocks too.
    */
   private routeWithin(ctx: CommandContext, task: TaskView, harness: HarnessRecord, agentId: string, runId: string) {
     if (!this.router) return;
@@ -636,10 +682,35 @@ export class FridayState {
         task_class: task.kind,
         model: null,
         binding: false,
+        blocked: true,
         source: 'none',
-        reason: `routing failed: ${(e as Error).message}`.slice(0, 500),
+        reason:
+          `routing failed: ${(e as Error).message}; a human decides ("friday routing explain ${task.task_id}")`.slice(
+            0,
+            500,
+          ),
         reason_codes: ['router.error'],
       };
+    }
+    if (decision.blocked) {
+      throw new FridayError('routing_blocked', `routing does not let ${task.task_id} start here: ${decision.reason}`, {
+        task_id: task.task_id,
+        harness_id: harness.harness_id,
+        decision,
+      });
+    }
+    // A route that allows the work now answers an earlier question about its block.
+    for (const e of this.q.escalations(ctx.project_id, 'pending')) {
+      if (e.task_id === task.task_id && e.kind === 'routing_blocked') {
+        ctx.emit({
+          type: 'escalation.answered',
+          payload: {
+            escalation_id: e.escalation_id,
+            answer: `routing allows it now: ${decision.reason}`.slice(0, 500),
+          },
+          refs: [{ kind: 'escalation', id: String(e.escalation_id) }],
+        });
+      }
     }
     ctx.emit({
       type: 'routing.decided',
@@ -739,6 +810,7 @@ export class FridayState {
             { kind: 'task', id: run.task_id },
           ],
         });
+        this.holdToConstraints(ctx, projectId, run, m);
         return;
       }
       const harness = this.q.harness(target.harness_id);
@@ -760,7 +832,53 @@ export class FridayState {
             { kind: 'task', id: run.task_id },
           ],
         });
+        this.holdToConstraints(ctx, projectId, run, m);
       }
+    });
+  }
+
+  /**
+   * A run routed under hard constraints (local only, vision, sensitive work) whose host reports a
+   * model other than the one routed: the declaration that it applies models is not trusted over
+   * what it reports (review F01). The attempt ends, and a human is asked before the task runs again.
+   */
+  private holdToConstraints(ctx: CommandContext, projectId: string, run: RunView, observed: string): void {
+    const d = run.routing_decision_id ? this.q.routingDecision(run.routing_decision_id) : undefined;
+    if (!d?.constraints?.length || d.model === null || d.model === observed) return;
+    const task = this.q.task(projectId, run.task_id);
+    if (task.current_run_id !== run.run_id || !['RUNNING', 'WAITING', 'ASSIGNED'].includes(task.status)) return;
+    const reason = `the host reports running ${observed}, but ${d.constraints.join(', ')} allowed only ${d.model}`;
+    ctx.emit({
+      type: 'routing.violated',
+      payload: { task_id: run.task_id, run_id: run.run_id, requested: d.model, observed, constraints: d.constraints },
+      refs: [
+        { kind: 'task', id: run.task_id },
+        { kind: 'run', id: run.run_id },
+      ],
+    });
+    // Released first: releasing expires the run's outbox, and the host must still be told to stop.
+    this.releaseWithin(ctx, projectId, SYSTEM, run.task_id, reason);
+    const h = this.q.findHarness(run.harness_id);
+    if (run.status === 'ACTIVE' && h?.attach_mode === 'spawn') {
+      this.enqueue(
+        ctx,
+        run.harness_id,
+        'task.cancel',
+        { task_id: run.task_id, run_id: run.run_id, reason },
+        run.run_id,
+      );
+    }
+    this.escalationWithin(ctx, {
+      kind: 'routing_violated',
+      goal_id: task.goal_id ?? null,
+      task_id: run.task_id,
+      question: `${run.task_id} was stopped: ${reason}`,
+      options: [
+        `friday routing explain ${run.task_id}`,
+        'friday routing pin --task <task> --model <model>',
+        `friday task cancel ${run.task_id}`,
+      ],
+      details: { run_id: run.run_id, requested: d.model, observed, constraints: d.constraints },
     });
   }
 
@@ -982,9 +1100,19 @@ export class FridayState {
   // ================================================================ project and tasks
 
   ensureProject(input: { project_id: string; name: string; root_path: string }): void {
-    if (this.q.project(input.project_id)) return;
-    this.exec({ name: 'project.ensure', project_id: input.project_id, actor: SYSTEM }, (ctx) => {
-      ctx.emit({ type: 'project.created', payload: { name: input.name, root_path: input.root_path } });
+    const known = this.q.project(input.project_id);
+    if (!known) {
+      this.exec({ name: 'project.ensure', project_id: input.project_id, actor: SYSTEM }, (ctx) => {
+        ctx.emit({ type: 'project.created', payload: { name: input.name, root_path: input.root_path } });
+      });
+      return;
+    }
+    // A database restored into another clone, or a checkout that moved: the project now lives here,
+    // and new runs work here, never in the checkout the database came from (review F08).
+    const norm = (p: string) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
+    if (norm(known.root_path) === norm(input.root_path)) return;
+    this.exec({ name: 'project.relocate', project_id: input.project_id, actor: SYSTEM }, (ctx) => {
+      ctx.emit({ type: 'project.relocated', payload: { from: known.root_path, to: input.root_path } });
     });
   }
 
@@ -1045,8 +1173,91 @@ export class FridayState {
     taskId: string,
     agentKey: string,
   ): { mode: 'assigned' | 'reserved'; task: TaskView } {
-    return this.exec({ name: 'task.assign', project_id: projectId, actor, params: { taskId, agentKey } }, (ctx) =>
-      this.assignWithin(ctx, projectId, taskId, agentKey),
+    return this.routed(projectId, () =>
+      this.exec({ name: 'task.assign', project_id: projectId, actor, params: { taskId, agentKey } }, (ctx) =>
+        this.assignWithin(ctx, projectId, taskId, agentKey),
+      ),
+    );
+  }
+
+  /**
+   * Runs a command that may create a run. When routing blocks it, nothing of the command commits;
+   * the block is recorded in its own transaction (review F01), and the error goes to the caller.
+   */
+  private routed<T>(projectId: string, command: () => T): T {
+    try {
+      return command();
+    } catch (e) {
+      if (isFridayError(e, 'routing_blocked')) {
+        try {
+          this.recordRoutingBlock(projectId, e.details as RoutingBlock);
+        } catch {
+          // Recording is best effort: the block itself already held.
+        }
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * A route that blocks a task's work (review F01): one `routing.blocked` event per new reason,
+   * and one question to a human while the task waits for an answer. A later route that allows the
+   * work answers it.
+   */
+  /** The Master Brain found no agent whose route lets the task start (review F01). */
+  noteRoutingBlocked(projectId: string, taskId: string, reason: string): void {
+    this.recordRoutingBlock(projectId, {
+      task_id: taskId,
+      harness_id: null,
+      decision: {
+        mode: 'unknown',
+        task_class: this.q.task(projectId, taskId).kind,
+        model: null,
+        binding: false,
+        blocked: true,
+        source: 'none',
+        reason: `no available agent may run it: ${reason}`,
+        reason_codes: ['delegation.all_blocked'],
+      },
+    });
+  }
+
+  private recordRoutingBlock(projectId: string, b: RoutingBlock): void {
+    const reason = String(b.decision.reason);
+    this.exec(
+      { name: 'routing.block', project_id: projectId, actor: SYSTEM, params: { task_id: b.task_id } },
+      (ctx) => {
+        const last = this.store.readByRef(projectId, 'task', b.task_id, { types: ['routing.blocked'] }).at(-1);
+        const lastReason = (last?.payload as { decision?: { reason?: string } } | undefined)?.decision?.reason;
+        if (lastReason !== reason) {
+          ctx.emit({
+            type: 'routing.blocked',
+            payload: { task_id: b.task_id, harness_id: b.harness_id, decision: b.decision },
+            refs: [
+              { kind: 'task', id: b.task_id },
+              ...(b.harness_id ? [{ kind: 'harness' as const, id: b.harness_id }] : []),
+            ],
+          });
+        }
+        const asked = this.q
+          .escalations(projectId, 'pending')
+          .some((e) => e.task_id === b.task_id && e.kind === 'routing_blocked');
+        if (!asked) {
+          const task = this.q.task(projectId, b.task_id);
+          this.escalationWithin(ctx, {
+            kind: 'routing_blocked',
+            goal_id: task.goal_id ?? null,
+            task_id: b.task_id,
+            question: `${b.task_id} cannot start: ${reason}`,
+            options: [
+              `friday routing explain ${b.task_id}`,
+              'friday routing pin --task <task> --model <model>',
+              `friday task cancel ${b.task_id}`,
+            ],
+            details: { harness_id: b.harness_id, reason_codes: b.decision.reason_codes ?? [] },
+          });
+        }
+      },
     );
   }
 
@@ -1119,6 +1330,16 @@ export class FridayState {
     opts: { idempotency_key?: string | undefined } = {},
   ): { task: TaskView; run_id: string; attempt: number; resumed: boolean } {
     const actor: Actor = { kind: 'agent', id: caller.agent_id };
+    return this.routed(projectId, () => this.claimWithin(projectId, caller, actor, p, opts));
+  }
+
+  private claimWithin(
+    projectId: string,
+    caller: Caller,
+    actor: Actor,
+    p: { task_id?: string | undefined; next?: boolean | undefined },
+    opts: { idempotency_key?: string | undefined },
+  ): { task: TaskView; run_id: string; attempt: number; resumed: boolean } {
     return this.exec(
       { name: 'task.claim', project_id: projectId, actor, idempotency_key: opts.idempotency_key, params: p },
       (ctx) => {
@@ -2148,6 +2369,16 @@ export class FridayState {
       if (last && last.mode === idle && last.reason === decision.reason)
         return { mode: idle, task: this.q.task(projectId, taskId) };
     }
+    return this.routed(projectId, () => this.delegateWithin(projectId, actor, taskId, decision, idle));
+  }
+
+  private delegateWithin(
+    projectId: string,
+    actor: Actor,
+    taskId: string,
+    decision: { agent_key: string | null; reason: string; scores: unknown[] },
+    idle: 'waiting' | 'none',
+  ): { mode: 'assigned' | 'reserved' | 'waiting' | 'none'; task: TaskView } {
     return this.exec(
       { name: 'task.delegate', project_id: projectId, actor, params: { taskId, agent_key: decision.agent_key } },
       (ctx) => {
@@ -3162,7 +3393,24 @@ export class FridayState {
       const run = this.q.run(runId);
       if (run.workspace !== 'pending' || run.status !== 'STARTING') return run;
       const task = this.q.task(projectId, run.task_id);
+      const owner = this.q.operationRuns(projectId, { task_id: task.task_id, status: 'running', limit: 1 })[0];
+      if (owner) {
+        throw new FridayError(
+          'invalid_state_transition',
+          `${owner.operation} (${owner.operation_run_id}) of an earlier attempt still runs in the worktree`,
+        );
+      }
       let worktree = this.q.worktreeForTask(task.task_id);
+      if (worktree && worktree.path === alloc.path && worktree.status !== 'active') {
+        ctx.emit({
+          type: 'worktree.released',
+          payload: { worktree_id: worktree.worktree_id, status: 'active', reason: 'reused by a new attempt' },
+          refs: [
+            { kind: 'task', id: task.task_id },
+            { kind: 'worktree', id: worktree.worktree_id },
+          ],
+        });
+      }
       if (!worktree || worktree.path !== alloc.path) {
         const worktree_id = this.ids.next('wt');
         ctx.emit({
@@ -3398,8 +3646,11 @@ export class FridayState {
 
   /**
    * The gateway starts an operation for the agent holding the task (ADR-0029 §3): recorded with
-   * the names of the credentials it receives and the approval it spends, in one transaction. The
-   * approval is checked again here, so a grant revoked a moment ago is not spent.
+   * the names of the credentials it receives and the approval it spends, in one transaction. All
+   * of its authority is checked again here, at the moment it starts (review F06): the task still
+   * runs, in the caller's attempt, from the caller's session; the approval still covers it; and
+   * `still` (the daemon's view of the effective policy, the operation's definition and the agent's
+   * role) still allows it. The gateway starts the process right after this commits.
    */
   startOperation(
     projectId: string,
@@ -3416,7 +3667,7 @@ export class FridayState {
       risk: 'low' | 'medium' | 'high';
       reason: string;
     },
-    opts: { idempotency_key?: string | undefined } = {},
+    opts: { idempotency_key?: string | undefined; still?: () => string | null } = {},
   ): OperationRunView {
     const actor: Actor = { kind: 'agent', id: caller.agent_id };
     return this.exec(
@@ -3428,6 +3679,27 @@ export class FridayState {
         params: { operation: op.operation, task_id: op.task_id, run_id: op.run_id, reason: op.reason },
       },
       (ctx) => {
+        const task = this.q.findTask(projectId, op.task_id);
+        const run = op.run_id ? this.q.findRun(op.run_id) : undefined;
+        if (task?.status !== 'RUNNING' || task.assigned_agent_id !== caller.agent_id) {
+          throw new FridayError(
+            'permission_denied',
+            `${op.task_id} is ${task?.status ?? 'gone'}${task && task.assigned_agent_id !== caller.agent_id ? ' and held by another agent' : ''}; ${op.operation} was not started`,
+          );
+        }
+        if (
+          !run ||
+          task.current_run_id !== run.run_id ||
+          run.status !== 'ACTIVE' ||
+          run.harness_id !== caller.harness_id
+        ) {
+          throw new FridayError(
+            'permission_denied',
+            `this session no longer holds the attempt of ${op.task_id} it asked for; ${op.operation} was not started`,
+          );
+        }
+        const refused = opts.still?.();
+        if (refused) throw new FridayError('permission_denied', refused);
         const running = this.q.operationRuns(projectId, { task_id: op.task_id, status: 'running', limit: 1 })[0];
         if (running) {
           throw new FridayError(
@@ -3476,12 +3748,15 @@ export class FridayState {
     );
   }
 
-  /** The outcome of an operation; its sanitized output is an artifact (ADR-0029 §5). */
+  /**
+   * The outcome of an operation; its sanitized output is an artifact (ADR-0029 §5). `interrupted`:
+   * Friday stopped it (its attempt ended, or the daemon stopped) and confirmed its processes ended.
+   */
   finishOperation(
     projectId: string,
     operationRunId: string,
     outcome: {
-      status: 'passed' | 'failed';
+      status: 'passed' | 'failed' | 'interrupted';
       exit_code: number | null;
       timed_out: boolean;
       duration_ms: number;

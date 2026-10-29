@@ -140,4 +140,36 @@ describe('operation runs', () => {
     replay(db, state.store, PROJECT, state.projector);
     expect(dump()).toEqual(before);
   });
+
+  it('checks every part of its authority again at the moment it starts (review F06)', () => {
+    // The policy (or the operation, or the agent's role) changed meanwhile: the daemon says so.
+    const a = agentOnTask();
+    expect(() =>
+      state.startOperation(
+        PROJECT,
+        a.caller,
+        {
+          operation: 'stripe-test',
+          task_id: a.task_id,
+          run_id: a.run_id,
+          binary: 'node',
+          cwd: 'C:/demo/shop',
+          credentials: [],
+          approval_id: null,
+          policy_version: 'v1',
+          risk: 'low',
+          reason: 'x',
+        },
+        { still: () => "the project's policy changed while stripe-test was being prepared" },
+      ),
+    ).toThrow(/policy changed/);
+    // Another session than the one holding the attempt.
+    expect(() => start({ ...a, caller: { ...a.caller, harness_id: 'harness_other' } }, null)).toThrow(
+      /no longer holds the attempt/,
+    );
+    // The task was cancelled while the credentials loaded.
+    state.cancelTask(PROJECT, human, a.task_id, 'changed my mind');
+    expect(() => start(a, null)).toThrow(/is CANCELLED; stripe-test was not started/);
+    expect(state.q.operationRuns(PROJECT, { task_id: a.task_id })).toEqual([]);
+  });
 });

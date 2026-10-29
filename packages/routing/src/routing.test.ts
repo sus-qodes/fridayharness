@@ -97,24 +97,73 @@ describe('decideRoute', () => {
 
   it('applies hard constraints before anything else: local only, sensitive work, vision (Part 08 §11)', () => {
     const local = decideRoute(base({ settings: { ...DEFAULT_ROUTING, must_use_local: true } }));
-    expect(local).toMatchObject({ model: null, source: 'none', constraints: ['must_use_local'] });
+    expect(local).toMatchObject({ model: null, source: 'none', constraints: ['must_use_local'], blocked: true });
     const withLocal = mergeModels(guide.models, [
       { id: 'local-coder', vendors: ['claude-code'], local: true, capabilities: { code_editing: 0.6 } },
     ]);
-    expect(decideRoute(base({ models: withLocal, settings: { ...DEFAULT_ROUTING, must_use_local: true } })).model).toBe(
-      'local-coder',
-    );
+    const onlyLocal = { ...DEFAULT_ROUTING, must_use_local: true };
+    // A host that applies the model it is given runs the local one.
+    expect(decideRoute(base({ models: withLocal, settings: onlyLocal, model_control: 'set' }))).toMatchObject({
+      model: 'local-coder',
+      binding: true,
+      blocked: false,
+    });
+    // One that chooses its own model meets the constraint only when it is seen running a local model
+    // (review F01): advice alone would not keep the work local.
+    expect(decideRoute(base({ models: withLocal, settings: onlyLocal }))).toMatchObject({
+      model: null,
+      blocked: true,
+      reason_codes: expect.arrayContaining(['advisory.unverified']),
+    });
+    expect(
+      decideRoute(base({ models: withLocal, settings: onlyLocal, observed_model: 'claude-opus-5-5' })).blocked,
+    ).toBe(true);
+    expect(decideRoute(base({ models: withLocal, settings: onlyLocal, observed_model: 'local-coder' }))).toMatchObject({
+      model: 'local-coder',
+      binding: false,
+      blocked: false,
+    });
     const sensitive = { ...DEFAULT_ROUTING, sensitive: { kinds: ['implementation'], roles: [] } };
     expect(decideRoute(base({ settings: sensitive }))).toMatchObject({
       model: null,
+      blocked: true,
       reason_codes: ['constraint.sensitive'],
     });
-    expect(decideRoute(base({ settings: sensitive, pins: [pin({ model: 'claude-opus-5-5' })] })).model).toBe(
+    const pinnedOpus = [pin({ model: 'claude-opus-5-5' })];
+    expect(decideRoute(base({ settings: sensitive, pins: pinnedOpus, model_control: 'set' })).model).toBe(
+      'claude-opus-5-5',
+    );
+    expect(decideRoute(base({ settings: sensitive, pins: pinnedOpus })).blocked).toBe(true);
+    expect(decideRoute(base({ settings: sensitive, pins: pinnedOpus, observed_model: 'claude-opus-5-5' })).model).toBe(
       'claude-opus-5-5',
     );
     const blind = mergeModels(guide.models, [{ id: 'blind', vendors: ['claude-code'], vision: false }]);
     const vision = decideRoute(base({ models: blind, pins: [pin({ needs_vision: true })] }));
     expect(vision.excluded).toContainEqual({ model: 'blind', reason: 'constraint.vision' });
+  });
+
+  it('blocks work it cannot route, and has no opinion on a host whose models it does not know (review F01)', () => {
+    // A pin that cannot run here, manual mode without a model, and Laya configured to stop: blocked.
+    expect(decideRoute(base({ pins: [pin({ model: 'gpt-5.6-luna' })] })).blocked).toBe(true);
+    expect(decideRoute(base({ settings: { ...DEFAULT_ROUTING, mode: 'manual' } })).blocked).toBe(true);
+    const laya = { question_id: 'q', checkpoint: 'c', choice: 'claude-opus-5-5', confidence: 0.2, threshold: 0.8 };
+    expect(decideRoute(base({ laya, settings: { ...DEFAULT_ROUTING, low_confidence: 'block' } })).blocked).toBe(true);
+    expect(decideRoute(base({ laya, settings: { ...DEFAULT_ROUTING, low_confidence: 'score' } })).blocked).toBe(false);
+    // A host that runs none of the models Friday knows and declares none: no opinion, not a block.
+    const generic = decideRoute(base({ vendor: 'generic' }));
+    expect(generic).toMatchObject({ model: null, blocked: false, reason_codes: ['harness.models_unknown'] });
+    // ... unless a hard constraint must hold, which nothing then shows it meets.
+    expect(
+      decideRoute(base({ vendor: 'generic', settings: { ...DEFAULT_ROUTING, must_use_local: true } })).blocked,
+    ).toBe(true);
+    // Every model the harness can run is on the guide's avoid list: blocked as well.
+    const avoidAll = {
+      ...guide.classes,
+      implementation: { preferred: [], fallback: [], avoid: ['claude-haiku-5-5'], notes: null },
+    };
+    expect(
+      decideRoute(base({ harness_models: ['claude-haiku-5-5'], guide: avoidAll, model_control: 'set' })).blocked,
+    ).toBe(true);
   });
 
   it('lets measured outcomes count once there are enough of them', () => {

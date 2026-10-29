@@ -1,4 +1,4 @@
-import { type ExecutionProfile, executeRun, ProfileError, prepareRun } from '@friday/execution';
+import { type ExecutionProfile, executeRun, type ProcessGroups, ProfileError, prepareRun } from '@friday/execution';
 import type { CheckOutcome } from '@friday/verification';
 import type { EffectivePolicy } from './policy.js';
 
@@ -30,7 +30,8 @@ export function profileCache(deps: {
 
 /**
  * Runs one check in the execution profile (ADR-0029 §6). A command the profile refuses fails the
- * check, with the reason as its output.
+ * check, with the reason as its output. With `groups`, the check's whole process tree is a group:
+ * what the check leaves running when it exits ends with it (review F07).
  */
 export async function runCheckInProfile(
   profile: ExecutionProfile,
@@ -44,13 +45,15 @@ export async function runCheckInProfile(
     env?: Record<string, string>;
     timeoutMs: number;
   },
+  groups?: ProcessGroups,
 ): Promise<CheckOutcome> {
+  const group = groups?.create();
   try {
     const run = prepareRun(
       { command: spec.command, args: spec.args, root: spec.root, cwd: spec.cwd, env: spec.env ?? {} },
       profile,
     );
-    const out = await executeRun(run, profile, { timeoutMs: spec.timeoutMs });
+    const out = await executeRun(run, profile, { timeoutMs: spec.timeoutMs, ...(group ? { group } : {}) });
     return {
       name: spec.name,
       passed: out.passed,
@@ -76,5 +79,7 @@ export async function runCheckInProfile(
       output_truncated: false,
       spawn_error: reason,
     };
+  } finally {
+    await group?.close();
   }
 }

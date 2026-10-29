@@ -96,17 +96,47 @@ export async function moveRef(root: string, ref: string, value: string, expected
   }
 }
 
-/** Commits everything in a checkout (a task's verified work) and returns the new HEAD. */
-export async function commitAll(dir: string, message: string, author: CommitIdentity): Promise<string> {
-  await runGit(dir, ['add', '-A'], { timeoutMs: 300_000 });
-  await runGit(dir, ['commit', '-q', '-F', '-'], { input: message, env: identityEnv(author), timeoutMs: 600_000 });
-  return (await runGit(dir, ['rev-parse', 'HEAD'])).stdout.trim();
+/** The tree a commit holds, or null when there is no such commit. */
+export async function treeOf(root: string, rev: string): Promise<string | null> {
+  const r = await runGit(root, ['rev-parse', '--verify', '--quiet', `${rev}^{tree}`], { okCodes: [1, 128] });
+  return r.code === 0 ? r.stdout.trim() || null : null;
+}
+
+/** The paths whose content differs between two trees. */
+export async function changedBetween(root: string, a: string, b: string): Promise<string[]> {
+  const r = await runGit(root, ['diff-tree', '-r', '--name-only', '--no-renames', '-z', a, b]);
+  return r.stdout.split('\0').filter(Boolean);
+}
+
+/**
+ * Commits exactly `tree`, content Friday verified, on top of `parent` in a checkout, and moves the
+ * checkout's HEAD there only while it still names `parent` (review F04). The commit is built from
+ * the tree, never from the files: a change made after the tree was taken stays an uncommitted change
+ * in the checkout and never enters the commit. No hooks run. The index is then set to the new commit
+ * when git lets it (a command of the agent's may hold it); the files are not touched.
+ */
+export async function commitContent(
+  dir: string,
+  tree: string,
+  parent: string | null,
+  message: string,
+  author: CommitIdentity,
+): Promise<string> {
+  const commit = await commitTree(dir, tree, parent ? [parent] : [], message, author);
+  const r = await runGit(dir, ['update-ref', '-m', 'friday: commit the verified work', 'HEAD', commit, parent ?? ''], {
+    okCodes: [1, 128],
+  });
+  if (r.code !== 0) {
+    throw new FridayError('git_conflict', `HEAD moved while Friday committed the verified work: ${r.stderr.trim()}`);
+  }
+  await runGit(dir, ['reset', '-q'], { timeoutMs: 300_000 }).catch(() => undefined);
+  return commit;
 }
 
 /**
  * Friday's own checkout of a commit, detached, beside the task worktrees (`<key>/<name>`): where an
  * integrated revision is verified. Nobody else works in it, so checking out discards what checks
- * left in tracked files; untracked and ignored files (installed dependencies) stay.
+ * left behind, in tracked and in untracked files; ignored files (installed dependencies) stay.
  */
 export async function checkoutForVerification(
   mainRoot: string,
@@ -121,6 +151,7 @@ export async function checkoutForVerification(
   );
   if (registered && existsSync(dir)) {
     await runGit(dir, ['checkout', '-q', '--detach', '--force', commit], { timeoutMs: 600_000 });
+    await runGit(dir, ['clean', '-q', '-fd'], { timeoutMs: 300_000 });
   } else {
     await runGit(main.root, ['worktree', 'prune']);
     mkdirSync(path.dirname(dir), { recursive: true });

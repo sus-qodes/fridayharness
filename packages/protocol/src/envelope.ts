@@ -67,6 +67,7 @@ export type DomainEvent = z.infer<typeof DomainEvent>;
  */
 export const EVENT_TYPES = [
   'project.created',
+  'project.relocated',
   'daemon.started',
   'daemon.stopped',
   'task.created',
@@ -140,6 +141,8 @@ export const EVENT_TYPES = [
   'operation.interrupted',
   // M7: model routing (ADR-0031).
   'routing.decided',
+  'routing.blocked',
+  'routing.violated',
   'routing.pinned',
   'routing.unpinned',
   'routing.outcome_recorded',

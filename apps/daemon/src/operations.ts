@@ -5,6 +5,7 @@ import {
   executeRun,
   MIN_SECRET_LENGTH,
   type PreparedRun,
+  type ProcessGroups,
   ProfileError,
   prepareRun,
 } from '@friday/execution';
@@ -34,6 +35,19 @@ export interface OperationDeps {
   policy: () => EffectivePolicy;
   profile: () => ExecutionProfile;
   env: NodeJS.ProcessEnv;
+  /** Every operation's process tree is a group, ended with the operation (review F07). */
+  groups: ProcessGroups;
+}
+
+interface Running {
+  task_id: string;
+  run_id: string | null;
+  /** Resolves once the run's outcome is recorded. */
+  done: Promise<void>;
+  /** Ends the whole process tree; resolves once nothing of it is left. */
+  stop: () => Promise<void>;
+  /** Why Friday stopped it, once it did. */
+  stopped: string | null;
 }
 
 const blank = (operation: string): OperationResult => ({
@@ -59,10 +73,25 @@ const blank = (operation: string): OperationResult => ({
  * output with every credential removed, never a secret.
  */
 export class OperationManager {
-  readonly #running = new Map<string, { done: Promise<void>; stop: () => void }>();
+  readonly #running = new Map<string, Running>();
   readonly #launched = new Set<string>();
+  readonly #unsubscribe: () => void;
 
-  constructor(private readonly deps: OperationDeps) {}
+  constructor(private readonly deps: OperationDeps) {
+    // An operation runs on its task's attempt's authority: when the attempt ends (cancelled,
+    // released, reassigned, failed, claimed done), the operation is stopped (review F07).
+    this.#unsubscribe = deps.state.transport.subscribe(
+      { project_id: deps.project.project_id, types: ['run.ended', 'run.declined'] },
+      (e) => {
+        const p = e.payload as { run_id?: string; changes?: { outcome?: string } };
+        if (!p.run_id) return;
+        const why = `its task's attempt ended (${p.changes?.outcome ?? e.type.replace('run.', '')})`;
+        this.stopRun(p.run_id, why).catch((err: unknown) =>
+          deps.logger.error('stopping an operation failed', { run_id: p.run_id, message: (err as Error).message }),
+        );
+      },
+    );
+  }
 
   private get pid() {
     return this.deps.project.project_id;
@@ -223,6 +252,21 @@ export class OperationManager {
       credentials.push({ variable, name, value });
     }
 
+    // Everything above was decided before the credentials loaded, which awaits. The start checks it
+    // all again in the transaction that records it, and the process starts right after (review F06).
+    const still = (): string | null => {
+      const now = this.deps.policy();
+      if (now.version !== policy.version) {
+        return `the project's policy changed while ${op.name} was being prepared (${policy.version.slice(0, 12)} became ${now.version.slice(0, 12)}); ask again`;
+      }
+      const def = now.operations[op.name];
+      if (!def) return `${op.name} is no longer declared and trusted on this clone`;
+      const role = state.q.findAgent(caller.agent_id)?.role ?? '';
+      if (def.roles.length && !def.roles.includes(role)) {
+        return `${op.name} is for agents of the role${def.roles.length > 1 ? 's' : ''} ${def.roles.join(', ')}`;
+      }
+      return null;
+    };
     let started: OperationRunView;
     try {
       started = state.startOperation(
@@ -240,10 +284,14 @@ export class OperationManager {
           risk: op.risk,
           reason: p.reason,
         },
-        { idempotency_key: p.idempotency_key },
+        { idempotency_key: p.idempotency_key, still },
       );
     } catch (e) {
-      if (isFridayError(e, 'approval_required') || isFridayError(e, 'invalid_state_transition')) {
+      if (
+        isFridayError(e, 'approval_required') ||
+        isFridayError(e, 'invalid_state_transition') ||
+        isFridayError(e, 'permission_denied')
+      ) {
         return denied((e as Error).message);
       }
       throw e;
@@ -275,9 +323,36 @@ export class OperationManager {
     );
   }
 
-  /** Ends every running operation's process tree (daemon shutdown). */
-  close(): void {
-    for (const r of this.#running.values()) r.stop();
+  /**
+   * Stops the operations of a run and resolves once their processes are confirmed gone and their
+   * outcome is recorded (review F07).
+   */
+  async stopRun(runId: string, reason: string): Promise<void> {
+    const ids = [...this.#running.entries()].filter(([, r]) => r.run_id === runId).map(([id]) => id);
+    await Promise.all(ids.map((id) => this.#stop(id, reason)));
+  }
+
+  /** Stops every operation of a task: before its worktree is used or released again. */
+  async stopTask(taskId: string, reason: string): Promise<void> {
+    const ids = [...this.#running.entries()].filter(([, r]) => r.task_id === taskId).map(([id]) => id);
+    await Promise.all(ids.map((id) => this.#stop(id, reason)));
+  }
+
+  async #stop(id: string, reason: string): Promise<void> {
+    const r = this.#running.get(id);
+    if (!r) return;
+    if (!r.stopped) {
+      r.stopped = reason;
+      this.deps.logger.info('stopping operation', { operation_run_id: id, reason });
+    }
+    await r.stop();
+    await r.done;
+  }
+
+  /** Ends every running operation's process tree, confirmed, and records it (daemon shutdown). */
+  async close(): Promise<void> {
+    this.#unsubscribe();
+    await Promise.allSettled([...this.#running.keys()].map((id) => this.#stop(id, 'the daemon stopped')));
   }
 
   #launch(
@@ -290,32 +365,44 @@ export class OperationManager {
     const { state, logger } = this.deps;
     const id = started.operation_run_id;
     this.#launched.add(id);
-    let stop = () => {};
-    const done = executeRun(prepared, profile, {
-      timeoutMs: op.timeout_ms,
-      credentials,
-      onStart: (_pid, s) => {
-        stop = s;
-      },
-    })
+    // The group exists before the process does, so a stop asked for at any moment is honoured.
+    const group = this.deps.groups.create();
+    const entry: Running = {
+      task_id: started.task_id,
+      run_id: started.run_id,
+      done: Promise.resolve(),
+      stop: () => group.terminate(),
+      stopped: null,
+    };
+    this.#running.set(id, entry);
+    entry.done = executeRun(prepared, profile, { timeoutMs: op.timeout_ms, credentials, group })
       .then((out) => {
         const header = [
           `$ ${prepared.binary.path} ${prepared.args.join(' ')}`,
           `(operation ${op.name} in ${prepared.cwd}; credentials: ${credentials.map((c) => c.name).join(', ') || 'none'}; exit ${out.exit_code ?? out.signal ?? 'none'})`,
+          ...(entry.stopped ? [`(stopped by Friday: ${entry.stopped})`] : []),
           '',
         ].join('\n');
         // The artifact store redacts once more: the registered values and well-known formats.
         const artifact = state.artifacts?.storeText(this.pid, 'operation', `${header}${out.output}`);
         state.finishOperation(this.pid, id, {
-          status: out.passed ? 'passed' : 'failed',
+          status: entry.stopped ? 'interrupted' : out.passed ? 'passed' : 'failed',
           exit_code: out.exit_code,
           timed_out: out.timed_out,
           duration_ms: out.duration_ms,
           redactions: out.redactions,
           artifact_ref: artifact ? `artifact:${artifact.artifact_id}` : null,
-          summary: summarizeOutcome({ name: op.name, ...out }).slice(0, 300),
+          summary: (entry.stopped
+            ? `stopped: ${entry.stopped}; its processes ended`
+            : summarizeOutcome({ name: op.name, ...out })
+          ).slice(0, 300),
         });
-        logger.info('operation finished', { operation: op.name, operation_run_id: id, passed: out.passed });
+        logger.info('operation finished', {
+          operation: op.name,
+          operation_run_id: id,
+          passed: out.passed,
+          stopped: entry.stopped,
+        });
       })
       .catch((e: unknown) => {
         const message = (e as Error).message;
@@ -336,8 +423,8 @@ export class OperationManager {
       })
       .finally(() => {
         this.#running.delete(id);
+        void group.close();
       });
-    this.#running.set(id, { done, stop: () => stop() });
   }
 
   async #wait(id: string, waitMs: number, signal?: AbortSignal): Promise<OperationResult> {

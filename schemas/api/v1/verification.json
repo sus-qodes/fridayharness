@@ -75,6 +75,13 @@
         "null"
       ]
     },
+    "tree": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "checks": {
       "type": "array",
       "items": {

@@ -1,11 +1,12 @@
 /**
  * Integration of verified task branches into goal branches (plan M5c, ADR-0025).
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { GitRoot } from '@friday/git';
 import type { IntegrationView, TaskStartParams, TaskView, VerificationView } from '@friday/protocol';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cli } from '../helpers/cli.js';
 import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
 import { FakeHarness } from '../helpers/fake-harness.js';
@@ -32,11 +33,24 @@ const SUM_TEST = [
 ].join('\n');
 const CHECKS = '  checks:\n    - name: tests\n      command: node\n      args: ["--test", "test/*.test.mjs"]\n';
 
-async function project(): Promise<TestDaemon> {
+/**
+ * A check that repairs what it checks, as a formatter or a code generator might: when `a + b`
+ * exceeds 3 it lowers b in the checkout, then passes.
+ */
+const REPAIRING_CHECK = [
+  "const fs = require('node:fs');",
+  "const num = (f) => Number(/= (\\d+)/.exec(fs.readFileSync(f, 'utf8'))[1]);",
+  "if (num('src/a.mjs') + num('src/b.mjs') > 3) fs.writeFileSync('src/b.mjs', 'export const b = 0;\\n');",
+  "process.exit(num('src/a.mjs') + num('src/b.mjs') <= 3 ? 0 : 1);",
+  '',
+].join('\n');
+const REPAIRING_CHECKS = '  checks:\n    - name: repairing\n      command: node\n      args: ["scripts/check.cjs"]\n';
+
+async function project(checks = CHECKS, extra: Record<string, string> = {}): Promise<TestDaemon> {
   const td = await startTestDaemon(ws(), {
     git: true,
     brain: { autoStart: false },
-    editConfig: (y) => y.replace('  checks: []\n', CHECKS),
+    editConfig: (y) => y.replace('  checks: []\n', checks),
   });
   const dir = ws().projectDir;
   const git = deterministicGit(dir, { startEpoch: 1_767_225_700 });
@@ -44,9 +58,10 @@ async function project(): Promise<TestDaemon> {
     'src/a.mjs': 'export const a = 1;\n',
     'src/b.mjs': 'export const b = 1;\n',
     'test/sum.test.mjs': SUM_TEST,
+    ...extra,
   })) {
     const abs = path.join(dir, rel);
-    (await import('node:fs')).mkdirSync(path.dirname(abs), { recursive: true });
+    mkdirSync(path.dirname(abs), { recursive: true });
     writeFileSync(abs, text);
   }
   await git.commitAll('sources and tests');
@@ -265,5 +280,65 @@ describe('goal branches', () => {
     ]);
     await runOnce(td);
     expect((await td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`))).goal.status).toBe('ACTIVE');
+  });
+
+  it('never integrates a merge whose checks changed the files they checked (review F04)', async () => {
+    const td = await project(REPAIRING_CHECKS, { 'scripts/check.cjs': REPAIRING_CHECK });
+    const { goalId, ids } = await goalWith(td, [
+      { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+      { key: 'raise-b', summary: 'Raise b to 2', write: ['src/b.mjs'] },
+    ]);
+    const branch = `friday/goal-${goalId}`;
+    const ra = await begin(td, 'be-1', ids['raise-a'] as string);
+    const rb = await begin(td, 'be-2', ids['raise-b'] as string);
+    await finish(td, ra, { 'src/a.mjs': 'export const a = 2;\n' });
+    const one = await integrationOf(td, ids['raise-a'] as string);
+    expect(one.status).toBe('integrated');
+
+    // Each change passes alone, and its check changes nothing. Merged, a + b = 4: the check lowers b
+    // in Friday's checkout and then passes, so what passed is not the merged revision.
+    await finish(td, rb, { 'src/b.mjs': 'export const b = 2;\n' });
+    const two = await integrationOf(td, ids['raise-b'] as string);
+    expect(two).toMatchObject({ status: 'failed', merged_commit: null });
+    expect(two.summary).toMatch(/changed src\/b\.mjs/);
+    expect((await git(['rev-parse', branch])).trim()).toBe(one.merged_commit);
+    const value = async (f: string) => Number(/= (\d+)/.exec(await git(['show', `${branch}:${f}`]))?.[1]);
+    expect((await value('src/a.mjs')) + (await value('src/b.mjs'))).toBeLessThanOrEqual(3);
+  });
+
+  it('lands only the tree that was verified, even when the worktree changes during integration (review F04)', async () => {
+    const td = await project();
+    const { goalId, ids } = await goalWith(td, [{ key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] }]);
+    const id = ids['raise-a'] as string;
+    const w = await begin(td, 'be-1', id);
+    const dir = realpathSync(w.start.working_directory);
+    const same = (a: string, b: string) =>
+      process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+    // Right after integration reads the worktree (the task is COMPLETED by then), a writer changes it.
+    const identity = GitRoot.prototype.identity;
+    let changed = false;
+    const spy = vi.spyOn(GitRoot.prototype, 'identity').mockImplementation(async function (
+      this: GitRoot,
+      ...args: Parameters<GitRoot['identity']>
+    ) {
+      const r = await identity.apply(this, args);
+      const status = td.daemon.state.q.task(td.project.project_id, id).status;
+      if (!changed && same(this.root, dir) && status === 'COMPLETED') {
+        changed = true;
+        writeFileSync(path.join(dir, 'src', 'a.mjs'), 'export const a = 99; // BAD unverified\n');
+      }
+      return r;
+    });
+    try {
+      await finish(td, w, { 'src/a.mjs': 'export const a = 2;\n' });
+      const one = await integrationOf(td, id);
+      expect(changed).toBe(true);
+      const landed = await git(['show', `friday/goal-${goalId}:src/a.mjs`]).catch(() => '');
+      expect(landed).not.toContain('BAD');
+      expect(one.status).toBe('failed');
+      expect(one.summary).toMatch(/changed after it was verified/);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

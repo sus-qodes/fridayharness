@@ -2,21 +2,23 @@
  * Integration plumbing (plan M5c, ADR-0025 §2–§5): merges without a checkout, refs moved only from
  * the value Friday saw, and Friday's own checkout for verifying a merged revision.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { FridayError } from '@friday/protocol';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
 import {
   agentIdentity,
+  changedBetween,
   checkoutForVerification,
-  commitAll,
+  commitContent,
   commitTree,
   GitRoot,
   isAncestor,
   mergeCommits,
   moveRef,
   resolveCommit,
+  treeOf,
 } from './index.js';
 
 const ws = useTestWorkspace();
@@ -77,14 +79,58 @@ describe('merging without a checkout', () => {
 });
 
 describe("Friday's commits and checkouts", () => {
-  it("commits an agent's work in the agent's name, never the user's", async () => {
+  it('reads the exact content of a checkout as a tree, leaving the checkout and its index alone (review F04)', async () => {
+    const { dir, g } = await repo();
+    const root = await GitRoot.open(dir);
+    expect((await root.contentTree()).tree).toBe(await treeOf(dir, 'HEAD'));
+    writeFileSync(path.join(dir, 'a.txt'), 'staged\n');
+    await g.run(['add', 'a.txt']);
+    writeFileSync(path.join(dir, 'a.txt'), 'changed again\n');
+    writeFileSync(path.join(dir, 'new.txt'), 'untracked\n');
+    writeFileSync(path.join(dir, '.gitignore'), 'build/\n');
+    mkdirSync(path.join(dir, 'build'), { recursive: true });
+    writeFileSync(path.join(dir, 'build', 'out.js'), 'ignored\n');
+    const status = await g.run(['status', '--porcelain']);
+    const { head, tree } = await root.contentTree();
+    expect(head).toBe((await g.run(['rev-parse', 'HEAD'])).trim());
+    expect(await g.run(['status', '--porcelain'])).toBe(status);
+    expect(await g.run(['show', `${tree}:a.txt`])).toBe('changed again');
+    expect(await g.run(['show', `${tree}:new.txt`])).toBe('untracked');
+    expect(await g.run(['ls-tree', '-r', '--name-only', tree])).not.toContain('build/');
+    expect(await changedBetween(dir, (await treeOf(dir, 'HEAD')) as string, tree)).toEqual([
+      '.gitignore',
+      'a.txt',
+      'new.txt',
+    ]);
+  });
+
+  it("commits exactly the verified tree in the agent's name, never what changed after it (review F04)", async () => {
     const { dir, g } = await repo();
     writeFileSync(path.join(dir, 'c.txt'), 'new\n');
-    const head = await commitAll(dir, 'the work\n\nverified as abc', agentIdentity('be 1'));
+    const verified = await (await GitRoot.open(dir)).contentTree();
+    // A writer changes the checkout after the verified tree was taken.
+    writeFileSync(path.join(dir, 'c.txt'), 'BAD unverified\n');
+    const head = await commitContent(
+      dir,
+      verified.tree,
+      verified.head,
+      'the work\n\nverified as abc',
+      agentIdentity('be 1'),
+    );
     expect((await g.run(['log', '-1', '--format=%an <%ae>|%s', head])).trim()).toBe(
       'be 1 (via Friday) <be-1@agents.friday.invalid>|the work',
     );
-    expect(await g.run(['status', '--porcelain'])).toBe('');
+    expect((await g.run(['rev-parse', 'HEAD'])).trim()).toBe(head);
+    expect(await treeOf(dir, head)).toBe(verified.tree);
+    expect(await g.run(['show', `${head}:c.txt`])).toBe('new');
+    // The late change is still in the checkout, uncommitted.
+    expect(await g.run(['status', '--porcelain'])).toBe('M c.txt');
+    // HEAD is no longer the parent Friday saw: nothing is committed.
+    const moved = await commitContent(dir, verified.tree, verified.head, 'again', agentIdentity('be 1')).catch(
+      (e: FridayError) => e,
+    );
+    expect((moved as FridayError).code).toBe('COS-8000');
+    expect((await g.run(['rev-parse', 'HEAD'])).trim()).toBe(head);
   });
 
   it('checks out a revision for verification in its own detached worktree, and reuses it', async () => {
@@ -93,10 +139,13 @@ describe("Friday's commits and checkouts", () => {
     const first = await checkoutForVerification(dir, wt, 'goal-1', one);
     expect(readFileSync(path.join(first, 'a.txt'), 'utf8').replace(/\r\n/g, '\n')).toBe('one\n');
     writeFileSync(path.join(first, 'a.txt'), 'left behind by a check\n');
+    writeFileSync(path.join(first, 'report.txt'), 'also left behind\n');
     const again = await checkoutForVerification(dir, wt, 'goal-1', two);
     expect(again).toBe(first);
     expect((await (await GitRoot.open(again)).refs()).branch).toBeNull();
     expect(readFileSync(path.join(again, 'a.txt'), 'utf8').replace(/\r\n/g, '\n')).toBe('a\n');
     expect(readFileSync(path.join(again, 'b.txt'), 'utf8').replace(/\r\n/g, '\n')).toBe('two\n');
+    expect(existsSync(path.join(again, 'report.txt'))).toBe(false);
+    expect((await (await GitRoot.open(again)).contentTree()).tree).toBe(await treeOf(dir, two));
   });
 });

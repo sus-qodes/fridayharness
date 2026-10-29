@@ -67,10 +67,8 @@ describe('routing in the state', () => {
     expect(run.routing_decision_id).toBe(decision?.decision_id);
   });
 
-  it("records the model a session reports, which its runs inherit, and a router's failure without stopping the run", () => {
-    state.setRouter(() => {
-      throw new Error('registry unreadable');
-    });
+  it('records the model a session reports, which its runs inherit', () => {
+    state.setRouter(router);
     const reg = register('cc-1', 'attach');
     state.observeModel(
       PROJECT,
@@ -86,11 +84,101 @@ describe('routing in the state', () => {
       { task_id: task.task_id },
     );
     expect(state.q.run(claimed.run_id)).toMatchObject({ model_observed: 'claude-sonnet-5-5', model_basis: 'session' });
-    expect(state.q.routingDecisions(PROJECT, { task_id: task.task_id })[0]).toMatchObject({
-      model: null,
-      reason_codes: ['router.error'],
-    });
     expect(state.q.task(PROJECT, task.task_id).status).toBe('RUNNING');
+  });
+
+  it('starts nothing a route blocks, a failing router included, and asks a human once (review F01)', () => {
+    // A router that fails cannot show the work may run here: it does not (until M7.1 it did).
+    state.setRouter(() => {
+      throw new Error('registry unreadable');
+    });
+    const cc = register('cc-1', 'attach');
+    const task = state.createTask(PROJECT, human, { summary: 'docs', ready: true });
+    const caller = { harness_id: cc.harness_id, agent_id: cc.agent_id };
+    expect(() => state.claimTask(PROJECT, caller, { task_id: task.task_id })).toThrow(
+      /routing failed: registry unreadable/,
+    );
+    expect(() => state.claimTask(PROJECT, caller, { task_id: task.task_id })).toThrow(/COS-7003|routing/);
+    expect(state.q.task(PROJECT, task.task_id).status).toBe('READY');
+    expect(state.q.runs(task.task_id)).toEqual([]);
+    const blocks = state.store.readSince(PROJECT, 0, { types: ['routing.blocked'] });
+    expect(blocks).toHaveLength(1);
+    const asked = () =>
+      state.q.escalations(PROJECT, 'pending').filter((e) => e.task_id === task.task_id && e.kind === 'routing_blocked');
+    expect(asked()).toHaveLength(1);
+
+    // A decision that blocks (no eligible model here): no run and no task.start for a spawn host.
+    state.setRouter(({ task: t }) => ({
+      decision: {
+        mode: 'hybrid',
+        task_class: t.kind,
+        model: null,
+        binding: false,
+        blocked: true,
+        source: 'none',
+        reason: 'no eligible model can run this task here; a human decides',
+        reason_codes: ['none.eligible'],
+      },
+    }));
+    const codex = register('codex-1', 'spawn', { task_start: true, model_control: 'set' });
+    expect(() => state.assignTask(PROJECT, human, task.task_id, 'codex-1')).toThrow(/no eligible model/);
+    expect(state.pollOutbox(PROJECT, codex.harness_id)).toEqual([]);
+    expect(state.q.task(PROJECT, task.task_id).status).toBe('READY');
+    expect(asked()).toHaveLength(1);
+
+    // A route that allows it: the work starts, and the question about the block is answered.
+    state.setRouter(router);
+    state.assignTask(PROJECT, human, task.task_id, 'codex-1');
+    expect(state.pollOutbox(PROJECT, codex.harness_id)[0]?.params).toMatchObject({ model: 'gpt-5.6-luna' });
+    expect(asked()).toEqual([]);
+  });
+
+  it('ends an attempt whose host runs another model than its hard constraints allowed (review F01)', () => {
+    state.setRouter(({ task: t }) => ({
+      decision: {
+        mode: 'hybrid',
+        task_class: t.kind,
+        model: 'local-coder',
+        binding: true,
+        source: 'score',
+        reason: 'the only local model',
+        reason_codes: ['score.best'],
+        constraints: ['must_use_local'],
+      },
+    }));
+    const codex = register('codex-1', 'spawn', { task_start: true, model_control: 'set' });
+    const task = state.createTask(PROJECT, human, { summary: 'refactor', ready: true });
+    state.assignTask(PROJECT, human, task.task_id, 'codex-1');
+    const [start] = state.pollOutbox(PROJECT, codex.harness_id);
+    if (!start) throw new Error('no task.start was queued');
+    const runId = (start.params as { run_id: string }).run_id;
+    state.ackOutbox(PROJECT, codex.harness_id, [{ message_id: start.message_id, accepted: true }]);
+    expect(state.q.task(PROJECT, task.task_id).status).toBe('RUNNING');
+    // The same model: nothing happens.
+    state.observeModel(
+      PROJECT,
+      { kind: 'harness', id: codex.harness_id },
+      { run_id: runId },
+      'local-coder',
+      'reported',
+    );
+    expect(state.q.task(PROJECT, task.task_id).status).toBe('RUNNING');
+    // Another one: the attempt ends, the host is told to stop, and a human decides.
+    state.observeModel(
+      PROJECT,
+      { kind: 'harness', id: codex.harness_id },
+      { run_id: runId },
+      'gpt-5.6-luna',
+      'reported',
+    );
+    expect(state.q.task(PROJECT, task.task_id).status).toBe('READY');
+    expect(state.q.run(runId).status).toBe('ENDED');
+    expect(state.pollOutbox(PROJECT, codex.harness_id).map((m) => m.method)).toContain('task.cancel');
+    expect(
+      state.q
+        .escalations(PROJECT, 'pending')
+        .filter((e) => e.task_id === task.task_id && e.kind === 'routing_violated'),
+    ).toHaveLength(1);
   });
 
   it('keeps human pins with their source and expiry, and only humans make them', () => {
