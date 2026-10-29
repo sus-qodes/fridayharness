@@ -193,6 +193,9 @@ importers:
       '@friday/adapter-claude':
         specifier: workspace:*
         version: link:../../packages/adapters/claude
+      '@friday/adapter-codex':
+        specifier: workspace:*
+        version: link:../../packages/adapters/codex
       '@friday/daemon':
         specifier: workspace:*
         version: link:../daemon
@@ -309,6 +312,28 @@ importers:
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
+
+  packages/adapters/codex:
+    dependencies:
+      '@friday/adapter-generic':
+        specifier: workspace:*
+        version: link:../generic
+      '@friday/execution':
+        specifier: workspace:*
+        version: link:../../execution
+      '@friday/git':
+        specifier: workspace:*
+        version: link:../../git
+      '@friday/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+      '@friday/sdk':
+        specifier: workspace:*
+        version: link:../../sdk
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../../tests/support
 
   packages/adapters/generic:
     dependencies:
@@ -577,6 +602,9 @@ importers:
       '@friday/adapter-claude':
         specifier: workspace:*
         version: link:../packages/adapters/claude
+      '@friday/adapter-codex':
+        specifier: workspace:*
+        version: link:../packages/adapters/codex
       '@friday/adapter-generic':
         specifier: workspace:*
         version: link:../packages/adapters/generic

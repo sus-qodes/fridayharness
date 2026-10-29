@@ -1,0 +1,209 @@
+// A scripted stand-in for `codex app-server` (protocol v2 as recorded in M3.5 against Codex
+// 0.162.1). It speaks JSON-RPC over stdio like the real one and plays a script for each turn:
+// agent messages, commands and file changes that ask for approval, writes that do not, reroutes,
+// questions and delegation. An approved long command starts a real process that writes to a work
+// file, so a test can prove what Friday allowed, declined and stopped. It never calls a model.
+//
+// Environment:
+//   FAKE_CODEX_SCRIPT  a JSON file: { model?, multiAgentMode?, turns: Step[][], resume?: Step[] }
+//   FAKE_CODEX_LOG     a JSON-lines file of everything the client sent, and the answers it gave
+//   FAKE_CODEX_WORK    a folder: <task>.work files grow while a long command runs; threads.json
+//                      (thread-<id>.json) remembers each thread, so a new app-server can resume it
+import { spawn } from 'node:child_process';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import readline from 'node:readline';
+
+const script = JSON.parse(readFileSync(process.env.FAKE_CODEX_SCRIPT, 'utf8'));
+const logFile = process.env.FAKE_CODEX_LOG;
+const workDir = process.env.FAKE_CODEX_WORK;
+mkdirSync(workDir, { recursive: true });
+/** One file per thread, so a new app-server can resume a thread another one started. */
+const threadFile = (id) => path.join(workDir, `thread-${id}.json`);
+const loadThread = (id) => (existsSync(threadFile(id)) ? JSON.parse(readFileSync(threadFile(id), 'utf8')) : null);
+const saveThread = (t) => writeFileSync(threadFile(t.id), JSON.stringify(t));
+let started = 0;
+const log = (entry) => logFile && appendFileSync(logFile, `${JSON.stringify({ t: Date.now(), ...entry })}\n`);
+
+const send = (msg) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...msg })}\n`);
+let nextServerId = 0;
+const answers = new Map();
+/** A request to the client; resolves with its answer (or { error }). */
+const ask = (method, params) =>
+  new Promise((resolve) => {
+    const id = nextServerId++;
+    answers.set(id, resolve);
+    send({ id, method, params });
+  });
+const notify = (method, params) => send({ method, params });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const steers = [];
+let steerWaiter = null;
+let item = 0;
+
+const WRAP =
+  process.platform === 'win32'
+    ? (c) => `"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '${c.replace(/'/g, "''")}'`
+    : (c) => `/bin/bash -lc '${c.replace(/'/g, "'\\''")}'`;
+const WRITER = "setInterval(() => require('node:fs').appendFileSync(process.argv[1], 'x'), 20)";
+
+async function play(steps, thread, turnId) {
+  const cwd = thread.cwd;
+  const at = (p) => (path.isAbsolute(p) ? p : path.join(cwd, p));
+  for (const s of steps) {
+    if (s.op === 'command') {
+      const id = `exec-${++item}`;
+      const command = WRAP(s.command);
+      notify('item/started', { threadId: thread.id, turnId, item: { type: 'commandExecution', id, command, status: 'inProgress' } });
+      const r = await ask('item/commandExecution/requestApproval', {
+        kind: 'command',
+        threadId: thread.id,
+        turnId,
+        itemId: id,
+        startedAtMs: Date.now(),
+        command,
+        cwd,
+      });
+      log({ approval: 'command', command: s.command, answer: r });
+      if (r?.decision === 'accept') {
+        if (s.long) {
+          // Real work that outlives the turn's bookkeeping: only Friday's group can end it.
+          spawn(process.execPath, ['-e', WRITER, path.join(workDir, `${thread.task}.work`)], { stdio: 'ignore' });
+        } else {
+          if (s.write) writeFileSync(at(s.write.path), s.write.text);
+          notify('item/completed', { threadId: thread.id, turnId, item: { type: 'commandExecution', id, command, status: 'completed', exitCode: 0 } });
+        }
+      } else {
+        notify('item/completed', { threadId: thread.id, turnId, item: { type: 'commandExecution', id, command, status: 'declined', exitCode: null } });
+      }
+    } else if (s.op === 'write') {
+      const id = `patch-${++item}`;
+      const changes = [{ path: at(s.path), kind: { type: 'add' }, diff: '' }];
+      notify('item/started', { threadId: thread.id, turnId, item: { type: 'fileChange', id, changes, status: 'inProgress' } });
+      let ok = true;
+      if (s.ask !== false) {
+        const r = await ask('item/fileChange/requestApproval', { threadId: thread.id, turnId, itemId: id, startedAtMs: Date.now() });
+        log({ approval: 'fileChange', path: s.path, answer: r });
+        ok = r?.decision === 'accept';
+      }
+      if (ok) {
+        mkdirSync(path.dirname(at(s.path)), { recursive: true });
+        writeFileSync(at(s.path), s.text ?? '');
+      }
+      notify('item/completed', { threadId: thread.id, turnId, item: { type: 'fileChange', id, changes, status: ok ? 'completed' : 'declined' } });
+    } else if (s.op === 'message') {
+      notify('item/completed', { threadId: thread.id, turnId, item: { type: 'agentMessage', id: `msg-${++item}`, text: s.text } });
+    } else if (s.op === 'final') {
+      const text = JSON.stringify({
+        status: s.status ?? 'completed',
+        summary: s.summary ?? 'done',
+        changed_paths: s.changed_paths ?? [],
+        blocked_reason: s.blocked_reason ?? '',
+      });
+      notify('item/completed', { threadId: thread.id, turnId, item: { type: 'agentMessage', id: `msg-${++item}`, text } });
+      notify('turn/completed', { threadId: thread.id, turn: { id: turnId, status: 'completed', items: [], error: null } });
+      return;
+    } else if (s.op === 'fail') {
+      notify('turn/completed', {
+        threadId: thread.id,
+        turn: { id: turnId, status: 'failed', items: [], error: { message: s.message ?? 'failed' } },
+      });
+      return;
+    } else if (s.op === 'reroute') {
+      notify('model/rerouted', { threadId: thread.id, turnId, fromModel: thread.model, toModel: s.to, reason: 'highRiskCyberActivity' });
+    } else if (s.op === 'ask') {
+      const r = await ask('item/tool/requestUserInput', {
+        threadId: thread.id,
+        turnId,
+        itemId: `ask-${++item}`,
+        isBlocking: true,
+        questions: [{ id: 'q1', header: 'Question', question: s.question }],
+      });
+      log({ userInput: r });
+    } else if (s.op === 'delegate') {
+      notify('item/started', { threadId: thread.id, turnId, item: { type: 'collabAgentToolCall', id: `collab-${++item}`, tool: 'spawn_agent' } });
+    } else if (s.op === 'waitSteer') {
+      if (!steers.length) await new Promise((r) => { steerWaiter = r; });
+    } else if (s.op === 'wait') {
+      await sleep(s.ms ?? 100);
+    }
+  }
+  // A script without a final step leaves the turn running, as a long task does.
+}
+
+const handlers = {
+  initialize: () => ({ userAgent: `fake_codex/0.162.1 (${process.platform})`, codexHome: workDir }),
+  'thread/start': (p) => {
+    const id = `thr-${process.pid}-${++started}`;
+    const t = { id, cwd: p.cwd, model: p.model ?? script.model ?? 'gpt-fake', task: null, turns: 0 };
+    saveThread(t);
+    return {
+      thread: { id },
+      model: t.model,
+      modelProvider: 'openai',
+      cwd: p.cwd,
+      approvalPolicy: p.approvalPolicy,
+      approvalsReviewer: p.approvalsReviewer,
+      sandbox: { type: p.sandbox },
+      multiAgentMode: script.multiAgentMode ?? 'explicitRequestOnly',
+    };
+  },
+  'thread/resume': (p) => {
+    const t = loadThread(p.threadId);
+    if (!t) throw Object.assign(new Error(`no thread ${p.threadId}`), { code: -32600 });
+    t.cwd = p.cwd ?? t.cwd;
+    saveThread(t);
+    return { thread: { id: t.id }, model: t.model, modelProvider: 'openai', multiAgentMode: script.multiAgentMode ?? 'explicitRequestOnly' };
+  },
+  'turn/start': (p) => {
+    const t = loadThread(p.threadId);
+    if (!t) throw Object.assign(new Error(`no thread ${p.threadId}`), { code: -32600 });
+    const text = p.input?.[0]?.text ?? '';
+    const task = /task_[0-9a-z]{26}/i.exec(text)?.[0];
+    if (task) t.task = task;
+    const steps = /Continue the task where you left off/.test(text) ? (script.resume ?? []) : (script.turns[t.turns] ?? []);
+    t.turns += 1;
+    saveThread(t);
+    const turnId = `turn-${p.threadId}-${t.turns}`;
+    setImmediate(() => void play(steps, t, turnId));
+    return { turn: { id: turnId, status: 'inProgress', items: [] } };
+  },
+  'turn/steer': (p) => {
+    steers.push(p.input?.[0]?.text ?? '');
+    if (steerWaiter) {
+      steerWaiter();
+      steerWaiter = null;
+    }
+    return { turnId: p.expectedTurnId };
+  },
+  'turn/interrupt': () => ({}),
+};
+
+readline.createInterface({ input: process.stdin }).on('line', async (line) => {
+  let msg;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (msg.method && msg.id === undefined) {
+    log({ notification: msg.method });
+    return;
+  }
+  if (msg.method) {
+    log({ request: msg.method, params: msg.params });
+    const h = handlers[msg.method];
+    if (!h) return send({ id: msg.id, error: { code: -32601, message: `no ${msg.method}` } });
+    try {
+      send({ id: msg.id, result: await h(msg.params ?? {}) });
+    } catch (e) {
+      send({ id: msg.id, error: { code: e.code ?? -32603, message: e.message } });
+    }
+    return;
+  }
+  const resolve = answers.get(msg.id);
+  if (resolve) {
+    answers.delete(msg.id);
+    resolve(msg.error ? { error: msg.error } : msg.result);
+  }
+});

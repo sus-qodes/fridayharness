@@ -241,9 +241,11 @@ describe('friday harness config claude-code', () => {
 
   it('rejects hosts other than claude-code with a usage error', async () => {
     await gitProject();
+    // Codex is a spawn-mode harness since M8a.2: it has a doctor, and nothing to configure in the project.
     for (const args of [
       ['harness', 'config', 'cursor'],
-      ['harness', 'doctor', 'codex'],
+      ['harness', 'config', 'codex'],
+      ['harness', 'doctor', 'cursor'],
     ]) {
       const res = await cli(['--project', ws().projectDir, ...args]);
       expect(res.code, args.join(' ')).toBe(2);

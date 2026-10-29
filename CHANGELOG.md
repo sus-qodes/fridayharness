@@ -10,6 +10,14 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - **Fix:** a request to run a command is judged as that command. Before, a recursive delete naming an absolute path could not be approved.
   - `task.resume` tells the adapter which host session to resume.
   - Hosts that speak over stdio run inside Friday's process groups.
+- **M8a.2, Codex works for Friday** (`friday harness run codex --agent <key>`, guide: `docs/integration/codex.md`):
+  - **Its own host.** Each task attempt gets its own Codex app-server, in the task's worktree, inside a Friday process group. Cancelling a task stops it and everything it started.
+  - **Friday decides.** Every command and file change Codex asks about is decided by Friday's policy. Friday answers only accept or decline. What a human must decide waits for `friday approve`.
+  - **Settings pinned on every thread:** Codex's approvals come to Friday, never to its own reviewer. The model Friday routed is used, and the model Codex reports is recorded.
+  - **Messages** for the agent reach its running turn.
+  - **Finishing.** A turn's end becomes a completion claim for verification, a blocked result, or an error.
+  - **Doctor.** `friday harness doctor codex` checks the executable, its app-server and its sandbox, without calling a model.
+  - Writes Codex makes without asking, and its own delegation, are reported, not hidden.
 
 ## Unreleased — M7.1e, the follow-up review of M7.1
 

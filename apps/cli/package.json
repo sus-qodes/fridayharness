@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@friday/adapter-claude": "workspace:*",
+    "@friday/adapter-codex": "workspace:*",
     "@friday/daemon": "workspace:*",
     "@friday/db": "workspace:*",
     "@friday/git": "workspace:*",

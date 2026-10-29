@@ -4,7 +4,7 @@ Friday is a local orchestration and context control plane for AI software develo
 
 The architecture is called **ContextOS** in the original specification.
 
-**Status:** M0–M7 built and tested locally, after three stabilizations from independent reviews (M2.5, M3.1 and M7.1, with its follow-up M7.1e; see [the dispositions](docs/reviews/)). The gates are pending: they need live runs with real hosts, CI on both operating systems, and the owner's acceptance of the decision records ([status table](docs/BUILD_PLAN.md#f1-status-table-updated-at-every-gate)). M8 is next.
+**Status:** M0–M7 built and tested locally, after three stabilizations from independent reviews (M2.5, M3.1 and M7.1, with its follow-up M7.1e; see [the dispositions](docs/reviews/)). The gates are pending: they need live runs with real hosts, CI on both operating systems, and the owner's acceptance of the decision records ([status table](docs/BUILD_PLAN.md#f1-status-table-updated-at-every-gate)). M8a, a second host, is under way: Codex works for Friday as a spawn-mode harness (`friday harness run codex`), tested against a scripted host; runs with real accounts wait for the owner.
 - **M1** gives you the event spine, the daemon, the `friday` CLI, a read-only status page, and Claude Code attached through an MCP server, a skill and policy hooks. A task runs from creation through a Claude Code session to a verified completion, with Friday's policy enforced on the session's tools.
 - **M2** adds the Master Brain. A goal becomes a versioned plan that you approve; its tasks are delegated to agents, revised when verification fails, and escalated to you when only a human can decide.
 - **M2.5** closes the twelve findings of the 2026-10-14 review:
@@ -65,6 +65,7 @@ See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 | [docs/routing.md](docs/routing.md) | Model routing: pins, hard constraints, the registry and guide, evidence, Laya and its calibration, what binds and what is advice |
 | [docs/protocol/README.md](docs/protocol/README.md) | The harness protocol: transport, tokens, methods, errors, versions |
 | [docs/integration/claude-code-spike.md](docs/integration/claude-code-spike.md) | Verified Claude Code hook and MCP behaviour on Windows |
+| [docs/integration/codex.md](docs/integration/codex.md) | Codex as a spawn-mode harness: running it, what Friday pins and decides, what is not mediated |
 | [docs/integration/codex-spike.md](docs/integration/codex-spike.md) | The M3.5 Codex app-server spike: what works, what does not, and the contract changes before M8 |
 | [docs/reviews/](docs/reviews/) | External reviews of the plan and the project, and how each finding was handled |
 
@@ -129,9 +130,9 @@ Set `FRIDAY_TEST_TMP` to a short directory (for example `C:\t`) if your temp pat
 ```
 apps/        daemon, cli
 packages/    protocol, core, db, events, state, sdk, policy, verification, planner, git, code-graph, context,
-             execution, routing, mcp-server, adapters/{generic,claude}
+             execution, routing, mcp-server, adapters/{generic,claude,codex}
 tests/       support and helpers, cross-package suites (integration, failure, hooks, mcp, security, conformance, scenarios), fixtures
 docs/        plan, spec, decisions, security, integration notes, runbooks, reviews
 ```
 
-Messaging and memory live in `packages/state`, because each change commits with the event log. The Codex adapter and Claude spawn mode arrive in M8a, further adapters in M8b and the full UI in M9, as listed in the build plan.
+Messaging and memory live in `packages/state`, because each change commits with the event log. The Codex adapter arrived in M8a.2; Claude spawn mode follows in M8a.3, further adapters in M8b and the full UI in M9, as listed in the build plan.

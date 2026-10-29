@@ -1,0 +1,26 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    {
+      "path": "../generic"
+    },
+    {
+      "path": "../../execution"
+    },
+    {
+      "path": "../../git"
+    },
+    {
+      "path": "../../protocol"
+    },
+    {
+      "path": "../../sdk"
+    }
+  ]
+}

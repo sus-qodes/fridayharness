@@ -15,6 +15,7 @@ import {
 } from '@friday/adapter-claude';
 import { newId } from '@friday/protocol';
 import { type Command, Option } from 'commander';
+import { doctorCodex, registerSpawnRun } from './codex.js';
 import { type GlobalOptions, out, project, UsageError } from './context.js';
 import { extraDoctorChecks, renderDoctor } from './doctor.js';
 import { materializeFixtureShop } from './fixture.js';
@@ -27,7 +28,7 @@ const HOSTS = ['claude-code'];
 function requireHost(host: string): void {
   if (!HOSTS.includes(host)) {
     throw new UsageError(
-      `unsupported host "${host}": M1 supports claude-code (cursor, codex and october arrive in M8)`,
+      `unsupported host "${host}": this command configures claude-code; codex works as a spawn-mode harness and needs no files in the project (friday harness run codex); cursor and october arrive in M8b`,
     );
   }
 }
@@ -180,13 +181,27 @@ function registerHarness(program: Command): void {
     .command('doctor <host>')
     .description('check that a host is wired to Friday and which enforcement level it reaches (read-only)')
     .option('--quick', 'skip starting the MCP server')
-    .action(async (host: string, opts: { quick?: boolean }) => {
-      requireHost(host);
-      const ref = project(g());
-      const report = await claudeDoctor(ref, { ...(opts.quick ? { skipMcp: true } : {}) });
-      out(g(), report, () => `${renderDoctor(report.checks)}\n\nEnforcement achieved: ${report.achieved}`);
-      if (report.checks.some((c) => c.status === 'fail')) process.exitCode = 1;
-    });
+    .addOption(
+      new Option('--sandbox <mode>', 'codex: the sandbox its threads would run with')
+        .choices(['read-only', 'workspace-write', 'danger-full-access'])
+        .default('workspace-write'),
+    )
+    .action(
+      async (
+        host: string,
+        opts: { quick?: boolean; sandbox: 'read-only' | 'workspace-write' | 'danger-full-access' },
+      ) => {
+        // A spawn-mode host writes nothing into the project: its doctor checks the host itself (ADR-0032).
+        if (host === 'codex') return doctorCodex(g, opts.sandbox);
+        requireHost(host);
+        const ref = project(g());
+        const report = await claudeDoctor(ref, { ...(opts.quick ? { skipMcp: true } : {}) });
+        out(g(), report, () => `${renderDoctor(report.checks)}\n\nEnforcement achieved: ${report.achieved}`);
+        if (report.checks.some((c) => c.status === 'fail')) process.exitCode = 1;
+      },
+    );
+
+  registerSpawnRun(harness, g);
 }
 
 function registerFixture(program: Command): void {
