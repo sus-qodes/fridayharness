@@ -3,6 +3,7 @@
 //! notifications. The Rust core is the only HTTP client of the daemon on the desktop: the webview
 //! holds no credential (FD-06) and reaches the daemon only through the commands below.
 
+mod autostart;
 mod confirm;
 mod daemon;
 mod events;
@@ -293,6 +294,12 @@ pub struct DeepLink {
     /// The reach the human chose on the Notch's card, for the approval's full view.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reach: Option<String>,
+    /// The tab the panel or drawer opens on (Settings' Planner, a diff's files).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
+    /// The file a diff opens on, as the daemon names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 impl DeepLink {
@@ -302,12 +309,32 @@ impl DeepLink {
                 !v.is_empty() && v.len() <= 128 && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
             })
         };
-        let panel = self
-            .panel
-            .as_ref()
-            .is_none_or(|v| !v.is_empty() && v.len() <= 32 && v.chars().all(|c| c.is_ascii_lowercase() || c == '-'));
+        let name = |s: &Option<String>| {
+            s.as_ref().is_none_or(|v| {
+                !v.is_empty() && v.len() <= 32 && v.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+            })
+        };
+        // A drawer's tab by the page's own rule (desktop/boot.ts `TAB`): a lower-case letter, then
+        // lower-case letters, digits and hyphens.
+        let tab = self.tab.as_ref().is_none_or(|v| {
+            let mut c = v.chars();
+            v.len() <= 32
+                && c.next().is_some_and(|f| f.is_ascii_lowercase())
+                && c.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+        });
         let reach = self.reach.as_deref().is_none_or(|r| matches!(r, "once" | "run" | "task"));
-        id(&self.focus_task) && id(&self.approval_id) && id(&self.id) && panel && reach
+        // Any file name, but no control character (NUL and line ends among them).
+        let path = self
+            .path
+            .as_ref()
+            .is_none_or(|v| !v.is_empty() && v.chars().count() <= 1024 && !v.chars().any(char::is_control));
+        id(&self.focus_task)
+            && id(&self.approval_id)
+            && id(&self.id)
+            && name(&self.panel)
+            && tab
+            && reach
+            && path
     }
 }
 
@@ -388,14 +415,37 @@ fn set_tray_state(
     Ok(())
 }
 
-/// A native notification, sent only while the Notch is parked or the screen is locked.
+/// A native notification, sent only while the Notch is parked or the screen is locked. A `test`
+/// (Settings → Desktop app) comes from either window and goes now, within its own budget. Either
+/// answers whether it was handed to Windows, which says nothing of whether it appeared (notify.rs).
 #[tauri::command]
-fn notify(app: AppHandle, window: WebviewWindow, title: String, body: String) -> Result<bool, CmdError> {
+fn notify(
+    app: AppHandle,
+    window: WebviewWindow,
+    title: String,
+    body: String,
+    test: Option<bool>,
+) -> Result<bool, CmdError> {
+    let st = state(&app);
+    if test == Some(true) {
+        return st.notifier.test(&app, &title, &body).map_err(|_| too_many_notifications());
+    }
     if window.label() != island::LABEL {
         return Err(CmdError::bad_request("notifications come from the Notch window"));
     }
-    let st = state(&app);
     Ok(st.notifier.notify(&app, st.island.is_parked(), &title, &body))
+}
+
+fn too_many_notifications() -> CmdError {
+    CmdError::shell(
+        429,
+        "DESKTOP-1008",
+        "too_many_notifications",
+        format!(
+            "Friday sent {} test notifications in the last minute; try again in a minute",
+            notify::TESTS_PER_MINUTE
+        ),
+    )
 }
 
 // ---- commands: shortcuts, editor, browser, secrets -------------------------------------------------
@@ -566,6 +616,18 @@ async fn allow_spending(app: AppHandle, budget: f64) -> Result<Value, CmdError> 
         Ok(out.json().unwrap_or(Value::Null))
     })
     .await
+}
+
+/// Whether Windows starts this app when the user signs in (autostart.rs).
+#[tauri::command]
+fn get_autostart() -> bool {
+    autostart::enabled()
+}
+
+/// "Start Friday when I sign in": adds or removes the per-user Run entry; returns the state now.
+#[tauri::command]
+fn set_autostart(enabled: bool) -> Result<bool, CmdError> {
+    autostart::set(enabled).map_err(|e| CmdError::shell(500, "DESKTOP-2007", "autostart_failed", e))
 }
 
 // ---- lifecycle -----------------------------------------------------------------------------------
@@ -1044,6 +1106,8 @@ pub fn run() {
             open_in_browser,
             store_key,
             allow_spending,
+            get_autostart,
+            set_autostart,
         ])
         .setup(move |app| {
             let config_dir = app.path().app_config_dir()?;
@@ -1154,6 +1218,43 @@ mod tests {
             serde_json::to_value(DeepLink { approval_id: Some("a1".into()), ..Default::default() }).unwrap(),
             json!({"approval_id": "a1"})
         );
+    }
+
+    #[test]
+    fn deep_links_carry_a_drawer_tab_and_a_file() {
+        let link = |v: Value| serde_json::from_value::<DeepLink>(v).unwrap();
+        let diff = json!({"panel": "diff", "id": "task_1", "tab": "files", "path": "src/a b/ünï.ts"});
+        assert!(link(diff.clone()).valid());
+        // What the Studio receives is what the Notch sent.
+        assert_eq!(serde_json::to_value(link(diff.clone())).unwrap(), diff);
+        assert!(link(json!({"panel": "settings", "tab": "planner"})).valid());
+        assert!(link(json!({"panel": "settings", "tab": "starts-at-sign-in"})).valid());
+        // The page's rule (desktop/boot.ts `TAB`): a letter first, then letters, digits and hyphens.
+        assert!(link(json!({"panel": "settings", "tab": "step-2"})).valid());
+        for tab in ["", "Planner", "planner_1", "<b>", "-planner", "2fa", "a".repeat(33).as_str()] {
+            assert!(!link(json!({"panel": "settings", "tab": tab})).valid(), "{tab:?}");
+        }
+        assert!(link(json!({"panel": "settings", "tab": "a".repeat(32)})).valid());
+        // Every drawer and dialog the page names (shell/context.ts), and every tab it opens one on.
+        let panels = [
+            "inspector", "diff", "graph", "memory", "terminal", "agents", "inbox", "settings", "approval", "question",
+            "new-goal", "halt", "plan-editor", "verify", "recover", "land", "claude-setup", "start-agent", "plan-review",
+        ];
+        let tabs = [
+            "planner", "routing", "pins", "claude", "goal", "overview", "context", "git", "history", "combined", "tools",
+            "errors", "process",
+        ];
+        for panel in panels {
+            for tab in tabs {
+                assert!(link(json!({"panel": panel, "tab": tab})).valid(), "{panel} {tab}");
+            }
+        }
+        assert!(link(json!({"panel": "diff", "path": "é".repeat(1024)})).valid());
+        let bad: [String; 6] =
+            ["".into(), "é".repeat(1025), "a\0b".into(), "a\nb".into(), "a\u{1b}[2Jb".into(), "a\u{85}b".into()];
+        for path in bad {
+            assert!(!link(json!({"panel": "diff", "path": path})).valid(), "{path:?}");
+        }
     }
 
     #[test]

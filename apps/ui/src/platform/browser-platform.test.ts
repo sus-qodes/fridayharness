@@ -81,4 +81,33 @@ describe('browserPlatform', () => {
     expect(await browserPlatform({ clipboard: { writeText: refused } }).copy('x')).toBe(false);
     expect(await browserPlatform({ clipboard: null }).copy('x')).toBe(false);
   });
+
+  it('asks the Notification API for permission, and says when there is none', async () => {
+    const ask = (requestPermission?: () => Promise<string>) =>
+      browserPlatform({ notifications: requestPermission ? { requestPermission } : {} }).requestNotifications();
+    expect(await ask(async () => 'granted')).toBe('granted');
+    expect(await ask(async () => 'denied')).toBe('denied');
+    expect(await ask(async () => 'default')).toBe('default');
+    expect(await ask(async () => 'something else')).toBe('default');
+    expect(
+      await ask(async () => {
+        throw new Error('SecurityError');
+      }),
+    ).toBe('denied');
+    expect(await ask()).toBe('unsupported');
+    expect(await browserPlatform({ notifications: null }).requestNotifications()).toBe('unsupported');
+  });
+
+  it('reads the page’s own Notification API when asked', async () => {
+    const requestPermission = vi.fn(async () => 'granted');
+    vi.stubGlobal('Notification', { requestPermission });
+    try {
+      expect(await browserPlatform().requestNotifications()).toBe('granted');
+      expect(requestPermission).toHaveBeenCalledOnce();
+      vi.stubGlobal('Notification', undefined);
+      expect(await browserPlatform().requestNotifications()).toBe('unsupported');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

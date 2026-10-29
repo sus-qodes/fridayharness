@@ -4,6 +4,7 @@
  * 540 px wide; the terminal at the bottom, its height from `prefs.terminalHeight`. A title, a close
  * button, `Esc` (the topmost layer only) and `Tab` kept inside while focus is in it; the Studio
  * stays usable beside it. Closing returns focus where it was. An unknown kind closes at once.
+ * A drawer opened from a dialog (`request.back`) has a Back button that opens the dialog again.
  */
 import { button, h, setVar } from '../ui/dom.js';
 import { cleanText, truncate } from '../ui/format.js';
@@ -51,6 +52,12 @@ export function mountDrawerHost(ctx: AppContext, layers: LayerStack): DrawerHost
     if (ctx.store.select('ui').drawer === request) closeDrawer(ctx);
   }
 
+  /** Closes the drawer and opens the dialog it came from, in one change. */
+  function backFor(request: DrawerRequest): void {
+    if (!request.back || ctx.store.select('ui').drawer !== request) return;
+    ctx.store.patch('ui', { drawer: null, modal: { ...request.back.modal } });
+  }
+
   function applyHeight(): void {
     if (shown && BOTTOM_DRAWERS.has(shown.request.kind)) {
       setVar(shown.panel, '--sh-term-h', `${terminalHeight(ctx.store.select('prefs').terminalHeight)}px`);
@@ -73,6 +80,11 @@ export function mountDrawerHost(ctx: AppContext, layers: LayerStack): DrawerHost
       ariaLabel: 'Close the panel',
       title: 'Close (Esc)',
     });
+    const backBtn = request.back
+      ? button(truncate(cleanText(request.back.label), 60), () => backFor(request), {
+          class: 'btn btn-ghost sh-drawer-back',
+        })
+      : null;
     const panel = h(
       'section',
       {
@@ -82,7 +94,7 @@ export function mountDrawerHost(ctx: AppContext, layers: LayerStack): DrawerHost
         aria: { labelledby: titleId },
         dataset: { kind: request.kind },
       },
-      h('header', { class: 'sh-drawer-head' }, title, closeBtn),
+      h('header', { class: 'sh-drawer-head' }, backBtn, title, closeBtn),
       body,
     );
     el.append(panel);

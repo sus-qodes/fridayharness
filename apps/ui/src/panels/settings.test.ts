@@ -1,5 +1,7 @@
 import type { BrainStatusView } from '@friday/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { desktopPlatform, TEST_BODY, TEST_TITLE } from '../platform/desktop-platform.js';
+import type { TauriCore } from '../platform/tauri-transport.js';
 import { makeContext } from '../test/context.js';
 import { makeSnapshot } from '../test/fixtures.js';
 import { clampNumber, pageActions, plannerSteps, readLoosening, settingsDrawer } from './settings.js';
@@ -38,6 +40,37 @@ const POLICY = {
 function findCheckbox(root: HTMLElement, text: string): HTMLInputElement {
   const label = Array.from(root.querySelectorAll('label.check')).find((l) => l.textContent?.includes(text));
   return label?.querySelector('input') as HTMLInputElement;
+}
+
+/** How the shell refuses a native dialog the human cancelled (apps/desktop README, Errors). */
+const CANCELLED = {
+  status: 400,
+  body: {
+    error: {
+      code: 'DESKTOP-1003',
+      name: 'cancelled',
+      message: 'you cancelled it in the confirmation dialog',
+      retryable: false,
+    },
+  },
+};
+
+type ShellAnswer = (args: Record<string, unknown> | undefined) => unknown;
+
+/** A context whose platform is the desktop's, over a fake shell answering each command from `answers`. */
+function desktopContext(answers: Record<string, ShellAnswer> = {}, over: Partial<BrainStatusView> = {}) {
+  const calls: { cmd: string; args?: Record<string, unknown> }[] = [];
+  const all: Record<string, ShellAnswer> = { get_shortcuts: () => [], get_autostart: () => false, ...answers };
+  const core: Pick<TauriCore, 'invoke'> = {
+    invoke: (async (cmd: string, args?: Record<string, unknown>) => {
+      calls.push({ cmd, ...(args ? { args } : {}) });
+      const answer = all[cmd];
+      return answer ? answer(args) : null;
+    }) as TauriCore['invoke'],
+  };
+  const ctx = makeContext({ snapshot: makeSnapshot({ brain: brain(over) }) });
+  (ctx as { platform: unknown }).platform = desktopPlatform(core, { writeText: async () => undefined });
+  return { ctx, calls, to: (cmd: string) => calls.filter((c) => c.cmd === cmd) };
 }
 
 afterEach(() => {
@@ -125,11 +158,12 @@ describe('settings drawer', () => {
       { id, accel, state: 'registered' },
       { id: 'notch', accel: 'Ctrl+Alt+Shift+N', state: 'skipped', note: 'the keyboard layout types a letter' },
     ]);
-    const restart = vi.fn(async () => undefined);
+    const restart = vi.fn(async () => true);
     (ctx as { platform: unknown }).platform = {
       kind: 'tauri',
       openInEditor: () => undefined,
       copy: async () => true,
+      requestNotifications: async () => 'granted',
       desktop: {
         shortcuts: async () => [
           { id: 'studio', accel: 'Ctrl+Alt+Shift+F', state: 'registered' },
@@ -137,6 +171,11 @@ describe('settings drawer', () => {
         ],
         setShortcut,
         restart,
+        storeKey: async () => true,
+        allowSpending: async () => true,
+        autostart: async () => false,
+        setAutostart: async (on: boolean) => on,
+        testNotification: async () => true,
       },
     };
     const d = settingsDrawer(ctx, { kind: 'settings' });
@@ -153,6 +192,60 @@ describe('settings drawer', () => {
     buttonBy(d.el, 'Restart Friday').click();
     await flush();
     expect(restart).toHaveBeenCalledOnce();
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Friday is restarting' });
+    d.destroy();
+  });
+
+  it('says nothing when the human cancels the native restart dialog', async () => {
+    const { ctx, to } = desktopContext({
+      restart_daemon: () => {
+        throw CANCELLED;
+      },
+    });
+    const d = settingsDrawer(ctx, { kind: 'settings' });
+    await flush();
+    const restart = buttonBy(d.el, 'Restart Friday');
+    restart.click();
+    await flush();
+    expect(to('restart_daemon')).toHaveLength(1);
+    expect(ctx.toasts).toEqual([]);
+    expect(restart.disabled).toBe(false);
+    d.destroy();
+  });
+
+  it('sends a test notification and says only what the shell can tell', async () => {
+    let answer: unknown = true;
+    const { ctx, to } = desktopContext({
+      notify: () => {
+        if (answer instanceof Error) throw { status: 429, body: { error: { code: 'DESKTOP-1008', message: 'wait' } } };
+        return answer;
+      },
+    });
+    const d = settingsDrawer(ctx, { kind: 'settings' });
+    await flush();
+    const send = buttonBy(d.el, 'Send a test notification');
+    send.click();
+    await flush();
+    expect(to('notify')).toEqual([{ cmd: 'notify', args: { title: TEST_TITLE, body: TEST_BODY, test: true } }]);
+    // Handed to Windows: whether it appeared is beyond what the shell sees, and no answer claims
+    // Windows refused it (the shell never learns Windows' answer).
+    expect(d.el.textContent).toContain('Friday handed a test notification to Windows.');
+    expect(d.el.textContent).toContain('If none appeared, Windows is holding Friday’s notifications back');
+    expect(d.el.textContent).toContain('Do Not Disturb, Focus');
+    expect(d.el.textContent).not.toContain('refused');
+    answer = false;
+    send.click();
+    await flush();
+    expect(d.el.textContent).toContain('Friday could not prepare the notification, so Windows was not asked.');
+    expect(d.el.textContent).not.toContain('Friday handed');
+    expect(d.el.textContent).not.toContain('refused');
+    answer = new Error('too many');
+    send.click();
+    await flush();
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'error', text: 'Send a test notification', detail: 'wait' });
+    expect(d.el.textContent).not.toContain('could not prepare');
+    expect(d.el.textContent).not.toContain('Friday handed');
+    expect(send.disabled).toBe(false);
     d.destroy();
   });
 
@@ -186,6 +279,127 @@ describe('settings drawer', () => {
     await flush();
     expect(d.el.textContent).toContain('This browser has no notifications.');
     expect(ctx.store.select('prefs').notifications).toBe(false);
+    d.destroy();
+  });
+
+  it('in the desktop app turns notifications on without the browser API, absent or denying (deep review R8)', async () => {
+    for (const api of [undefined, { requestPermission: vi.fn(async () => 'denied') }]) {
+      vi.stubGlobal('Notification', api);
+      const { ctx } = desktopContext();
+      const d = settingsDrawer(ctx, { kind: 'settings' });
+      const box = findCheckbox(d.el, 'Notify me while the Notch is hidden or the screen is locked');
+      check(box, true);
+      await flush();
+      expect(ctx.store.select('prefs').notifications).toBe(true);
+      expect(box.checked).toBe(true);
+      expect(d.el.textContent).not.toContain('This browser has no notifications.');
+      expect(d.el.textContent).not.toContain('The browser refused');
+      if (api) expect(api.requestPermission).not.toHaveBeenCalled();
+      check(box, false);
+      expect(ctx.store.select('prefs').notifications).toBe(false);
+      d.destroy();
+    }
+  });
+
+  it('in the desktop app stores the key and allows spending through the native dialogs (deep review R9)', async () => {
+    const { ctx, to } = desktopContext({
+      store_key: (args) => ({ name: args?.name, stored: true, protection: 'dpapi', endpoint: null }),
+      allow_spending: () => ({ ok: true }),
+    });
+    const d = settingsDrawer(ctx, { kind: 'settings', tab: 'planner' });
+    await flush();
+    buttonBy(d.el, 'Store the key…').click();
+    await flush();
+    // Only the provider's name goes to the shell: the key stays in Windows' own prompt.
+    expect(to('store_key')).toEqual([{ cmd: 'store_key', args: { name: 'anthropic' } }]);
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'The key is stored' });
+    expect(ctx.refreshes).toBe(1);
+    expect(d.el.querySelector('input[type="password"]')).toBeNull();
+    type(controlBy(d.el, 'Daily budget (USD) for the command below'), '12');
+    buttonBy(d.el, 'Allow spending up to $12.00 a day…').click();
+    await flush();
+    expect(to('allow_spending')).toEqual([{ cmd: 'allow_spending', args: { budget: 12 } }]);
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'This clone may spend up to $12.00 a day' });
+    expect(ctx.refreshes).toBe(2);
+    // Once the board says both are done, neither is offered again.
+    ctx.board(makeSnapshot({ brain: brain({ key: 'stored', approved_here: true }) }));
+    expect(buttonBy(d.el, 'Store the key…').hidden).toBe(true);
+    expect(buttonBy(d.el, 'Allow spending').hidden).toBe(true);
+    d.destroy();
+  });
+
+  it('a cancelled native dialog changes nothing and shows no error (deep review R9)', async () => {
+    const { ctx, to } = desktopContext({
+      store_key: () => {
+        throw CANCELLED;
+      },
+      allow_spending: () => {
+        throw CANCELLED;
+      },
+    });
+    const d = settingsDrawer(ctx, { kind: 'settings', tab: 'planner' });
+    await flush();
+    buttonBy(d.el, 'Store the key…').click();
+    await flush();
+    buttonBy(d.el, 'Allow spending').click();
+    await flush();
+    expect(to('store_key')).toHaveLength(1);
+    expect(to('allow_spending')).toHaveLength(1);
+    expect(ctx.toasts).toEqual([]);
+    expect(ctx.refreshes).toBe(0);
+    expect(buttonBy(d.el, 'Store the key…').disabled).toBe(false);
+    d.destroy();
+  });
+
+  it('offers no native dialogs in a browser', () => {
+    const d = settingsDrawer(makeContext({ snapshot: makeSnapshot({ brain: brain() }) }), { kind: 'settings' });
+    expect(() => buttonBy(d.el, 'Store the key…')).toThrow();
+    expect(() => buttonBy(d.el, 'Allow spending')).toThrow();
+    expect(d.el.textContent).not.toContain('Start Friday when I sign in');
+    d.destroy();
+  });
+
+  it('in the desktop app turns starting at sign-in on and off (deep review R11)', async () => {
+    let on = true;
+    const { ctx, to } = desktopContext({
+      get_autostart: () => on,
+      set_autostart: (args) => {
+        on = args?.enabled === true;
+        return on;
+      },
+    });
+    const d = settingsDrawer(ctx, { kind: 'settings' });
+    const box = findCheckbox(d.el, 'Start Friday when I sign in');
+    expect(box.disabled).toBe(true);
+    await flush();
+    expect(box.disabled).toBe(false);
+    expect(box.checked).toBe(true);
+    check(box, false);
+    await flush();
+    expect(to('set_autostart')).toEqual([{ cmd: 'set_autostart', args: { enabled: false } }]);
+    expect(box.checked).toBe(false);
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Friday no longer starts when you sign in' });
+    check(box, true);
+    await flush();
+    expect(to('set_autostart').at(-1)?.args).toEqual({ enabled: true });
+    expect(box.checked).toBe(true);
+    d.destroy();
+  });
+
+  it('puts the sign-in toggle back when the shell refuses (deep review R11)', async () => {
+    const { ctx } = desktopContext({
+      set_autostart: () => {
+        throw { status: 500, body: { error: { code: 'DESKTOP-2007', name: 'autostart_failed', message: 'no' } } };
+      },
+    });
+    const d = settingsDrawer(ctx, { kind: 'settings' });
+    await flush();
+    const box = findCheckbox(d.el, 'Start Friday when I sign in');
+    check(box, true);
+    await flush();
+    expect(box.checked).toBe(false);
+    // The shell's refusal reaches the toast as Friday's error, its message readable.
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'error', text: 'Change starting at sign-in', detail: 'no' });
     d.destroy();
   });
 

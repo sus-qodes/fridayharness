@@ -1,13 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { takeRequestedReach } from '../governance/decisions.js';
+import { SAVE_DEBOUNCE_MS } from '../store/prefs.js';
 import { makeContext } from '../test/context.js';
-import { makeApproval, makeSnapshot, makeTask } from '../test/fixtures.js';
+import { makeApproval, makeEvent, makeRun, makeSnapshot, makeTask } from '../test/fixtures.js';
 import {
   applyDeepLink,
+  bootDesktopNotch,
   bootDesktopStudio,
   type DaemonStatus,
   type DesktopEnv,
+  type StudioTarget,
+  sendableLink,
   statusScreen,
+  studioLink,
   trayState,
   untilReady,
 } from './boot.js';
@@ -25,6 +30,8 @@ const INFO = {
 function fakeShell(statuses: DaemonStatus[], snapshot = makeSnapshot()) {
   const calls: { cmd: string; args?: Record<string, unknown> }[] = [];
   const listeners = new Map<string, (p: unknown) => void>();
+  /** The event stream's channel, once the page opened it. */
+  let channel: ((message: unknown) => void) | null = null;
   let i = 0;
   const env: DesktopEnv = {
     pollMs: 1,
@@ -39,6 +46,9 @@ function fakeShell(statuses: DaemonStatus[], snapshot = makeSnapshot()) {
       }) as DesktopEnv['core']['invoke'],
       Channel: class {
         readonly id = 7;
+        constructor(onmessage?: (message: unknown) => void) {
+          channel = onmessage ?? null;
+        }
       } as unknown as DesktopEnv['core']['Channel'],
     },
     listen: async (event, handler) => {
@@ -46,8 +56,15 @@ function fakeShell(statuses: DaemonStatus[], snapshot = makeSnapshot()) {
       return () => listeners.delete(event);
     },
   };
-  return { env, calls, emit: (event: string, payload: unknown) => listeners.get(event)?.(payload) };
+  return {
+    env,
+    calls,
+    emit: (event: string, payload: unknown) => listeners.get(event)?.(payload),
+    send: (message: unknown) => channel?.(message),
+  };
 }
+
+const settle = () => new Promise((r) => setTimeout(r, 20));
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -120,6 +137,177 @@ describe('the desktop Studio', () => {
     expect(takeRequestedReach('apr_1')).toBe('task');
     applyDeepLink(ctx, { panel: 'recover', id: 'task_7' });
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'recover', id: 'task_7' });
+  });
+});
+
+describe('deep links from the Notch window (deep review R7)', () => {
+  /** A Studio window's context with the drawers the links name. */
+  function studio() {
+    const ctx = makeContext({ snapshot: makeSnapshot({ tasks: [makeTask({ task_id: 't1' })] }) });
+    for (const kind of ['settings', 'agents', 'diff', 'inspector'] as const)
+      ctx.registry.drawer(kind, () => ({ el: document.createElement('div'), title: kind, destroy() {} }));
+    return ctx;
+  }
+  /** The link as the Studio receives it: JSON, across the shell. */
+  const across = (link: unknown): StudioTarget => JSON.parse(JSON.stringify(link)) as StudioTarget;
+
+  it('opens the drawer each Notch target names, with its tab and file', () => {
+    const ctx = studio();
+    applyDeepLink(ctx, across(studioLink({ panel: 'settings' })));
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
+    applyDeepLink(ctx, across(studioLink({ panel: 'agents', tab: 'routing' })));
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents', tab: 'routing' });
+    applyDeepLink(ctx, across(studioLink({ task_id: 't1', panel: 'diff', path: 'backend/src/checkout.ts' })));
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: 't1', path: 'backend/src/checkout.ts' });
+    applyDeepLink(ctx, across(studioLink({ task_id: 't1' })));
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'inspector', id: 't1' });
+    expect(studioLink({ task_id: 't1', approval_id: 'apr_1' })).toEqual({ focus_task: 't1', approval_id: 'apr_1' });
+  });
+
+  it('drops a tab or a file path of an unexpected form', () => {
+    const ctx = studio();
+    applyDeepLink(ctx, { panel: 'agents', tab: '<b>routing</b>' });
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents' });
+    applyDeepLink(ctx, { panel: 'diff', id: 't1', path: `a${String.fromCharCode(7)}b.ts` });
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: 't1' });
+    applyDeepLink(ctx, { panel: 'diff', id: 't1', path: 'x'.repeat(2000) });
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: 't1' });
+  });
+
+  it('the Notch window sends Settings, Routing and the ticker’s file, and the Studio opens that drawer', async () => {
+    const snapshot = makeSnapshot({
+      tasks: [makeTask({ task_id: 't1', status: 'RUNNING', plan_key: 'api' })],
+      runs: { t1: makeRun({ task_id: 't1' }) },
+    });
+    const shell = fakeShell([{ state: 'ready' }], snapshot);
+    const root = document.createElement('div');
+    document.body.append(root);
+    await bootDesktopNotch(root, shell.env);
+    await settle();
+    const ctx = studio();
+    /** The last `show_studio` target, delivered to the Studio as the shell's `studio-deeplink`. */
+    const deliver = () => {
+      const sent = shell.calls.filter((c) => c.cmd === 'show_studio').at(-1);
+      applyDeepLink(ctx, across(sent?.args?.target));
+    };
+    const q = <T extends HTMLElement>(sel: string): T => {
+      const el = root.querySelector<T>(sel);
+      if (!el) throw new Error(`no ${sel}`);
+      return el;
+    };
+    try {
+      q<HTMLButtonElement>('.nt-foot-btn').click();
+      deliver();
+      expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
+      q<HTMLButtonElement>('.nt-routing').click();
+      deliver();
+      expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents', tab: 'routing' });
+
+      // An agent writes a file; on the folded pill the ticker names it.
+      shell.send({
+        kind: 'event',
+        event: makeEvent(1000, 'run.paths_observed', { task_id: 't1', paths: ['backend/src/checkout.ts'] }),
+      });
+      shell.emit('notch-open', { focus: true });
+      q('.nt-expanded').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      const ticker = q<HTMLButtonElement>('.nt-ticker');
+      expect(ticker.hidden).toBe(false);
+      ticker.click();
+      deliver();
+      expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: 't1', path: 'backend/src/checkout.ts' });
+    } finally {
+      window.dispatchEvent(new Event('pagehide'));
+    }
+  });
+
+  it('leaves out a file path the shell would refuse, so the diff still opens without it', async () => {
+    const snapshot = makeSnapshot({
+      tasks: [makeTask({ task_id: 't1', status: 'RUNNING', plan_key: 'api' })],
+      runs: { t1: makeRun({ task_id: 't1' }) },
+    });
+    const shell = fakeShell([{ state: 'ready' }], snapshot);
+    const root = document.createElement('div');
+    document.body.append(root);
+    await bootDesktopNotch(root, shell.env);
+    await settle();
+    const ctx = studio();
+    const sent = () => shell.calls.filter((c) => c.cmd === 'show_studio').at(-1)?.args?.target;
+    const ticker = () => {
+      const el = root.querySelector<HTMLButtonElement>('.nt-ticker');
+      if (!el) throw new Error('no ticker');
+      return el;
+    };
+    try {
+      shell.emit('notch-open', { focus: true });
+      root
+        .querySelector('.nt-expanded')
+        ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      // An agent's file names hold what they like: a line break, or more than the shell takes.
+      let at = 1000;
+      for (const path of ['backend/src/a\nb.ts', `backend/src/${'x'.repeat(1100)}.ts`]) {
+        shell.send({ kind: 'event', event: makeEvent(at++, 'run.paths_observed', { task_id: 't1', paths: [path] }) });
+        expect(ticker().hidden).toBe(false);
+        ticker().click();
+        expect(sent()).toEqual({ panel: 'diff', id: 't1' });
+        applyDeepLink(ctx, across(sent()));
+        expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: 't1' });
+      }
+    } finally {
+      window.dispatchEvent(new Event('pagehide'));
+    }
+  });
+
+  it('sends a tab and a path only of the forms both sides take', () => {
+    expect(sendableLink({ panel: 'agents', tab: 'routing' })).toEqual({ panel: 'agents', tab: 'routing' });
+    expect(sendableLink({ panel: 'settings', tab: 'step-2' })).toEqual({ panel: 'settings', tab: 'step-2' });
+    for (const tab of ['Routing', 'pins_1', '-pins', 'a'.repeat(33)])
+      expect(sendableLink({ panel: 'agents', tab })).toEqual({ panel: 'agents' });
+    expect(sendableLink({ panel: 'diff', id: 't1', path: 'a\tb.ts', tab: 'goal' })).toEqual({
+      panel: 'diff',
+      id: 't1',
+      tab: 'goal',
+    });
+    expect(sendableLink({ panel: 'diff', id: 't1', path: 'é'.repeat(1024) })).toEqual({
+      panel: 'diff',
+      id: 't1',
+      path: 'é'.repeat(1024),
+    });
+    expect(sendableLink({ approval_id: 'apr_1', reach: 'task' })).toEqual({ approval_id: 'apr_1', reach: 'task' });
+  });
+});
+
+describe('preferences in the desktop windows (deep review R5)', () => {
+  const prefsCalls = (calls: { cmd: string; args?: Record<string, unknown> }[], method: 'GET' | 'POST') =>
+    calls.filter(
+      (c) => c.cmd === 'friday_request' && c.args?.method === method && String(c.args?.path).endsWith('/ui/prefs'),
+    );
+
+  it('read and keep the project’s copy, and stop with the window', async () => {
+    const studioShell = fakeShell([{ state: 'ready' }]);
+    const studioRoot = document.createElement('div');
+    document.body.append(studioRoot);
+    await bootDesktopStudio(studioRoot, studioShell.env);
+    await settle();
+    expect(prefsCalls(studioShell.calls, 'GET')).toHaveLength(1);
+
+    const shell = fakeShell([{ state: 'ready' }]);
+    const root = document.createElement('div');
+    document.body.append(root);
+    await bootDesktopNotch(root, shell.env);
+    await settle();
+    expect(prefsCalls(shell.calls, 'GET')).toHaveLength(1);
+    // The daemon held none: this window's copy became the first.
+    expect(prefsCalls(shell.calls, 'POST')).toHaveLength(1);
+    shell.emit('toggle-mute', { muted: true });
+    window.dispatchEvent(new Event('pagehide'));
+    await settle();
+    // The change made just before the window closed was sent; nothing is sent after.
+    const saved = prefsCalls(shell.calls, 'POST');
+    expect(saved).toHaveLength(2);
+    expect(saved[1]?.args?.body).toMatchObject({ prefs: { muted: true } });
+    shell.emit('toggle-mute', { muted: false });
+    await new Promise((r) => setTimeout(r, SAVE_DEBOUNCE_MS + 100));
+    expect(prefsCalls(shell.calls, 'POST')).toHaveLength(2);
   });
 });
 

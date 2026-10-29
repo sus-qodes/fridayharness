@@ -83,6 +83,36 @@ export function fileHasher(file: string): { loaded: string; current: () => strin
 }
 
 /**
+ * Each task's tool calls counted so far, up to the event sequence `upTo`: a snapshot reads only the
+ * events after it, so its cost follows what happened since the last read, not the whole history
+ * (the snapshot is read up to four times a second). Events are never changed once written, so
+ * what was counted stays right. One per daemon and project, made where its snapshot route is.
+ */
+export interface ToolCallTally {
+  upTo: number;
+  counts: Map<string, number>;
+}
+
+export function toolCallTally(): ToolCallTally {
+  return { upTo: 0, counts: new Map() };
+}
+
+/** Brings the tally up to `head`; a head behind it is another log, counted again from the start. */
+function countToolCalls(state: FridayState, pid: string, head: number, tally: ToolCallTally): Map<string, number> {
+  if (head < tally.upTo) {
+    tally.upTo = 0;
+    tally.counts.clear();
+  }
+  if (head > tally.upTo) {
+    for (const [taskId, n] of Object.entries(state.q.toolCallCounts(pid, tally.upTo, head))) {
+      tally.counts.set(taskId, (tally.counts.get(taskId) ?? 0) + n);
+    }
+    tally.upTo = head;
+  }
+  return tally.counts;
+}
+
+/**
  * Everything the board needs in one synchronous read, consistent with `head` (plan M9 §5.3,
  * FD-08): the interface streams events from `head` and reads this again after domain events.
  */
@@ -93,6 +123,8 @@ export function buildUiSnapshot(deps: {
   daemonVersion: string;
   brain?: BrainHandle | undefined;
   info?: UiSnapshotInfo | undefined;
+  /** The daemon's running count of tool calls; without one, they are counted from the start. */
+  toolCalls?: ToolCallTally | undefined;
   nowMs: number;
 }): UiSnapshot {
   const { state, project } = deps;
@@ -118,15 +150,20 @@ export function buildUiSnapshot(deps: {
   const SQL_LIMIT = 5000;
   const liveTasks = state.q.tasks(pid, { limit: SQL_LIMIT, liveSince: new Date(deps.nowMs - DAY_MS).toISOString() });
   if (liveTasks.length >= SQL_LIMIT) truncated.tasks = true;
-  const tasks: SnapshotTask[] = cap(
+  const shownTasks = cap(
     liveTasks.filter((t) => !TERMINAL.has(t.status) || recent(t.updated_at, DAY_MS)),
     'tasks',
     'last',
-  ).map((t) => ({
+  );
+  // From the event log, so the count is the same after a reload (review R13); only the events
+  // since the last read are counted.
+  const toolCalls = countToolCalls(state, pid, head, deps.toolCalls ?? toolCallTally());
+  const tasks: SnapshotTask[] = shownTasks.map((t) => ({
     ...t,
     agent_key: agentKey(t.assigned_agent_id),
     waiting_note: t.status === 'WAITING' ? latestReason(state, pid, t.task_id, 'task.waiting') : null,
     delegation_note: t.status === 'READY' ? delegationNote(state, t.task_id) : null,
+    tool_calls: toolCalls.get(t.task_id) ?? 0,
   }));
 
   const runs: Record<string, RunView> = {};
@@ -148,6 +185,14 @@ export function buildUiSnapshot(deps: {
     'goals',
     'last',
   );
+  // Progress over all of a goal's tasks: `tasks` leaves out those finished more than a day ago and
+  // those past its cap, so counting what it lists would lose them (review R4).
+  const counted = state.q.goalProgress(
+    pid,
+    goals.map((g) => g.goal_id),
+  );
+  const goalProgress: UiSnapshot['goal_progress'] = {};
+  for (const g of goals) goalProgress[g.goal_id] = counted[g.goal_id] ?? { total: 0, completed: 0 };
   const plans: UiSnapshot['plans'] = {};
   for (const g of goals) {
     if (!g.plan_id) continue;
@@ -221,6 +266,7 @@ export function buildUiSnapshot(deps: {
     },
     counts: state.q.statusCounts(pid),
     goals,
+    goal_progress: goalProgress,
     plans,
     tasks,
     runs,

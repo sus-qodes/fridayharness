@@ -1,12 +1,13 @@
 /**
  * What the palette offers and in which order (plan §7.6): tasks, goals, agents and files from the
- * board, and the registered commands; recent actions first. The entries carry their own `run`, so
- * the overlay only shows and runs them. Collecting and ranking need no DOM.
+ * board (an open goal without a plan also offers its plan editor), and the registered commands;
+ * recent actions first. The entries carry their own `run`, so the overlay only shows and runs
+ * them. Collecting and ranking need no DOM.
  */
 import type { UiSnapshot } from '@friday/protocol';
 import { statusLook } from '../model/status.js';
 import { visible } from '../model/text.js';
-import { type AppContext, type Command, openDrawer } from '../shell/context.js';
+import { type AppContext, type Command, openDrawer, openModal } from '../shell/context.js';
 import type { ActivityState } from '../store/state.js';
 import { basename, cleanText, humanize, shortId, truncate } from '../ui/format.js';
 import type { IconName } from '../ui/svg.js';
@@ -15,7 +16,10 @@ import { type FuzzyMatch, fuzzyMatch } from './fuzzy.js';
 export type EntryGroup = 'command' | 'agent' | 'task' | 'goal' | 'file';
 
 export interface PaletteEntry {
-  /** Stable across re-reads: `cmd:pause`, `task:<id>`, `goal:<id>`, `agent:<key>`, `file:<task>:<path>`. */
+  /**
+   * Stable across re-reads: `cmd:pause`, `task:<id>`, `goal:<id>`, `goal-plan:<id>`, `agent:<key>`,
+   * `file:<task>:<path>`.
+   */
   id: string;
   group: EntryGroup;
   /** Display text, already made safe (summaries cleaned, names with visible escapes). */
@@ -158,16 +162,30 @@ export function boardEntries(board: UiSnapshot | null, activity: ActivityState |
   }
 
   for (const goal of board.goals) {
+    const label = summaryLabel(goal.objective || goal.request) || shortId(goal.goal_id);
     out.push({
       id: `goal:${goal.goal_id}`,
       group: 'goal',
-      label: summaryLabel(goal.objective || goal.request) || shortId(goal.goal_id),
+      label,
       detail: `${shortId(goal.goal_id)} · ${humanize(goal.status)}`,
       keywords: [goal.goal_id, summaryLabel(goal.request)],
       icon: 'goal',
       // The interface has one selection; the canvas selects and centres the node whose id it holds.
       run: (ctx) => ctx.store.patch('ui', { selectedTaskId: goal.goal_id }),
     });
+    // An open goal without a plan, active or proposed: its plan editor, whenever the human returns.
+    const plans = board.plans[goal.goal_id];
+    if (goal.status === 'OPEN' && !plans?.active && !plans?.proposed) {
+      out.push({
+        id: `goal-plan:${goal.goal_id}`,
+        group: 'goal',
+        label: truncate(`Write the plan: ${label}`, LABEL_MAX),
+        detail: `${shortId(goal.goal_id)} · No plan yet`,
+        keywords: [goal.goal_id, 'write plan', 'plan editor'],
+        icon: 'goal',
+        run: (ctx) => openModal(ctx, { kind: 'plan-editor', id: goal.goal_id, mode: 'first' }),
+      });
+    }
   }
 
   if (activity) {

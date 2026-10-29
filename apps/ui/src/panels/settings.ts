@@ -1,8 +1,10 @@
 /**
  * Settings (plan §7.10): sound, notifications, motion, the mascot's outfit, Notch timings and
  * finished goals (written to `prefs`, which the shell persists); the planner's state with the exact
- * terminal steps (a key and spending consent never pass through the browser, FD-26); the policy's
- * loosening and Trust (sending exactly the hash shown); logging out; stopping Friday; about.
+ * terminal steps, and in the desktop app its native dialogs (a key and spending consent never pass
+ * through the page, FD-26); the policy's loosening and Trust (sending exactly the hash shown);
+ * logging out; stopping Friday; the desktop app's shortcuts, start at sign-in, a test notification
+ * and restart; about.
  */
 import type { BrainStatusView } from '@friday/protocol';
 import type { PolicyView } from '../api/client.js';
@@ -14,6 +16,7 @@ import {
   type DesktopCommands,
   type DesktopShortcut,
   type DrawerRequest,
+  type NotificationAnswer,
   openDrawer,
 } from '../shell/context.js';
 import type { Prefs } from '../store/state.js';
@@ -132,7 +135,10 @@ const SHORTCUT_LABELS: Record<string, string> = {
   halt: 'Open the halt dialog',
 };
 
-/** The desktop app's section: its global shortcuts, each changeable, and a restart of Friday. */
+/**
+ * The desktop app's section: its global shortcuts, each changeable, starting at sign-in, a test
+ * notification and a restart of Friday.
+ */
 function desktopSection(ctx: AppContext, desktop: DesktopCommands, td: Teardown): HTMLElement {
   const list = h('div', { class: 'pn-shortcuts' }, note('Reading the shortcuts…'));
   const render = (items: DesktopShortcut[]) => {
@@ -168,9 +174,59 @@ function desktopSection(ctx: AppContext, desktop: DesktopCommands, td: Teardown)
   const restartBtn = button([icon('rework', 14), 'Restart Friday'], () => void restart(), { class: 'btn' });
   async function restart() {
     restartBtn.disabled = true;
-    // The shell asks natively first; the page reads the board again once Friday is back.
-    await ctx.act('Restart Friday', () => desktop.restart(), 'Friday is restarting');
+    // The shell asks natively first (a cancel answers false: nothing to say); the page reads the
+    // board again once Friday is back.
+    const done = await ctx.act('Restart Friday', () => desktop.restart());
+    if (done) ctx.toast({ kind: 'success', text: 'Friday is restarting' });
     if (!td.done) restartBtn.disabled = false;
+  }
+  // A test notification (plan §8.7): the shell can tell only whether it handed the notification to
+  // Windows, never whether it appeared, so the answer says no more than that.
+  const testState = h('div', { class: 'field-hint', aria: { live: 'polite' } });
+  const testBtn = button([icon('bell', 14), 'Send a test notification'], () => void testNotification(), {
+    class: 'btn',
+  });
+  async function testNotification() {
+    testBtn.disabled = true;
+    testState.textContent = '';
+    const taken = await ctx.act('Send a test notification', () => desktop.testNotification());
+    if (td.done) return;
+    testBtn.disabled = false;
+    if (taken === true)
+      testState.textContent =
+        'Friday handed a test notification to Windows. If none appeared, Windows is holding Friday’s notifications back: Do Not Disturb, Focus, the app’s own notification setting (Windows Settings → System → Notifications), or a copy of the app started without its Start-menu shortcut.';
+    else if (taken === false)
+      testState.textContent =
+        'Friday could not prepare the notification, so Windows was not asked. Restart the desktop app and send another test.';
+  }
+  // Start at sign-in (plan §8.3): opt-in, a per-user Run entry the shell writes and removes.
+  const startState = h('div', { class: 'field-hint', aria: { live: 'polite' } });
+  const startBox = checkbox('Start Friday when I sign in', false, (on) => void setStart(on));
+  const startInput = startBox.querySelector('input') as HTMLInputElement;
+  startInput.disabled = true;
+  desktop.autostart().then(
+    (on) => {
+      if (td.done) return;
+      startInput.checked = on;
+      startInput.disabled = false;
+    },
+    () => {
+      if (td.done) return;
+      startInput.disabled = false;
+      startState.textContent = 'The desktop app did not say whether it starts when you sign in.';
+    },
+  );
+  async function setStart(on: boolean) {
+    startInput.disabled = true;
+    startState.textContent = '';
+    const r = await ctx.act(
+      'Change starting at sign-in',
+      () => desktop.setAutostart(on),
+      (now) => (now ? 'Friday starts when you sign in to Windows' : 'Friday no longer starts when you sign in'),
+    );
+    if (td.done) return;
+    startInput.disabled = false;
+    startInput.checked = r ?? !on;
   }
   return h(
     'section',
@@ -178,7 +234,10 @@ function desktopSection(ctx: AppContext, desktop: DesktopCommands, td: Teardown)
     h('h3', { class: 'section-title' }, 'Desktop app'),
     note('Shortcuts work anywhere in Windows while the app runs, for example Ctrl+Alt+Shift+F.'),
     list,
-    h('div', { class: 'pn-actions pn-actions-start' }, restartBtn),
+    startBox,
+    startState,
+    h('div', { class: 'pn-actions pn-actions-start' }, testBtn, restartBtn),
+    testState,
   );
 }
 
@@ -208,13 +267,11 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
     field('Volume', volume).el,
   );
 
-  // ---- notifications
+  // ---- notifications: the platform asks (a browser its Notification API; the desktop app sends its own)
+  const nativeNotify = ctx.platform.kind === 'tauri';
+  const notifyWhen = nativeNotify ? 'while the Notch is hidden or the screen is locked' : 'while this tab is hidden';
   const notifyState = h('div', { class: 'field-hint', aria: { live: 'polite' } });
-  const notifyBox = checkbox(
-    'Notify me while this tab is hidden',
-    prefs().notifications,
-    (on) => void setNotifications(on),
-  );
+  const notifyBox = checkbox(`Notify me ${notifyWhen}`, prefs().notifications, (on) => void setNotifications(on));
   const notifyInput = notifyBox.querySelector('input') as HTMLInputElement;
   async function setNotifications(on: boolean) {
     notifyState.textContent = '';
@@ -222,32 +279,28 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
       set({ notifications: false });
       return;
     }
-    const api = (globalThis as { Notification?: { requestPermission?: () => Promise<string>; permission?: string } })
-      .Notification;
-    if (!api || typeof api.requestPermission !== 'function') {
-      notifyInput.checked = false;
-      set({ notifications: false });
-      notifyState.textContent = 'This browser has no notifications.';
-      return;
-    }
-    let result = 'default';
+    let result: NotificationAnswer = 'default';
     try {
-      result = await api.requestPermission();
+      result = await ctx.platform.requestNotifications();
     } catch {
       result = 'denied';
     }
     if (td.done) return;
     if (result === 'granted') {
       set({ notifications: true });
-      notifyState.textContent =
-        'Friday notifies you of approvals, questions, plans, blocked agents and failures while the tab is hidden.';
+      // The desktop app cannot see whether Windows shows them: the test below says what it can.
+      notifyState.textContent = nativeNotify
+        ? `Friday asks Windows to notify you of approvals, questions, plans, blocked agents and failures ${notifyWhen}. Send a test notification (Desktop app, below) to see whether Windows shows them.`
+        : `Friday notifies you of approvals, questions, plans, blocked agents and failures ${notifyWhen}.`;
     } else {
       notifyInput.checked = false;
       set({ notifications: false });
       notifyState.textContent =
-        result === 'denied'
-          ? 'The browser refused notifications for this page; allow them in its site settings, then turn this on again.'
-          : 'The browser did not allow notifications; turn this on again to be asked once more.';
+        result === 'unsupported'
+          ? 'This browser has no notifications.'
+          : result === 'denied'
+            ? 'The browser refused notifications for this page; allow them in its site settings, then turn this on again.'
+            : 'The browser did not allow notifications; turn this on again to be asked once more.';
     }
   }
   const notifications = h(
@@ -335,30 +388,69 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
     },
     { class: 'btn' },
   );
+  // The desktop app does the first two steps with its own dialogs: the key goes into Windows'
+  // password prompt and only the provider's name passes through the page (FD-26).
+  const native = ctx.platform.desktop ?? null;
+  const keyBtn = button([icon('shield', 14), 'Store the key…'], () => void storeKey(), { class: 'btn' });
+  const spendBtn = button('', () => void allowSpending(), { class: 'btn' });
+  const nativeBox = native
+    ? h(
+        'div',
+        { class: 'pn-planner-native' },
+        note(
+          'The desktop app can do the first two steps with its own dialogs; the key goes into Windows’ password prompt, never into this page.',
+        ),
+        h('div', { class: 'pn-actions pn-actions-start' }, keyBtn, spendBtn),
+      )
+    : null;
+  // A cancelled dialog answers false: nothing changed, nothing to say. Once done, the board is read
+  // again so the planner's state follows.
+  async function storeKey() {
+    if (!native) return;
+    keyBtn.disabled = true;
+    const done = await ctx.act('Store the provider key', () => native.storeKey('anthropic'));
+    if (done) {
+      ctx.toast({ kind: 'success', text: 'The key is stored' });
+      ctx.refresh();
+    }
+    if (!td.done) keyBtn.disabled = false;
+  }
+  async function allowSpending() {
+    if (!native) return;
+    spendBtn.disabled = true;
+    const amount = budget;
+    const done = await ctx.act('Allow this clone to spend', () => native.allowSpending(amount));
+    if (done) {
+      ctx.toast({ kind: 'success', text: `This clone may spend up to ${usd(amount)} a day` });
+      ctx.refresh();
+    }
+    if (!td.done) spendBtn.disabled = false;
+  }
   const fixBox = h(
     'div',
     { class: 'pn-planner-fix' },
     note(
       'You can always write plans yourself. To let the Master Brain plan, run these in a terminal in the project folder:',
     ),
-    ctx.platform.kind === 'tauri'
-      ? note('The desktop app can also do the first two steps with its own dialogs.')
-      : null,
     field('Daily budget (USD) for the command below', budgetInput).el,
+    nativeBox,
     stepsBox,
     h('div', { class: 'pn-actions pn-actions-start' }, openConfig),
   );
   function renderSteps() {
     const board = ctx.store.select('board');
     const root = board?.project.root ?? '';
+    const brain = board?.brain ?? null;
     replace(
       stepsBox,
       root ? h('li', null, 'Go to the project folder:', copyLine(ctx, `cd "${root}"`, 'folder command')) : null,
-      plannerSteps(board?.brain ?? null, budget).map((s) =>
-        h('li', null, s.text, s.command ? copyLine(ctx, s.command) : null),
-      ),
+      plannerSteps(brain, budget).map((s) => h('li', null, s.text, s.command ? copyLine(ctx, s.command) : null)),
     );
     openConfig.disabled = !root;
+    // The same steps as the commands above, offered while each is still needed.
+    keyBtn.hidden = !(!brain?.remote || brain.key === 'missing');
+    spendBtn.hidden = !!brain?.approved_here;
+    replace(spendBtn, icon('check', 14), `Allow spending up to ${usd(budget)} a day…`);
   }
   function renderPlanner() {
     const brain = ctx.store.select('board')?.brain ?? null;
@@ -528,7 +620,7 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
   }
   const friday = h('section', { class: 'pn-section' }, h('h3', { class: 'section-title' }, 'Friday'), stopBtn);
 
-  // ---- the desktop app: its global shortcuts and a restart (plan §8.6)
+  // ---- the desktop app: its global shortcuts, start at sign-in, a test notification and a restart (plan §8.3, §8.6)
   const desktop = ctx.platform.desktop ? desktopSection(ctx, ctx.platform.desktop, td) : null;
 
   // ---- about

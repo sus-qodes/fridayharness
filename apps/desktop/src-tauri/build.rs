@@ -20,6 +20,8 @@ const COMMANDS: &[&str] = &[
     "open_in_browser",
     "store_key",
     "allow_spending",
+    "get_autostart",
+    "set_autostart",
 ];
 
 fn main() {

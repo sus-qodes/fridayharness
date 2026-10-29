@@ -838,6 +838,53 @@ export class Queries {
     return out;
   }
 
+  /**
+   * Per goal, in one grouped read: its tasks except cancelled and abandoned ones, and how many of
+   * those completed. A goal without such tasks is absent.
+   */
+  goalProgress(projectId: string, goalIds: readonly string[]): Record<string, { total: number; completed: number }> {
+    const out: Record<string, { total: number; completed: number }> = {};
+    if (!goalIds.length) return out;
+    for (const r of this.db
+      .prepare(
+        `SELECT goal_id, count(*) AS total, sum(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed
+           FROM tasks
+          WHERE project_id = ? AND goal_id IN (${goalIds.map(() => '?').join(',')})
+            AND status NOT IN ('CANCELLED','ABANDONED')
+          GROUP BY goal_id`,
+      )
+      .all<{ goal_id: string; total: number; completed: number }>(projectId, ...goalIds)) {
+      out[r.goal_id] = { total: Number(r.total), completed: Number(r.completed) };
+    }
+    return out;
+  }
+
+  /**
+   * Per task, in one grouped read: the tool calls its agents' hosts reported finished, completed or
+   * failed (`agent.event` `tool.completed` and `tool.failed`), in the events after sequence `after`
+   * up to `upTo`, over every attempt. The task is the one the payload names (every producer of
+   * `agent.event` names it there and in the event's task reference). The read goes through the
+   * index on (project, type, sequence), so a caller that keeps the totals reads only the events
+   * since its last read, not the whole history. A task without any is absent.
+   */
+  toolCallCounts(projectId: string, after: number, upTo: number): Record<string, number> {
+    const out: Record<string, number> = {};
+    if (upTo <= after) return out;
+    for (const r of this.db
+      .prepare(
+        `SELECT json_extract(payload_json, '$.task_id') AS task_id, count(*) AS n
+           FROM events
+          WHERE project_id = ? AND type = 'agent.event' AND sequence > ? AND sequence <= ?
+            AND json_extract(payload_json, '$.event_type') IN ('tool.completed','tool.failed')
+            AND json_extract(payload_json, '$.task_id') IS NOT NULL
+          GROUP BY 1`,
+      )
+      .all<{ task_id: string; n: number }>(projectId, after, upTo)) {
+      out[r.task_id] = Number(r.n);
+    }
+    return out;
+  }
+
   pendingOutboxCount(harnessId: string): number {
     return (
       this.db

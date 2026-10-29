@@ -83,14 +83,16 @@ describe('process groups', () => {
         stop = s;
       },
     });
-    for (let i = 0; i < 100 && size(marker) === 0; i++) await sleep(50);
+    // While every package tests at once, starting the group's helper and two processes can take
+    // longer than 5 s (LESSONS T-63): wait for the writer as long as the run itself may take.
+    for (let i = 0; i < 400 && size(marker) === 0; i++) await sleep(50);
     expect(size(marker)).toBeGreaterThan(0);
     await (stop as () => Promise<void>)();
     expect(await group.active()).toBe(0);
     expect(await stillWriting(marker)).toBe(false);
     const out = await done;
     expect(out.exit_code).not.toBe(0);
-  });
+  }, 60_000);
 
   it('never starts a run whose group was ended before it began', async () => {
     groups = new ProcessGroups();

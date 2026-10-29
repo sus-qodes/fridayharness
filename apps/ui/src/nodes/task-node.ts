@@ -1,9 +1,9 @@
 /**
  * The task card (handoff Part 04 §3, plan §7.3): kind, id, priority and risk; summary; agent,
  * write scope and worktree branch; acceptance criteria as a plain list; checks "passed of run";
- * reservations and a conflict badge; duration, changed files and `+N −M`; a status bar coloured by
- * status with the waiting reason, and the agent's note while it is blocked. Hover (or focus)
- * reveals the actions that apply to the task's state.
+ * reservations and a conflict badge; duration, tool calls, changed files and `+N −M`; a status bar
+ * coloured by status with the waiting reason, and the agent's note while it is blocked. Hover (or
+ * focus) reveals the actions that apply to the task's state.
  */
 import type {
   FileReservationView,
@@ -114,6 +114,10 @@ const STATUS_ICON: Record<string, IconName | LocalIcon> = {
   CANCELLED: 'cross',
   ABANDONED: 'cross',
 };
+
+/** What the card's tool count is (`tool_calls` in the snapshot, counted from the event log). */
+const TOOL_CALLS_TITLE =
+  'Tool calls the agent’s host reported finishing for this task, over every attempt (calls Friday refused never ran)';
 
 const PRIORITY_TONE: Record<string, Tone> = { urgent: 'danger', high: 'warn', normal: 'muted', low: 'muted' };
 const RISK_TONE: Record<string, Tone> = { low: 'good', medium: 'warn', high: 'danger' };
@@ -492,6 +496,12 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
       'div',
       { class: 'nd-stats' },
       h('span', { title: 'Started → completed' }, nodeIcon('hourglass', 11), ms === null ? '—' : duration(ms)),
+      h(
+        'span',
+        { class: 'nd-tools', title: TOOL_CALLS_TITLE },
+        nodeIcon('terminal', 11),
+        typeof t.tool_calls === 'number' ? plural(t.tool_calls, 'tool') : '—',
+      ),
       h('span', { title: 'Changed files' }, nodeIcon('file', 11), m.files === null ? '—' : plural(m.files, 'file')),
       h('span', { class: 'nd-lines mono', title: 'Lines added and removed' }, statText(m.stats)),
     );

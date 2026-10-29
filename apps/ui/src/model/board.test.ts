@@ -140,6 +140,60 @@ describe('deriveBoard rules', () => {
     expect(hidden.loose).toEqual(['task_r']);
   });
 
+  it('takes goal progress from the totals over all the goal’s tasks, not from the tasks listed (review R4)', () => {
+    const goal = makeGoal({ goal_id: 'goal_g', status: 'ACTIVE' });
+    // t1 completed yesterday and has aged out of the list; its plan still names it.
+    const s = makeSnapshot({
+      goals: [goal],
+      plans: {
+        goal_g: {
+          active: makePlan({
+            goal_id: 'goal_g',
+            tasks: [
+              makePlanTask({ key: 'a', task_id: 'task_1', status: 'COMPLETED' }),
+              makePlanTask({ key: 'b', position: 1, task_id: 'task_2', status: 'READY' }),
+            ],
+          }),
+          proposed: null,
+        },
+      },
+      tasks: [makeTask({ task_id: 'task_2', goal_id: 'goal_g', status: 'READY' })],
+      goal_progress: { goal_g: { completed: 1, total: 2 } },
+    });
+    const board = deriveBoard(s);
+    expect(board.groups[0]?.taskIds).toEqual(['task_2']);
+    expect(board.groups[0]?.progress).toEqual({ completed: 1, total: 2 });
+  });
+
+  it('keeps the totals when every task of a finished goal aged out, or the task list hit its cap', () => {
+    const done = makeGoal({ goal_id: 'goal_done', status: 'COMPLETED' });
+    const big = makeGoal({ goal_id: 'goal_big', status: 'ACTIVE' });
+    const s = makeSnapshot({
+      goals: [done, big],
+      tasks: [makeTask({ task_id: 'task_b1', goal_id: 'goal_big', status: 'COMPLETED' })],
+      truncated: { tasks: true },
+      goal_progress: { goal_done: { completed: 2, total: 2 }, goal_big: { completed: 40, total: 700 } },
+    });
+    const board = deriveBoard(s);
+    expect(board.groups.map((g) => [g.id, g.progress])).toEqual([
+      ['goal_done', { completed: 2, total: 2 }],
+      ['goal_big', { completed: 40, total: 700 }],
+    ]);
+  });
+
+  it('counts the listed tasks when the snapshot carries no totals for a goal', () => {
+    const goal = makeGoal({ goal_id: 'goal_g' });
+    const s = makeSnapshot({
+      goals: [goal],
+      tasks: [
+        makeTask({ task_id: 'task_1', goal_id: 'goal_g', status: 'COMPLETED' }),
+        makeTask({ task_id: 'task_2', goal_id: 'goal_g', status: 'READY' }),
+      ],
+      goal_progress: {},
+    });
+    expect(deriveBoard(s).groups[0]?.progress).toEqual({ completed: 1, total: 2 });
+  });
+
   it('puts a task whose goal the snapshot does not list with the loose tasks', () => {
     const b = deriveBoard(makeSnapshot({ tasks: [makeTask({ task_id: 'task_x', goal_id: 'goal_unknown' })] }));
     expect(b.loose).toEqual(['task_x']);

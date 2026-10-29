@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   diffLines,
   type Edit,
+  endsInNewline,
   firstChangedLine,
   MAX_DIFF_LINES,
   myers,
@@ -199,9 +200,11 @@ describe('diffLines', () => {
   });
 
   it('says when both sides are the same', () => {
-    const d = diffLines('a\nb', 'a\nb\n');
+    const d = diffLines('a\nb\n', 'a\nb\n');
     expect(d.identical).toBe(true);
     expect(d.hunks).toEqual([]);
+    // Line endings alone change no line (the viewer says what differs).
+    expect(diffLines('a\r\nb\r\n', 'a\nb\n').identical).toBe(true);
   });
 
   it('shows a side over the cap as a whole-file replacement', () => {
@@ -222,6 +225,63 @@ describe('diffLines', () => {
     const d = diffLines(exact.join('\n'), changed.join('\n'));
     expect(d.replaced).toBe(false);
     expect(d.added).toBe(1);
+  });
+});
+
+describe('the final newline', () => {
+  const kinds = (d: ReturnType<typeof diffLines>) =>
+    d.lines.map((l) => `${l.kind}:${l.text}${l.noNewline ? ' (no newline)' : ''}`);
+
+  it('shows removing the final newline as a change of the last line', () => {
+    const d = diffLines('export const n = 1;\n', 'export const n = 1;');
+    expect(d.identical).toBe(false);
+    expect(d).toMatchObject({ added: 1, removed: 1 });
+    expect(kinds(d)).toEqual(['del:export const n = 1;', 'add:export const n = 1; (no newline)']);
+    expect(d.hunks).toHaveLength(1);
+    expect(d.hunks[0]).toMatchObject({ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1 });
+  });
+
+  it('shows adding the final newline the same way, with the old side marked', () => {
+    const d = diffLines('a\nb', 'a\nb\n');
+    expect(d.identical).toBe(false);
+    expect(kinds(d)).toEqual(['context:a', 'del:b (no newline)', 'add:b']);
+    expect(firstChangedLine(d)).toBe(2);
+  });
+
+  it('marks both sides when neither ends in a newline', () => {
+    expect(kinds(diffLines('a\nb', 'a\nc'))).toEqual(['context:a', 'del:b (no newline)', 'add:c (no newline)']);
+    const same = diffLines('a\nb', 'a\nb');
+    expect(same.identical).toBe(true);
+    expect(kinds(same)).toEqual(['context:a', 'context:b (no newline)']);
+    expect(kinds(diffLines('x', ''))).toEqual(['del:x (no newline)']);
+  });
+
+  it('shows the newline of an otherwise empty file as an empty line', () => {
+    const added = diffLines('', '\n');
+    expect(added).toMatchObject({ identical: false, added: 1, removed: 0 });
+    expect(kinds(added)).toEqual(['add:']);
+    const removed = diffLines('\n', '');
+    expect(removed).toMatchObject({ identical: false, added: 0, removed: 1 });
+    expect(kinds(removed)).toEqual(['del:']);
+  });
+
+  it('keeps the mark in a whole-file replacement', () => {
+    const big = Array.from({ length: 4 }, (_, i) => `l${i}`).join('\n');
+    const d = diffLines(big, `${big}\n`, { maxLines: 3 });
+    expect(d.replaced).toBe(true);
+    expect(d.lines.filter((l) => l.noNewline).map((l) => [l.kind, l.oldNo])).toEqual([['del', 4]]);
+  });
+
+  it('says whether a text ends in a newline', () => {
+    expect([null, undefined, '', 'a', 'a\n', 'a\r\n', '\n'].map((t) => endsInNewline(t))).toEqual([
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+    ]);
   });
 });
 

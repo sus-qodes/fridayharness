@@ -1,4 +1,4 @@
-import type { SnapshotTask } from '@friday/protocol';
+import type { SnapshotTask, UiSnapshot } from '@friday/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deriveBoard, type GoalGroup, type PodModel } from '../model/board.js';
 import type { AgentActivity } from '../store/state.js';
@@ -11,12 +11,13 @@ import {
   makePlanTask,
   makeRun,
   makeScenario,
+  makeSnapshot,
   makeTask,
   makeVerification,
 } from '../test/fixtures.js';
 import { createAgentPod, type PodCardModel, podModelName, podUsage, ToolDurations, vendorLabel } from './agent-pod.js';
 import { actionButton, fingerprint, pills } from './common.js';
-import { createGoalNode, integrationText, progressPercent } from './goal-node.js';
+import { createGoalNode, integrationText, planNeed, progressPercent } from './goal-node.js';
 import { ARM_DELAY_MS, Arming, createPlanGhost, createPlanReviewBar, planCounts, proposer } from './plan-ghost.js';
 import { createTaskNode, statText, statusColor, type TaskCardModel, taskActions, taskDuration } from './task-node.js';
 
@@ -156,6 +157,21 @@ describe('task card', () => {
     expect(t).toContain('3 files');
     expect(node.el.querySelector('.nd-lines')?.textContent).toBe('+14 −2');
     expect(node.el.style.getPropertyValue('--nd-status')).toBe('var(--status-completed)');
+  });
+
+  it('shows the tool calls its hosts reported for the task, from the snapshot (review R13)', () => {
+    const ctx = makeContext();
+    const node = createTaskNode(ctx, taskModel({ tool_calls: 12 }));
+    const tools = node.el.querySelector('.nd-tools') as HTMLElement;
+    expect(tools.textContent).toBe('12 tools');
+    expect(tools.title).toContain('Tool calls');
+    expect(tools.title).toContain('every attempt');
+    node.update(taskModel({ tool_calls: 13 }));
+    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('13 tools');
+    node.update(taskModel({ tool_calls: 1 }));
+    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('1 tool');
+    node.update(taskModel({ tool_calls: 0 }));
+    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('0 tools');
   });
 
   it('shows "—" until the line counts answer, then updates in place', () => {
@@ -349,6 +365,87 @@ describe('goal card', () => {
     expect(node.el.textContent).toContain('v2 proposed');
     click(node.el.querySelector('[data-action="land"]'));
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'land', id: g.goal.goal_id });
+  });
+
+  describe('an open goal without a plan (review R1)', () => {
+    const GID = 'goal_0000000000000000000000gg01';
+    const unplanned = () =>
+      group({
+        goal: makeGoal({ goal_id: GID, status: 'OPEN', plan_id: null }),
+        active: null,
+        proposed: null,
+        taskIds: [],
+        progress: { completed: 0, total: 0 },
+      });
+    const brain = (planner_available: boolean) => ({ planner_available }) as UiSnapshot['brain'];
+
+    it('offers "Write the plan", which opens the plan editor on the goal', () => {
+      const ctx = makeContext();
+      const node = createGoalNode(ctx, { group: unplanned() });
+      expect(actionOf(node.el, 'brain-plan')).toBeNull();
+      click(actionOf(node.el, 'write-plan'));
+      expect(ctx.store.select('ui').modal).toEqual({ kind: 'plan-editor', id: GID, mode: 'first' });
+    });
+
+    it('lets the Master Brain plan while a planner is ready', async () => {
+      const ctx = makeContext({
+        snapshot: makeSnapshot({ brain: brain(true) }),
+        answers: { [`POST /goals/${GID}/replan`]: { result: 'proposed plan_1 v1 with 3 task(s)' } },
+      });
+      const node = createGoalNode(ctx, { group: unplanned() });
+      expect(actionOf(node.el, 'write-plan')).not.toBeNull();
+      click(actionOf(node.el, 'brain-plan'));
+      await flush();
+      expect(ctx.transport.to('POST', `/goals/${GID}/replan`)).toHaveLength(1);
+      expect(ctx.refreshes).toBe(1);
+      expect(ctx.toasts.at(-1)).toMatchObject({ kind: 'success', text: expect.stringContaining('proposed a plan') });
+    });
+
+    it('says when the Master Brain proposed nothing', async () => {
+      const ctx = makeContext({
+        snapshot: makeSnapshot({ brain: brain(true) }),
+        answers: { [`POST /goals/${GID}/replan`]: { result: `failed: ${HOSTILE}` } },
+      });
+      const node = createGoalNode(ctx, { group: unplanned() });
+      click(actionOf(node.el, 'brain-plan'));
+      await flush();
+      expect(ctx.toasts.at(-1)).toMatchObject({ kind: 'warn', detail: `failed: ${HOSTILE}` });
+    });
+
+    it('shows the Master Brain planning instead of asking it twice', () => {
+      const ctx = makeContext({
+        snapshot: makeSnapshot({
+          brain: brain(true),
+          brain_jobs: [{ job_id: 'job_1', kind: 'plan', status: 'calling', goal_id: GID }],
+        }),
+      });
+      const node = createGoalNode(ctx, { group: unplanned() });
+      expect(node.el.textContent).toContain('Master Brain planning');
+      expect(actionOf(node.el, 'brain-plan')).toBeNull();
+      expect(actionOf(node.el, 'write-plan')).not.toBeNull();
+    });
+
+    it('follows the planner and the plan on the board', () => {
+      const ctx = makeContext();
+      const node = createGoalNode(ctx, { group: unplanned() });
+      expect(actionOf(node.el, 'brain-plan')).toBeNull();
+      ctx.board(makeSnapshot({ brain: brain(true) }));
+      node.update({ group: unplanned() });
+      expect(actionOf(node.el, 'brain-plan')).not.toBeNull();
+      node.update({ group: { ...unplanned(), proposed: makePlan({ status: 'PROPOSED' }) } });
+      expect(actionOf(node.el, 'write-plan')).toBeNull();
+      expect(actionOf(node.el, 'brain-plan')).toBeNull();
+    });
+
+    it('offers nothing for a goal with a plan, or one that is not open', () => {
+      const ctx = makeContext({ snapshot: makeSnapshot({ brain: brain(true) }) });
+      expect(actionOf(createGoalNode(ctx, { group: group() }).el, 'write-plan')).toBeNull();
+      const cancelled = { ...unplanned(), goal: makeGoal({ status: 'CANCELLED', plan_id: null }) };
+      const node = createGoalNode(ctx, { group: cancelled });
+      expect(actionOf(node.el, 'write-plan')).toBeNull();
+      expect(node.el.textContent).toContain('No plan yet');
+      expect(planNeed(group(), null)).toBeNull();
+    });
   });
 
   it('computes percentages and integration text', () => {

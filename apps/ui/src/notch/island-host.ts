@@ -36,10 +36,20 @@ import {
 export type { IslandRect } from './island.js';
 export type { NotchSlots } from './island-views.js';
 
+/** Where the Studio opens for the notch window: a task, an approval, or one of its drawers. */
+export interface NotchStudioTarget {
+  task_id?: string;
+  approval_id?: string;
+  /** A drawer: Settings, the agents drawer at `tab`, or the diff of `task_id` at `path`. */
+  panel?: 'settings' | 'agents' | 'diff';
+  tab?: string;
+  path?: string;
+}
+
 export interface NotchOptions {
   mode: 'in-page' | 'window';
   onRect?: (r: { x: number; y: number; width: number; height: number }) => void;
-  onOpenStudio?: (target: { task_id?: string; approval_id?: string }) => void;
+  onOpenStudio?: (target: NotchStudioTarget) => void;
 }
 
 /** The mounted Notch. It is a `Component`; `open` serves the Notch shortcut. */
@@ -134,7 +144,7 @@ export function mountNotchWith(
 
   const inPage = opts.mode === 'in-page';
 
-  function goStudio(target: { task_id?: string; approval_id?: string }): void {
+  function goStudio(target: NotchStudioTarget): void {
     if (opts.onOpenStudio) opts.onOpenStudio(target);
     else {
       if (target.task_id) store.patch('ui', { selectedTaskId: target.task_id });
@@ -146,7 +156,7 @@ export function mountNotchWith(
     open: () => fsm.open(),
     openDiff: (taskId, path) => {
       if (inPage || !opts.onOpenStudio) openDrawer(ctx, { kind: 'diff', id: taskId, path });
-      else opts.onOpenStudio({ task_id: taskId });
+      else opts.onOpenStudio({ task_id: taskId, panel: 'diff', ...(path ? { path } : {}) });
     },
     openStudio: () => {
       const items = model?.items ?? [];
@@ -168,12 +178,12 @@ export function mountNotchWith(
     settings: () => {
       // The notch window is too small for the settings drawer: the Studio shows it.
       if (inPage || !opts.onOpenStudio) openDrawer(ctx, { kind: 'settings' });
-      else opts.onOpenStudio({});
+      else opts.onOpenStudio({ panel: 'settings' });
     },
     toggleMute: () => store.patch('prefs', { muted: !store.select('prefs').muted }),
     routing: () => {
       if (inPage || !opts.onOpenStudio) openDrawer(ctx, { kind: 'agents', tab: 'routing' });
-      else opts.onOpenStudio({});
+      else opts.onOpenStudio({ panel: 'agents', tab: 'routing' });
     },
     page: (delta) => {
       const items = model?.items ?? [];

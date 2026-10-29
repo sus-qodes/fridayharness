@@ -16,6 +16,11 @@ import {
 
 type Fetch = typeof fetch;
 
+export interface HttpRequestOptions extends RequestOptions {
+  /** Lets the request outlive the page (`fetch` keepalive: at most 64 KB in flight), for a save sent as it closes. */
+  keepalive?: boolean;
+}
+
 export class HttpTransport implements Transport {
   readonly kind = 'http' as const;
 
@@ -30,7 +35,7 @@ export class HttpTransport implements Transport {
     return { ...(t ? { authorization: `Bearer ${t}` } : {}), ...extra };
   }
 
-  async request<T>(method: 'GET' | 'POST', path: string, body?: unknown, opts: RequestOptions = {}): Promise<T> {
+  async request<T>(method: 'GET' | 'POST', path: string, body?: unknown, opts: HttpRequestOptions = {}): Promise<T> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 15_000);
     const onAbort = () => controller.abort();
@@ -44,6 +49,7 @@ export class HttpTransport implements Transport {
           ...(opts.idempotencyKey ? { 'idempotency-key': opts.idempotencyKey } : {}),
         }),
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        ...(opts.keepalive ? { keepalive: true } : {}),
         signal: controller.signal,
         credentials: 'omit',
         cache: 'no-store',

@@ -5,6 +5,7 @@
  */
 import type { UiSnapshot } from '@friday/protocol';
 import { FridayApi } from '../api/client.js';
+import { browserPlatform } from '../platform/browser-platform.js';
 import type { RequestOptions, StreamEnd, StreamHandlers, Transport } from '../platform/transport.js';
 import { type AppContext, type ConfirmOptions, Registry, type Toast } from '../shell/context.js';
 import { createStore, type FridayStore, type ReactionKind } from '../store/state.js';
@@ -78,6 +79,8 @@ export function makeContext(opts: { answers?: Answers; snapshot?: UiSnapshot; st
       kind: 'browser',
       openInEditor: () => undefined,
       copy: async () => true,
+      // As a browser asks: the page's Notification API, which a test stubs.
+      requestNotifications: () => browserPlatform().requestNotifications(),
     },
     registry: new Registry(),
     transport,

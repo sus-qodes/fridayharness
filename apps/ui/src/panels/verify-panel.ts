@@ -258,7 +258,15 @@ export function verifyModal(
   const diffSection = section(
     'What changed',
     diffBox,
-    linkButton('Open the diff', () => openDrawer(ctx, { kind: 'diff', id: taskId })),
+    linkButton('Open the diff', () => {
+      // A drawer under this dialog takes no input: close first, and let the drawer come back here.
+      close();
+      openDrawer(ctx, {
+        kind: 'diff',
+        id: taskId,
+        back: { modal: { kind: 'verify', id: taskId }, label: 'Back to verification' },
+      });
+    }),
     discrepancyBox,
   );
 

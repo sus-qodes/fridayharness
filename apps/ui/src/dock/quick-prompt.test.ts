@@ -229,6 +229,38 @@ describe('quick prompt', () => {
       priority: 'normal',
       plan: true,
     });
+    // The Master Brain writes the plan: no editor opens.
+    expect(t.ctx.store.select('ui').modal).toBeNull();
+  });
+
+  it('opens the new goal’s plan editor when no planner will write it (review R1)', async () => {
+    const t = track(setup(makeSnapshot({ brain: null }), { 'POST /goals': { goal_id: 'goal_new' } }));
+    await t.type('goal Add subscriptions');
+    await t.enter();
+    expect(posts(t.ctx, '/goals')[0]?.body).toMatchObject({ request: 'Add subscriptions', plan: false });
+    expect(t.ctx.store.select('ui').modal).toEqual({ kind: 'plan-editor', id: 'goal_new', mode: 'first' });
+    expect(t.feedback.textContent).toBe('Goal created: write its plan in the editor.');
+    expect(t.onDone).toHaveBeenCalledTimes(1);
+    // A goal offered for free text and confirmed takes the same way.
+    t.ctx.store.patch('ui', { modal: null });
+    await t.type('Fix the auth tests');
+    await t.enter();
+    await t.enter();
+    expect(t.ctx.store.select('ui').modal).toEqual({ kind: 'plan-editor', id: 'goal_new', mode: 'first' });
+  });
+
+  it('opens no editor when the goal was not created', async () => {
+    const t = track(
+      setup(undefined, {
+        'POST /goals': () => {
+          throw new Error('COS-1000 invalid');
+        },
+      }),
+    );
+    await t.type('goal Add subscriptions');
+    await t.enter();
+    expect(t.ctx.store.select('ui').modal).toBeNull();
+    expect(t.feedback.textContent).toBe('The goal was not created.');
   });
 
   it('offers a goal for anything else and creates it only on Enter', async () => {

@@ -26,7 +26,9 @@ const MAX_BODY: u64 = 64 * 1024 * 1024;
 const MAX_HEAD: usize = 64 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
-pub const MAX_TIMEOUT: Duration = Duration::from_secs(900);
+/// The longest a request may wait: verification and integration, whose checks may each run an
+/// hour (`TIMEOUTS.long` in apps/ui/src/api/timeouts.ts, and the CLI's own wait).
+pub const MAX_TIMEOUT: Duration = Duration::from_secs(3_700);
 
 /// The operator token. Never printed: `Debug` shows nothing, and the bytes are cleared on drop.
 pub struct Token(String);
@@ -455,6 +457,11 @@ fn checked_for(gate: Gate, req: &Request<'_>, project: &Project, port: u16) -> R
     Ok(c.url)
 }
 
+/// The time a request is given: what it asked for, from 1 s up to [`MAX_TIMEOUT`].
+pub fn effective_timeout(asked: Duration) -> Duration {
+    asked.clamp(Duration::from_secs(1), MAX_TIMEOUT)
+}
+
 /// Sends a request to the open project's daemon and returns its JSON answer.
 pub fn send(project: &Project, gate: Gate, req: &Request<'_>) -> Result<Value, CmdError> {
     if let Some(k) = req.idempotency_key {
@@ -467,7 +474,7 @@ pub fn send(project: &Project, gate: Gate, req: &Request<'_>) -> Result<Value, C
         Some(v) if !v.is_null() => Some(serde_json::to_vec(v).map_err(|e| CmdError::bad_request(e.to_string()))?),
         _ => None,
     };
-    let timeout = req.timeout.clamp(Duration::from_secs(1), MAX_TIMEOUT);
+    let timeout = effective_timeout(req.timeout);
 
     let mut discovery = daemon::read_discovery(project)?;
     let mut url = checked_for(gate, req, project, discovery.port)?;
@@ -600,6 +607,25 @@ mod tests {
         assert_eq!(e.code(), Some(routes::NOT_FORWARDED));
         assert_eq!(e.body.pointer("/error/retryable"), Some(&Value::Bool(false)));
         assert_eq!(CmdError::offline("x").status, 0);
+    }
+
+    #[test]
+    fn every_budget_the_interface_asks_for_is_kept() {
+        // apps/ui/src/api/timeouts.ts: the page's per-route budgets, verification's the longest.
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/src/api/timeouts.ts");
+        let text = std::fs::read_to_string(&file).expect("apps/ui/src/api/timeouts.ts");
+        let budgets: Vec<u64> = text
+            .lines()
+            .filter_map(|l| l.split_once(':')?.1.trim().trim_end_matches(',').replace('_', "").parse().ok())
+            .collect();
+        assert!(budgets.contains(&3_700_000), "{budgets:?}");
+        for ms in budgets {
+            assert_eq!(effective_timeout(Duration::from_millis(ms)), Duration::from_millis(ms), "{ms} ms");
+        }
+        // The CLI's verify and integrate wait as long (apps/cli/src/program.ts, integrations.ts).
+        assert_eq!(effective_timeout(Duration::from_millis(3_700_000)), Duration::from_secs(3_700));
+        assert_eq!(effective_timeout(Duration::from_secs(86_400)), MAX_TIMEOUT);
+        assert_eq!(effective_timeout(Duration::ZERO), Duration::from_secs(1));
     }
 
     #[test]

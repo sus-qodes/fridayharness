@@ -1,7 +1,12 @@
 import type { TaskDiffFile } from '@friday/protocol';
 import { describe, expect, it } from 'vitest';
+import { openDrawer, openModal } from '../shell/context.js';
+import { mountDrawerHost } from '../shell/drawer-host.js';
+import { LayerStack } from '../shell/layers.js';
+import { mountModalHost } from '../shell/modal-host.js';
 import { makeContext } from '../test/context.js';
 import { makeRun, makeSnapshot, makeTask, makeVerification } from '../test/fixtures.js';
+import { h } from '../ui/dom.js';
 import { BIDI, buttonBy, flush, HOSTILE, LONG, type, ZW } from './test-support.js';
 import { changedPaths, checksWording, discrepancies, readClaim, verifyModal } from './verify-panel.js';
 
@@ -192,9 +197,18 @@ describe('verification panel', () => {
     const opened: string[] = [];
     const ctx = makeContext({ snapshot: scenario() });
     (ctx.platform as { openInEditor: (p: string) => void }).openInEditor = (p) => opened.push(p);
-    const m = verifyModal(ctx, { kind: 'verify', id: TID }, () => undefined);
+    let closed = 0;
+    const m = verifyModal(ctx, { kind: 'verify', id: TID }, () => {
+      closed += 1;
+    });
     buttonBy(m.el, 'Open the diff').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: TID });
+    // The dialog closes first: a drawer under it would take no input (review R3).
+    expect(closed).toBe(1);
+    expect(ctx.store.select('ui').drawer).toEqual({
+      kind: 'diff',
+      id: TID,
+      back: { modal: { kind: 'verify', id: TID }, label: 'Back to verification' },
+    });
     buttonBy(m.el, 'Open config.yaml in VS Code').click();
     expect(opened).toEqual(['C:/demo/shop/.friday/config.yaml']);
     expect(m.el.textContent).toContain('restart Friday to apply');
@@ -251,5 +265,46 @@ describe('verification panel', () => {
     expect(m.el.textContent).toContain('No completion claim is recorded');
     expect(m.el.textContent).toContain('Could not read the diff: git is not available');
     m.destroy();
+  });
+});
+
+describe('the diff from the verification panel (review R3)', () => {
+  it('opens on top, where it takes input, and Back returns to the panel', async () => {
+    const ctx = makeContext({ snapshot: scenario() });
+    const layers = new LayerStack(ctx.keys);
+    const drawers = mountDrawerHost(ctx, layers);
+    const modals = mountModalHost(ctx, layers);
+    document.body.append(drawers.el, modals.el);
+    ctx.registry.modal('verify', (c, r, close) => verifyModal(c, r, close));
+    ctx.registry.drawer('diff', () => ({ el: h('div', { class: 'diff-stub' }), title: 'Diff', destroy() {} }));
+    try {
+      openModal(ctx, { kind: 'verify', id: TID });
+      await flush();
+      buttonBy(modals.el, 'Open the diff').click();
+      expect(ctx.store.select('ui').modal).toBeNull();
+      expect(modals.el.querySelector('.sh-modal-backdrop')).toBeNull();
+      const drawer = drawers.el.querySelector<HTMLElement>('[role="dialog"]');
+      expect(drawer?.querySelector('.diff-stub')).not.toBeNull();
+      expect(layers.modalOpen()).toBe(false);
+      expect(layers.top()?.el).toBe(drawer);
+      buttonBy(drawers.el, 'Back to verification').click();
+      expect(ctx.store.select('ui').drawer).toBeNull();
+      expect(ctx.store.select('ui').modal).toEqual({ kind: 'verify', id: TID });
+      expect(drawers.el.querySelector('[role="dialog"]')).toBeNull();
+      expect(modals.el.querySelector('.pn-verify')).not.toBeNull();
+    } finally {
+      drawers.destroy();
+      modals.destroy();
+    }
+  });
+
+  it('shows no Back button on a drawer opened from elsewhere', () => {
+    const ctx = makeContext({ snapshot: scenario() });
+    const drawers = mountDrawerHost(ctx, new LayerStack(ctx.keys));
+    ctx.registry.drawer('diff', () => ({ el: h('div'), title: 'Diff', destroy() {} }));
+    openDrawer(ctx, { kind: 'diff', id: TID });
+    expect(drawers.el.querySelector('.sh-drawer-back')).toBeNull();
+    expect(drawers.el.querySelector('.sh-drawer-close')).not.toBeNull();
+    drawers.destroy();
   });
 });

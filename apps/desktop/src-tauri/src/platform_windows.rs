@@ -27,7 +27,9 @@ pub fn peer_pid_in(rows: &[TcpRow], local: SocketAddrV4, remote: SocketAddrV4) -
 mod imp {
     use super::*;
     use windows::core::{BOOL, PCWSTR};
-    use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, POINT, RECT, STILL_ACTIVE, WPARAM};
+    use windows::Win32::Foundation::{
+        CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HWND, LPARAM, LRESULT, POINT, RECT, STILL_ACTIVE, WPARAM,
+    };
     use windows::Win32::Graphics::Gdi::{CreateRectRgn, SetWindowRgn};
     use windows::Win32::NetworkManagement::IpHelper::{
         GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, TCP_TABLE_OWNER_PID_CONNECTIONS,
@@ -37,6 +39,9 @@ mod imp {
         CredUIPromptForCredentialsW, CREDUI_FLAGS_ALWAYS_SHOW_UI, CREDUI_FLAGS_DO_NOT_PERSIST,
         CREDUI_FLAGS_EXCLUDE_CERTIFICATES, CREDUI_FLAGS_GENERIC_CREDENTIALS, CREDUI_FLAGS_KEEP_USERNAME,
         CREDUI_INFOW,
+    };
+    use windows::Win32::System::Registry::{
+        RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ,
     };
     use windows::Win32::System::StationsAndDesktops::{
         CloseDesktop, GetUserObjectInformationW, OpenInputDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS,
@@ -304,6 +309,60 @@ mod imp {
         s.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
+    /// A string value of a key under `HKEY_CURRENT_USER`; None when either is missing.
+    pub fn reg_get_string(subkey: &str, name: &str) -> Option<String> {
+        let (key, value) = (wide(subkey), wide(name));
+        let mut size = 0u32;
+        // SAFETY: the first call only asks for the size; the second fills a buffer of that size.
+        unsafe {
+            let get = |data: Option<*mut core::ffi::c_void>, size: &mut u32| {
+                RegGetValueW(
+                    HKEY_CURRENT_USER,
+                    PCWSTR(key.as_ptr()),
+                    PCWSTR(value.as_ptr()),
+                    RRF_RT_REG_SZ,
+                    None,
+                    data,
+                    Some(size),
+                )
+            };
+            if get(None, &mut size) != ERROR_SUCCESS {
+                return None;
+            }
+            let mut buf = vec![0u16; (size as usize).div_ceil(2) + 1];
+            size = (buf.len() * 2) as u32;
+            if get(Some(buf.as_mut_ptr().cast()), &mut size) != ERROR_SUCCESS {
+                return None;
+            }
+            let end = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
+            Some(String::from_utf16_lossy(&buf[..end]))
+        }
+    }
+
+    /// Writes a string value of a key under `HKEY_CURRENT_USER` (the key is created if missing).
+    pub fn reg_set_string(subkey: &str, name: &str, data: &str) -> bool {
+        let (key, value, text) = (wide(subkey), wide(name), wide(data));
+        // SAFETY: every string is NUL-terminated and outlives the call; the size counts the NUL.
+        unsafe {
+            RegSetKeyValueW(
+                HKEY_CURRENT_USER,
+                PCWSTR(key.as_ptr()),
+                PCWSTR(value.as_ptr()),
+                REG_SZ.0,
+                Some(text.as_ptr().cast()),
+                (text.len() * 2) as u32,
+            ) == ERROR_SUCCESS
+        }
+    }
+
+    /// Removes a value of a key under `HKEY_CURRENT_USER`; true when it is gone (or never was).
+    pub fn reg_delete_value(subkey: &str, name: &str) -> bool {
+        let (key, value) = (wide(subkey), wide(name));
+        // SAFETY: both strings are NUL-terminated and outlive the call.
+        let rc = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, PCWSTR(key.as_ptr()), PCWSTR(value.as_ptr())) };
+        rc == ERROR_SUCCESS || rc == ERROR_FILE_NOT_FOUND
+    }
+
     /// Windows' own credential prompt with a hidden password field; the user name is fixed. The
     /// secret is returned once and the prompt's buffer is cleared.
     pub fn prompt_secret(parent: Option<isize>, caption: &str, message: &str, user: &str) -> Option<String> {
@@ -394,6 +453,15 @@ mod imp {
     pub fn prompt_secret(_parent: Option<isize>, _caption: &str, _message: &str, _user: &str) -> Option<String> {
         None
     }
+    pub fn reg_get_string(_subkey: &str, _name: &str) -> Option<String> {
+        None
+    }
+    pub fn reg_set_string(_subkey: &str, _name: &str, _data: &str) -> bool {
+        false
+    }
+    pub fn reg_delete_value(_subkey: &str, _name: &str) -> bool {
+        false
+    }
 }
 
 pub use imp::*;
@@ -451,5 +519,30 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(tcp_peer_pid(local, ep(port)), Some(std::process::id()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn user_registry_values_are_written_read_and_removed() {
+        // A scratch key of this test's own, never the Run key; removed (values and all) at the end.
+        struct Scratch(Vec<u16>);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                use windows::Win32::System::Registry::{RegDeleteKeyW, HKEY_CURRENT_USER};
+                // SAFETY: a NUL-terminated name of the key this test created.
+                let _ = unsafe { RegDeleteKeyW(HKEY_CURRENT_USER, windows::core::PCWSTR(self.0.as_ptr())) };
+            }
+        }
+        let key = format!(r"Software\dev.friday.desktop-test-{}", std::process::id());
+        let _scratch = Scratch(key.encode_utf16().chain(std::iter::once(0)).collect());
+        let line = r#""C:\Program Files\Friday ünï\friday-desktop.exe""#;
+        assert_eq!(reg_get_string(&key, "Friday"), None);
+        assert!(reg_set_string(&key, "Friday", line));
+        assert_eq!(reg_get_string(&key, "Friday").as_deref(), Some(line));
+        assert!(reg_set_string(&key, "Friday", r#""C:\b.exe""#));
+        assert_eq!(reg_get_string(&key, "Friday").as_deref(), Some(r#""C:\b.exe""#));
+        assert!(reg_delete_value(&key, "Friday"));
+        assert_eq!(reg_get_string(&key, "Friday"), None);
+        assert!(reg_delete_value(&key, "Friday"), "removing a missing value succeeds");
     }
 }

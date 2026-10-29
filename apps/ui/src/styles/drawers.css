@@ -674,6 +674,17 @@
   color: var(--diff-del-text);
 }
 
+/* The end-of-file mark ("\ No newline at end of file"): a note about the line above, not a line. */
+.dr-eof .dr-code {
+  color: var(--color-slate-500);
+  font-style: italic;
+}
+
+/* Beside a mark in the split view, the other half is no missing line: no empty-side tint. */
+.dr-eof-pair .dr-side-empty {
+  background: none;
+}
+
 /* Syntax tokens (highlight.ts): plain text with a class, never markup. */
 .dr-tk-keyword,
 .dr-tk-meta {

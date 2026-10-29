@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeContext } from '../test/context.js';
-import { makeAgent, makeScenario, makeSnapshot, makeTask } from '../test/fixtures.js';
+import { makeAgent, makeGoal, makePlan, makeScenario, makeSnapshot, makeTask } from '../test/fixtures.js';
 import { registerCommands } from './commands.js';
 import {
   boardEntries,
@@ -52,6 +52,29 @@ describe('collectEntries', () => {
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: 'task_x', path: 'a.ts' });
     await byId('goal:goal_0000000000000000000000gg01').run(ctx);
     expect(ctx.store.select('ui').selectedTaskId).toBe('goal_0000000000000000000000gg01');
+  });
+
+  it('offers the plan editor of an open goal without a plan, and only of one (review R1)', async () => {
+    const open = makeGoal({ goal_id: 'goal_open', status: 'OPEN', plan_id: null, request: 'Add subscriptions' });
+    const proposed = makeGoal({ goal_id: 'goal_proposed', status: 'OPEN' });
+    const active = makeGoal({ goal_id: 'goal_active', status: 'ACTIVE' });
+    const cancelled = makeGoal({ goal_id: 'goal_cancelled', status: 'CANCELLED', plan_id: null });
+    const ctx = makeContext({
+      snapshot: makeSnapshot({
+        goals: [open, proposed, active, cancelled],
+        plans: {
+          goal_proposed: { active: null, proposed: makePlan({ status: 'PROPOSED' }) },
+          goal_active: { active: makePlan(), proposed: null },
+        },
+      }),
+    });
+    const entries = boardEntries(ctx.store.select('board'), null);
+    const plans = entries.filter((e) => e.id.startsWith('goal-plan:'));
+    expect(plans.map((e) => e.id)).toEqual(['goal-plan:goal_open']);
+    expect(plans[0]).toMatchObject({ group: 'goal', label: 'Write the plan: Add subscriptions' });
+    expect(rankEntries(entries, 'write plan')[0]?.entry.id).toBe('goal-plan:goal_open');
+    await plans[0]?.run(ctx);
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'plan-editor', id: 'goal_open', mode: 'first' });
   });
 
   it('skips a command whose availability check throws', () => {

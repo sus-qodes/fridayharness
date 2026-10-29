@@ -2,13 +2,17 @@
  * The goal card (handoff Part 04 §2, plan §7.3): goal id, the request (or the planner's objective),
  * a status pill, the human's constraints as pills with the planner's inferred ones marked, a
  * progress bar (completed of total), the plan badge (version, a proposed revision waiting), the
- * integration state, and "Ready to land" once the goal is completed (FD-27).
+ * integration state, and "Ready to land" once the goal is completed (FD-27). An open goal without
+ * a plan, active or proposed, offers "Write the plan" and, while a planner is ready, "Let the
+ * Master Brain plan": the card is the way back to a plan after its editor was closed or the page
+ * reloaded.
  */
+import type { UiSnapshot } from '@friday/protocol';
 import type { GoalGroup } from '../model/board.js';
 import { type AppContext, openModal } from '../shell/context.js';
 import { button, h, replace, setVar, toggleClass } from '../ui/dom.js';
 import { cleanText, plural, shortId, truncate } from '../ui/format.js';
-import { badge, fingerprint, type NodeView, nodeIcon, pill, type Tone } from './common.js';
+import { actionButton, badge, fingerprint, type NodeView, nodeIcon, pill, type Tone } from './common.js';
 
 export interface GoalCardModel {
   group: GoalGroup;
@@ -31,12 +35,40 @@ export function integrationText(i: GoalGroup['integration']): string | null {
   return parts.length ? parts.join(' · ') : null;
 }
 
+/** What an open goal without a plan can do about it (null for any other goal). */
+export function planNeed(
+  g: Pick<GoalGroup, 'goal' | 'active' | 'proposed'>,
+  board: Pick<UiSnapshot, 'brain' | 'brain_jobs'> | null,
+): { planning: boolean; brain: boolean } | null {
+  if (g.goal.status !== 'OPEN' || g.active || g.proposed) return null;
+  const planning = (board?.brain_jobs ?? []).some(
+    (j) => j.goal_id === g.goal.goal_id && (j.kind === 'plan' || j.kind === 'replan'),
+  );
+  return { planning, brain: !planning && !!board?.brain?.planner_available };
+}
+
 export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeView<GoalCardModel> {
   let model = initial;
   let printed = '';
   const body = h('div', { class: 'nd-body' });
   const foot = h('div', { class: 'nd-foot nd-goal-foot' });
   const land = () => openModal(ctx, { kind: 'land', id: model.group.goal.goal_id });
+  const writePlan = () => openModal(ctx, { kind: 'plan-editor', id: model.group.goal.goal_id, mode: 'first' });
+  const brainPlan = async () => {
+    const goalId = model.group.goal.goal_id;
+    const r = await ctx.act('Let the Master Brain plan', () => ctx.api.replan(goalId));
+    if (!r) return;
+    ctx.refresh();
+    const result = typeof r.result === 'string' ? r.result : '';
+    if (result.startsWith('proposed'))
+      ctx.toast({ kind: 'success', text: 'The Master Brain proposed a plan: review it on the board' });
+    else
+      ctx.toast({
+        kind: 'warn',
+        text: 'The Master Brain proposed no plan',
+        ...(result ? { detail: truncate(cleanText(result), 300) } : {}),
+      });
+  };
   const el = h(
     'div',
     {
@@ -60,6 +92,7 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
   function render(force = false): void {
     const g = model.group;
     const goal = g.goal;
+    const need = planNeed(g, ctx.store.select('board'));
     const print = fingerprint([
       goal,
       g.progress,
@@ -68,6 +101,7 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
       g.active?.status,
       g.proposed?.version,
       g.taskIds.length,
+      need,
     ]);
     if (!force && print === printed) return;
     printed = print;
@@ -138,7 +172,11 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
       foot,
       g.active
         ? badge(`Plan v${g.active.version}`, 'muted', truncate(cleanText(g.active.summary), 300))
-        : badge('No plan yet', 'muted'),
+        : need?.planning
+          ? badge('Master Brain planning', 'info', 'The Master Brain is writing a plan for this goal')
+          : need
+            ? null
+            : badge('No plan yet', 'muted'),
       g.proposed ? badge(`v${g.proposed.version} proposed`, 'warn', 'A plan version waits for your review') : null,
       integration
         ? h(
@@ -151,6 +189,20 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
           )
         : null,
       h('span', { class: 'spacer' }),
+      need
+        ? actionButton('Write the plan', 'goal', writePlan, {
+            cls: 'nd-act-primary',
+            action: 'write-plan',
+            title: 'Write this goal’s plan in the plan editor',
+          })
+        : null,
+      need?.brain
+        ? actionButton('Let the Master Brain plan', 'bolt', brainPlan, {
+            action: 'brain-plan',
+            busyLabel: 'Planning…',
+            title: 'Ask the Master Brain for a plan; you review it before anything starts',
+          })
+        : null,
       goal.status === 'COMPLETED'
         ? button([nodeIcon('check', 13), 'Ready to land'], land, {
             class: 'btn btn-primary nd-land',

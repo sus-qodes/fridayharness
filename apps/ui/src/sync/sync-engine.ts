@@ -4,6 +4,13 @@
  * trailing, at most one in flight, at least once a second while events keep coming). Reconnects
  * with jittered backoff (250 ms → 5 s) and resumes from the last sequence, so nothing is missed.
  *
+ * A failed re-read is tried again on its own, with backoff (1 s → 30 s), until one succeeds: a live
+ * stream that brings only pings causes no other read (review R2).
+ *
+ * The stream opens only once a snapshot was read, from that snapshot's head: opened without one it
+ * would start at 0 and replay the whole history through the dispatcher, with its sounds, Blip and
+ * the Notch. Until then the read itself is tried again.
+ *
  * Liveness is judged on raw bytes (pings included): a stream silent for 45 s is dropped and opened
  * again. Reconnects that fail for 10 s mean Friday is gone from this address (it stopped, or it
  * restarted on another port, which is a new origin for this tab); the same after `event: shutdown`.
@@ -38,11 +45,19 @@ export interface SyncOptions {
   /** Failing reconnects for this long end in "not reachable". */
   unreachableMs?: number;
   backoff?: (attempt: number) => number;
+  /** The wait before a failed snapshot read is tried again, by failures in a row. */
+  readBackoff?: (failures: number) => number;
   now?: () => number;
 }
 
 export function defaultBackoff(attempt: number): number {
   const base = Math.min(5000, 250 * 2 ** Math.max(0, attempt - 1));
+  return Math.round(base * (0.8 + Math.random() * 0.4));
+}
+
+/** 1 s, doubling to 30 s, jittered. */
+export function defaultReadBackoff(failures: number): number {
+  const base = Math.min(30_000, 1000 * 2 ** Math.max(0, failures - 1));
   return Math.round(base * (0.8 + Math.random() * 0.4));
 }
 
@@ -65,6 +80,7 @@ export class SyncEngine {
   readonly #stallMs: number;
   readonly #unreachableMs: number;
   readonly #backoff: (attempt: number) => number;
+  readonly #readBackoff: (failures: number) => number;
   readonly #now: () => number;
 
   #running = false;
@@ -75,11 +91,17 @@ export class SyncEngine {
    * and their reactions (sounds, the Notch, log lines) would be lost (review M9i).
    */
   #cursor: number | null = null;
+  /** The stream loop runs (it starts after the first good read of the snapshot). */
+  #streaming = false;
   #stream: AbortController | null = null;
   #refreshTimer: ReturnType<typeof setTimeout> | null = null;
   #firstPendingAt = 0;
   #refreshing: Promise<void> | null = null;
   #refreshAgain = false;
+  /** The retry of a failed read, independent of the stream. */
+  #retryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Failed reads in a row (the retry's backoff). */
+  #readFailures = 0;
   #stallTimer: ReturnType<typeof setTimeout> | null = null;
   #sleepTimer: ReturnType<typeof setTimeout> | null = null;
   #wake: (() => void) | null = null;
@@ -102,6 +124,7 @@ export class SyncEngine {
     this.#stallMs = opts.stallMs ?? STALL_MS;
     this.#unreachableMs = opts.unreachableMs ?? UNREACHABLE_MS;
     this.#backoff = opts.backoff ?? defaultBackoff;
+    this.#readBackoff = opts.readBackoff ?? defaultReadBackoff;
     this.#now = opts.now ?? (() => Date.now());
   }
 
@@ -124,35 +147,43 @@ export class SyncEngine {
     if (this.#running) return;
     this.#running = true;
     this.#failingSince = null;
+    this.#readFailures = 0;
     this.store.patch('system', { connection: 'connecting', attempts: 0 });
     try {
       await this.#loadSnapshot();
     } catch (e) {
-      if (this.#handleFatal(e)) return;
-      const failure = this.#classify(e);
-      if (failure === 'offline' && this.#failingSince === null) this.#failingSince = this.#now();
-      this.store.patch('system', { connection: 'reconnecting', refreshing: false });
+      if (!this.#handleFatal(e)) this.#firstReadFailed(this.#classify(e));
+      return;
     }
-    if (this.#running) void this.#loop();
+    this.#openStream();
   }
 
-  /** Starts again after "not reachable" or "stopped" (the strip's Try again), from the last sequence. */
+  /**
+   * The strip's Try again: starts again after "not reachable" or "stopped", from the last
+   * sequence; while running, reads the snapshot again at once (a read failed).
+   */
   retry(): Promise<void> {
-    if (this.#running) return Promise.resolve();
+    if (this.#running) {
+      this.#readFailures = 0;
+      return this.#refreshNow();
+    }
     this.#draining = false;
     return this.start();
   }
 
   stop(): void {
     this.#running = false;
+    this.#streaming = false;
     this.#stream?.abort();
     this.#stream = null;
     if (this.#refreshTimer) clearTimeout(this.#refreshTimer);
     if (this.#stallTimer) clearTimeout(this.#stallTimer);
     if (this.#sleepTimer) clearTimeout(this.#sleepTimer);
+    if (this.#retryTimer) clearTimeout(this.#retryTimer);
     this.#refreshTimer = null;
     this.#stallTimer = null;
     this.#sleepTimer = null;
+    this.#retryTimer = null;
     this.#firstPendingAt = 0;
     const wake = this.#wake;
     this.#wake = null;
@@ -207,19 +238,26 @@ export class SyncEngine {
   }
 
   async #refreshNow(): Promise<void> {
-    if (this.#draining) return;
+    if (this.#held()) return;
     if (this.#refreshing) {
       this.#refreshAgain = true;
       return this.#refreshing;
     }
+    // This read replaces a pending retry; if it fails, it schedules its own.
+    if (this.#retryTimer) clearTimeout(this.#retryTimer);
+    this.#retryTimer = null;
     this.store.patch('system', { refreshing: true });
     this.#refreshing = (async () => {
       try {
         await this.#loadSnapshot();
+        this.#readFailures = 0;
+        this.#openStream();
       } catch (e) {
         if (!this.#handleFatal(e)) {
-          this.#classify(e);
+          const failure = this.#classify(e);
           this.store.patch('system', { refreshing: false });
+          if (this.#streaming) this.#retryRead();
+          else this.#firstReadFailed(failure);
         }
       } finally {
         this.#refreshing = null;
@@ -230,6 +268,59 @@ export class SyncEngine {
       }
     })();
     return this.#refreshing;
+  }
+
+  /**
+   * Tries a failed read again after a backoff, whatever the stream does: a stream that stays live
+   * may bring no event that would cause a read, and an agent waiting for a human sends none.
+   * Not while the daemon drains (its stream's return reads again) or once the engine stopped.
+   */
+  #retryRead(): void {
+    if (!this.#running || this.#held()) return;
+    this.#readFailures += 1;
+    if (this.#retryTimer) clearTimeout(this.#retryTimer);
+    this.#retryTimer = setTimeout(() => {
+      this.#retryTimer = null;
+      if (this.#running && !this.#held()) void this.#refreshNow();
+    }, this.#readBackoff(this.#readFailures));
+  }
+
+  /**
+   * Reads wait while the daemon drains, once a stream is open to say when it answers again; before
+   * that, no stream will, so they go on.
+   */
+  #held(): boolean {
+    return this.#draining && this.#streaming;
+  }
+
+  /** The stream, once: after the first good read, from its head (or where an earlier stream ended). */
+  #openStream(): void {
+    if (!this.#running || this.#streaming) return;
+    this.#streaming = true;
+    void this.#loop();
+  }
+
+  /**
+   * A read before the stream opened failed; it is tried again by itself. A Friday that does not
+   * answer for 10 s is not reachable here, as for the stream. One that answered but could not give
+   * the board is connected: the strip says the read failed, with Try again.
+   */
+  #firstReadFailed(failure: Failure): void {
+    if (failure === 'offline') {
+      const now = this.#now();
+      if (this.#failingSince === null) this.#failingSince = now;
+      else if (now - this.#failingSince >= this.#unreachableMs) {
+        this.#end(UNREACHABLE_MESSAGE);
+        return;
+      }
+    } else if (failure === 'other') this.#failingSince = null;
+    const attempts = failure === 'other' ? 0 : this.store.select('system').attempts + 1;
+    this.store.patch('system', {
+      connection: failure === 'other' ? 'live' : 'reconnecting',
+      attempts,
+      refreshing: false,
+    });
+    this.#retryRead();
   }
 
   async #loop(): Promise<void> {

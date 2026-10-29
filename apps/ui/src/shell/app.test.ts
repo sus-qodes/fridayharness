@@ -82,6 +82,8 @@ function json(body: unknown, status = 200): Response {
 interface DaemonOpts {
   exchange?: 'ok' | 401 | 'offline';
   snapshot?: 'ok' | 401 | 'offline';
+  /** The daemon's copy of the preferences; without it `ui/prefs` is an unknown route. */
+  prefs?: { saved: Record<string, unknown> | null };
 }
 
 /** A daemon behind `fetch`: the code exchange, the snapshot, and a stream that stays open. */
@@ -101,6 +103,11 @@ function fakeDaemon(order: string[], opts: DaemonOpts = {}) {
       if (opts.snapshot === 401) return json({ error: { code: 'COS-3005', message: 'session ended' } }, 401);
       if (opts.snapshot === 'offline') throw new TypeError('Failed to fetch');
       return json(makeSnapshot({ project: { ...makeSnapshot().project, name: 'shop' } }));
+    }
+    if (url.endsWith('/ui/prefs') && opts.prefs) {
+      if (init.method !== 'POST') return json({ prefs: opts.prefs.saved });
+      opts.prefs.saved = (JSON.parse(String(init.body)) as { prefs: Record<string, unknown> }).prefs;
+      return json({ ok: true });
     }
     if (url.includes('/events/stream')) {
       if (opts.snapshot === 'offline') throw new TypeError('Failed to fetch');
@@ -459,5 +466,58 @@ describe('bootBrowser (plan §4.2, §7.1)', () => {
     const out = await bootBrowserWith(h('div'), fakeAreas([]), e);
     expect(document.documentElement.classList.contains('reduce-motion')).toBe(true);
     if (out.kind === 'running') out.stop();
+  });
+
+  it('lays the daemon copy of the preferences over the saved ones and sends every change to both', async () => {
+    const order: string[] = [];
+    const prefs = { saved: { muted: true, outfit: 'visor' } as Record<string, unknown> | null };
+    const { fetchImpl, calls } = fakeDaemon(order, { prefs });
+    const { env: e, session, local } = env(order, fetchImpl as unknown as typeof fetch);
+    session.setItem(SESSION_KEY, JSON.stringify({ token: 't', expires_at: '2099-01-01T00:00:00Z', project_id: PID }));
+    local.setItem('friday.prefs', JSON.stringify({ motion: 'reduce', outfit: 'witch' }));
+    const out = await bootBrowserWith(h('div'), fakeAreas([]), e);
+    if (out.kind !== 'running') throw new Error(`not running: ${out.reason}`);
+    const read = calls.find((c) => c.url.endsWith('/ui/prefs'));
+    expect(read?.url).toBe(`${ORIGIN}/api/v1/projects/${PID}/ui/prefs`);
+    expect(read?.init.headers).toMatchObject({ authorization: 'Bearer t' });
+    await vi.waitFor(() =>
+      expect(out.ctx.store.select('prefs')).toMatchObject({ muted: true, outfit: 'visor', motion: 'reduce' }),
+    );
+    out.ctx.store.patch('prefs', { volume: 0.3 });
+    await vi.waitFor(() => expect(prefs.saved).toMatchObject({ muted: true, outfit: 'visor', volume: 0.3 }));
+    await vi.waitFor(() => expect(JSON.parse(local.getItem('friday.prefs') ?? '{}')).toMatchObject({ volume: 0.3 }));
+    out.stop();
+  });
+
+  it('finds the preferences again after Friday restarts on another port, a new origin with empty storage (review R5)', async () => {
+    const prefs = { saved: null as Record<string, unknown> | null };
+    const boot = async (origin: string) => {
+      const order: string[] = [];
+      const { fetchImpl } = fakeDaemon(order, { prefs });
+      const {
+        env: e,
+        session,
+        local,
+      } = env(order, fetchImpl as unknown as typeof fetch, {
+        location: { hash: '', pathname: '/ui/nonce/', search: '', origin },
+      });
+      session.setItem(SESSION_KEY, JSON.stringify({ token: 't', expires_at: '2099-01-01T00:00:00Z', project_id: PID }));
+      const out = await bootBrowserWith(h('div'), fakeAreas([]), e);
+      if (out.kind !== 'running') throw new Error(`not running: ${out.reason}`);
+      return { out, local };
+    };
+    const first = await boot(ORIGIN);
+    await vi.waitFor(() => expect(prefs.saved).not.toBeNull());
+    first.out.ctx.store.patch('prefs', { muted: true, outfit: 'visor' });
+    await vi.waitFor(() => expect(prefs.saved).toMatchObject({ muted: true, outfit: 'visor' }));
+    await vi.waitFor(() => expect(first.local.getItem('friday.audio.muted')).toBe('true'));
+    first.out.stop();
+
+    const second = await boot('http://127.0.0.1:4987');
+    expect(second.local.getItem('friday.audio.muted')).toBeNull();
+    await vi.waitFor(() =>
+      expect(second.out.ctx.store.select('prefs')).toMatchObject({ muted: true, outfit: 'visor' }),
+    );
+    second.out.stop();
   });
 });

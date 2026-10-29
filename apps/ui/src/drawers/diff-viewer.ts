@@ -73,6 +73,27 @@ function lineNo(n: number | null): HTMLElement {
 const SIGN: Record<DiffLine['kind'], string> = { context: ' ', add: '+', del: '−' };
 const SPOKEN: Record<DiffLine['kind'], string> = { context: '', add: 'added', del: 'removed' };
 
+/** Git's mark after a last line that does not end in a newline. */
+export const NO_NEWLINE = 'No newline at end of file';
+
+function noNewlineMark(): Child[] {
+  return [
+    h('span', { class: 'dr-sign', aria: { hidden: 'true' } }, '\\'),
+    h('code', { class: 'dr-code muted' }, NO_NEWLINE),
+  ];
+}
+
+/**
+ * What a file whose lines all match says: "the same" only when the texts are, never while git
+ * records a change (an empty file added or deleted, or line endings changed).
+ */
+export function unchangedNotice(file: TaskDiffFile): string {
+  if (file.change === 'added') return 'An empty file was added.';
+  if (file.change === 'deleted') return 'An empty file was deleted.';
+  if ((file.before ?? '') !== (file.after ?? '')) return 'Only the line endings differ (CRLF and LF).';
+  return 'The contents are the same on both sides.';
+}
+
 export interface FileDiffOptions {
   mode: DiffMode;
   /** Most rows drawn before a "Show the rest" button (default `MAX_ROWS`). */
@@ -95,7 +116,7 @@ export function renderFileDiff(file: TaskDiffFile, opts: FileDiffOptions): HTMLE
   }
   const diff = opts.diff ?? diffLines(file.before, file.after);
   if (diff.identical) {
-    root.append(h('div', { class: 'dr-notice' }, 'The contents are the same on both sides.'));
+    root.append(h('div', { class: 'dr-notice' }, unchangedNotice(file)));
     return root;
   }
   if (diff.replaced) {
@@ -140,6 +161,8 @@ export function renderFileDiff(file: TaskDiffFile, opts: FileDiffOptions): HTMLE
             h('code', { class: 'dr-code' }, tokensView(tokens, line.text)),
           ),
         );
+        if (line.noNewline)
+          rows.append(h('div', { class: 'dr-row dr-eof' }, lineNo(null), lineNo(null), noNewlineMark()));
       }
     } else {
       for (const pair of pairRows(hunk.lines)) {
@@ -161,6 +184,13 @@ export function renderFileDiff(file: TaskDiffFile, opts: FileDiffOptions): HTMLE
           );
         };
         rows.append(h('div', { class: 'dr-row dr-pair' }, side(pair.left, 'left'), side(pair.right, 'right')));
+        if (pair.left?.noNewline || pair.right?.noNewline) {
+          const mark = (l: DiffLine | null) =>
+            l?.noNewline
+              ? h('div', { class: 'dr-side dr-eof' }, lineNo(null), noNewlineMark())
+              : h('div', { class: 'dr-side dr-side-empty' }, lineNo(null), h('code', { class: 'dr-code' }));
+          rows.append(h('div', { class: 'dr-row dr-pair dr-eof-pair' }, mark(pair.left), mark(pair.right)));
+        }
       }
     }
   }

@@ -6,8 +6,8 @@
  * 1. the service-worker guard: a leftover worker is removed and nothing else happens;
  * 2. the session: `#code=` is cleared from the address first, then exchanged; otherwise this tab's
  *    own session from `sessionStorage`; without one, the login screen;
- * 3. the API client over HTTP for the session's project, the store with the saved preferences,
- *    the dispatcher and the sync engine;
+ * 3. the API client over HTTP for the session's project, the store with the saved preferences
+ *    (this origin's, then the daemon's copy laid over them), the dispatcher and the sync engine;
  * 4. the context (toasts, confirm, `act`, reactions, refresh, the browser platform, the keyboard,
  *    the registry), every area's `register`, then the layout: header, banners, connection strip,
  *    the Studio, the decisions rail, the dock, the palette, the in-page Notch, drawers, modals,
@@ -29,7 +29,7 @@ import {
 } from '../platform/session.js';
 import { guardServiceWorkers } from '../platform/sw-guard.js';
 import { AuthError, OfflineError } from '../platform/transport.js';
-import { loadPrefs, watchPrefs } from '../store/prefs.js';
+import { loadPrefs, startPrefsSync, watchPrefs } from '../store/prefs.js';
 import { createStore, type FridayStore, type ReactionKind } from '../store/state.js';
 import { Dispatcher } from '../sync/dispatcher.js';
 import { SyncEngine, UNREACHABLE_MESSAGE } from '../sync/sync-engine.js';
@@ -341,6 +341,8 @@ export async function bootBrowserWith(root: HTMLElement, areas: AreaSet, env: Bo
       root: doc.documentElement,
       win,
     });
+    // This origin's storage is new at every start on another port; the daemon's copy is not.
+    const stopPrefsSync = startPrefsSync(api, store, { win });
     const dispatcher = new Dispatcher(store);
     const engine = new SyncEngine(api, store, dispatcher);
 
@@ -378,6 +380,7 @@ export async function bootBrowserWith(root: HTMLElement, areas: AreaSet, env: Bo
       services.confirms.destroy();
       services.toasts.destroy();
       keys.detach();
+      stopPrefsSync();
       stopPrefs();
     };
 

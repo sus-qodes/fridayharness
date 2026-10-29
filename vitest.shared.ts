@@ -52,10 +52,14 @@ export const sharedTestConfig = {
   },
 };
 
-/** Vitest project for a single workspace package. */
-export function unitProject(name: string) {
+/**
+ * Vitest project for a single workspace package. A package whose tests start many processes (git)
+ * takes a longer `testTimeout`: while every package tests at once they run several times slower
+ * than alone (LESSONS T-63).
+ */
+export function unitProject(name: string, opts: { testTimeout?: number } = {}) {
   return defineProject({
     ...sharedTestConfig,
-    test: { ...sharedTestConfig.test, name },
+    test: { ...sharedTestConfig.test, name, ...opts },
   });
 }

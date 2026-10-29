@@ -331,17 +331,36 @@
   align-items: center;
   gap: 12px;
   height: 20px;
+  min-width: 0;
   padding: 0 12px;
+  overflow: hidden;
   font-size: var(--text-caption);
   font-variant-numeric: tabular-nums;
   color: var(--color-slate-400);
 }
 
+/*
+ * Duration, tool calls, files and +N −M fit at ordinary values; at extreme ones (12h 05m,
+ * 128 tools, 12 files, +1402 −220) the tool count gives way and ends in an ellipsis, and the row
+ * clips anything beyond, so it never runs past the card. The card's height is fixed, so the row
+ * does not wrap. Block items, not flex: only a block's own text takes an ellipsis.
+ */
 .nd-stats span {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+  flex: none;
+  line-height: 20px;
   white-space: nowrap;
+}
+
+.nd-stats svg {
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+
+.nd-stats .nd-tools {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .nd-lines {

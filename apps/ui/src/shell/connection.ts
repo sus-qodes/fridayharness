@@ -2,7 +2,8 @@
  * The connection to Friday as people see it (plan §7.1): one pure description of the daemon state
  * (the header's dot reads it) and the connection strip under the header, which says what is
  * happening while the page is not live: reconnect attempts, "Friday is stopping", "not reachable
- * here", a session that ended, and the errors the sync engine reported.
+ * here", a session that ended, and the errors the sync engine reported, with Try again where it
+ * helps.
  */
 import type { Connection, FridayStore, SystemState } from '../store/state.js';
 import { STALE_PAGE_MESSAGE, STOPPING_MESSAGE, UNREACHABLE_MESSAGE } from '../sync/sync-engine.js';
@@ -56,13 +57,14 @@ export function connectionView(system: SystemState): ConnectionView {
     return { state: 'stopping', label: 'Stopping', message: `${STOPPING_MESSAGE}.`, detail: null, retry: false };
   }
   if (c === 'live') {
+    // The engine tries a failed read again by itself, with backoff; Try again reads it now.
     const detail = detailOf(system, [STALE_PAGE_MESSAGE]);
     return {
       state: 'connected',
       label: 'Connected',
       message: detail ? 'Friday is connected, but the last read of the board failed.' : null,
       detail,
-      retry: false,
+      retry: !!detail,
     };
   }
   if (c === 'starting' || c === 'connecting') {
@@ -81,7 +83,10 @@ export function connectionView(system: SystemState): ConnectionView {
 }
 
 export interface StripOptions {
-  /** "Try again" after Friday stopped or was not reachable. */
+  /**
+   * "Try again" (the sync engine's `retry`): starts again after Friday stopped or was not
+   * reachable, and reads the board again while connected after a read failed.
+   */
   onRetry?: () => void;
 }
 

@@ -529,6 +529,17 @@ describe('mounted Notch: the compact pill', () => {
     expect(handle.el.dataset.state).toBe('compact');
   });
 
+  it('in the notch window the ticker asks the Studio for the diff at that file (deep review R7)', () => {
+    const ctx = makeContext({ snapshot: running(), answers: { 'GET /tasks/t1/diff': { files: [] } } });
+    ctx.store.patch('activity', { files: { t1: [{ path: 'backend/src/checkout.ts', at: 100 }] } });
+    const onOpenStudio = vi.fn();
+    const { q } = mount(ctx, { mode: 'window', onOpenStudio });
+    vi.advanceTimersByTime(2400);
+    q<HTMLButtonElement>('.nt-ticker').click();
+    expect(onOpenStudio).toHaveBeenCalledWith({ task_id: 't1', panel: 'diff', path: 'backend/src/checkout.ts' });
+    expect(ctx.store.select('ui').drawer).toBeNull();
+  });
+
   it('reads the line counts again after a write, at most once a second', async () => {
     const ctx = makeContext({ snapshot: running(), answers: { 'GET /tasks/t1/diff': { files: [] } } });
     ctx.store.patch('activity', { files: { t1: [{ path: 'a.ts', at: ctx.clock.now }] } });
@@ -666,6 +677,19 @@ describe('mounted Notch: the expanded card', () => {
     handle.open();
     studio?.click();
     expect(handle.el.dataset.state).toBe('compact');
+  });
+
+  it('in the notch window Settings and Routing name their drawer for the Studio (deep review R7)', () => {
+    const ctx = makeContext();
+    const onOpenStudio = vi.fn();
+    const { handle, q } = mount(ctx, { mode: 'window', onOpenStudio });
+    handle.open();
+    const [settings] = [...handle.el.querySelectorAll<HTMLButtonElement>('.nt-foot-btn')];
+    settings?.click();
+    expect(onOpenStudio).toHaveBeenLastCalledWith({ panel: 'settings' });
+    q<HTMLButtonElement>('.nt-routing').click();
+    expect(onOpenStudio).toHaveBeenLastCalledWith({ panel: 'agents', tab: 'routing' });
+    expect(ctx.store.select('ui').drawer).toBeNull();
   });
 
   it('the banner opens the task inspector', () => {

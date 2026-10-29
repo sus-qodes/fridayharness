@@ -142,7 +142,16 @@ export function landModal(
     section(
       'Files',
       filesBox,
-      linkButton('Open the full goal diff', () => openDrawer(ctx, { kind: 'diff', id: goalId, tab: 'goal' })),
+      linkButton('Open the full goal diff', () => {
+        // A drawer under this dialog takes no input: close first, and let the drawer come back here.
+        close();
+        openDrawer(ctx, {
+          kind: 'diff',
+          id: goalId,
+          tab: 'goal',
+          back: { modal: { kind: 'land', id: goalId }, label: 'Back to landing' },
+        });
+      }),
     ),
     section('Merge it', stepsBox),
     h(

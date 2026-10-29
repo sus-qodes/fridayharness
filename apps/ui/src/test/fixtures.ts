@@ -80,6 +80,7 @@ export function makeTask(overrides: Partial<SnapshotTask> = {}): SnapshotTask {
     agent_key: null,
     waiting_note: null,
     delegation_note: null,
+    tool_calls: 0,
     ...overrides,
   } as SnapshotTask;
 }
@@ -348,6 +349,7 @@ export function makeSnapshot(overrides: Partial<UiSnapshot> = {}): UiSnapshot {
     verification: { checks: [{ name: 'tests', kind: 'test', required: true }], auto_on_completion: false },
     counts: {},
     goals: [],
+    goal_progress: {},
     plans: {},
     tasks: [],
     runs: {},

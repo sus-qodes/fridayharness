@@ -17,6 +17,7 @@ import { setCursor } from '../mascot/index.js';
 import { waitingCount } from '../notch/derive.js';
 import { mountNotch, type NotchHandle } from '../notch/index.js';
 import { realTimers } from '../notch/island-fsm.js';
+import type { NotchStudioTarget } from '../notch/island-host.js';
 import { type NotificationCtor, type NotificationLike, startNotifierWith } from '../notify/notifier.js';
 import { desktopPlatform } from '../platform/desktop-platform.js';
 import { type TauriCore, TauriTransport } from '../platform/tauri-transport.js';
@@ -24,7 +25,7 @@ import { createAppContext, createShellServices, mountShell } from '../shell/app.
 import { type AppContext, type DrawerKind, type ModalKind, openDrawer, openModal } from '../shell/context.js';
 import { headerCounts } from '../shell/header.js';
 import { productMark } from '../shell/mark.js';
-import { loadPrefs, watchPrefs } from '../store/prefs.js';
+import { loadPrefs, startPrefsSync, watchPrefs } from '../store/prefs.js';
 import { createStore, type FridayStore } from '../store/state.js';
 import { Dispatcher } from '../sync/dispatcher.js';
 import { SyncEngine } from '../sync/sync-engine.js';
@@ -57,15 +58,64 @@ export interface DesktopEnv {
   pollMs?: number;
 }
 
-/** Where a deep link from the Notch or the tray points (`show_studio`'s target). */
+/** Where a deep link from the Notch or the tray points (`show_studio`'s target, lib.rs `DeepLink`). */
 export interface StudioTarget {
   focus_task?: string;
   approval_id?: string;
   panel?: string;
-  /** The id the panel opens on (a task for Recover, a goal for a revision). */
+  /** The id the panel opens on (a task for Recover or a diff, a goal for a revision). */
   id?: string;
+  /** The drawer's tab (the agents drawer's `routing`). */
+  tab?: string;
+  /** The file a diff drawer selects. */
+  path?: string;
   /** The reach the human chose on the Notch's card. */
   reach?: 'once' | 'run' | 'task';
+}
+
+/** The shell's deep link for where the Notch window sends the human: a drawer opens on the task's id. */
+export function studioLink(t: NotchStudioTarget): StudioTarget {
+  if (t.panel) {
+    return {
+      panel: t.panel,
+      ...(t.task_id ? { id: t.task_id } : {}),
+      ...(t.tab ? { tab: t.tab } : {}),
+      ...(t.path ? { path: t.path } : {}),
+    };
+  }
+  // The shell's target names a task `focus_task` (lib.rs DeepLink).
+  return {
+    ...(t.task_id ? { focus_task: t.task_id } : {}),
+    ...(t.approval_id ? { approval_id: t.approval_id } : {}),
+  };
+}
+
+/** A drawer's tab as the drawers name them. */
+const TAB = /^[a-z][a-z0-9-]{0,31}$/;
+/** Characters a file path from another window never holds. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are refused on purpose
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+const PATH_MAX = 1024;
+
+function linkPath(p: unknown): string | null {
+  return typeof p === 'string' && p.length > 0 && p.length <= PATH_MAX && !CONTROL.test(p) ? p : null;
+}
+
+/**
+ * The link as the shell takes it. The shell refuses a whole link for one field of an unexpected
+ * form (lib.rs `DeepLink::valid`, the same rules as here), and the Studio would then not open at
+ * all; a tab or a file path of another form (an agent's file name with a line break, say) is left
+ * out instead, and the drawer opens without it.
+ */
+export function sendableLink(t: StudioTarget): StudioTarget {
+  const { tab, path, ...rest } = t;
+  const file = linkPath(path);
+  return { ...rest, ...(typeof tab === 'string' && TAB.test(tab) ? { tab } : {}), ...(file ? { path: file } : {}) };
+}
+
+/** Shows the Studio at `target` (`show_studio`). */
+function showStudio(env: DesktopEnv, target: StudioTarget): void {
+  void env.core.invoke('show_studio', { target: sendableLink(target) }).catch(() => undefined);
 }
 
 async function loadEnv(): Promise<DesktopEnv> {
@@ -167,6 +217,8 @@ function makeContext(env: DesktopEnv, info: ProjectInfo, root: HTMLElement): Run
   const api = new FridayApi(new TauriTransport(async () => env.core), info.project_id);
   const store = createStore(loadPrefs(safeStorage()));
   const stopPrefs = watchPrefs(store, { storage: safeStorage(), root: document.documentElement, win: window });
+  // The project's copy too, as in a browser: one copy for the windows, the browser and every start.
+  const stopPrefsSync = startPrefsSync(api, store, { win: window });
   const dispatcher = new Dispatcher(store);
   const engine = new SyncEngine(api, store, dispatcher);
   const keys = new Keyboard(window);
@@ -197,6 +249,7 @@ function makeContext(env: DesktopEnv, info: ProjectInfo, root: HTMLElement): Run
       services.confirms.destroy();
       services.toasts.destroy();
       keys.detach();
+      stopPrefsSync();
       stopPrefs();
     },
   };
@@ -224,14 +277,21 @@ async function followDaemon(env: DesktopEnv, run: Running): Promise<() => void> 
 export function applyDeepLink(ctx: AppContext, t: StudioTarget | null | undefined): void {
   if (!t) return;
   if (t.focus_task) ctx.store.patch('ui', { selectedTaskId: t.focus_task });
-  // Only kinds this window registered are opened: the panel name came over IPC.
+  // Only kinds this window registered are opened, with a tab and a path of the expected form: the
+  // link came over IPC.
   const panel = t.panel;
   const id = t.id ? { id: t.id } : {};
+  const path = linkPath(t.path);
+  const where = {
+    ...id,
+    ...(typeof t.tab === 'string' && TAB.test(t.tab) ? { tab: t.tab } : {}),
+    ...(path ? { path } : {}),
+  };
   if (t.approval_id) {
     if (t.reach) requestReach(t.approval_id, t.reach);
     openModal(ctx, { kind: 'approval', id: t.approval_id });
   } else if (panel && ctx.registry.drawers.has(panel as DrawerKind))
-    openDrawer(ctx, { kind: panel as DrawerKind, ...id });
+    openDrawer(ctx, { kind: panel as DrawerKind, ...where });
   else if (panel && ctx.registry.modals.has(panel as ModalKind)) openModal(ctx, { kind: panel as ModalKind, ...id });
   else if (t.focus_task) openDrawer(ctx, { kind: 'inspector', id: t.focus_task });
 }
@@ -330,14 +390,7 @@ export async function bootDesktopNotch(root: HTMLElement, injected?: DesktopEnv)
     onRect: (r) => {
       void env.core.invoke('notch_rect', { x: r.x, y: r.y, w: r.width, h: r.height }).catch(() => undefined);
     },
-    onOpenStudio: (target) => {
-      // The shell's target names a task `focus_task` (lib.rs DeepLink).
-      const link: StudioTarget = {
-        ...(target.task_id ? { focus_task: target.task_id } : {}),
-        ...(target.approval_id ? { approval_id: target.approval_id } : {}),
-      };
-      void env.core.invoke('show_studio', { target: link }).catch(() => undefined);
-    },
+    onOpenStudio: (target) => showStudio(env, studioLink(target)),
   });
   root.append(run.services.toasts.el, run.services.confirms.el);
 
@@ -366,9 +419,15 @@ export async function bootDesktopNotch(root: HTMLElement, injected?: DesktopEnv)
       target = { approval_id: modal.id, ...(reach ? { reach } : {}) };
     } else if (drawer?.kind === 'inspector' && drawer.id) target = { focus_task: drawer.id };
     else if (modal) target = { panel: modal.kind, ...(modal.id ? { id: modal.id } : {}) };
-    else if (drawer) target = { panel: drawer.kind, ...(drawer.id ? { id: drawer.id } : {}) };
+    else if (drawer)
+      target = {
+        panel: drawer.kind,
+        ...(drawer.id ? { id: drawer.id } : {}),
+        ...(drawer.tab ? { tab: drawer.tab } : {}),
+        ...(drawer.path ? { path: drawer.path } : {}),
+      };
     store.patch('ui', { modal: null, drawer: null });
-    void env.core.invoke('show_studio', { target }).catch(() => undefined);
+    showStudio(env, target);
   });
 
   // The tray's icon and line follow the board.
@@ -385,13 +444,14 @@ export async function bootDesktopNotch(root: HTMLElement, injected?: DesktopEnv)
   store.subscribe('system', tray);
   store.subscribe('prefs', tray);
   // An approval that expires changes no board: the line is read again every 15 s too.
-  setInterval(tray, 15_000);
+  const trayTimer = setInterval(tray, 15_000);
 
   await followDaemon(env, run);
   await env.listen<{ x: number; y: number }>('cursor', (p) => setCursor(p?.x ?? null, p?.y));
   await env.listen<{ focus?: boolean }>('notch-open', (p) => handle.open(p?.focus !== false));
   await env.listen<{ muted: boolean }>('toggle-mute', (p) => store.patch('prefs', { muted: !!p?.muted }));
   window.addEventListener('pagehide', () => {
+    clearInterval(trayTimer);
     stopNotifier();
     stopSound();
     handle.destroy();

@@ -84,7 +84,10 @@ describe('landing', () => {
       copied.push(t);
       return true;
     };
-    const m = landModal(ctx, { kind: 'land', id: GID }, () => undefined);
+    let closed = 0;
+    const m = landModal(ctx, { kind: 'land', id: GID }, () => {
+      closed += 1;
+    });
     await flush();
     expect(ctx.transport.calls[0]?.path).toContain(`/goals/${GID}/diff?stat=1`);
     const text = m.el.textContent ?? '';
@@ -100,8 +103,16 @@ describe('landing', () => {
     buttonBy(m.el, 'Copy the branch name').click();
     await flush();
     expect(copied).toEqual([`git merge friday/goal-${GID}`, `friday/goal-${GID}`]);
+    expect(closed).toBe(0);
     buttonBy(m.el, 'Open the full goal diff').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: GID, tab: 'goal' });
+    // The dialog closes first: a drawer under it would take no input (review R3).
+    expect(closed).toBe(1);
+    expect(ctx.store.select('ui').drawer).toEqual({
+      kind: 'diff',
+      id: GID,
+      tab: 'goal',
+      back: { modal: { kind: 'land', id: GID }, label: 'Back to landing' },
+    });
     m.destroy();
   });
 

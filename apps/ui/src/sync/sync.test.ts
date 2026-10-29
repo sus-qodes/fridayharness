@@ -10,12 +10,23 @@ import {
   type StreamHandlers,
   type Transport,
 } from '../platform/transport.js';
+import { connectionView } from '../shell/connection.js';
 import { UI_API } from '../shell/version.js';
 import { createStore, type FridayStore } from '../store/state.js';
-import { makeAgent, makeApproval, makeEvent, makeRun, makeSnapshot, makeTask } from '../test/fixtures.js';
-import { approvalFromEvent, Dispatcher, isDomainEvent } from './dispatcher.js';
+import {
+  makeAgent,
+  makeApproval,
+  makeEscalation,
+  makeEvent,
+  makeRun,
+  makeSnapshot,
+  makeTask,
+} from '../test/fixtures.js';
+import { Dispatcher, isDomainEvent } from './dispatcher.js';
+import { approvalFromEvent, escalationFromEvent } from './rows.js';
 import {
   DRAINING_CODE,
+  defaultReadBackoff,
   STALE_PAGE_MESSAGE,
   STALL_MS,
   STOPPING_MESSAGE,
@@ -82,6 +93,17 @@ const silent: Script = (h, signal) =>
   new Promise((resolve) => {
     h.onOpen?.();
     signal.addEventListener('abort', () => resolve('closed'));
+  });
+
+/** A healthy stream that opens and then only pings, every 15 s, until it is aborted. */
+const pinging: Script = (h, signal) =>
+  new Promise((resolve) => {
+    h.onOpen?.();
+    const ping = setInterval(() => h.onActivity?.(), 15_000);
+    signal.addEventListener('abort', () => {
+      clearInterval(ping);
+      resolve('closed');
+    });
   });
 
 function setup(t: FakeTransport, opts: SyncOptions = {}) {
@@ -251,6 +273,164 @@ describe('SyncEngine', () => {
     await vi.advanceTimersByTimeAsync(STALL_MS * 4);
     expect(t.streamPaths).toHaveLength(1);
     engine.stop();
+  });
+
+  it('reads the board again after one failed read, while the stream stays connected with pings only (review R2)', async () => {
+    vi.useFakeTimers();
+    const t = new FakeTransport();
+    t.snapshots = [snapshot(1), snapshot(2)];
+    let handlers = null as StreamHandlers | null;
+    t.fallback = (h, signal) => {
+      handlers = h;
+      return pinging(h, signal);
+    };
+    const { store, engine } = setup(t);
+    await engine.start();
+    await vi.advanceTimersByTimeAsync(1);
+    t.snapshotError = new ApiError(500, 'COS-5000', 'internal_error', 'database is locked', true);
+    handlers?.onEvent(event(2, 'task.ready'));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(t.snapshotCalls).toBe(2);
+    expect(store.select('system').connection).toBe('live');
+    expect(store.select('system').lastError).toContain('COS-5000');
+    // The daemon answers again; the stream only pings, and no domain event comes to cause a read.
+    t.snapshotError = null;
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(t.snapshotCalls).toBe(3);
+    expect(store.select('board')?.head).toBe(2);
+    expect(store.select('system')).toMatchObject({ connection: 'live', lastError: null });
+    expect(t.streamPaths).toHaveLength(1);
+    engine.stop();
+  });
+
+  it('retries failed reads with growing, bounded waits, and stops retrying when the engine stops', async () => {
+    vi.useFakeTimers();
+    const t = new FakeTransport();
+    t.snapshots = [snapshot(1)];
+    t.fallback = pinging;
+    const waits: number[] = [];
+    const { engine } = setup(t, {
+      readBackoff: (n) => {
+        waits.push(n);
+        return n * 1000;
+      },
+    });
+    await engine.start();
+    t.snapshotError = new ApiError(500, 'COS-5000', 'internal_error', 'database is locked', true);
+    await engine.refresh();
+    expect(t.snapshotCalls).toBe(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(t.snapshotCalls).toBe(3);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(t.snapshotCalls).toBe(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(t.snapshotCalls).toBe(4);
+    expect(waits).toEqual([1, 2, 3]);
+    engine.stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(t.snapshotCalls).toBe(4);
+    for (let n = 1; n < 40; n++) expect(defaultReadBackoff(n)).toBeLessThanOrEqual(36_000);
+    expect(defaultReadBackoff(1)).toBeGreaterThanOrEqual(800);
+  });
+
+  it('Try again reads the board at once while the engine runs, and a good read ends the retries', async () => {
+    vi.useFakeTimers();
+    const t = new FakeTransport();
+    t.snapshots = [snapshot(1), snapshot(4)];
+    t.fallback = pinging;
+    const { store, engine } = setup(t, { readBackoff: () => 30_000 });
+    await engine.start();
+    await vi.advanceTimersByTimeAsync(1);
+    t.snapshotError = new OfflineError('connection reset');
+    await engine.refresh();
+    expect(t.snapshotCalls).toBe(2);
+    t.snapshotError = null;
+    await engine.retry();
+    expect(t.snapshotCalls).toBe(3);
+    expect(store.select('board')?.head).toBe(4);
+    expect(store.select('system').lastError).toBeNull();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(t.snapshotCalls).toBe(3);
+    engine.stop();
+  });
+
+  it('does not retry a read while Friday drains, nor after the session ended', async () => {
+    vi.useFakeTimers();
+    const t = new FakeTransport();
+    t.snapshots = [snapshot(1)];
+    t.fallback = pinging;
+    const { store, engine } = setup(t, { readBackoff: () => 1000 });
+    await engine.start();
+    t.snapshotError = new ApiError(503, DRAINING_CODE, 'shutting_down', 'Friday is shutting down', true);
+    await engine.refresh();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(t.snapshotCalls).toBe(2);
+    engine.stop();
+    const t2 = new FakeTransport();
+    t2.snapshots = [snapshot(1)];
+    t2.fallback = pinging;
+    const two = setup(t2, { readBackoff: () => 1000 });
+    await two.engine.start();
+    t2.snapshotError = new AuthError('COS-3005', 'expired');
+    await two.engine.refresh();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(t2.snapshotCalls).toBe(2);
+    expect(two.store.select('system').connection).toBe('signed-out');
+    expect(store.select('system').lastError).toBe(STOPPING_MESSAGE);
+  });
+
+  it('opens the stream only after a first read succeeded, from its head, with no reaction to older events (review P1c)', async () => {
+    vi.useFakeTimers();
+    const t = new FakeTransport();
+    t.snapshots = [snapshot(6)];
+    t.snapshotError = new ApiError(500, 'COS-5000', 'internal_error', 'database is locked', true);
+    // The daemon's stream sends what happened after `since`: a task completed at 3, a question at
+    // 5, a new task at 8.
+    const history = [event(3, 'task.completed'), event(5, 'escalation.requested'), event(8, 'task.created')];
+    t.fallback = (h, signal) =>
+      new Promise((resolve) => {
+        h.onOpen?.();
+        const since = Number(t.streamPaths.at(-1)?.split('since=')[1]);
+        for (const e of history) if (e.sequence > since) h.onEvent(e);
+        signal.addEventListener('abort', () => resolve('closed'));
+      });
+    const { store, engine } = setup(t, { readBackoff: () => 2000 });
+    await engine.start();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(t.streamPaths).toEqual([]);
+    expect(store.select('board')).toBeNull();
+    // The strip says the board could not be read, with Try again.
+    expect(connectionView(store.select('system'))).toMatchObject({
+      retry: true,
+      detail: expect.stringContaining('COS-5000'),
+    });
+    t.snapshotError = null;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(store.select('board')?.head).toBe(6);
+    expect(t.streamPaths).toEqual(['/api/v1/projects/proj_1/events/stream?since=6']);
+    expect(store.select('activity').reactions.map((r) => r.kind)).toEqual(['node']);
+    expect(connectionView(store.select('system'))).toMatchObject({ state: 'connected', message: null });
+    engine.stop();
+  });
+
+  it('keeps reading a first board Friday does not give, while it drains, and says it is not reachable once it is gone', async () => {
+    vi.useFakeTimers();
+    const t = new FakeTransport();
+    t.snapshots = [snapshot(3)];
+    t.snapshotError = new ApiError(503, DRAINING_CODE, 'shutting_down', 'Friday is shutting down', true);
+    t.fallback = silent;
+    const { store, engine } = setup(t, { readBackoff: () => 1000 });
+    await engine.start();
+    expect(store.select('system').lastError).toBe(STOPPING_MESSAGE);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(t.snapshotCalls).toBe(2);
+    t.snapshotError = new OfflineError('connection refused');
+    await vi.advanceTimersByTimeAsync(UNREACHABLE_MS - 1500);
+    expect(store.select('system').connection).toBe('reconnecting');
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(store.select('system')).toMatchObject({ connection: 'stopped', lastError: UNREACHABLE_MESSAGE });
+    expect(t.streamPaths).toEqual([]);
+    expect(engine.running).toBe(false);
   });
 
   it('says Friday is not reachable here after 10 s of failed reconnects, and stops', async () => {
@@ -446,6 +626,24 @@ describe('SyncEngine', () => {
     expect(a.files[TASK]?.[0]?.path).toBe('frontend/src/a.ts');
   });
 
+  it('counts a task’s tool calls on its card as they finish, with no read of the board (review P1a)', async () => {
+    const t = new FakeTransport();
+    t.snapshots = [snapshot(10, { tasks: [makeTask({ task_id: TASK, status: 'RUNNING', tool_calls: 4 })] })];
+    t.streams.push(async (h) => {
+      h.onOpen?.();
+      h.onEvent(event(11, 'agent.event', { event_type: 'tool.completed', task_id: TASK, tool: 'Read' }, AGENT));
+      h.onEvent(event(12, 'agent.event', { event_type: 'tool.failed', task_id: TASK, tool: 'Bash' }, AGENT));
+      h.onEvent(event(13, 'agent.event', { event_type: 'progress', task_id: TASK, note: 'halfway' }, AGENT));
+      await tick(40);
+      return 'shutdown';
+    });
+    const { store, engine } = setup(t);
+    await engine.start();
+    await tick(60);
+    expect(store.select('board')?.tasks[0]?.tool_calls).toBe(6);
+    expect(t.snapshotCalls).toBe(1);
+  });
+
   it('forwards every applied event to its listeners, never one older than the cursor', async () => {
     const t = new FakeTransport();
     t.snapshots = [snapshot(4)];
@@ -560,6 +758,90 @@ describe('Dispatcher (plan §7.2)', () => {
     expect(store.select('board')?.approvals).toEqual([]);
   });
 
+  it('shows a question from its payload in the same tick, and keeps it over an older snapshot (review R2)', () => {
+    const store = boardStore();
+    const d = new Dispatcher(store);
+    const escalation = {
+      escalation_id: 'esc_9',
+      task_id: TASK,
+      run_id: 'run_1',
+      question: 'Which plan names should the page show?',
+      options: ['Basic and Pro', 'Free and Team'],
+      context: 'the spec names none',
+    };
+    expect(d.handle(event(12, 'escalation.requested', { escalation }, AGENT))).toBe(true);
+    const shown = store.select('board')?.escalations ?? [];
+    expect(shown).toHaveLength(1);
+    expect(shown[0]).toMatchObject({
+      escalation_id: 'esc_9',
+      task_id: TASK,
+      run_id: 'run_1',
+      question: 'Which plan names should the page show?',
+      options: ['Basic and Pro', 'Free and Team'],
+      status: 'pending',
+      kind: null,
+      details: null,
+      requested_by_kind: 'agent',
+      requested_by_id: 'agent_1',
+    });
+    expect(store.select('activity').reactions.at(-1)).toMatchObject({ kind: 'question' });
+    // A read from before the request still shows it; a read that covers the request replaces it.
+    expect(d.reconcile(snapshot(11)).escalations.map((e) => e.escalation_id)).toEqual(['esc_9']);
+    expect(d.reconcile(snapshot(12)).escalations).toEqual([]);
+    expect(d.reconcile(snapshot(11)).escalations).toEqual([]);
+  });
+
+  it('takes an answered question off the board at once, and keeps it off an older snapshot', () => {
+    const store = boardStore({ escalations: [makeEscalation({ escalation_id: 'esc_1' })] });
+    const d = new Dispatcher(store);
+    expect(d.handle(event(11, 'escalation.answered', { escalation_id: 'esc_1', answer: 'yes' }))).toBe(true);
+    expect(store.select('board')?.escalations).toEqual([]);
+    const older = snapshot(10, { escalations: [makeEscalation({ escalation_id: 'esc_1' })] });
+    expect(d.reconcile(older).escalations).toEqual([]);
+    // Its request replayed after the answer does not bring it back.
+    d.handle(event(9, 'escalation.requested', { escalation: { escalation_id: 'esc_1', question: 'q' } }));
+    expect(store.select('board')?.escalations).toEqual([]);
+  });
+
+  it('does not bring back a question a snapshot covering its request no longer lists', () => {
+    const store = boardStore({ escalations: [] });
+    const d = new Dispatcher(store);
+    d.handle(event(9, 'escalation.requested', { escalation: { escalation_id: 'esc_2', question: 'q' } }));
+    expect(store.select('board')?.escalations).toEqual([]);
+  });
+
+  it('builds question rows only from well-formed payloads, as Friday’s own questions carry them', () => {
+    expect(escalationFromEvent(event(1, 'escalation.requested', {}))).toBeNull();
+    expect(escalationFromEvent(event(1, 'escalation.requested', { escalation: { escalation_id: 'e' } }))).toBeNull();
+    const own = escalationFromEvent(
+      event(1, 'escalation.requested', {
+        escalation: {
+          escalation_id: 'e',
+          task_id: null,
+          goal_id: 'goal_1',
+          question: 'The plan was rejected',
+          options: [],
+          kind: 'plan_rejected',
+          details: { why: 'no planner' },
+        },
+      }),
+    );
+    expect(own).toMatchObject({
+      task_id: null,
+      goal_id: 'goal_1',
+      kind: 'plan_rejected',
+      options: [],
+      details: { why: 'no planner' },
+      requested_by_kind: 'system',
+    });
+    const odd = escalationFromEvent(
+      event(1, 'escalation.requested', {
+        escalation: { escalation_id: 'e', question: 'q', options: 'yes', details: ['x'] },
+      }),
+    );
+    expect(odd).toMatchObject({ options: null, details: null });
+  });
+
   it('builds approval rows only from well-formed payloads', () => {
     expect(approvalFromEvent(event(1, 'approval.requested', {}))).toBeNull();
     expect(
@@ -648,6 +930,44 @@ describe('Dispatcher (plan §7.2)', () => {
     const d = new Dispatcher(store);
     d.handle(event(11, 'policy.evaluated', { kind: 'write', decision: 'allow', task_id: 'task_2' }, AGENT), 50);
     expect(store.select('ui').staleStats.task_2).toBe(50);
+  });
+
+  it('does not count again a tool call the board’s snapshot already counted (review P1a)', () => {
+    const store = boardStore({ tasks: [makeTask({ task_id: TASK, agent_key: 'fe-1', tool_calls: 3 })] });
+    const d = new Dispatcher(store);
+    // The board's snapshot has its head at 10: these two are in its count.
+    d.handle(event(9, 'agent.event', { event_type: 'tool.completed', task_id: TASK }, AGENT));
+    d.handle(event(10, 'agent.event', { event_type: 'tool.failed', task_id: TASK }, AGENT));
+    expect(store.select('board')?.tasks[0]?.tool_calls).toBe(3);
+    d.handle(event(11, 'agent.event', { event_type: 'tool.completed', task_id: TASK }, AGENT));
+    expect(store.select('board')?.tasks[0]?.tool_calls).toBe(4);
+    // A task not on the board, and agent events that are not tool calls, count nothing.
+    d.handle(event(12, 'agent.event', { event_type: 'tool.completed', task_id: 'task_gone' }, AGENT));
+    d.handle(event(13, 'agent.event', { event_type: 'progress', task_id: TASK }, AGENT));
+    expect(store.select('board')?.tasks.map((t) => t.tool_calls)).toEqual([4]);
+    // A tool event naming only its run is not in the daemon's count, so the page does not count it
+    // either: the count would fall at the next reload.
+    d.handle(event(14, 'agent.event', { event_type: 'tool.completed', run_id: 'run_1' }, AGENT));
+    expect(store.select('board')?.tasks.map((t) => t.tool_calls)).toEqual([4]);
+  });
+
+  it('keeps the larger tool count: an older snapshot does not lower it, a newer one raises it (review P1a)', () => {
+    const store = boardStore({ tasks: [makeTask({ task_id: TASK, agent_key: 'fe-1', tool_calls: 2 })] });
+    const d = new Dispatcher(store);
+    for (const sequence of [11, 12, 13])
+      d.handle(event(sequence, 'agent.event', { event_type: 'tool.completed', task_id: TASK }, AGENT));
+    expect(store.select('board')?.tasks[0]?.tool_calls).toBe(5);
+    // Read before 12 and 13 arrived, so it counts 3.
+    const older = d.reconcile(snapshot(11, { tasks: [makeTask({ task_id: TASK, tool_calls: 3 })] }));
+    expect(older.tasks[0]?.tool_calls).toBe(5);
+    store.setState({ board: older });
+    // A call after that snapshot counts on top of it.
+    d.handle(event(14, 'agent.event', { event_type: 'tool.failed', task_id: TASK }, AGENT));
+    expect(store.select('board')?.tasks[0]?.tool_calls).toBe(6);
+    // A snapshot that counted more than the page saw raises it.
+    expect(
+      d.reconcile(snapshot(16, { tasks: [makeTask({ task_id: TASK, tool_calls: 8 })] })).tasks[0]?.tool_calls,
+    ).toBe(8);
   });
 
   it('measures the last tool from its policy decision to its completion, per agent', () => {

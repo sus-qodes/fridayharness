@@ -46,6 +46,8 @@ windows = { version = "0.62", features = [
   "Win32_Networking_WinSock",
   "Win32_Security",
   "Win32_Security_Credentials",
+  # The per-user Run entry ("Start Friday when I sign in", autostart.rs).
+  "Win32_System_Registry",
   "Win32_System_StationsAndDesktops",
   "Win32_System_Threading",
   "Win32_UI_Input_KeyboardAndMouse",

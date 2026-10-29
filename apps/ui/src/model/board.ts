@@ -49,7 +49,7 @@ export interface BoardOptions {
 
 export interface Progress {
   completed: number;
-  /** Every task of the goal except cancelled and abandoned ones. */
+  /** Every task of the goal except cancelled and abandoned ones, listed in the snapshot or not. */
   total: number;
 }
 
@@ -153,6 +153,7 @@ export function emptyBoard(snapshot: UiSnapshot | null = null): Board {
   };
 }
 
+/** Progress over the tasks given: only for a goal the snapshot carries no totals for. */
 export function goalProgress(tasks: readonly Pick<SnapshotTask, 'status'>[]): Progress {
   let completed = 0;
   let total = 0;
@@ -214,7 +215,9 @@ export function deriveBoard(snapshot: UiSnapshot | null, opts: BoardOptions = { 
       ghostIds: [],
       active: plans.active,
       proposed: plans.proposed,
-      progress: goalProgress(ids.map((id) => allTasks.get(id) as SnapshotTask)),
+      // The snapshot's totals cover tasks its list leaves out (finished a day ago, past the cap).
+      progress:
+        snapshot.goal_progress?.[goal.goal_id] ?? goalProgress(ids.map((id) => allTasks.get(id) as SnapshotTask)),
       integration: integrationSummary(ids.map((id) => snapshot.integrations[id])),
       dropped: [],
     };

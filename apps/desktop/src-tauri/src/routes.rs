@@ -96,6 +96,9 @@ pub const PREFIX: &str = "/api/v1/projects/";
 pub static ROUTES: &[Route] = &[
     // ---- board and events
     get("ui/snapshot", &[]),
+    // The interface's preferences, kept by the project (`{prefs}` both ways).
+    get("ui/prefs", &[]),
+    post("ui/prefs"),
     get("events", &["since", "limit", "type"]),
     Route { method: Method::Get, template: "events/stream", query: &["since"], owner: Owner::Stream },
     // ---- tasks
@@ -529,6 +532,17 @@ mod tests {
         assert!(req("GET", &p("graph/query?path=src%2Findex.ts&depth=2")).is_ok());
         assert!(req("GET", &p("events?since=4&limit=200&type=task.created&type=task.updated")).is_ok());
         assert!(req("POST", &p("agent-processes/claude-1/stop")).is_ok());
+    }
+
+    #[test]
+    fn the_project_preferences_are_read_and_saved() {
+        let c = req("GET", &p("ui/prefs")).unwrap();
+        assert_eq!(c.route.owner, Owner::Request);
+        let prefs = json!({"prefs": {"friday.audio.muted": true}});
+        assert!(for_request("POST", &p("ui/prefs"), Some(&prefs), PID, PORT).is_ok());
+        assert!(refused("GET", &p("ui/prefs?x=1")));
+        assert!(for_request("GET", &p("ui/prefs"), Some(&prefs), PID, PORT).is_err());
+        assert!(for_confirm("POST", &p("ui/prefs"), Some(&prefs), PID, PORT).is_err());
     }
 
     #[test]

@@ -3,7 +3,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { makeContext } from '../test/context.js';
 import { makeRun, makeSnapshot, makeTask } from '../test/fixtures.js';
 import { h } from '../ui/dom.js';
-import { _setRememberedMode, createDiffViewer, fileLabels, fileNotice, renderFileDiff } from './diff-viewer.js';
+import {
+  _setRememberedMode,
+  createDiffViewer,
+  fileLabels,
+  fileNotice,
+  NO_NEWLINE,
+  renderFileDiff,
+  unchangedNotice,
+} from './diff-viewer.js';
 
 const IMG = '<img src=x onerror=alert(1)>';
 const BIDI = '\u202E';
@@ -105,8 +113,59 @@ describe('renderFileDiff', () => {
     const more = holder.querySelector<HTMLButtonElement>('.dr-more');
     expect(more?.textContent).toBe('Show the remaining 200 lines');
     more?.click();
-    expect(holder.querySelectorAll('.dr-row')).toHaveLength(300);
+    expect(holder.querySelectorAll('.dr-row:not(.dr-eof)')).toHaveLength(300);
+    // The text has no final newline: git's mark follows its last line.
+    expect(holder.querySelectorAll('.dr-eof')).toHaveLength(1);
     expect(holder.querySelector('.dr-more')).toBeNull();
+  });
+
+  describe('the final newline', () => {
+    const rowKinds = (el: Element) =>
+      [...el.querySelectorAll('.dr-rows > .dr-row')].map((r) =>
+        r.classList.contains('dr-eof') ? 'eof' : (r.classList[1] ?? '').replace('dr-', ''),
+      );
+
+    it('shows removing it, never "the same on both sides"', () => {
+      const f = file({ before: 'export const n = 1;\n', after: 'export const n = 1;' });
+      const el = renderFileDiff(f, { mode: 'unified' });
+      expect(el.textContent).not.toContain('the same on both sides');
+      expect(rowKinds(el)).toEqual(['del', 'add', 'eof']);
+      expect(el.querySelector('.dr-eof')?.textContent).toBe('\\No newline at end of file');
+      expect(el.querySelector('.dr-hunk')?.textContent).toBe('@@ -1,1 +1,1 @@');
+    });
+
+    it('shows adding it, with the mark after the old line', () => {
+      const el = renderFileDiff(file({ before: 'a\nb', after: 'a\nb\n' }), { mode: 'unified' });
+      expect(rowKinds(el)).toEqual(['context', 'del', 'eof', 'add']);
+    });
+
+    it('marks the side without it in the side-by-side view', () => {
+      const el = renderFileDiff(file({ before: 'a\n', after: 'a' }), { mode: 'split' });
+      const marks = el.querySelector('.dr-eof-pair');
+      expect(marks).not.toBeNull();
+      expect(marks?.children[0]?.classList.contains('dr-side-empty')).toBe(true);
+      expect(marks?.children[1]?.textContent).toContain(NO_NEWLINE);
+    });
+
+    it('shows the newline of an otherwise empty file as an empty line', () => {
+      const added = renderFileDiff(file({ before: '', after: '\n' }), { mode: 'unified' });
+      expect(rowKinds(added)).toEqual(['add']);
+      expect(added.querySelector('.dr-notice')).toBeNull();
+      const removed = renderFileDiff(file({ before: '\n', after: '' }), { mode: 'unified' });
+      expect(rowKinds(removed)).toEqual(['del']);
+    });
+
+    it('says what differs when no line does', () => {
+      const notice = (o: Partial<TaskDiffFile>) =>
+        renderFileDiff(file(o), { mode: 'unified' }).querySelector('.dr-notice')?.textContent;
+      expect(notice({ before: 'a\r\nb\r\n', after: 'a\nb\n' })).toBe('Only the line endings differ (CRLF and LF).');
+      expect(notice({ before: null, after: '', change: 'added' })).toBe('An empty file was added.');
+      expect(notice({ before: '', after: null, change: 'deleted' })).toBe('An empty file was deleted.');
+      expect(notice({ before: 'a\n', after: 'a\n', change: 'renamed' })).toBe(
+        'The contents are the same on both sides.',
+      );
+      expect(unchangedNotice(file({ before: 'x', after: 'x' }))).toBe('The contents are the same on both sides.');
+    });
   });
 
   it('says when a side is over the cap', () => {

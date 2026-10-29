@@ -118,19 +118,21 @@ The page imports `@tauri-apps/api/core` only in `apps/ui/src/platform/tauri-tran
 
 | Command | Arguments | Answer | Notes |
 |---|---|---|---|
-| `friday_request` | `method: 'GET'\|'POST'`, `path` (with query), `body?`, `timeoutMs?` (default 15 000, at most 900 000), `idempotencyKey?` | the daemon's JSON (`null` when empty) | allowlisted routes only; refuses every route `confirm_and_send` owns and any body asking for `danger-full-access` |
+| `friday_request` | `method: 'GET'\|'POST'`, `path` (with query), `body?`, `timeoutMs?` (default 15 000, from 1 000 up to 3 700 000, the page's longest budget: verification), `idempotencyKey?` | the daemon's JSON (`null` when empty) | allowlisted routes only; refuses every route `confirm_and_send` owns and any body asking for `danger-full-access`; a test reads `apps/ui/src/api/timeouts.ts` and fails if a budget there is above the ceiling |
 | `confirm_and_send` | `method`, `path`, `body?` | the daemon's JSON | for the routes it owns (below) and danger bodies; shows a native dialog when Rust decides one is needed |
 | `stream_open` | `since: number`, `channel: Channel<StreamMessage>` | stream id | resolves once the daemon accepted the stream |
 | `stream_close` | `id` | — | shuts the connection; the reading thread ends at once |
 | `project_info` | — | `{project_id, name, root, port, url, ui_api: 1}` | `url` is `http://127.0.0.1:<port>` |
 | `daemon_status` | — | `{state, message?}`; state `starting`, `ready`, `stopping`, `stopped`, `failed` or `no_project` | also pushed as event `daemon-status` |
 | `stop_daemon` | — | — | native confirmation, then `POST /admin/shutdown` with the operator token; waits for the process to exit (2 min) |
-| `restart_daemon` | — | — | stop, then start as at launch |
+| `restart_daemon` | — | — | native confirmation, then stop and start as at launch; a cancel answers 400 `DESKTOP-1003`, which the page takes as "cancelled", not as an error |
 | `notch_rect` | `x, y, w, h` (CSS pixels of the Notch window) | — | Notch window only; a rectangle at most 4.5 px high is the wake strip |
 | `notch_keyboard` | `take: boolean` | — | Notch window only; `true` makes the window focusable and focuses it, `false` restores and gives the keyboard back to the window that had it |
-| `show_studio` | `target?: {focus_task?, approval_id?, panel?}` | — | shows and focuses the Studio and sends it `studio-deeplink` with `target` (ids `[A-Za-z0-9_-]`, panel `[a-z-]`) |
+| `show_studio` | `target?: {focus_task?, approval_id?, panel?, id?, tab?, path?, reach?}` | — | shows and focuses the Studio and sends it `studio-deeplink` with `target`. Rules (the same in the Studio's receiver, `apps/ui/src/desktop/boot.ts`): `focus_task`, `approval_id`, `id` `[A-Za-z0-9_-]{1,128}`; `panel` `[a-z-]{1,32}`; `tab` `^[a-z][a-z0-9-]{0,31}$`; `path` 1–1 024 characters, no control character; `reach` `once`, `run` or `task`. One bad field refuses the whole target (`DESKTOP-1007`), so the Notch leaves out a tab or path that breaks its rule |
 | `set_tray_state` | `state: 'idle'\|'working'\|'waiting'\|'error'`, `countsLine`, `paused?`, `muted?` | — | the tray icon, status line and tooltip; Pause/Resume and Mute follow `paused` and `muted` |
-| `notify` | `title`, `body` | `boolean`: sent | Notch window only; sent only while the Notch is parked (Show Notch off) or the screen is locked; at most 10 a minute |
+| `notify` | `title`, `body`, `test?` | `boolean`: handed to Windows | Notch window only; sent only while the Notch is parked (Show Notch off) or the screen is locked; at most 10 a minute. With `test`: from either window, at once, at most 3 a minute on a budget of its own (then 429 `DESKTOP-1008`). The notification plugin queues the toast and drops Windows' answer, so `true` never means it appeared, and `false` means it could not be prepared or was not sent |
+| `get_autostart` | — | `boolean` | whether the per-user Run entry `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` → `Friday` starts this exe |
+| `set_autostart` | `enabled: boolean` | `boolean`: on now | writes the entry (this exe's path in quotes, no argument: the app opens the last project) or removes it; a path holding a quote or a control character, or over 260 characters, is refused; failure `DESKTOP-2007` |
 | `get_shortcuts` | — | `[{id, accel, state, note?}]`, state `registered`, `in_use`, `skipped` or `invalid` | ids `studio`, `notch`, `halt` |
 | `set_shortcut` | `id`, `accel` (`Ctrl+Alt+Shift+K`) | the new list | stored in `desktop.json` |
 | `open_in_editor` | `path` (absolute, or relative to the root), `line?` | — | only existing files inside the project root or the `friday-worktrees` folder; opens `vscode://file/<path>[:line]` with `ShellExecuteW` (no command line is built) |
@@ -159,10 +161,12 @@ A failed command rejects with `{status, body}`: `status` is the daemon's HTTP st
 | `DESKTOP-1005` | 400 | too long to show in a dialog |
 | `DESKTOP-1006` | 409 | the policy changed since it was shown |
 | `DESKTOP-1007` | 400 | a bad argument |
+| `DESKTOP-1008` | 429 | three test notifications went out in the last minute |
 | `DESKTOP-2000` | 0 | the daemon was not reached |
 | `DESKTOP-2001` | 0 | the port is held by a process other than the daemon in `daemon.json` (the token was not sent) |
 | `DESKTOP-2002` | 0 | no project is open yet |
 | `DESKTOP-2003`–`2006` | 0/500 | no install, no `vscode://` handler, no sign-in file, a CLI command failed |
+| `DESKTOP-2007` | 500 | the sign-in entry could not be written or removed |
 
 ### Channel messages (`stream_open`)
 
@@ -174,7 +178,7 @@ A failed command rejects with `{status, body}`: `status` is the daemon's HTTP st
 |---|---|---|
 | `cursor` | Notch | `{x, y}`: the cursor in the Notch window's CSS pixels (outside the window too), at most every 16 ms while it moves, not while the island is the wake strip or the Notch is parked |
 | `notch-open` | Notch | `{focus: true}` (the Notch shortcut; the window already has the keyboard) |
-| `studio-deeplink` | Studio | `{focus_task?, approval_id?, panel?}` (`show_studio`, the tray's Settings… sends `{panel: "settings"}`) |
+| `studio-deeplink` | Studio | `{focus_task?, approval_id?, panel?, id?, tab?, path?, reach?}` (`show_studio`, rules above; the tray's Settings… sends `{panel: "settings"}`; the Notch sends `{panel: "agents", tab: "routing"}` for Routing and `{panel: "diff", id: <task>, path}` from its file ticker) |
 | `open-halt` | Studio | none (the tray's Halt…, the halt shortcut) |
 | `toggle-mute` | all | `{muted}` (the tray's Mute sounds) |
 | `daemon-status` | all | `{state, message?}` |
@@ -189,7 +193,7 @@ A failed command rejects with `{status, body}`: `status` is the daemon's HTTP st
 
 ## Verifying the shell
 
-`cargo test` runs 65 unit tests (two more with `--ignored`: one against a real project, one that reports which Ctrl+Alt+Shift letters type a character on the installed layouts): the allowlist (dot segments, encoded dots, slashes and backslashes in both cases, `//`, backslashes, NUL and control characters, a foreign project id, `/admin`, `/hooks`, `/protocol`, `harness-sessions/bind`, `ui/login-codes`, `ui/logout`, a second `?`, stray queries, every confirm-owned route refused by `friday_request`, danger bodies), the HTTP head and chunked decoding, the dialog escaping and approval rules, the SSE parser, the project key against values computed with Node and the SDK's algorithm, `daemon.json` checks, the TCP-table pid check on a real loopback connection, placement and hit-test math, shortcuts and the AltGr rule, paths the page may open.
+`cargo test` runs 74 unit tests (two more with `--ignored`: one against a real project, one that reports which Ctrl+Alt+Shift letters type a character on the installed layouts): the allowlist (dot segments, encoded dots, slashes and backslashes in both cases, `//`, backslashes, NUL and control characters, a foreign project id, `/admin`, `/hooks`, `/protocol`, `harness-sessions/bind`, `ui/login-codes`, `ui/logout`, a second `?`, stray queries, every confirm-owned route refused by `friday_request`, danger bodies), the HTTP head and chunked decoding, the dialog escaping and approval rules, the SSE parser, the project key against values computed with Node and the SDK's algorithm, `daemon.json` checks, the TCP-table pid check on a real loopback connection, placement and hit-test math, shortcuts and the AltGr rule, paths the page may open, the deep link's fields, every time budget of the page's table passing the proxy unclamped, the preference routes, the sign-in entry (on a scratch key under `HKCU\Software`, removed when the test ends) and the two notification budgets.
 
 `cargo test -- --ignored` with `FRIDAY_DESKTOP_TEST_PROJECT` (a folder inside a project) and `FRIDAY_DESKTOP_TEST_KEY` (the SDK's key for it) checks the project discovery against a real repository.
 
@@ -210,6 +214,6 @@ To read the pages that way: start the exe with `WEBVIEW2_ADDITIONAL_BROWSER_ARGU
 
 ### Not verified (manual checks of plan §10.4, on an unlocked screen)
 
-Clicks on the island with the real cursor over it, approving from the Notch without stealing focus from the editor, typing in the floating Notch, the Studio's modal opened from the Notch by a high-risk approval, the first alert's sound, the tray items and shortcuts by hand, the native dialogs and the credential prompt by hand, notifications (from `target\release` Windows shows them as PowerShell's; an exe run from elsewhere needs a Start-menu shortcut carrying the app id `dev.friday.desktop`, or Windows drops them), monitor and DPI changes, route 1.
+Clicks on the island with the real cursor over it, approving from the Notch without stealing focus from the editor, typing in the floating Notch, the Studio's modal opened from the Notch by a high-risk approval, the first alert's sound, the tray items and shortcuts by hand, the native dialogs and the credential prompt by hand, notifications (from `target\release` Windows shows them as PowerShell's; an exe run from elsewhere needs a Start-menu shortcut carrying the app id `dev.friday.desktop`, or Windows drops them), "Send a test notification" from both kinds of build, "Start Friday when I sign in" through an actual sign-in, monitor and DPI changes, route 1.
 
 `eval` inside the probe's script was not blocked: scripts the host injects (WebView2 `ExecuteScript`) are not subject to the page's CSP, so the probe cannot show that page scripts cannot `eval`; the CSP has no `'unsafe-eval'` and Tauri adds none.

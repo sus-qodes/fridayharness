@@ -1,17 +1,21 @@
 /**
  * The ingestion dispatcher (handoff Part 07 §4, plan §7.2): applies what an event shows between
  * snapshots (tool activity, file ticker, pulses, logs, usage, reactions, stale line counts, the
- * arrival and removal of approvals) and says whether the event changed domain state, in which case
- * the snapshot is read again. It derives no other domain state (plan FD-08).
+ * arrival and removal of approvals and questions) and says whether the event changed domain state,
+ * in which case the snapshot is read again. It derives no other domain state (plan FD-08).
  *
- * Approvals are the one place it edits the board itself: a requested approval is shown from its
- * event payload in the same tick, and a decided or revoked one leaves the pending list at once, on
- * every surface, before the re-read. `reconcile` keeps those edits over a snapshot read before
- * them, until a snapshot at or after their event replaces them.
+ * Approvals and questions are the places it edits the board itself: a requested one is shown from
+ * its event payload in the same tick, and a decided, revoked or answered one leaves the pending
+ * list at once, on every surface, before the re-read. `reconcile` keeps those edits over a
+ * snapshot read before them, until a snapshot at or after their event replaces them.
+ *
+ * A task's tool count is the third: a finished tool call is transient and causes no re-read, so it
+ * adds one to the card itself, and `reconcile` keeps the larger of a snapshot's count and the card's.
  */
-import type { ApprovalRow, DomainEvent, UiSnapshot } from '@friday/protocol';
+import type { ApprovalRow, DomainEvent, EscalationView, UiSnapshot } from '@friday/protocol';
 import type { ActivityState, AgentActivity, FridayStore, LogLine, ReactionKind, ToolKind } from '../store/state.js';
 import { cleanText, truncate } from '../ui/format.js';
+import { approvalFromEvent, escalationFromEvent, record, str, strings } from './rows.js';
 
 /** Events that change no view of the snapshot: shown from the stream only. */
 const TRANSIENT = new Set([
@@ -38,7 +42,7 @@ const LOG_LIMIT = 300;
 const FILES_LIMIT = 12;
 const PULSE_LIMIT = 80;
 const REACTION_LIMIT = 20;
-/** Local approval edits remembered for `reconcile` (they end when a later snapshot arrives). */
+/** Local edits of each kind remembered for `reconcile` (they end when a later snapshot arrives). */
 const LOCAL_LIMIT = 400;
 const DURATION_AGENTS_LIMIT = 500;
 
@@ -61,62 +65,16 @@ function toolKind(value: unknown): ToolKind {
   }
 }
 
-function str(v: unknown): string | null {
-  return typeof v === 'string' && v.length > 0 ? v : null;
-}
-
-function strings(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0) : [];
-}
-
-function record(v: unknown): Record<string, unknown> {
-  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
-}
-
 function emptyAgent(): AgentActivity {
   return { current: null, log: [], usage: null, model: null };
 }
 
-/** The pending approval row an `approval.requested` payload describes, or null when it is not one. */
-export function approvalFromEvent(event: DomainEvent): ApprovalRow | null {
-  const a = record(record(event.payload).approval);
-  const id = str(a.approval_id);
-  if (!id || (a.status !== undefined && a.status !== 'pending')) return null;
-  const risk = a.risk === 'low' || a.risk === 'medium' || a.risk === 'high' ? a.risk : null;
-  const reuse = a.reuse === 'run' || a.reuse === 'task' ? a.reuse : 'once';
-  return {
-    approval_id: id,
-    project_id: event.project_id,
-    task_id: str(a.task_id),
-    run_id: str(a.run_id),
-    requested_by_kind: event.actor?.kind ?? 'agent',
-    requested_by_id: event.actor?.id ?? '',
-    capability: str(a.capability) ?? 'unknown',
-    target: typeof a.target === 'string' ? a.target : null,
-    purpose: typeof a.purpose === 'string' ? a.purpose : null,
-    risk,
-    status: 'pending',
-    decided_by_kind: null,
-    decided_by_id: null,
-    decided_at: null,
-    expires_at: str(a.expires_at),
-    created_at: event.occurred_at,
-    reuse,
-    policy_version: str(a.policy_version),
-    uses: 0,
-    last_used_at: null,
-    note: null,
-    decided_via: null,
-    expired: false,
-  };
-}
-
 let nextId = 1;
 
-interface LocalEdit {
+interface LocalEdit<T> {
   sequence: number;
-  /** Present for an approval shown before the snapshot has it; absent for a removal. */
-  row: ApprovalRow | null;
+  /** Present for an item shown before the snapshot has it; absent for a removal. */
+  row: T | null;
 }
 
 /** How long an approval decided here stays out of older snapshots. */
@@ -127,7 +85,8 @@ export class Dispatcher {
   readonly #toolStart = new Map<string, { tool: string; at: number }>();
   /** Per agent key: how long the last tool took, from `policy.evaluated` to its completion. */
   readonly #toolDuration = new Map<string, number>();
-  readonly #local = new Map<string, LocalEdit>();
+  readonly #local = new Map<string, LocalEdit<ApprovalRow>>();
+  readonly #questions = new Map<string, LocalEdit<EscalationView>>();
 
   constructor(private readonly store: FridayStore) {}
 
@@ -181,9 +140,17 @@ export class Dispatcher {
         if (id) this.#removeApproval(id, event.sequence);
         break;
       }
-      case 'escalation.requested':
+      case 'escalation.requested': {
+        const row = escalationFromEvent(event);
+        if (row) this.#addQuestion(row, event.sequence);
         this.#react('question', now);
         break;
+      }
+      case 'escalation.answered': {
+        const id = str(p.escalation_id);
+        if (id) this.#removeQuestion(id, event.sequence);
+        break;
+      }
       case 'plan.proposed':
         this.#react('plan', now);
         break;
@@ -236,29 +203,16 @@ export class Dispatcher {
   }
 
   /**
-   * The snapshot with the approval edits of events it does not include yet (its `head` is before
-   * them); edits it covers are forgotten.
+   * The snapshot with the approval and question edits of events it does not include yet (its
+   * `head` is before them); edits it covers are forgotten.
    */
   reconcile(raw: UiSnapshot): UiSnapshot {
-    const board = this.#withoutDecided(raw);
-    if (!this.#local.size) return board;
-    let approvals = board.approvals;
-    let changed = false;
-    for (const [id, edit] of this.#local) {
-      if (edit.sequence <= board.head) {
-        this.#local.delete(id);
-        continue;
-      }
-      const has = approvals.some((a) => a.approval_id === id);
-      if (edit.row && !has) {
-        approvals = [...approvals, edit.row];
-        changed = true;
-      } else if (!edit.row && has) {
-        approvals = approvals.filter((a) => a.approval_id !== id);
-        changed = true;
-      }
-    }
-    return changed ? { ...board, approvals } : board;
+    const board = this.#withToolCalls(this.#withoutDecided(raw));
+    const approvals = applyEdits(this.#local, board.approvals, board.head, (a) => a.approval_id);
+    const escalations = applyEdits(this.#questions, board.escalations, board.head, (e) => e.escalation_id);
+    return approvals === board.approvals && escalations === board.escalations
+      ? board
+      : { ...board, approvals, escalations };
   }
 
   /**
@@ -280,6 +234,25 @@ export class Dispatcher {
     return { ...board, approvals: board.approvals.filter((a) => !(a.approval_id in keep)) };
   }
 
+  /**
+   * Each task's tool count as the larger of the snapshot's and the board's: a count never goes
+   * down, so the larger is the newer, and a snapshot read before calls the card already counted
+   * does not take them away.
+   */
+  #withToolCalls(board: UiSnapshot): UiSnapshot {
+    const current = this.store.select('board');
+    if (!current) return board;
+    const counted = new Map(current.tasks.map((t) => [t.task_id, t.tool_calls]));
+    let raised = false;
+    const tasks = board.tasks.map((t) => {
+      const n = counted.get(t.task_id);
+      if (typeof n !== 'number' || typeof t.tool_calls !== 'number' || n <= t.tool_calls) return t;
+      raised = true;
+      return { ...t, tool_calls: n };
+    });
+    return raised ? { ...board, tasks } : board;
+  }
+
   /** Drops pulses older than `maxAgeMs` (the canvas calls this as it draws). */
   prunePulses(now: number, maxAgeMs = 1600): void {
     const a = this.store.select('activity');
@@ -293,13 +266,13 @@ export class Dispatcher {
     this.store.setState({ activity: next });
   }
 
-  #remember(id: string, edit: LocalEdit): void {
-    this.#local.delete(id);
-    this.#local.set(id, edit);
-    while (this.#local.size > LOCAL_LIMIT) {
-      const oldest = this.#local.keys().next().value;
+  #remember<T>(edits: Map<string, LocalEdit<T>>, id: string, edit: LocalEdit<T>): void {
+    edits.delete(id);
+    edits.set(id, edit);
+    while (edits.size > LOCAL_LIMIT) {
+      const oldest = edits.keys().next().value;
       if (oldest === undefined) break;
-      this.#local.delete(oldest);
+      edits.delete(oldest);
     }
   }
 
@@ -311,17 +284,38 @@ export class Dispatcher {
     // A snapshot that already covers this event and does not list the approval: it was decided.
     if (current && sequence <= current.head && !current.approvals.some((a) => a.approval_id === row.approval_id))
       return;
-    this.#remember(row.approval_id, { sequence, row });
+    this.#remember(this.#local, row.approval_id, { sequence, row });
     const board = this.store.select('board');
     if (!board || board.approvals.some((a) => a.approval_id === row.approval_id)) return;
     this.store.setState({ board: { ...board, approvals: [...board.approvals, row] } });
   }
 
   #removeApproval(id: string, sequence: number): void {
-    this.#remember(id, { sequence, row: null });
+    this.#remember(this.#local, id, { sequence, row: null });
     const board = this.store.select('board');
     if (!board?.approvals.some((a) => a.approval_id === id)) return;
     this.store.setState({ board: { ...board, approvals: board.approvals.filter((a) => a.approval_id !== id) } });
+  }
+
+  #addQuestion(row: EscalationView, sequence: number): void {
+    const removed = this.#questions.get(row.escalation_id);
+    if (removed && !removed.row) return; // answered before this arrived (replayed out of order)
+    const board = this.store.select('board');
+    const listed = !!board?.escalations.some((e) => e.escalation_id === row.escalation_id);
+    // A snapshot that already covers this event and does not list the question: it was answered.
+    if (board && sequence <= board.head && !listed) return;
+    this.#remember(this.#questions, row.escalation_id, { sequence, row });
+    if (!board || listed) return;
+    this.store.setState({ board: { ...board, escalations: [...board.escalations, row] } });
+  }
+
+  #removeQuestion(id: string, sequence: number): void {
+    this.#remember(this.#questions, id, { sequence, row: null });
+    const board = this.store.select('board');
+    if (!board?.escalations.some((e) => e.escalation_id === id)) return;
+    this.store.setState({
+      board: { ...board, escalations: board.escalations.filter((e) => e.escalation_id !== id) },
+    });
   }
 
   #agentKeyOf(event: DomainEvent): string | null {
@@ -362,6 +356,22 @@ export class Dispatcher {
     const ui = this.store.select('ui');
     if (ui.staleStats[taskId] === now) return;
     this.store.patch('ui', { staleStats: { ...ui.staleStats, [taskId]: now } });
+  }
+
+  /**
+   * A finished tool call: one more on its task's card, whose count would otherwise stand still
+   * until a domain event re-reads the snapshot. Only for an event after the snapshot the board
+   * came from, which already counted those up to its head.
+   */
+  #countTool(taskId: string | null, sequence: number): void {
+    const board = this.store.select('board');
+    if (!board || !taskId || sequence <= board.head) return;
+    const i = board.tasks.findIndex((t) => t.task_id === taskId);
+    const task = board.tasks[i];
+    if (!task || typeof task.tool_calls !== 'number') return;
+    const tasks = board.tasks.slice();
+    tasks[i] = { ...task, tool_calls: task.tool_calls + 1 };
+    this.store.setState({ board: { ...board, tasks } });
   }
 
   #startTool(agentKey: string, tool: string, now: number): void {
@@ -421,6 +431,8 @@ export class Dispatcher {
     const changed = [...strings(p.changed_paths), ...strings(data.changed_paths)];
     const unmediated = type === 'host.unmediated_write' ? [...strings(data.paths), ...strings(p.paths)] : [];
     if ((type === 'tool.completed' && changed.length) || unmediated.length) this.#markStale(taskId, now);
+    // Counted only when the payload names the task, as the daemon counts (a count must never fall on reload).
+    if (type === 'tool.completed' || type === 'tool.failed') this.#countTool(str(p.task_id), event.sequence);
     const agentKey = this.#agentKeyOf(event) ?? this.#agentKeyOfRun(runId) ?? this.#agentKeyOfTask(taskId);
     if (!agentKey) return;
     const a = this.store.select('activity');
@@ -533,6 +545,24 @@ export class Dispatcher {
 
 function clean(path: string): string {
   return truncate(cleanText(path), 200);
+}
+
+/**
+ * A snapshot list with the local edits of events after `head` applied; edits at or before it are
+ * forgotten. The same list when nothing changed.
+ */
+function applyEdits<T>(edits: Map<string, LocalEdit<T>>, list: T[], head: number, idOf: (item: T) => string): T[] {
+  let out = list;
+  for (const [id, edit] of edits) {
+    if (edit.sequence <= head) {
+      edits.delete(id);
+      continue;
+    }
+    const has = out.some((x) => idOf(x) === id);
+    if (edit.row && !has) out = [...out, edit.row];
+    else if (!edit.row && has) out = out.filter((x) => idOf(x) !== id);
+  }
+  return out;
 }
 
 function appendLog(log: LogLine[], line: LogLine): LogLine[] {

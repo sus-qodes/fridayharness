@@ -88,7 +88,7 @@ export interface Reaction {
   label?: string;
 }
 
-export type { DrawerKind } from '../shell/context.js';
+export type { DrawerBack, DrawerKind } from '../shell/context.js';
 
 export interface UiState {
   selectedTaskId: string | null;

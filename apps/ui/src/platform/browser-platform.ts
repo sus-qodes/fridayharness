@@ -1,9 +1,15 @@
 /**
  * The browser platform (plan FD-07, §7.7 "Open in VS Code", ERRATA F39): files open in VS Code
- * through `vscode://file/<absolute path>[:line]` links, and text goes to the clipboard when the
- * page may write it. Relative paths are resolved against the project root when one is known.
+ * through `vscode://file/<absolute path>[:line]` links, text goes to the clipboard when the
+ * page may write it, and notification permission comes from the Notification API (FD-25).
+ * Relative paths are resolved against the project root when one is known.
  */
-import type { Platform } from '../shell/context.js';
+import type { NotificationAnswer, Platform } from '../shell/context.js';
+
+/** What the page needs of the Notification API. */
+export interface NotificationApi {
+  requestPermission?: () => Promise<string>;
+}
 
 export interface BrowserPlatformEnv {
   /** Opens a link the operating system hands to VS Code (default: a detached anchor's click). */
@@ -11,6 +17,8 @@ export interface BrowserPlatformEnv {
   clipboard?: Pick<Clipboard, 'writeText'> | null;
   /** The project root, for paths given relative to it. */
   root?: () => string | null | undefined;
+  /** The Notification API (default: the page's own, read when asked). */
+  notifications?: NotificationApi | null;
 }
 
 /** Characters that never belong in a path the page opens. */
@@ -88,6 +96,19 @@ export function browserPlatform(env: BrowserPlatformEnv = {}): Platform {
         return true;
       } catch {
         return false;
+      }
+    },
+    async requestNotifications(): Promise<NotificationAnswer> {
+      const api =
+        env.notifications !== undefined
+          ? env.notifications
+          : (globalThis as { Notification?: NotificationApi }).Notification;
+      if (!api || typeof api.requestPermission !== 'function') return 'unsupported';
+      try {
+        const answer = await api.requestPermission();
+        return answer === 'granted' || answer === 'denied' ? answer : 'default';
+      } catch {
+        return 'denied';
       }
     },
   };

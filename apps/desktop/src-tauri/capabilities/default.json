@@ -25,6 +25,8 @@
     "allow-open-in-editor",
     "allow-open-in-browser",
     "allow-store-key",
-    "allow-allow-spending"
+    "allow-allow-spending",
+    "allow-get-autostart",
+    "allow-set-autostart"
   ]
 }

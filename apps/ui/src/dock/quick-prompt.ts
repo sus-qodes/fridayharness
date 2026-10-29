@@ -5,7 +5,7 @@
  * line decides it, and only while the waiting approvals are the ones that were shown (FD-28).
  */
 import { hasHidden } from '../model/text.js';
-import { type AppContext, type Component, openDrawer } from '../shell/context.js';
+import { type AppContext, type Component, openDrawer, openModal } from '../shell/context.js';
 import { h, replace } from '../ui/dom.js';
 import { icon } from '../ui/svg.js';
 import { openHalt, pauseFriday, pauseText, resumeFriday, resumeText } from './actions.js';
@@ -103,11 +103,13 @@ export function quickPrompt(ctx: AppContext, opts: QuickPromptOptions = {}): Com
     const r = await ctx.act(
       'Create a goal',
       () => ctx.api.createGoal({ request: text, constraints: [], outcomes: [], priority: 'normal', plan }),
-      plan ? 'Goal created: the Master Brain plans it' : 'Goal created: write its plan in the Studio',
+      plan ? 'Goal created: the Master Brain plans it' : 'Goal created: write its plan',
     );
     if (r) {
       ctx.refresh();
-      done('Goal created.');
+      // Without a planner nobody else writes the plan: its editor opens on the new goal.
+      if (!plan && r.goal_id) openModal(ctx, { kind: 'plan-editor', id: r.goal_id, mode: 'first' });
+      done(plan ? 'Goal created.' : 'Goal created: write its plan in the editor.');
     } else show('error', 'The goal was not created.');
   }
 

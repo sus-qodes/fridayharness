@@ -45,9 +45,18 @@ export interface Platform {
   openInEditor(path: string, line?: number): void;
   /** Copies text to the clipboard; resolves false when the page may not. */
   copy(text: string): Promise<boolean>;
+  /**
+   * Asks, from a user gesture, whether Friday may notify (plan FD-25). A browser asks its
+   * Notification API; the desktop shell sends its own notifications (plan §8.7), so the browser's
+   * permission says nothing there. Never rejects.
+   */
+  requestNotifications(): Promise<NotificationAnswer>;
   /** What only the desktop shell can do (plan §8.6); absent in a browser tab. */
   readonly desktop?: DesktopCommands;
 }
+
+/** A notification permission, or `unsupported` when there is no way to notify. */
+export type NotificationAnswer = 'granted' | 'denied' | 'default' | 'unsupported';
 
 /** A global shortcut of the desktop shell, as it registered it. */
 export interface DesktopShortcut {
@@ -62,8 +71,26 @@ export interface DesktopCommands {
   shortcuts(): Promise<DesktopShortcut[]>;
   /** Registers `accel` for the shortcut; answers the new list. */
   setShortcut(id: string, accel: string): Promise<DesktopShortcut[]>;
-  /** Stops Friday and starts it again (the shell asks natively first). */
-  restart(): Promise<void>;
+  /** Stops Friday and starts it again (the shell asks natively first); false when the human cancelled. */
+  restart(): Promise<boolean>;
+  /**
+   * Asks for the provider's key in Windows' own password prompt and stores it (FD-26): only the
+   * provider's name passes through the page. True once stored, false when the human cancelled.
+   */
+  storeKey(name: string): Promise<boolean>;
+  /** Lets this clone spend at most `budget` dollars a day, after a native confirmation; false when cancelled. */
+  allowSpending(budget: number): Promise<boolean>;
+  /** Whether the desktop app starts when the user signs in to Windows (plan §8.3). */
+  autostart(): Promise<boolean>;
+  /** Turns starting at sign-in on or off; answers whether it is on now. */
+  setAutostart(enabled: boolean): Promise<boolean>;
+  /**
+   * Hands a test notification to Windows now, whatever the Notch shows (plan §8.7). True when it
+   * was handed over, which is not that it appeared: Windows may hold it back without an error
+   * (Do Not Disturb, Focus, the app's own setting, an unpackaged build). False when the shell could
+   * not prepare it, so Windows was never asked.
+   */
+  testNotification(): Promise<boolean>;
 }
 
 /** The daemon routes a page needs to decide things, and the shell's helpers. */
@@ -98,6 +125,18 @@ export interface DrawerRequest {
   id?: string;
   tab?: string;
   path?: string;
+  /**
+   * Set when a dialog opened this drawer: the dialog closed first, because a drawer under a
+   * dialog takes no input, and this is the way back to it.
+   */
+  back?: DrawerBack;
+}
+
+/** The dialog a drawer was opened from: the drawer's Back button opens it again. */
+export interface DrawerBack {
+  modal: ModalRequest;
+  /** The button's words ("Back to verification"). */
+  label: string;
 }
 
 export type ModalKind =

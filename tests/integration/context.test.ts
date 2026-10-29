@@ -5,7 +5,7 @@
 import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ContextPacket, TaskView } from '@friday/protocol';
-import { useTestWorkspace } from '@friday/test-support';
+import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli, REPO_ROOT } from '../helpers/cli.js';
 import { startTestDaemon } from '../helpers/daemon.js';
@@ -31,6 +31,9 @@ describe('friday context explain (M4 gate, Part 12 §13)', () => {
         recursive: true,
       });
     }
+    // Committed before the task starts: a spawned agent works in a task worktree made from HEAD,
+    // and uncommitted files in the main checkout are not in it (LESSONS UI-73).
+    await deterministicGit(dir).commitAll('fixture-shop');
     const be = await FakeHarness.connect(td, { agentKey: 'be-1', role: 'backend' });
     const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
       summary: 'Add discount codes to checkout',

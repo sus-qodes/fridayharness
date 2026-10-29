@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../platform/transport.js';
+import { openModal } from '../shell/context.js';
+import { mountDrawerHost } from '../shell/drawer-host.js';
+import { LayerStack } from '../shell/layers.js';
+import { mountModalHost } from '../shell/modal-host.js';
 import { makeContext, type TestContext } from '../test/context.js';
 import { makeAgent, makeApproval, makeSnapshot, makeTask } from '../test/fixtures.js';
+import { h } from '../ui/dom.js';
 import { approvalModal, isFileTarget } from './approval-modal.js';
 import { requestReach } from './decisions.js';
 
@@ -266,7 +271,12 @@ describe('approval modal (macro)', () => {
     expect(m.el.querySelector('.gv-impact')?.textContent).toContain('test/pricing.test.ts');
     buttonNamed(m.el, 'Open the diff').click();
     expect(closed).toBe(1);
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: TASK, path: target });
+    expect(ctx.store.select('ui').drawer).toEqual({
+      kind: 'diff',
+      id: TASK,
+      path: target,
+      back: { modal: { kind: 'approval', id: APR }, label: 'Back to the approval' },
+    });
     m.destroy();
   });
 
@@ -287,5 +297,55 @@ describe('approval modal (macro)', () => {
     expect(isFileTarget(makeApproval({ capability: 'file.write', target: 'a.ts' }))).toBe(true);
     expect(isFileTarget(makeApproval({ capability: 'shell.git.push', target: 'git push' }))).toBe(false);
     expect(isFileTarget(makeApproval({ capability: 'file.read', target: null }))).toBe(false);
+  });
+});
+
+describe('the diff from the approval', () => {
+  it('opens on top, where it takes input, and Back returns to the approval', async () => {
+    const target = 'src/pricing.ts';
+    const ctx = makeContext({
+      snapshot: makeSnapshot({
+        agents: [makeAgent()],
+        tasks: [makeTask()],
+        approvals: [makeApproval({ capability: 'file.write', target, risk: 'medium' })],
+      }),
+      answers: {
+        [`GET /tasks/${TASK}/diff`]: {
+          task_id: TASK,
+          source: 'worktree',
+          root: 'C:/wt/abc',
+          base: 'a',
+          truncated: false,
+          notes: [],
+          files: [{ path: target, change: 'modified', added: 3, removed: 1, binary: false, protected: false }],
+        },
+        'GET /graph/query': { version: 'g1', node: { path: target }, dependencies: [], consumers: [], tests: [] },
+      },
+    });
+    const layers = new LayerStack(ctx.keys);
+    const drawers = mountDrawerHost(ctx, layers);
+    const modals = mountModalHost(ctx, layers);
+    document.body.append(drawers.el, modals.el);
+    ctx.registry.modal('approval', (c, r, close) => approvalModal(c, r, close));
+    ctx.registry.drawer('diff', () => ({ el: h('div', { class: 'diff-stub' }), title: 'Diff', destroy() {} }));
+    try {
+      openModal(ctx, { kind: 'approval', id: APR });
+      await flush();
+      buttonNamed(modals.el, 'Open the diff').click();
+      expect(ctx.store.select('ui').modal).toBeNull();
+      const drawer = drawers.el.querySelector<HTMLElement>('[role="dialog"]');
+      expect(drawer?.querySelector('.diff-stub')).not.toBeNull();
+      expect(layers.modalOpen()).toBe(false);
+      expect(layers.top()?.el).toBe(drawer);
+      buttonNamed(drawers.el, 'Back to the approval').click();
+      expect(ctx.store.select('ui').drawer).toBeNull();
+      expect(ctx.store.select('ui').modal).toEqual({ kind: 'approval', id: APR });
+      expect(drawers.el.querySelector('[role="dialog"]')).toBeNull();
+      expect(modals.el.querySelector('.gv-approval-modal')).not.toBeNull();
+    } finally {
+      drawers.destroy();
+      modals.destroy();
+      document.body.replaceChildren();
+    }
   });
 });

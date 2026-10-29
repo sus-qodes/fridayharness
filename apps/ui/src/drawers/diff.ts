@@ -17,6 +17,8 @@ export interface DiffLine {
   /** 1-based line number on the new side; null for a removed line. */
   newNo: number | null;
   text: string;
+  /** The last line of a side that does not end in a newline (git's "\ No newline at end of file"). */
+  noNewline?: boolean;
 }
 
 export interface Hunk {
@@ -44,13 +46,31 @@ export type Edit = { op: 'eq'; a: number; b: number } | { op: 'del'; a: number }
 
 /**
  * A text's lines: split at `\n`, a trailing `\r` dropped from each line, and no empty last line
- * for a final newline. `null` (no such side: an added or deleted file) has no lines.
+ * for a final newline (`endsInNewline` says whether there was one). `null` (no such side: an added
+ * or deleted file) has no lines.
  */
 export function splitLines(text: string | null | undefined): string[] {
   if (text === null || text === undefined || text === '') return [];
   const lines = text.split('\n');
   if (lines[lines.length - 1] === '') lines.pop();
   return lines.map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
+}
+
+/** Whether a text ends in a newline; its `splitLines` look the same either way. */
+export function endsInNewline(text: string | null | undefined): boolean {
+  return typeof text === 'string' && text.endsWith('\n');
+}
+
+/**
+ * The lines as the diff compares them. A last line without a final newline is not the same line as
+ * that text with one: git counts adding or removing the final newline as a change of the last line.
+ * No line holds `\n`, so the marked key cannot equal a real line.
+ */
+function compareKeys(lines: readonly string[], finalNewline: boolean): readonly string[] {
+  if (finalNewline || lines.length === 0) return lines;
+  const keys = [...lines];
+  keys[keys.length - 1] = `${keys[keys.length - 1]}\n`;
+  return keys;
 }
 
 /** Maps equal lines to equal integers, so the algorithm compares numbers. */
@@ -256,6 +276,10 @@ export function diffLines(
 ): LineDiff {
   const a = splitLines(before);
   const b = splitLines(after);
+  // The index of the line that ends its side without a newline, or -1.
+  const openA = endsInNewline(before) ? -1 : a.length - 1;
+  const openB = endsInNewline(after) ? -1 : b.length - 1;
+  const mark = (line: DiffLine, open: boolean): DiffLine => (open ? { ...line, noNewline: true } : line);
   const max = opts.maxLines ?? MAX_DIFF_LINES;
   const replaced = a.length > max || b.length > max;
   const lines: DiffLine[] = [];
@@ -263,21 +287,22 @@ export function diffLines(
   let removed = 0;
   if (replaced) {
     a.forEach((text, i) => {
-      lines.push({ kind: 'del', oldNo: i + 1, newNo: null, text });
+      lines.push(mark({ kind: 'del', oldNo: i + 1, newNo: null, text }, i === openA));
     });
     b.forEach((text, j) => {
-      lines.push({ kind: 'add', oldNo: null, newNo: j + 1, text });
+      lines.push(mark({ kind: 'add', oldNo: null, newNo: j + 1, text }, j === openB));
     });
     removed = a.length;
     added = b.length;
   } else {
-    for (const e of myers(a, b)) {
-      if (e.op === 'eq') lines.push({ kind: 'context', oldNo: e.a + 1, newNo: e.b + 1, text: a[e.a] as string });
+    for (const e of myers(compareKeys(a, openA < 0), compareKeys(b, openB < 0))) {
+      if (e.op === 'eq')
+        lines.push(mark({ kind: 'context', oldNo: e.a + 1, newNo: e.b + 1, text: a[e.a] as string }, e.a === openA));
       else if (e.op === 'del') {
-        lines.push({ kind: 'del', oldNo: e.a + 1, newNo: null, text: a[e.a] as string });
+        lines.push(mark({ kind: 'del', oldNo: e.a + 1, newNo: null, text: a[e.a] as string }, e.a === openA));
         removed++;
       } else {
-        lines.push({ kind: 'add', oldNo: null, newNo: e.b + 1, text: b[e.b] as string });
+        lines.push(mark({ kind: 'add', oldNo: null, newNo: e.b + 1, text: b[e.b] as string }, e.b === openB));
         added++;
       }
     }

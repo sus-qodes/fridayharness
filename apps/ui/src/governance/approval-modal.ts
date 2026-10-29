@@ -150,7 +150,7 @@ export function approvalModal(
     );
     void ctx.api.taskDiff(taskId, true).then(
       (diff) => {
-        if (!disposed) replace(diffBox, diffSummary(ctx, diff, target, taskId, close));
+        if (!disposed) replace(diffBox, diffSummary(ctx, diff, target, taskId, a.approval_id, close));
       },
       (e: unknown) => {
         if (!disposed) replace(diffBox, h('p', { class: 'muted' }, `The diff could not be read (${errorText(e)}).`));
@@ -391,13 +391,26 @@ export function approvalModal(
   };
 }
 
-function diffSummary(ctx: AppContext, diff: TaskDiff, target: string, taskId: string, close: () => void): HTMLElement {
+function diffSummary(
+  ctx: AppContext,
+  diff: TaskDiff,
+  target: string,
+  taskId: string,
+  approvalId: string,
+  close: () => void,
+): HTMLElement {
   const files = diff.files.slice(0, 40);
   const openDiff = button(
     [icon('file', 14), 'Open the diff'],
     () => {
+      // A drawer under this dialog takes no input: close first, and let the drawer come back here.
       close();
-      openDrawer(ctx, { kind: 'diff', id: taskId, path: target });
+      openDrawer(ctx, {
+        kind: 'diff',
+        id: taskId,
+        path: target,
+        back: { modal: { kind: 'approval', id: approvalId }, label: 'Back to the approval' },
+      });
     },
     { class: 'btn btn-ghost' },
   );

@@ -199,7 +199,20 @@ export type SnapshotTask = TaskView & {
   waiting_note: string | null;
   /** READY: why delegation left it waiting ("no agent is available …"). */
   delegation_note: string | null;
+  /**
+   * Tool calls its agents' hosts reported finished for it, completed or failed (`agent.event`
+   * `tool.completed` and `tool.failed`), over every attempt. A call Friday refused never ran and
+   * is not counted; Codex reports its commands and file changes only.
+   */
+  tool_calls: number;
 };
+
+/** A goal's tasks, counted over all of them (not only those the snapshot lists). */
+export interface GoalProgressView {
+  /** Every task of the goal except cancelled and abandoned ones. */
+  total: number;
+  completed: number;
+}
 
 /** An inbox item without its body (loaded when opened), with a short preview. */
 export type SnapshotInboxItem = Omit<InboxItem, 'body'> & { preview: string };
@@ -236,6 +249,11 @@ export interface UiSnapshot {
   verification: { checks: { name: string; kind: string; required: boolean }[]; auto_on_completion: boolean };
   counts: Record<string, number>;
   goals: GoalView[];
+  /**
+   * Per listed goal: its progress over all its tasks, including those `tasks` leaves out (finished
+   * more than a day ago, or past the list's cap).
+   */
+  goal_progress: Record<string, GoalProgressView>;
   plans: Record<string, { active: LivePlanVersion | null; proposed: LivePlanVersion | null }>;
   tasks: SnapshotTask[];
   runs: Record<string, RunView>;

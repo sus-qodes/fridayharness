@@ -51,7 +51,8 @@ import { goalDiff, taskDiff } from './task-diff.js';
 import type { ToolJudge } from './tool-policy.js';
 import { statusPageHtml } from './ui.js';
 import type { UiAuth } from './ui-auth.js';
-import { buildUiSnapshot, type UiSnapshotInfo } from './ui-snapshot.js';
+import { UI_PREFS_MAX_BYTES, UiPrefs } from './ui-prefs.js';
+import { buildUiSnapshot, toolCallTally, type UiSnapshotInfo } from './ui-snapshot.js';
 import { mountUiStatic, type UiBundle, uiPath } from './ui-static.js';
 import type { WorkspaceManager } from './workspaces.js';
 
@@ -300,6 +301,8 @@ export function buildApp(deps: AppDeps): Hono<Env> {
 
   // ---- the interface's views and controls (plan M9 §5.2–§5.4) ------------------------------
 
+  // This daemon's running count of each task's tool calls: each read counts only the new events.
+  const toolCalls = toolCallTally();
   app.get(`${P}/ui/snapshot`, allow(...OPERATOR), (c) => {
     c.header('cache-control', 'no-store');
     return c.json(
@@ -310,10 +313,31 @@ export function buildApp(deps: AppDeps): Hono<Env> {
         daemonVersion: deps.daemonVersion,
         brain: deps.brain,
         info: deps.uiInfo?.(),
+        toolCalls,
         nowMs: state.clock.nowMs(),
       }),
     );
   });
+  // The interface's preferences, per project: a browser's own storage belongs to an origin, which
+  // changes with the port at every start (docs/frontend/PLAN.md §6 rule 8).
+  const uiPrefs = deps.stateDir ? UiPrefs.forProject(project, deps.stateDir, state) : undefined;
+  const prefsStore = (): UiPrefs => {
+    if (!uiPrefs) throw new FridayError('capability_unsupported', 'this daemon keeps no interface preferences');
+    return uiPrefs;
+  };
+  app.get(`${P}/ui/prefs`, allow(...OPERATOR), (c) => c.json({ prefs: prefsStore().read() }));
+  app.post(
+    `${P}/ui/prefs`,
+    allow(...OPERATOR),
+    bodyLimit({
+      maxSize: UI_PREFS_MAX_BYTES,
+      onError: (c) => errorResponse(c, new FridayError('payload_too_large', 'the preferences exceed 64 KB')),
+    }),
+    async (c) => {
+      prefsStore().write((await json(c)).prefs);
+      return c.json({ ok: true });
+    },
+  );
   const diffOpts = (c: Context) => ({
     stat: c.req.query('stat') === '1' || c.req.query('stat') === 'true',
     ...(deps.stateDir ? { stateDir: deps.stateDir } : {}),

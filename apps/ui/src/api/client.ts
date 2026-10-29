@@ -36,6 +36,7 @@ import type {
   VerificationView,
   WorktreeView,
 } from '@friday/protocol';
+import type { HttpRequestOptions } from '../platform/http-transport.js';
 import type { RequestOptions, Transport } from '../platform/transport.js';
 import { TIMEOUTS } from './timeouts.js';
 
@@ -476,6 +477,17 @@ export class FridayApi {
 
   claudeSetupApply(agentKey: string): Promise<ClaudeSetupResult> {
     return this.post('/agent-setup/claude-code', { agent_key: agentKey }, { timeoutMs: TIMEOUTS.setup });
+  }
+
+  // ---- preferences: the project's copy, which outlives the page's origin (plan §6 rule 8)
+  /** The preferences the daemon keeps for this project; null before the first save. Untrusted, like storage. */
+  uiPrefs(): Promise<{ prefs: Record<string, unknown> | null }> {
+    return this.get('/ui/prefs');
+  }
+
+  /** `keepalive` only for the copy sent as the page hides, so closing it does not cancel the save. */
+  saveUiPrefs(prefs: object, opts?: HttpRequestOptions): Promise<{ ok: true }> {
+    return this.post('/ui/prefs', { prefs }, opts);
   }
 
   // ---- session
