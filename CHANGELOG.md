@@ -2,6 +2,10 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — OpenCode checkpoint C (experimental)
+
+- **Friday's refusals shown in front of a live model:** with the owner's permission, OpenCode 1.19.3 ran with Ollama's `qwen2.5:7b` on this machine, its own permissions open, and Friday's plugin as the only gate. The allowed write happened; a write outside the task's scope, a read of a fake `.env`, a shell write, a mock MCP tool, and writes under a failing check, a hanging check, an unbound session, a cancelled task and a stopped daemon were all refused with nothing written (`tests/scenarios/opencode-c.live.test.ts`, `docs/integration/opencode.md`). OpenCode stays experimental and L1 unverified until its lifecycle (checkpoint D) is recorded.
+
 ## Unreleased — OpenCode A/B (experimental)
 
 - Added experimental OpenCode checkpoints A/B: a pinned 1.19.3 no-model server/session preflight with private configuration, plugin readiness and effective-config checks; a fail-closed before-tool plugin and fixture-tested translator using the existing tool.check policy; harness config/doctor/run dispatch, scripted-host conformance and an optional native no-model check. OpenCode remains L1 unverified. Model prompt submission, task polling and autonomous-worker discovery are disabled; no live model enforcement, coding-quality or busy-lifecycle claim is made.

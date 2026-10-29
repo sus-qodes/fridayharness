@@ -9,7 +9,7 @@ import { type PluginSettings, policyPluginSource } from './plugin.js';
 export const OPENCODE_VERSION = '1.19.3';
 export const CONFIG_FILE = '.friday/harness/opencode/config.json';
 export const LEVEL_NOTE =
-  'L1 unverified (experimental): only no-model launcher and fixture policy checks are built; live enforcement is unverified';
+  'L1 unverified (experimental): live before-tool refusals were recorded with a local model (checkpoint C); busy cancellation, recovery and the worker lifecycle are unverified';
 
 export interface ControlledProfile {
   dir: string;
@@ -20,6 +20,45 @@ export interface ControlledProfile {
   pluginHash: string;
   verify(): void;
 }
+/**
+ * The model of checkpoint C (plan M8b.6): one OpenAI-compatible server on this machine, through
+ * OpenCode's bundled `@ai-sdk/openai-compatible`, so nothing is downloaded and no credential is
+ * sent. Only for the enforcement check with a local model the owner approved.
+ */
+export interface InferenceSettings {
+  /** A literal loopback address over plain http, such as Ollama's `http://127.0.0.1:11434/v1`. */
+  baseURL: string;
+  /** The model the server has, such as `qwen2.5:7b`. */
+  model: string;
+  contextTokens?: number;
+  outputTokens?: number;
+}
+/** The provider id Friday gives the local server inside the private profile. */
+export const LOCAL_PROVIDER = 'friday-local';
+
+/**
+ * Refuses anything but a literal loopback address (127.0.0.1 or [::1]) over plain http with no
+ * credentials, the rule of plan M12.1: a host name may resolve elsewhere.
+ */
+export function loopbackModelUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('the model server address is not a URL');
+  }
+  if (
+    url.protocol !== 'http:' ||
+    url.username ||
+    url.password ||
+    !['127.0.0.1', '[::1]'].includes(url.hostname) ||
+    url.search ||
+    url.hash
+  )
+    throw new Error('the model server must be a loopback http address with no credentials');
+  return url.href.replace(/\/$/, '');
+}
+
 export const hash = (text: string | Buffer): string => createHash('sha256').update(text).digest('hex');
 const json = (file: string): Record<string, unknown> =>
   JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
@@ -29,7 +68,12 @@ const contains = (parent: string, child: string) => {
 };
 
 /** No project/user settings, credentials, proxy, preload or model provider variables are inherited. */
-export function controlledEnvironment(dir: string, command: string, source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function controlledEnvironment(
+  dir: string,
+  command: string,
+  source: NodeJS.ProcessEnv,
+  nativePermission: 'deny' | 'allow' = 'deny',
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   if (process.platform === 'win32') {
     env.SystemRoot = process.env.SystemRoot ?? 'C:\\Windows';
@@ -71,7 +115,9 @@ export function controlledEnvironment(dir: string, command: string, source: Node
     'OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER',
   ])
     env[flag] = '1';
-  env.OPENCODE_PERMISSION = '{"*":"deny"}';
+  // Native permissions deny everything, except in checkpoint C's model profile, where they allow so
+  // that Friday's before-tool plugin is the only gate a refusal can come from (plan M8b.6).
+  env.OPENCODE_PERMISSION = JSON.stringify({ '*': nativePermission });
   env.npm_config_offline = 'true';
   return env;
 }
@@ -116,6 +162,10 @@ export function createControlledProfile(opts: {
   dependenciesDir: string;
   bridge: Omit<PluginSettings, 'cwd'>;
   env?: NodeJS.ProcessEnv;
+  /** Checkpoint C only (plan M8b.6): the local model, with native permissions that allow. */
+  inference?: InferenceSettings;
+  /** Checkpoint C only: MCP servers the profile declares (a mock server whose tool Friday must refuse). */
+  mcp?: Record<string, Record<string, unknown>>;
 }): ControlledProfile {
   const cwd = realpathSync(opts.cwd);
   const base = opts.baseDir ?? path.join(os.tmpdir(), 'friday-opencode');
@@ -130,7 +180,11 @@ export function createControlledProfile(opts: {
   const dir = realpathSync(mkdtempSync(path.join(realpathSync(base), 'attempt-')));
   try {
     ensurePrivateDir(dir);
-    const env = controlledEnvironment(dir, opts.command, opts.env ?? process.env);
+    const inference = opts.inference
+      ? { ...opts.inference, baseURL: loopbackModelUrl(opts.inference.baseURL) }
+      : undefined;
+    if (opts.mcp && !inference) throw new Error('MCP servers are declared only in the model profile of checkpoint C');
+    const env = controlledEnvironment(dir, opts.command, opts.env ?? process.env, inference ? 'allow' : 'deny');
     for (const child of ['home', 'config/opencode', 'data', 'cache', 'state', 'tmp', 'managed'])
       mkdirSync(path.join(dir, child), { recursive: true, mode: 0o700 });
     const configDir = path.join(dir, 'config', 'opencode');
@@ -142,17 +196,38 @@ export function createControlledProfile(opts: {
     const plugin = path.join(dir, 'policy.mjs');
     const source = policyPluginSource({ ...opts.bridge, cwd });
     writeFileSync(plugin, source, { mode: 0o600 });
+    const model = inference ? `${LOCAL_PROVIDER}/${inference.model}` : undefined;
     const config = {
       $schema: 'https://opencode.ai/config.json',
       plugin: [pathToFileURL(plugin).href],
-      mcp: {},
-      enabled_providers: [],
+      mcp: opts.mcp ?? {},
+      enabled_providers: inference ? [LOCAL_PROVIDER] : [],
+      ...(inference
+        ? {
+            provider: {
+              [LOCAL_PROVIDER]: {
+                npm: '@ai-sdk/openai-compatible',
+                name: 'Friday local model',
+                options: { baseURL: inference.baseURL, timeout: 600_000 },
+                models: {
+                  [inference.model]: {
+                    name: inference.model,
+                    tool_call: true,
+                    limit: { context: inference.contextTokens ?? 16_384, output: inference.outputTokens ?? 1_024 },
+                  },
+                },
+              },
+            },
+            model,
+            small_model: model,
+          }
+        : {}),
       autoupdate: false,
       snapshot: false,
       lsp: false,
       formatter: false,
       instructions: [],
-      permission: { '*': 'deny' },
+      permission: { '*': inference ? 'allow' : 'deny' },
       command: {},
       agent: {},
       shell:
@@ -225,6 +300,28 @@ export function verifyEffectiveConfig(value: unknown, profile: ControlledProfile
     const empty = JSON.stringify(expected) === '{}' || JSON.stringify(expected) === '[]';
     if (JSON.stringify(actual[key] ?? (empty ? expected : null)) !== JSON.stringify(expected))
       throw new Error(`OpenCode effective configuration differs: ${key}`);
+  }
+  // Checkpoint C's model: exactly the declared provider, at the declared address, with the declared
+  // models, and the declared model chosen (plan M8b.6). The host may add defaults; these may not differ.
+  const providers = profile.config.provider as Record<string, Record<string, unknown>> | undefined;
+  if (providers) {
+    const got = (actual.provider ?? {}) as Record<string, Record<string, unknown>>;
+    const ids = (o: object) => JSON.stringify(Object.keys(o).sort());
+    if (ids(got) !== ids(providers)) throw new Error('OpenCode effective configuration differs: provider');
+    for (const [id, want] of Object.entries(providers)) {
+      const have = got[id] ?? {};
+      const address = (o: Record<string, unknown>) => (o.options as { baseURL?: unknown } | undefined)?.baseURL;
+      if (
+        have.npm !== want.npm ||
+        address(have) !== address(want) ||
+        ids((have.models ?? {}) as object) !== ids((want.models ?? {}) as object)
+      )
+        throw new Error(`OpenCode effective configuration differs: provider ${id}`);
+    }
+    for (const key of ['model', 'small_model'])
+      if (actual[key] !== profile.config[key]) throw new Error(`OpenCode effective configuration differs: ${key}`);
+  } else if (actual.provider && Object.keys(actual.provider as object).length) {
+    throw new Error('OpenCode effective configuration differs: provider');
   }
   profile.verify();
 }

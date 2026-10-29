@@ -30,6 +30,14 @@ export class PolicyBridge {
     if (!this.#ready || this.#session) throw new Error('policy plugin is not ready or session is already bound');
     this.#session = session;
   }
+  /**
+   * Moves the one binding to a new session (checkpoint C, plan M8b.6): the session it leaves loses
+   * its authority at once, so at most one session is ever bound.
+   */
+  rebind(session: string): void {
+    if (!this.#ready || !this.#session) throw new Error('policy plugin is not ready or no session is bound');
+    this.#session = session;
+  }
   async open(): Promise<void> {
     const server = createServer((req, res) => {
       void (async () => {

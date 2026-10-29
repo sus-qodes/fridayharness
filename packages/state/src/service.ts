@@ -331,7 +331,7 @@ export function achievedEnforcement(h: {
     return {
       level: h.claimed === 'L1' ? 'L1' : 'L0',
       status: h.claimed === 'L1' ? 'unverified' : 'observed',
-      basis: 'OpenCode is experimental; live hook enforcement has not been verified',
+      basis: 'OpenCode is experimental; its live refusals are recorded (checkpoint C), its lifecycle is not',
     };
   const hooked = HOOKED_HOSTS[h.vendor];
   if (hooked && h.attach_mode === 'attach') {

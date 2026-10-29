@@ -8,7 +8,9 @@ import { PolicyBridge } from './bridge.js';
 import {
   type ControlledProfile,
   createControlledProfile,
+  type InferenceSettings,
   LEVEL_NOTE,
+  LOCAL_PROVIDER,
   OPENCODE_VERSION,
   verifyEffectiveConfig,
 } from './profile.js';
@@ -24,9 +26,25 @@ export interface OpenCodeSpawnOptions {
   hostEnv?: NodeJS.ProcessEnv;
   startupTimeoutMs?: number;
   checkTimeoutMs?: number;
+  /**
+   * Checkpoint C only (plan M8b.6, approved by the owner): a model on this machine. Without it the
+   * adapter is the A/B no-model preflight and sends no prompt.
+   */
+  inference?: InferenceSettings;
+  /** Checkpoint C only: MCP servers the profile declares (a mock whose tool Friday must refuse). */
+  mcp?: Record<string, Record<string, unknown>>;
+  /**
+   * For the live check only: makes the policy check fail (`error`) or never answer (`hang`), to show
+   * that a failing check blocks the call. Production leaves it unset.
+   */
+  checkFault?: () => 'none' | 'error' | 'hang';
 }
 
-/** Checkpoints A/B only: starts a controlled server/session, never submits a model prompt. */
+/**
+ * Checkpoints A/B: starts a controlled server/session and never submits a model prompt. With
+ * `inference` (checkpoint C, plan M8b.6), the same controlled server talks to a model on this
+ * machine, for the live enforcement check.
+ */
 export class OpenCodeSpawnAdapter {
   readonly #groups = new ProcessGroups();
   readonly #bridge: PolicyBridge;
@@ -41,6 +59,9 @@ export class OpenCodeSpawnAdapter {
   constructor(private readonly opts: OpenCodeSpawnOptions) {
     this.#bridge = new PolicyBridge(async (params) => {
       if (!this.#client || this.#closed) throw new Error('Friday is not connected');
+      const fault = opts.checkFault?.() ?? 'none';
+      if (fault === 'error') throw new Error('the policy check failed (injected)');
+      if (fault === 'hang') await new Promise<never>(() => undefined);
       return this.#client.call('tool.check', params);
     }, opts.checkTimeoutMs ?? 4000);
   }
@@ -91,6 +112,8 @@ export class OpenCodeSpawnAdapter {
           timeoutMs: this.opts.checkTimeoutMs ?? 4000,
         },
         ...(this.opts.hostEnv ? { env: this.opts.hostEnv } : {}),
+        ...(this.opts.inference ? { inference: this.opts.inference } : {}),
+        ...(this.opts.mcp ? { mcp: this.opts.mcp } : {}),
       });
       this.#profile = profile;
       this.#bridge.setProfile(profile);
@@ -134,7 +157,9 @@ export class OpenCodeSpawnAdapter {
         throw new Error('OpenCode health/version mismatch');
       verifyEffectiveConfig(await this.#request('/config'), profile);
       if (!this.#bridge.ready) throw new Error('Friday policy plugin is missing or failed to initialize');
-      const session = (await this.#request('/session', 'POST', { title: 'Friday no-model preflight' })) as {
+      const session = (await this.#request('/session', 'POST', {
+        title: this.opts.inference ? 'Friday checkpoint C' : 'Friday no-model preflight',
+      })) as {
         id?: unknown;
         directory?: unknown;
       };
@@ -144,13 +169,13 @@ export class OpenCodeSpawnAdapter {
       this.#client = new GenericHarnessClient(this.opts.bootstrap, {
         harness_key: `opencode:${this.opts.projectId}:${this.opts.agentKey}`,
         vendor: 'opencode',
-        name: 'OpenCode (A/B preflight)',
+        name: this.opts.inference ? 'OpenCode (checkpoint C, local model)' : 'OpenCode (A/B preflight)',
         version: OPENCODE_VERSION,
         attach_mode: 'spawn',
         project_id: this.opts.projectId,
         agent_key: this.opts.agentKey,
         enforcement_level: 'L1',
-        capabilities: { experimental: true, model_calls: false, accepts_tasks: false },
+        capabilities: { experimental: true, model_calls: Boolean(this.opts.inference), accepts_tasks: false },
         host: { session_id: session.id, cwd },
       });
       await this.#client.register();
@@ -165,16 +190,94 @@ export class OpenCodeSpawnAdapter {
     }
   }
 
-  /** There is intentionally no prompt transport at A/B, including on task/resume delivery. */
-  submitPrompt(): never {
-    throw new Error('OpenCode model execution is disabled until checkpoint C is authorized');
+  /**
+   * Sends one prompt to a session and waits until the model has finished with it: only with
+   * checkpoint C's local model (plan M8b.6). The prompt goes out asynchronously
+   * (`POST /session/:id/prompt_async`) and the session is then watched until the host reports it idle
+   * with its last answer complete, so a model that takes minutes never meets an HTTP time limit; past
+   * `timeoutMs` the session is stopped. The bound session by default; another session is for showing
+   * that its calls are refused. Without a model there is no prompt transport.
+   */
+  submitPrompt(text?: string, opts: { sessionId?: string; timeoutMs?: number } = {}): Promise<unknown> {
+    const inference = this.opts.inference;
+    if (!inference || typeof text !== 'string')
+      throw new Error('OpenCode model execution is disabled until checkpoint C is authorized');
+    const session = opts.sessionId ?? this.sessionId;
+    if (!session || this.#closed) throw new Error('OpenCode has no session to prompt');
+    return this.#prompt(session, text, inference.model, opts.timeoutMs ?? 600_000);
   }
 
-  async #request(route: string, method = 'GET', body?: unknown): Promise<unknown> {
+  async #prompt(session: string, text: string, model: string, timeoutMs: number): Promise<unknown> {
+    type Message = { info?: { role?: string; time?: { completed?: number } } };
+    const before = ((await this.messages(session)) as Message[]).length;
+    await this.#request(`/session/${encodeURIComponent(session)}/prompt_async`, 'POST', {
+      parts: [{ type: 'text', text }],
+      model: { providerID: LOCAL_PROVIDER, modelID: model },
+    });
+    const end = Date.now() + timeoutMs;
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const status = ((await this.#request('/session/status')) ?? {}) as Record<string, { type?: string }>;
+      const busy = (status[session]?.type ?? 'idle') !== 'idle';
+      const messages = (await this.messages(session)) as Message[];
+      const answer = messages
+        .slice(before)
+        .filter((m) => m.info?.role === 'assistant')
+        .at(-1);
+      if (!busy && answer?.info?.time?.completed) return messages;
+      if (Date.now() >= end) {
+        await this.abort(session);
+        throw new Error('the model did not finish in time; the session was stopped');
+      }
+    }
+  }
+
+  /**
+   * A new session that takes over the binding (checkpoint C): the session it replaces is stopped and
+   * loses its authority, so each scenario of the live check starts from a fresh conversation.
+   */
+  async newSession(): Promise<string> {
+    if (!this.opts.inference || !this.#profile) throw new Error('only checkpoint C opens a new bound session');
+    await this.abort();
+    const session = (await this.#request('/session', 'POST', { title: 'Friday checkpoint C' })) as {
+      id?: unknown;
+      directory?: unknown;
+    };
+    if (typeof session.id !== 'string' || !session.id || session.directory !== this.#profile.cwd)
+      throw new Error('OpenCode returned no bound session');
+    this.#bridge.rebind(session.id);
+    this.sessionId = session.id;
+    return session.id;
+  }
+
+  /** A session's messages and their parts (tool calls with their state), as the host records them. */
+  async messages(sessionId?: string): Promise<unknown> {
+    const session = sessionId ?? this.sessionId;
+    if (!session) throw new Error('OpenCode has no session');
+    return this.#request(`/session/${encodeURIComponent(session)}/message`);
+  }
+
+  /** A second session Friday never binds: its tool calls must all be refused (checkpoint C). */
+  async openUnboundSession(): Promise<string> {
+    if (!this.opts.inference) throw new Error('only checkpoint C opens a second session');
+    const session = (await this.#request('/session', 'POST', { title: 'Friday checkpoint C, unbound' })) as {
+      id?: unknown;
+    };
+    if (typeof session.id !== 'string' || !session.id) throw new Error('OpenCode returned no session');
+    return session.id;
+  }
+
+  /** Stops whatever a session is doing. */
+  async abort(sessionId?: string): Promise<void> {
+    const session = sessionId ?? this.sessionId;
+    if (session) await this.#request(`/session/${encodeURIComponent(session)}/abort`, 'POST').catch(() => undefined);
+  }
+
+  async #request(route: string, method = 'GET', body?: unknown, timeoutMs?: number): Promise<unknown> {
     const response = await fetch(this.#url + route, {
       method,
       redirect: 'error',
-      signal: AbortSignal.timeout(this.opts.startupTimeoutMs ?? 15000),
+      signal: AbortSignal.timeout(timeoutMs ?? this.opts.startupTimeoutMs ?? 15000),
       headers: {
         authorization: `Basic ${Buffer.from(`opencode:${this.#password}`).toString('base64')}`,
         'x-opencode-directory': encodeURIComponent(this.#profile?.cwd ?? ''),
@@ -183,7 +286,9 @@ export class OpenCodeSpawnAdapter {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     if (!response.ok) throw new Error('OpenCode preflight API failed');
-    return response.json();
+    // `prompt_async` answers 204 with no body.
+    const answer = await response.text();
+    return answer ? JSON.parse(answer) : null;
   }
   async close(): Promise<void> {
     if (this.#closed) return;
