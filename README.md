@@ -22,6 +22,7 @@ The architecture is called **ContextOS** in the original specification.
 - **M5b** verifies a task in the checkout it worked in, at a recorded revision: Friday's own checks (changes against the task's scope and claim, credentials in the code) run before the project's checks for that kind of task, related tests first, and a verification whose code changed while it ran judges nothing.
 - **M5c** serializes changes to conflict-prone files with file reservations, and brings each goal's verified task branches together in a goal branch, verifying the merged code before the branch moves; dependent tasks start from that integrated work, and you land the goal branch yourself.
 - **M5d** recovers from a lost harness or a failed attempt without losing work: the worktree's state is preserved, the stale attempt fenced, and the task reassigned in the same worktree and branch, within limits beyond which you decide.
+- **M6a** judges what agents ask for against one capability catalogue, answers what the policy decides alone at once, and binds every human approval to its task, attempt, exact target and policy, for one use unless you say otherwise.
 
 See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 

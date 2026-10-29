@@ -10,7 +10,7 @@ import {
   patternsOverlap,
 } from '@friday/policy';
 import { type Actor, FridayError, HarnessRegisterParams, isFridayError, type TaskView } from '@friday/protocol';
-import { renderContextMarkdown } from '@friday/sdk';
+import { policyVersion, renderContextMarkdown } from '@friday/sdk';
 import type { HarnessRecord } from '@friday/state';
 import type { Hono } from 'hono';
 import { actionFromTool } from './actions.js';
@@ -187,6 +187,17 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           if (!action) return c.json({ ok: true, hook_output: null });
           const task = heldTask(agent?.agent_id);
           const root = executionRoot(harness, task);
+          /** The approval that covers this session's use of a capability on a target (ADR-0027 §4). */
+          const approvalFor = (capability: string, target: string) =>
+            state.q.usableApproval(pid, {
+              capability,
+              target,
+              task_id: task?.task_id ?? null,
+              run_id: task?.current_run_id ?? null,
+              agent_id: agent?.agent_id ?? null,
+              policy_version: policyVersion(project.config),
+              now: state.clock.now(),
+            });
           // Conflict-prone files (ADR-0025): what other tasks hold, and what a first write takes.
           const reservations =
             action.kind === 'write' && task && project.config.reservations.mode !== 'off'
@@ -203,7 +214,7 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
             ctx: { projectRoot: root, mainRoot: project.root, stateDir: path.dirname(path.dirname(ctx.privateDir)) },
             task: task ? { task_id: task.task_id, status: task.status, scope: task.scope, kind: task.kind } : null,
             otherWriters: action.kind === 'write' ? otherWriters(agent?.agent_id, root) : [],
-            approved: (capability, target) => state.q.grantedApproval(pid, capability, target, state.clock.now()),
+            approved: (capability, target) => Boolean(approvalFor(capability, target)),
             autonomy: project.config.autonomy as Partial<Record<CommandClass, Autonomy>>,
             ...(reservations ? { reservations } : {}),
           });
@@ -263,6 +274,13 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
               { tool: toolName, targets: result.targets, rule: result.rule, task_id: task?.task_id ?? null },
               refs(task),
             );
+          }
+          // Approvals the allowed action relied on are used up now (ADR-0027 §5).
+          if (result.decision === 'allow' && result.relied_on?.length) {
+            const uses = result.relied_on
+              .map((r) => ({ approval_id: approvalFor(r.capability, r.target), tool: toolName, target: r.target }))
+              .filter((u): u is { approval_id: string; tool: string; target: string } => Boolean(u.approval_id));
+            state.useApprovals(pid, actor, uses);
           }
           if (result.rule === 'write.reserved' && result.reserved_by) {
             state.ownershipConflict(pid, actor, {

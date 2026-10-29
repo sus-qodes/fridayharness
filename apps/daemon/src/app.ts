@@ -71,6 +71,8 @@ export interface AppDeps {
   integration?: IntegrationManager;
   /** Recovery of lost and failed attempts (M5d). */
   recovery?: RecoveryManager;
+  /** The per-user state folder, for Friday's protected paths. */
+  stateDir?: string;
 }
 
 type Env = { Variables: { auth: AuthInfo; requestId: string } };
@@ -402,11 +404,34 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     ['approve', true],
     ['reject', false],
   ] as const) {
-    app.post(`${P}/approvals/:aid/${verb}`, allow(...OPERATOR), (c) => {
-      state.decideApproval(pid, HUMAN, c.req.param('aid'), granted);
+    app.post(`${P}/approvals/:aid/${verb}`, allow(...OPERATOR), async (c) => {
+      const body = z
+        .object({
+          reuse: z.enum(['once', 'run', 'task']).optional(),
+          ttl_s: z
+            .number()
+            .int()
+            .min(10)
+            .max(7 * 24 * 3600)
+            .optional(),
+          note: z.string().max(500).optional(),
+          via: z.enum(['cli', 'ui']).optional(),
+        })
+        .parse(await c.req.json().catch(() => ({})));
+      state.decideApproval(pid, HUMAN, c.req.param('aid'), granted, {
+        ...(body.reuse ? { reuse: body.reuse } : {}),
+        ...(body.ttl_s ? { ttl_s: body.ttl_s } : {}),
+        ...(body.note ? { note: body.note } : {}),
+        via: body.via ?? 'cli',
+      });
       return c.json({ ok: true, approval_id: c.req.param('aid'), status: granted ? 'granted' : 'denied' });
     });
   }
+  app.post(`${P}/approvals/:aid/revoke`, allow(...OPERATOR), async (c) => {
+    const body = z.object({ note: z.string().max(500).optional() }).parse(await c.req.json().catch(() => ({})));
+    state.revokeApproval(pid, HUMAN, c.req.param('aid'), body.note ?? 'revoked by a human');
+    return c.json({ ok: true, approval_id: c.req.param('aid'), status: 'revoked' });
+  });
   app.get(`${P}/escalations`, allow(...OPERATOR), (c) =>
     c.json({ escalations: state.q.escalations(pid, c.req.query('status')).map(escalationView) }),
   );
@@ -595,6 +620,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
           compile,
           signal: ctrl.signal,
           ...(deps.pollIntervalMs ? { pollIntervalMs: deps.pollIntervalMs } : {}),
+          ...(deps.stateDir ? { stateDir: deps.stateDir } : {}),
         },
         c.get('auth'),
         body,

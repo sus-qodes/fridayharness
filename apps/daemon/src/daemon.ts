@@ -317,6 +317,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     workspaces,
     integration,
     recovery,
+    stateDir: path.dirname(path.dirname(privateDir)),
   });
   for (const ext of opts.extensions ?? []) ext(app as unknown as Hono, ctx);
 

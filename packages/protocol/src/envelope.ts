@@ -127,6 +127,9 @@ export const EVENT_TYPES = [
   'integration.not_needed',
   // M5d: recovery of lost or failed attempts (ADR-0026).
   'recovery.performed',
+  // M6a: bound approvals (ADR-0027).
+  'approval.used',
+  'approval.revoked',
   'memory.superseded',
   'memory.approved',
   'memory.retracted',

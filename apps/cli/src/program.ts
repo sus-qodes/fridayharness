@@ -26,6 +26,14 @@ const collect = (v: string, prev: string[] = []) => [...prev, v];
 /** Extra commands contributed by adapters (M1c: `harness config`, `harness doctor`, `fixture init`). */
 export const commandPlugins: ((program: Command) => void)[] = [];
 
+/** `90`, `90s`, `30m`, `2h` or `1d` in seconds. */
+function parseDuration(text: string): number {
+  const m = text.trim().match(/^(\d+)\s*([smhd]?)$/i);
+  if (!m) throw new Error(`not a duration: ${text} (use 90s, 30m, 2h or 1d)`);
+  const unit = { '': 1, s: 1, m: 60, h: 3600, d: 86400 }[(m[2] ?? '').toLowerCase() as '' | 's' | 'm' | 'h' | 'd'];
+  return Number(m[1]) * unit;
+}
+
 export function buildProgram(): Command {
   const program = new Command('friday')
     .description('Friday: local orchestration and context control plane for AI coding harnesses')
@@ -541,9 +549,9 @@ export function buildProgram(): Command {
 
   // ---- approvals and escalations ---------------------------------------------------------------
 
-  program
+  const approvals = program
     .command('approvals')
-    .description('list approval requests')
+    .description('approval requests: what an agent asked for, the risk, and how far a grant reaches')
     .option('--all', 'include decided ones')
     .action(async (o: { all?: boolean }) => {
       const { client } = operator(g());
@@ -553,31 +561,65 @@ export function buildProgram(): Command {
       out(g(), res.approvals, () =>
         res.approvals.length
           ? table(
-              ['APPROVAL', 'STATUS', 'CAPABILITY', 'TARGET', 'PURPOSE', 'EXPIRES'],
+              ['APPROVAL', 'STATUS', 'CAPABILITY', 'RISK', 'TARGET', 'TASK', 'REACH', 'USES', 'EXPIRES', 'PURPOSE'],
               res.approvals.map((a) => [
                 a.approval_id,
                 a.status,
                 a.capability,
+                a.risk ?? '',
                 a.target,
-                a.purpose,
+                a.task_id ?? '',
+                a.reuse ?? 'once',
+                String(a.uses ?? 0),
                 shortTime(a.expires_at),
+                a.purpose,
               ]),
+              { maxWidth: 48 },
             )
           : 'No pending approvals.',
       );
+    });
+  approvals
+    .command('revoke <approval>')
+    .description('withdraw an approval: no later use counts')
+    .option('--note <text>', 'why')
+    .action(async (id: string, o: { note?: string }) => {
+      const { client } = operator(g());
+      const res = await client.post(client.projectPath(`/approvals/${id}/revoke`), o.note ? { note: o.note } : {});
+      out(g(), res, () => `${id}  revoked`);
     });
   for (const [verb, word] of [
     ['approve', 'granted'],
     ['reject', 'denied'],
   ] as const) {
-    program
+    const cmd = program
       .command(`${verb} <approval>`)
-      .description(`${verb} a pending approval request`)
-      .action(async (id: string) => {
-        const { client } = operator(g());
-        const res = await client.post(client.projectPath(`/approvals/${id}/${verb}`));
-        out(g(), res, () => `${id}  ${word}`);
+      .description(
+        verb === 'approve'
+          ? 'grant a pending approval; it covers that exact target, for its task, under the current policy'
+          : 'refuse a pending approval request',
+      )
+      .option('--note <text>', 'why (recorded with the decision)');
+    if (verb === 'approve') {
+      cmd
+        .addOption(
+          new Option(
+            '--for <reach>',
+            'how far it reaches: one use, this attempt, or the task (default: as requested)',
+          ).choices(['once', 'run', 'task']),
+        )
+        .option('--ttl <duration>', 'how long it lasts, such as 30m or 2h (default: as requested)');
+    }
+    cmd.action(async (id: string, o: { note?: string; for?: 'once' | 'run' | 'task'; ttl?: string }) => {
+      const { client } = operator(g());
+      const ttl = o.ttl ? parseDuration(o.ttl) : undefined;
+      const res = await client.post(client.projectPath(`/approvals/${id}/${verb}`), {
+        ...(o.note ? { note: o.note } : {}),
+        ...(o.for ? { reuse: o.for } : {}),
+        ...(ttl ? { ttl_s: ttl } : {}),
       });
+      out(g(), res, () => `${id}  ${word}${o.for ? ` (${o.for})` : ''}`);
+    });
   }
   program
     .command('escalations')

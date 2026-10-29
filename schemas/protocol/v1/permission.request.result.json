@@ -4,7 +4,10 @@
   "type": "object",
   "properties": {
     "approval_id": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "status": {
       "type": "string",
@@ -21,6 +24,17 @@
       "type": [
         "string",
         "null"
+      ]
+    },
+    "capability": {
+      "type": "string"
+    },
+    "risk": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
       ]
     }
   },

@@ -403,17 +403,23 @@ export const PermissionRequestParams = z.object({
   ...Base,
   task_id: z.string().optional(),
   run_id: z.string().optional(),
+  /** A capability (ADR-0027), a command class, or an older name such as `fs.write`. */
   action_class: z.string().min(1).max(100),
   resource: z.string().max(2000).optional(),
   command: z.string().max(4000).optional(),
   justification: z.string().min(1).max(1000),
   ttl_s: z.number().int().min(10).max(3600).default(900),
+  /** How far a grant reaches: one use, this attempt, or the task's later attempts too. */
+  reuse: z.enum(['once', 'run', 'task']).default('once'),
 });
 export const PermissionRequestResult = z.object({
-  approval_id: z.string(),
+  /** Null when no approval is involved: the policy already allows it, or never does. */
+  approval_id: z.string().nullable(),
   status: z.enum(['pending', 'granted', 'denied']),
   reason: z.string(),
   expires_at: z.string().nullable(),
+  capability: z.string().optional(),
+  risk: z.enum(['low', 'medium', 'high']).optional(),
 });
 
 export const HumanEscalationParams = z.object({

@@ -6,6 +6,17 @@
 export const PACKAGE_NAME = '@friday/policy';
 
 export {
+  CAPABILITIES,
+  type Capability,
+  type CapabilityDecision,
+  type CapabilityRequest,
+  CLASS_CAPABILITY,
+  capabilityOf,
+  DEFAULT_RISK,
+  evaluateCapability,
+  type Risk,
+} from './capabilities.js';
+export {
   type Autonomy,
   type CommandClass,
   type CommandClassification,

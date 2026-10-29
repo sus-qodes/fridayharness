@@ -44,6 +44,15 @@
       "type": "integer",
       "minimum": 10,
       "maximum": 3600
+    },
+    "reuse": {
+      "default": "once",
+      "type": "string",
+      "enum": [
+        "once",
+        "run",
+        "task"
+      ]
     }
   },
   "required": [

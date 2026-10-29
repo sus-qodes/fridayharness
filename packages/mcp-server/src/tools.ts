@@ -506,12 +506,13 @@ export function createFridayTools(session: FridaySession): FridayTool[] {
       name: 'friday_request_permission',
       title: 'Request permission',
       description:
-        'Ask a human for something policy blocks: a write outside scope (action_class "fs.write", resource = path), or a command class such as "git.push" (command = the exact command).',
+        'Ask for something policy blocks. action_class is a capability: "file.write" (resource = the path), "shell.git.push" or another shell capability (command = the exact command), "network.read" (resource = the URL). A grant covers that exact target for your task, once; ask with reuse "run" or "task" if you will need it again. Secrets are never handed out.',
       shape: {
         action_class: z.string().min(1).max(100),
         resource: z.string().max(2000).optional(),
         command: z.string().max(4000).optional(),
         justification: z.string().min(1).max(1000),
+        reuse: z.enum(['once', 'run', 'task']).optional(),
       },
       alwaysLoad: false,
       readOnly: false,
@@ -523,13 +524,17 @@ export function createFridayTools(session: FridaySession): FridayTool[] {
           justification: a.justification as string,
           ...(a.resource ? { resource: a.resource as string } : {}),
           ...(a.command ? { command: a.command as string } : {}),
+          ...(a.reuse ? { reuse: a.reuse as 'once' | 'run' | 'task' } : {}),
           ...(me?.current_task ? { task_id: me.current_task.task_id } : {}),
           ...(me?.current_run ? { run_id: me.current_run.run_id } : {}),
         });
-        return {
-          text: `Permission request ${res.approval_id} is ${res.status}. ${res.reason}. Do not retry the blocked action until it is granted.`,
-          structured: res,
-        };
+        const text =
+          res.approval_id === null
+            ? res.status === 'granted'
+              ? `No approval needed: ${res.reason}. Go ahead.`
+              : `Not allowed: ${res.reason}. Do not try to do it another way; report the task as blocked if you cannot continue without it.`
+            : `Permission request ${res.approval_id} (${res.capability ?? a.action_class}, ${res.risk ?? 'unknown'} risk) is ${res.status}. ${res.reason}. Do not retry the blocked action until it is granted.`;
+        return { text, structured: res };
       },
     },
     {

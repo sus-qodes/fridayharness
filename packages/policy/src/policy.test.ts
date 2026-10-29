@@ -166,7 +166,9 @@ describe('evaluate', () => {
   });
 
   it('allows an out-of-scope write a human approved', () => {
-    const res = write(['backend/x.ts'], { approved: (cap, target) => cap === 'fs.write' && target === 'backend/x.ts' });
+    const res = write(['backend/x.ts'], {
+      approved: (cap, target) => cap === 'file.write' && target === 'backend/x.ts',
+    });
     expect(res.decision).toBe('allow');
   });
 
@@ -234,7 +236,7 @@ describe('evaluate', () => {
     expect(cmd('node --test').decision).toBe('allow');
     expect(cmd('git commit -m x').decision).toBe('ask');
     expect(cmd('git push').decision).toBe('deny');
-    expect(cmd('git push', { approved: (c, t) => c === 'git.push' && t === 'git push' }).decision).toBe('allow');
+    expect(cmd('git push', { approved: (c, t) => c === 'shell.git.push' && t === 'git push' }).decision).toBe('allow');
     expect(cmd('cat .env').rule).toBe('sensitive.secrets');
     expect(cmd('type .friday\\run\\daemon.json').rule).toBe('sensitive.friday.runtime');
     expect(cmd('Get-Content $env:LOCALAPPDATA\\Friday\\projects\\x\\bootstrap.token').rule).toBe(

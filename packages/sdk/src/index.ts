@@ -22,6 +22,7 @@ export {
   type MasterBrainConfig,
   type ProviderConfig,
   parseConfig,
+  policyVersion,
   renderInitialConfig,
 } from './config.js';
 export {

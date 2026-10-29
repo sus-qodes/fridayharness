@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { FridayError, TaskKind, TaskScope } from '@friday/protocol';
 import { parse as parseYaml } from 'yaml';
@@ -108,6 +109,8 @@ export const FridayConfig = z
       .prefault({}),
     scopes: z.record(z.string(), TaskScope).default({}),
     autonomy: z.record(z.string(), z.enum(['auto', 'review', 'manual'])).default({}),
+    /** Risk tiers per capability (spec Part 07 §7, ADR-0027), over Friday's defaults. */
+    risk: z.record(z.string(), z.enum(['low', 'medium', 'high'])).default({}),
     security: z
       .object({
         enforcement_required: z.enum(['L0', 'L1', 'L2']).default('L1'),
@@ -178,6 +181,28 @@ export const FridayConfig = z
   })
   .passthrough();
 export type FridayConfig = z.infer<typeof FridayConfig>;
+
+/**
+ * The version of what decides permissions (ADR-0027 §4): autonomy, risk tiers, scopes, security and
+ * reservations. An approval granted under one version does not count under another.
+ */
+export function policyVersion(config: FridayConfig): string {
+  const canonical = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(canonical)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.keys(v as Record<string, unknown>)
+              .sort()
+              .map((k) => [k, canonical((v as Record<string, unknown>)[k])]),
+          )
+        : v;
+  const { autonomy, risk, scopes, security, reservations } = config;
+  return createHash('sha256')
+    .update(JSON.stringify(canonical({ autonomy, risk, scopes, security, reservations })))
+    .digest('hex')
+    .slice(0, 16);
+}
 
 export function parseConfig(text: string, source = 'config.yaml'): FridayConfig {
   let raw: unknown;

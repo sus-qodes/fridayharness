@@ -2,6 +2,15 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M6 security
+
+- **M6a, permissions that mean one thing:**
+  - Agents ask for **capabilities** from one catalogue (`file.write`, `shell.git.push`, `network.read`, `secret.resolve`, …), each with a risk tier you can change (`risk:` in `.friday/config.yaml`).
+  - **Requests are judged first.** What the task's scope and the autonomy settings allow is answered at once ("no approval needed"); what is never allowed, such as handing a raw secret to an agent, is refused at once; only real decisions wait for you.
+  - **An approval is bound** to the task, the agent's attempt, the exact target and the policy in force. By default it covers **one** use; approve with `--for run` or `--for task` to let it reach further, and `--ttl` to set how long it lasts. A changed policy retires older approvals. Every use is recorded, and `friday approvals revoke <id>` stops later ones.
+  - `friday approvals` shows the risk, the task, the reach and the uses. The status page can approve once or reject.
+  - Decision: ADR-0027.
+
 ## Unreleased — M5 verification, recovery, worktrees
 
 - **M5a, one checkout per task:**

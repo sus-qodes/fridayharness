@@ -3218,13 +3218,61 @@ export class FridayState {
       command?: string | undefined;
       justification: string;
       ttl_s: number;
+      reuse?: 'once' | 'run' | 'task' | undefined;
       idempotency_key?: string | undefined;
     },
-  ): { approval_id: string; status: 'pending'; reason: string; expires_at: string } {
+    /** The policy's verdict on the request (ADR-0027 §3), computed by the caller. */
+    verdict: {
+      capability: string;
+      decision: 'allow' | 'review' | 'deny';
+      risk: 'low' | 'medium' | 'high';
+      reason: string;
+      policy_version: string | null;
+    } = {
+      capability: p.action_class,
+      decision: 'review',
+      risk: 'medium',
+      reason: 'a human decides',
+      policy_version: null,
+    },
+  ): {
+    approval_id: string | null;
+    status: 'pending' | 'granted' | 'denied';
+    reason: string;
+    expires_at: string | null;
+    capability: string;
+    risk: 'low' | 'medium' | 'high';
+  } {
     const actor: Actor = { kind: 'agent', id: caller.agent_id };
     return this.exec(
       { name: 'permission.request', project_id: projectId, actor, idempotency_key: p.idempotency_key, params: p },
       (ctx) => {
+        const target = p.resource ?? p.command ?? null;
+        if (verdict.decision !== 'review') {
+          // Nothing for a human to decide: recorded as a policy evaluation, no approval made.
+          ctx.emit({
+            type: 'policy.evaluated',
+            payload: {
+              tool: 'friday_request_permission',
+              kind: 'capability',
+              capability: verdict.capability,
+              decision: verdict.decision === 'allow' ? 'allow' : 'deny',
+              reason: verdict.reason,
+              targets: target ? [target] : [],
+              task_id: p.task_id ?? null,
+              risk: verdict.risk,
+            },
+            refs: p.task_id ? [{ kind: 'task', id: p.task_id }] : [],
+          });
+          return {
+            approval_id: null,
+            status: verdict.decision === 'allow' ? ('granted' as const) : ('denied' as const),
+            reason: verdict.decision === 'allow' ? `no approval needed: ${verdict.reason}` : verdict.reason,
+            expires_at: null,
+            capability: verdict.capability,
+            risk: verdict.risk,
+          };
+        }
         const approval_id = this.ids.next('apr');
         const expires_at = addMs(ctx.now, p.ttl_s * 1000);
         ctx.emit({
@@ -3234,12 +3282,14 @@ export class FridayState {
               approval_id,
               task_id: p.task_id ?? null,
               run_id: p.run_id ?? null,
-              capability: p.action_class,
-              target: p.resource ?? p.command ?? null,
+              capability: verdict.capability,
+              target,
               purpose: p.justification,
-              risk: null,
+              risk: verdict.risk,
               status: 'pending',
               expires_at,
+              reuse: p.reuse ?? 'once',
+              policy_version: verdict.policy_version,
             },
           },
           refs: [
@@ -3252,28 +3302,77 @@ export class FridayState {
           status: 'pending' as const,
           reason: `waiting for a human: run "friday approve ${approval_id}" or "friday reject ${approval_id}"`,
           expires_at,
+          capability: verdict.capability,
+          risk: verdict.risk,
         };
       },
     );
   }
 
-  decideApproval(projectId: string, actor: Actor, approvalId: string, granted: boolean): void {
+  /**
+   * A human decides a pending approval (ADR-0027 §6). A grant may narrow or widen how far it
+   * reaches (`reuse`) and how long it lasts (`ttl_s`), and records how it was decided.
+   */
+  decideApproval(
+    projectId: string,
+    actor: Actor,
+    approvalId: string,
+    granted: boolean,
+    opts: { reuse?: 'once' | 'run' | 'task'; ttl_s?: number; note?: string; via?: 'cli' | 'ui' | 'elicitation' } = {},
+  ): void {
     if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human can decide an approval');
-    this.exec({ name: 'approval.decide', project_id: projectId, actor, params: { approvalId, granted } }, (ctx) => {
+    this.exec(
+      { name: 'approval.decide', project_id: projectId, actor, params: { approvalId, granted, opts } },
+      (ctx) => {
+        const row = this.db
+          .prepare('SELECT status, expires_at FROM approvals WHERE approval_id = ? AND project_id = ?')
+          .get<{
+            status: string;
+            expires_at: string | null;
+          }>(approvalId, projectId);
+        if (!row) throw new FridayError('invalid_request', `approval ${approvalId} not found`);
+        if (row.status !== 'pending')
+          throw new FridayError('invalid_state_transition', `approval is already ${row.status}`);
+        if (row.expires_at && row.expires_at <= ctx.now)
+          throw new FridayError('approval_expired', 'approval request expired');
+        ctx.emit({
+          type: 'approval.decided',
+          payload: {
+            approval_id: approvalId,
+            status: granted ? 'granted' : 'denied',
+            ...(granted && opts.reuse ? { reuse: opts.reuse } : {}),
+            ...(granted && opts.ttl_s ? { expires_at: addMs(ctx.now, opts.ttl_s * 1000) } : {}),
+            note: opts.note ?? null,
+            via: opts.via ?? null,
+          },
+          refs: [{ kind: 'approval', id: approvalId }],
+        });
+      },
+    );
+  }
+
+  /** Records that an action relied on approvals (ADR-0027 §5); a `once` grant is used up. */
+  useApprovals(projectId: string, actor: Actor, uses: { approval_id: string; tool: string; target: string }[]): void {
+    if (!uses.length) return;
+    this.exec({ name: 'approval.use', project_id: projectId, actor, params: { uses } }, (ctx) => {
+      for (const u of uses) {
+        ctx.emit({ type: 'approval.used', payload: u, refs: [{ kind: 'approval', id: u.approval_id }] });
+      }
+    });
+  }
+
+  /** A human withdraws an approval: no later use counts (spec Part 07 §16, invariant 9). */
+  revokeApproval(projectId: string, actor: Actor, approvalId: string, note: string): void {
+    if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human can revoke an approval');
+    this.exec({ name: 'approval.revoke', project_id: projectId, actor, params: { approvalId } }, (ctx) => {
       const row = this.db
-        .prepare('SELECT status, expires_at FROM approvals WHERE approval_id = ? AND project_id = ?')
-        .get<{
-          status: string;
-          expires_at: string | null;
-        }>(approvalId, projectId);
+        .prepare('SELECT status FROM approvals WHERE approval_id = ? AND project_id = ?')
+        .get<{ status: string }>(approvalId, projectId);
       if (!row) throw new FridayError('invalid_request', `approval ${approvalId} not found`);
-      if (row.status !== 'pending')
-        throw new FridayError('invalid_state_transition', `approval is already ${row.status}`);
-      if (row.expires_at && row.expires_at <= ctx.now)
-        throw new FridayError('approval_expired', 'approval request expired');
+      if (row.status === 'revoked') return;
       ctx.emit({
-        type: 'approval.decided',
-        payload: { approval_id: approvalId, status: granted ? 'granted' : 'denied' },
+        type: 'approval.revoked',
+        payload: { approval_id: approvalId, note },
         refs: [{ kind: 'approval', id: approvalId }],
       });
     });

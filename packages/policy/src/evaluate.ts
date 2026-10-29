@@ -1,4 +1,5 @@
 import type { TaskScope } from '@friday/protocol';
+import { CLASS_CAPABILITY } from './capabilities.js';
 import { type Autonomy, type CommandClass, classifyCommand } from './commands.js';
 import { canonicalize, globsOverlap, matchesAny, type PathContext } from './paths.js';
 import { type SensitiveClass, sensitiveClassOf, sensitiveInText, sensitivePattern } from './sensitive.js';
@@ -37,7 +38,10 @@ export interface PolicyInput {
   task: PolicyTask | null;
   /** Other sessions currently writing in this working tree (single-live-writer rule, plan B26). */
   otherWriters?: OtherWriter[];
-  /** True when a human granted this capability/target and the grant has not expired. */
+  /**
+   * Whether a usable approval covers this capability (a catalogue name, ADR-0027) and exact target.
+   * Only a check: the caller uses up what the result says it relied on.
+   */
   approved?: (capability: string, target: string) => boolean;
   autonomy?: Partial<Record<CommandClass, Autonomy>>;
   /**
@@ -64,6 +68,8 @@ export interface PolicyResult {
   reserve?: string[];
   /** A write denied because another task holds the reservation. */
   reserved_by?: { pattern: string; task_id: string };
+  /** Approvals an allowed action relied on, to be used up by the caller (ADR-0027). */
+  relied_on?: { capability: string; target: string }[];
 }
 
 const r = (decision: Decision, rule: string, reason: string, extra: Partial<PolicyResult> = {}): PolicyResult => ({
@@ -132,7 +138,10 @@ export function evaluate(input: PolicyInput): PolicyResult {
   if (action.kind === 'network') {
     const target = action.url ?? action.tool;
     if (input.approved?.('network.read', target))
-      return r('allow', 'network.approved', `a human approved network access to ${target}.`, { targets: [target] });
+      return r('allow', 'network.approved', `a human approved network access to ${target}.`, {
+        targets: [target],
+        relied_on: [{ capability: 'network.read', target }],
+      });
     return r('ask', 'network.review', `network access (${target}) needs a human decision in M1.`, {
       command_class: 'network.fetch',
       targets: [target],
@@ -158,10 +167,11 @@ export function evaluate(input: PolicyInput): PolicyResult {
         command_class: c.class,
         targets: [target],
       });
-    if (input.approved?.(c.class, target)) {
+    if (input.approved?.(CLASS_CAPABILITY[c.class], target)) {
       return r('allow', 'command.approved', `a human approved this ${c.class} command.`, {
         command_class: c.class,
         targets: [target],
+        relied_on: [{ capability: CLASS_CAPABILITY[c.class], target }],
       });
     }
     if (c.autonomy === 'manual') {
@@ -224,6 +234,7 @@ export function evaluate(input: PolicyInput): PolicyResult {
     );
   }
   const windows = ctx.windows ?? process.platform === 'win32';
+  const relied: { capability: string; target: string }[] = [];
   for (const rel of locations) {
     for (const other of input.otherWriters ?? []) {
       const otherWrites = other.scope?.write ?? [];
@@ -243,7 +254,11 @@ export function evaluate(input: PolicyInput): PolicyResult {
       }
     }
     const scope = task.scope?.write ?? [];
-    const inScope = scope.length === 0 || matchesAny(rel, scope, windows) || input.approved?.('fs.write', rel);
+    let inScope = scope.length === 0 || matchesAny(rel, scope, windows);
+    if (!inScope && input.approved?.('file.write', rel)) {
+      inScope = true;
+      relied.push({ capability: 'file.write', target: rel });
+    }
     if (!inScope) {
       return r(
         'deny',
@@ -268,6 +283,6 @@ export function evaluate(input: PolicyInput): PolicyResult {
     'allow',
     task.scope?.write.length ? 'write.in_scope' : 'write.no_scope',
     task.scope?.write.length ? 'inside the task scope.' : 'the task declares no write scope.',
-    { targets, ...(reserve.length ? { reserve } : {}) },
+    { targets, ...(reserve.length ? { reserve } : {}), ...(relied.length ? { relied_on: relied } : {}) },
   );
 }

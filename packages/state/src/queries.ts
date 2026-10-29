@@ -397,6 +397,50 @@ export class Queries {
   }
 
   /** Valid, unexpired grants for a capability and target. */
+  /**
+   * The approval that covers a use right now (ADR-0027 §4–§5): granted, not expired, under the
+   * current policy version, for this capability and exact target, and bound to this task — and for
+   * `once` and `run` grants to this attempt and agent. The oldest usable one, or undefined.
+   */
+  usableApproval(
+    projectId: string,
+    use: {
+      capability: string;
+      target: string;
+      task_id: string | null;
+      run_id: string | null;
+      agent_id: string | null;
+      policy_version: string | null;
+      now: string;
+    },
+  ): string | undefined {
+    const rows = this.db
+      .prepare(
+        `SELECT approval_id, task_id, run_id, requested_by_kind, requested_by_id, reuse, policy_version FROM approvals
+         WHERE project_id = ? AND capability = ? AND target = ? AND status = 'granted'
+           AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at, approval_id`,
+      )
+      .all<{
+        approval_id: string;
+        task_id: string | null;
+        run_id: string | null;
+        requested_by_kind: string;
+        requested_by_id: string;
+        reuse: string;
+        policy_version: string | null;
+      }>(projectId, use.capability, use.target, use.now);
+    // When several grants cover a use, the narrowest is spent first and broader ones are kept.
+    const reach: Record<string, number> = { once: 0, run: 1, task: 2 };
+    rows.sort((x, y) => (reach[x.reuse] ?? 0) - (reach[y.reuse] ?? 0));
+    return rows.find((a) => {
+      if (a.policy_version && use.policy_version && a.policy_version !== use.policy_version) return false;
+      if (a.task_id && a.task_id !== use.task_id) return false;
+      if (a.reuse === 'task') return true;
+      if (a.run_id && a.run_id !== use.run_id) return false;
+      return a.requested_by_kind !== 'agent' || a.requested_by_id === use.agent_id;
+    })?.approval_id;
+  }
+
   grantedApproval(projectId: string, capability: string, target: string, nowIso: string): boolean {
     return Boolean(
       this.db

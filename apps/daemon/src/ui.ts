@@ -63,6 +63,24 @@ async function api(path) {
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
+async function post(path, body) {
+  const r = await fetch('/api/v1/projects/' + PID + path, {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+/** A human decides an approval here, as with "friday approve" (ADR-0027 §6). */
+document.getElementById('approvals').onclick = async (ev) => {
+  const b = ev.target.closest('button[data-a]');
+  if (!b) return;
+  b.disabled = true;
+  try { await post('/approvals/' + encodeURIComponent(b.dataset.id) + '/' + b.dataset.a, { via: 'ui' }); }
+  catch (e) { document.getElementById('meta').textContent = '· ' + e.message; }
+  refresh();
+};
 function table(el, head, rows) {
   el.innerHTML = '<tr>' + head.map((h) => '<th>' + esc(h) + '</th>').join('') + '</tr>' +
     (rows.length ? rows.join('') : '<tr><td colspan="' + head.length + '" class="muted">none</td></tr>');
@@ -78,8 +96,11 @@ async function refresh() {
       '<tr><td><code>' + esc(h.harness_id) + '</code></td><td>' + esc(h.vendor) + '</td><td class="' + cls(h.status) + '">' + esc(h.status) + '</td><td>' + esc(h.enforcement_level || '') + '</td></tr>'));
     table(document.getElementById('agents'), ['Agent', 'Status', 'Task'], s.agents.map((a) =>
       '<tr><td>' + esc(a.agent_key) + (a.shadow ? ' (shadow)' : '') + '</td><td class="' + cls(a.status) + '">' + esc(a.status) + '</td><td><code>' + esc(a.current_task_id || '') + '</code></td></tr>'));
-    table(document.getElementById('approvals'), ['Approval', 'Capability', 'Target'], s.approvals.map((a) =>
-      '<tr><td><code>' + esc(a.approval_id) + '</code></td><td>' + esc(a.capability) + '</td><td>' + esc(a.target) + '</td></tr>'));
+    table(document.getElementById('approvals'), ['Approval', 'Capability', 'Risk', 'Target', 'Task', 'Purpose', ''], s.approvals.map((a) =>
+      '<tr><td><code>' + esc(a.approval_id) + '</code></td><td>' + esc(a.capability) + '</td><td>' + esc(a.risk || '') + '</td><td>' + esc(a.target) +
+      '</td><td><code>' + esc(a.task_id || '') + '</code></td><td>' + esc(a.purpose || '') + '</td><td>' +
+      '<button data-a="approve" data-id="' + esc(a.approval_id) + '">Approve once</button> ' +
+      '<button data-a="reject" data-id="' + esc(a.approval_id) + '">Reject</button></td></tr>'));
     table(document.getElementById('goals'), ['Goal', 'Status', 'Objective'], (s.goals || []).map((g) =>
       '<tr><td><code>' + esc(g.goal_id) + '</code></td><td class="' + cls(g.status) + '">' + esc(g.status) + '</td><td>' + esc(g.objective || g.request) + '</td></tr>'));
     table(document.getElementById('escalations'), ['Question', 'From', 'Kind', 'Text'], (s.escalations || []).map((q) =>

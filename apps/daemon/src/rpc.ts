@@ -1,5 +1,13 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
+  type Autonomy,
+  type Capability,
+  type CommandClass,
+  capabilityOf,
+  evaluateCapability,
+  type Risk,
+} from '@friday/policy';
+import {
   type Actor,
   type ContextPacket,
   FridayError,
@@ -13,7 +21,7 @@ import {
   rpcResult,
   type TokenClass,
 } from '@friday/protocol';
-import type { ProjectRef } from '@friday/sdk';
+import { type ProjectRef, policyVersion } from '@friday/sdk';
 import type { Caller, FridayState } from '@friday/state';
 import type { CompileInput } from './context.js';
 
@@ -29,6 +37,8 @@ export interface RpcDeps {
   compile: (input: CompileInput, actor: Actor) => Promise<ContextPacket>;
   signal?: AbortSignal;
   pollIntervalMs?: number;
+  /** The per-user state folder, for Friday's protected paths. */
+  stateDir?: string;
 }
 
 function issuesOf(err: { issues: { path: PropertyKey[]; message: string }[] }) {
@@ -246,7 +256,47 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
     }
     case 'permission.request': {
       const p = METHODS[method].params.parse(raw);
-      return state.requestPermission(pid, caller(), p);
+      const c = caller();
+      // Bound to the task and attempt it is for: the named one, else the one this agent holds (ADR-0027 §4).
+      const task = p.task_id
+        ? state.q.findTask(pid, p.task_id)
+        : state.q.tasks(pid, { statuses: ['RUNNING', 'WAITING'] }).find((t) => t.assigned_agent_id === c.agent_id);
+      const run = p.run_id
+        ? state.q.findRun(p.run_id)
+        : task?.current_run_id
+          ? state.q.findRun(task.current_run_id)
+          : undefined;
+      const capability = capabilityOf(p.action_class);
+      const version = policyVersion(project.config);
+      const verdict = capability
+        ? (() => {
+            const v = evaluateCapability({
+              capability,
+              target: p.resource ?? p.command ?? null,
+              task: task ? { task_id: task.task_id, status: task.status, scope: task.scope, kind: task.kind } : null,
+              ctx: {
+                projectRoot: run?.execution_root ?? state.q.findHarness(c.harness_id)?.host_cwd ?? project.root,
+                mainRoot: project.root,
+                ...(deps.stateDir ? { stateDir: deps.stateDir } : {}),
+              },
+              autonomy: project.config.autonomy as Partial<Record<CommandClass, Autonomy>>,
+              risk: project.config.risk as Partial<Record<Capability, Risk>>,
+            });
+            return { capability, decision: v.decision, risk: v.risk, reason: v.reason, policy_version: version };
+          })()
+        : {
+            capability: p.action_class,
+            decision: 'review' as const,
+            risk: 'high' as const,
+            reason: `${p.action_class} is not a capability Friday knows; a human decides`,
+            policy_version: version,
+          };
+      return state.requestPermission(
+        pid,
+        c,
+        { ...p, task_id: p.task_id ?? task?.task_id, run_id: p.run_id ?? run?.run_id },
+        verdict,
+      );
     }
     case 'task.release': {
       const p = METHODS[method].params.parse(raw);

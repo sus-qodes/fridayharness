@@ -672,6 +672,23 @@ CREATE INDEX ix_integrations ON integrations(project_id, goal_id, task_id);
   },
 ];
 
+/** M6a: approvals bound to their task, attempt, target and policy version (ADR-0027). */
+export const APPROVAL_MIGRATIONS: Migration[] = [
+  {
+    version: 14,
+    name: 'bound_approvals',
+    up: `
+ALTER TABLE approvals ADD COLUMN reuse TEXT NOT NULL DEFAULT 'once';
+ALTER TABLE approvals ADD COLUMN policy_version TEXT;
+ALTER TABLE approvals ADD COLUMN uses INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE approvals ADD COLUMN last_used_at TEXT;
+ALTER TABLE approvals ADD COLUMN note TEXT;
+ALTER TABLE approvals ADD COLUMN decided_via TEXT;
+CREATE INDEX ix_approvals_use ON approvals(project_id, capability, status);
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -686,6 +703,7 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...VERIFICATION_MIGRATIONS,
   ...RESERVATION_MIGRATIONS,
   ...INTEGRATION_MIGRATIONS,
+  ...APPROVAL_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */

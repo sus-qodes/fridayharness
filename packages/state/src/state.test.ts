@@ -424,13 +424,11 @@ describe('tokens, approvals and observations', () => {
       ttl_s: 600,
     });
     expect(a.status).toBe('pending');
-    expectError(
-      () => state.decideApproval(PROJECT, { kind: 'agent', id: reg.agent_id }, a.approval_id, true),
-      'COS-3000',
-    );
-    state.decideApproval(PROJECT, human, a.approval_id, true);
+    const id = a.approval_id as string;
+    expectError(() => state.decideApproval(PROJECT, { kind: 'agent', id: reg.agent_id }, id, true), 'COS-3000');
+    state.decideApproval(PROJECT, human, id, true);
     expect(state.q.grantedApproval(PROJECT, 'fs.write', 'backend/x.ts', clock.now())).toBe(true);
-    expectError(() => state.decideApproval(PROJECT, human, a.approval_id, false), 'COS-2002');
+    expectError(() => state.decideApproval(PROJECT, human, id, false), 'COS-2002');
   });
 
   it('only observation types can be recorded directly', () => {

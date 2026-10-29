@@ -274,7 +274,8 @@ export class StateProjector implements Projector {
         this.db
           .prepare(
             `INSERT INTO approvals (approval_id, project_id, task_id, run_id, requested_by_kind, requested_by_id, capability,
-               target, purpose, risk, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               target, purpose, risk, status, expires_at, created_at, reuse, policy_version)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             str(a.approval_id),
@@ -290,15 +291,42 @@ export class StateProjector implements Projector {
             str(a.status),
             opt(a.expires_at),
             e.occurred_at,
+            typeof a.reuse === 'string' ? a.reuse : 'once',
+            opt(a.policy_version),
           );
         return;
       }
       case 'approval.decided':
         this.db
           .prepare(
-            'UPDATE approvals SET status = ?, decided_by_kind = ?, decided_by_id = ?, decided_at = ? WHERE approval_id = ?',
+            `UPDATE approvals SET status = ?, decided_by_kind = ?, decided_by_id = ?, decided_at = ?,
+               reuse = COALESCE(?, reuse), expires_at = COALESCE(?, expires_at), note = ?, decided_via = ?
+             WHERE approval_id = ?`,
           )
-          .run(str(p.status), e.actor.kind, e.actor.id, e.occurred_at, str(p.approval_id));
+          .run(
+            str(p.status),
+            e.actor.kind,
+            e.actor.id,
+            e.occurred_at,
+            opt(p.reuse),
+            opt(p.expires_at),
+            opt(p.note),
+            opt(p.via),
+            str(p.approval_id),
+          );
+        return;
+      case 'approval.used':
+        this.db
+          .prepare(
+            `UPDATE approvals SET uses = uses + 1, last_used_at = ?,
+               status = CASE WHEN reuse = 'once' THEN 'used' ELSE status END WHERE approval_id = ?`,
+          )
+          .run(e.occurred_at, str(p.approval_id));
+        return;
+      case 'approval.revoked':
+        this.db
+          .prepare("UPDATE approvals SET status = 'revoked', note = ? WHERE approval_id = ?")
+          .run(opt(p.note), str(p.approval_id));
         return;
       case 'escalation.requested': {
         const x = p.escalation as Payload;
