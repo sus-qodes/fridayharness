@@ -77,13 +77,91 @@
 .sh-rail {
   flex: none;
   width: clamp(260px, 24vw, 340px);
-  padding: 12px;
-  border-left: 1px solid var(--border-subtle);
-  background: var(--bg-surface-glass);
+  padding: 14px;
+  border-left: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(14, 15, 17, 0.72);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  transition:
+    width 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    padding 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.24s ease;
+  overflow-x: hidden;
+  overflow-y: auto;
+  position: relative;
+  box-sizing: border-box;
+}
+
+.sh-rail.sh-rail-collapsed {
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  border-left: 0 solid transparent !important;
+  overflow: hidden !important;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.sh-rail-collapse-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--color-slate-400);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sh-rail-collapse-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.sh-rail-expand-btn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 25;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px 0 10px;
+  border-radius: 9999px;
+  background: rgba(16, 18, 22, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--color-slate-300);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: var(--weight-medium);
+  letter-spacing: -0.01em;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+
+.sh-rail-expand-btn:hover {
+  background: rgba(24, 28, 34, 0.95);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  transform: translateX(-2px);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
 }
 
 .sh-rail:focus-visible {
-  outline: 2px solid var(--color-cyan-glow);
+  outline: 2px solid var(--cyan);
   outline-offset: -2px;
   box-shadow: none;
 }
@@ -132,17 +210,30 @@
 
 /* ---- Header */
 .sh-header {
-  background: rgba(9, 13, 22, 0.94);
-  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(10, 11, 14, 0.85);
+  backdrop-filter: blur(24px) saturate(190%);
+  -webkit-backdrop-filter: blur(24px) saturate(190%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .sh-bar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  min-width: 0;
+  height: var(--header-height);
+  padding: 0 16px;
+  gap: 16px;
+}
+
+/* ── Left Zone: Brand + Unified Project Capsule ───────────────────────────── */
+
+.sh-left-zone {
   display: flex;
   align-items: center;
   gap: 12px;
   min-width: 0;
-  height: var(--header-height);
-  padding: 0 12px;
+  justify-self: start;
 }
 
 .sh-brand {
@@ -150,13 +241,15 @@
   flex: none;
   align-items: center;
   gap: 8px;
+  cursor: default;
+  user-select: none;
 }
 
 .sh-brand-name {
   color: var(--color-white);
-  font-size: var(--text-title-sm);
+  font-size: 14px;
   font-weight: var(--weight-bold);
-  letter-spacing: 0.02em;
+  letter-spacing: -0.01em;
 }
 
 .sh-brand-sub {
@@ -166,22 +259,43 @@
   text-transform: uppercase;
 }
 
+.sh-project-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 9px;
+  padding: 0 10px;
+  height: 28px;
+  min-width: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.sh-project-pill:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
 .sh-project {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   min-width: 0;
-  padding-left: 12px;
-  border-left: 1px solid var(--border-subtle);
-  line-height: 1.25;
+  line-height: 1;
 }
 
 .sh-project-name {
-  max-width: 32ch;
+  max-width: 24ch;
   overflow: hidden;
-  color: var(--color-white);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
   font-weight: var(--weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
+  letter-spacing: -0.01em;
 }
 
 .sh-daemon {
@@ -190,10 +304,12 @@
   flex: none;
   align-items: center;
   gap: 6px;
-  padding: 2px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
-  font-size: var(--text-caption);
+  padding: 0 0 0 8px;
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  font-size: 11px;
+  line-height: 1;
 }
 
 .sh-daemon[data-state="connected"] {
@@ -211,8 +327,8 @@
 }
 
 .sh-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--sh-dot);
   box-shadow: 0 0 6px var(--sh-dot);
@@ -224,14 +340,38 @@
 }
 
 .sh-daemon-label {
-  color: var(--color-slate-200);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* ── Center Zone: True-Centered Apple Segmented Control ───────────────────── */
+
+.sh-center-zone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
+}
+
+/* ── Right Zone: Metrics & Action Buttons ─────────────────────────────────── */
+
+.sh-right-zone {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-self: end;
 }
 
 .sh-metrics {
   display: flex;
-  flex: none;
   align-items: center;
   gap: 2px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 2px;
+  height: 28px;
 }
 
 .sh-metric {
@@ -241,6 +381,8 @@
   padding: 0 8px;
   color: var(--color-slate-400);
   font-size: var(--text-caption);
+  height: 22px;
+  border-radius: 6px;
 }
 
 .sh-metric-value {
@@ -261,9 +403,48 @@
 
 .sh-actions {
   display: flex;
-  flex: none;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
+}
+
+.sh-actions .btn {
+  height: 28px;
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.72);
+  transition: all 0.15s ease;
+}
+
+.sh-actions .btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.sh-actions .btn-icon {
+  width: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sh-actions .kbd {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.5);
+  margin-left: 4px;
+}
+
+/* Hide duplicate gear icon on the right */
+.sh-settings {
+  display: none !important;
 }
 
 .sh-btn {
@@ -469,19 +650,20 @@
 }
 
 /* ---- Drawers */
-/* Drawers and dialogs are opaque: the elevated tint over the page colour, never the board showing through. */
 .sh-drawer-host .sh-drawer {
   position: fixed;
   z-index: 40;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(var(--bg-surface-elevated), var(--bg-surface-elevated)), var(--bg-obsidian);
+  background: rgba(18, 19, 22, 0.95);
+  backdrop-filter: blur(32px) saturate(190%);
+  -webkit-backdrop-filter: blur(32px) saturate(190%);
   border-radius: 0;
-  box-shadow: var(--shadow-lg);
+  box-shadow: -16px 0 48px rgba(0, 0, 0, 0.6);
 }
 
 .sh-drawer-host .sh-drawer:focus-visible {
-  outline: 2px solid var(--color-cyan-glow);
+  outline: 2px solid var(--cyan);
   outline-offset: -2px;
   box-shadow: var(--shadow-lg);
 }
@@ -494,6 +676,7 @@
   border-top: none;
   border-right: none;
   border-bottom: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
   animation: sh-slide-left var(--duration-slow) var(--ease-snappy);
 }
 
@@ -506,6 +689,7 @@
   border-right: none;
   border-bottom: none;
   border-left: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
   animation: sh-slide-up var(--duration-slow) var(--ease-snappy);
 }
 
@@ -514,8 +698,8 @@
   flex: none;
   align-items: center;
   gap: 8px;
-  padding: 8px 8px 8px 16px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 10px 12px 10px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .sh-drawer-title {
@@ -523,9 +707,10 @@
   min-width: 0;
   margin: 0;
   overflow: hidden;
-  color: var(--color-white);
+  color: var(--ink);
   font-size: var(--text-title-sm);
   font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -533,7 +718,7 @@
 .sh-drawer-body {
   flex: 1;
   min-height: 0;
-  padding: 12px 16px 24px;
+  padding: 14px 18px 24px;
 }
 
 /* ---- Modals */
@@ -545,7 +730,9 @@
   align-items: center;
   justify-content: center;
   padding: 24px 16px;
-  background: rgba(5, 8, 15, 0.62);
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   animation: sh-fade var(--duration-base) var(--ease-standard);
 }
 
@@ -563,15 +750,18 @@
   width: 100%;
   max-width: 640px;
   max-height: calc(100vh - 48px);
-  background: linear-gradient(var(--bg-surface-elevated), var(--bg-surface-elevated)), var(--bg-obsidian);
+  background: radial-gradient(380px 240px at 50% 0%, rgba(255, 255, 255, 0.04) 0%, transparent 70%), var(--card);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.8),
+    inset 0 1px 0 var(--glass-inner-bevel);
   animation: sh-pop var(--duration-base) var(--ease-snappy);
 }
 
 .sh-modal-backdrop .sh-modal:focus-visible,
 .sh-confirm-backdrop .sh-confirm:focus-visible {
-  outline: 2px solid var(--color-cyan-glow);
+  outline: 2px solid var(--cyan);
   outline-offset: 2px;
   box-shadow: var(--shadow-lg);
 }
@@ -593,39 +783,43 @@
   flex: none;
   align-items: center;
   gap: 8px;
-  padding: 12px 10px 12px 20px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 14px 14px 14px 22px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .sh-modal-title {
   flex: 1;
   min-width: 0;
   margin: 0;
-  color: var(--color-white);
+  color: var(--ink);
   font-size: var(--text-title-md);
   font-weight: var(--weight-semibold);
+  letter-spacing: -0.015em;
   overflow-wrap: anywhere;
 }
 
 .sh-modal-body {
   flex: 1;
   min-height: 0;
-  padding: 16px 20px 20px;
+  padding: 18px 22px 24px;
 }
 
 /* ---- Confirm dialog */
 .sh-confirm-backdrop .sh-confirm {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   width: 100%;
   max-width: 460px;
   max-height: calc(100vh - 48px);
-  padding: 20px;
+  padding: 24px;
   overflow: auto;
-  background: var(--bg-surface-elevated);
+  background: var(--card);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.8),
+    inset 0 1px 0 var(--glass-inner-bevel);
   animation: sh-pop var(--duration-base) var(--ease-snappy);
 }
 

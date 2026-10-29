@@ -33,9 +33,6 @@
     },
     {
       "path": "../../packages/git"
-    },
-    {
-      "path": "../../packages/adapters/opencode"
     }
   ]
 }

@@ -4,7 +4,7 @@
  * approvals answered through Friday's policy, the model the host reports, messages steered into
  * the running turn, and a turn's end reported as a claim, a blocked result or an error.
  */
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CODEX_RULES, CodexAdapter } from '@friday/adapter-codex';
@@ -202,7 +202,13 @@ describe('the Codex adapter', () => {
     ).toBe(true);
     expect(String(started.developerInstructions)).not.toMatch(/friday:\/\//);
     // ...and those tools are the thread's, served by the adapter.
-    expect((started.dynamicTools as { name: string }[]).map((t) => t.name)).toEqual([...SPAWNED_AGENT_TOOLS]);
+    // The project declares no operation, so the thread is not given friday_run_operation (plan M13.5).
+    expect((started.dynamicTools as { name: string }[]).map((t) => t.name)).toEqual(
+      SPAWNED_AGENT_TOOLS.filter((t) => t !== 'friday_run_operation'),
+    );
+    expect(String(started.developerInstructions)).not.toContain('friday_run_operation');
+    // Each tool is told in one line (plan M13.5).
+    for (const t of started.dynamicTools as { description: string }[]) expect(t.description.length).toBeLessThan(260);
     expect(c.entries().find((e) => e.request === 'initialize')?.params).toMatchObject({
       capabilities: { experimentalApi: true },
     });
@@ -371,6 +377,49 @@ describe('the Codex adapter', () => {
       turns: 1,
       model: threadModel(failing),
     });
+  });
+
+  it('continues the thread that did the work for a rework, and starts a new one when it is gone (plan M13.2)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const done = (summary: string) => ({ op: 'final', status: 'completed', summary, blocked_reason: '' });
+    const c = codex(td, 'cx-1', { turns: [[done('first')], [done('again')], [done('third')]] });
+    await c.adapter.start();
+    expect(c.adapter.descriptor().capabilities).toMatchObject({ resume_session: true });
+    const id = await assigned(td, 'cx-1', ['src/**']);
+    const claimed = (what: string) =>
+      eventually(
+        () => status(td, id).status,
+        (s) => s === 'READY_FOR_VERIFICATION',
+        what,
+      );
+    const refuse = async (reason: string) => {
+      await td.operator.post(td.operator.projectPath(`/tasks/${id}/verify`), { result: 'failed', note: 'not yet' });
+      await td.operator.post(td.operator.projectPath(`/tasks/${id}/rework`), { reason });
+      await td.operator.post(td.operator.projectPath(`/tasks/${id}/assign`), { agent_key: 'cx-1' });
+    };
+    const requests = (m: string) => c.entries().filter((e) => e.request === m) as { params: Record<string, unknown> }[];
+    await claimed('the first claim');
+    const thread = td.daemon.state.q.findRun(status(td, id).current_run_id as string)?.session_ref;
+    await refuse('cover the edge case');
+    await claimed('the second claim');
+    // The rework resumed the first thread with the instructions it started with; its turn is the reason.
+    expect(requests('thread/resume')[0]?.params).toMatchObject({ threadId: thread });
+    expect(requests('thread/resume')[0]?.params.developerInstructions).toBe(
+      requests('thread/start')[0]?.params.developerInstructions,
+    );
+    const turns = requests('turn/start').map((r) => (r.params.input as { text: string }[])[0]?.text);
+    expect(turns[1]).toMatch(/refused your completion claim[\s\S]*Why: cover the edge case/);
+    // The thread is gone: the next rework starts a new thread, given the task as a new attempt is.
+    const second = td.daemon.state.q.findRun(status(td, id).current_run_id as string)?.session_ref;
+    rmSync(path.join(c.dir, 'work', `thread-${second}.json`));
+    await refuse('once more');
+    await claimed('the claim of the new thread');
+    expect(requests('thread/start')).toHaveLength(2);
+    expect(
+      requests('turn/start')
+        .map((r) => (r.params.input as { text: string }[])[0]?.text)
+        .at(-1),
+    ).toBe(firstTaskMessage({ task_id: id, instruction: '', acceptance_criteria: [] }, true));
   });
 
   it('steers a message for its agent into the running turn, and acknowledges it', async () => {

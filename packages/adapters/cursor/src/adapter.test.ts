@@ -52,7 +52,7 @@ describe('what a Cursor attempt cost (host.usage)', () => {
 });
 
 describe('the final answer of a Cursor session', () => {
-  const final = { status: 'completed', summary: 'done', changed_paths: ['a.ts'], blocked_reason: '' };
+  const final = { status: 'completed', summary: 'done', blocked_reason: '' };
   it('is the JSON object the last message ends with, wrapped or not', () => {
     expect(finalFrom(JSON.stringify(final))).toEqual(final);
     expect(finalFrom(`All set.\n\n${JSON.stringify(final)}`)).toEqual(final);
@@ -67,7 +67,6 @@ describe('the final answer of a Cursor session', () => {
     expect(finalFrom('I changed the parser. {not json}')).toEqual({
       status: 'completed',
       summary: 'I changed the parser. {not json}',
-      changed_paths: [],
       blocked_reason: '',
     });
   });

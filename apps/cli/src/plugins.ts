@@ -16,7 +16,6 @@ import {
 } from '@friday/adapter-claude';
 import { cursorConfigCli, cursorDoctor, cursorDoctorCli } from '@friday/adapter-cursor';
 import { geminiConfigCommand, geminiDoctor, geminiDoctorCommand } from '@friday/adapter-gemini';
-import { opencodeConfigCli, opencodeDoctorCli } from '@friday/adapter-opencode';
 import { newId } from '@friday/protocol';
 import { type Command, Option } from 'commander';
 import { createAgentLauncher } from './agent-launcher.js';
@@ -33,7 +32,7 @@ import { FRIDAY_DIR_GITIGNORE } from './templates.js';
  * The hosts `harness config` and `harness doctor` serve, each by its own adapter (plan M8b);
  * `harness doctor` also checks codex, a spawn-mode host with nothing to write into the project.
  */
-const CONFIG_HOSTS = ['claude-code', 'cursor', 'antigravity', 'gemini', 'opencode'] as const;
+const CONFIG_HOSTS = ['claude-code', 'cursor', 'antigravity', 'gemini'] as const;
 
 function requireHost(host: string): void {
   if (host !== 'claude-code') {
@@ -139,7 +138,6 @@ function registerHarness(program: Command): void {
       ) => {
         if (host !== 'gemini' && opts.geminiMd === false) throw new UsageError('--no-gemini-md is for gemini');
         if (host === 'antigravity') return antigravityConfigCli(project(g()), opts, hostIo(g));
-        if (host === 'opencode') return opencodeConfigCli(project(g()), opts, hostIo(g));
         if (host === 'cursor') return cursorConfigCli(project(g()), opts, hostIo(g));
         if (host === 'gemini') {
           for (const [given, name] of [
@@ -256,7 +254,6 @@ function registerHarness(program: Command): void {
         // A spawn-mode host writes nothing into the project: its doctor checks the host itself (ADR-0032).
         if (host === 'codex') return doctorCodex(g, opts.sandbox, opts.windowsSandbox);
         if (host === 'antigravity') return antigravityDoctorCli(project(g()), opts, hostIo(g));
-        if (host === 'opencode') return opencodeDoctorCli(project(g()), opts, hostIo(g));
         if (host === 'cursor') return cursorDoctorCli(project(g()), opts, hostIo(g));
         if (host === 'gemini') return geminiDoctorCommand(g(), opts, { UsageError, renderDoctor });
         requireHost(host);

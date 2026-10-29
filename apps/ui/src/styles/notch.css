@@ -14,8 +14,8 @@
 .nt-island {
   --nt-w: 200px;
   --nt-h: 32px;
-  --nt-r: 16px;
-  --nt-surface: var(--bg-obsidian);
+  --nt-r: 14px;
+  --nt-surface: #000000;
   position: absolute;
   top: 0;
   left: 50%;
@@ -25,13 +25,13 @@
   transform: translateX(-50%);
   overflow: hidden;
   border-radius: 0 0 var(--nt-r) var(--nt-r);
-  border: 1px solid var(--border-medium);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-top: none;
-  background: var(--nt-surface);
-  backdrop-filter: blur(24px) saturate(200%);
-  -webkit-backdrop-filter: blur(24px) saturate(200%);
-  box-shadow: var(--shadow-lg);
-  color: var(--color-slate-200);
+  background: #000000;
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.88),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+  color: var(--ink);
   font-family: var(--font-sans);
   font-size: var(--text-base);
   line-height: 1.4;
@@ -39,18 +39,20 @@
 }
 
 .nt-island[data-state="hidden"] {
-  border-color: var(--border-subtle);
+  border-color: rgba(255, 255, 255, 0.02);
   box-shadow: none;
 }
 
 .nt-island.nt-pinned {
-  border-color: var(--color-amber);
-  box-shadow: var(--shadow-lg), var(--shadow-glow-amber);
+  border-color: var(--amber);
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.88),
+    var(--shadow-glow-amber);
 }
 
 .nt-island.nt-pinned.nt-folded {
-  border-color: var(--border-medium);
-  box-shadow: var(--shadow-lg);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.88);
 }
 
 /* Views and their parts hide with the `hidden` attribute, whatever their display. */
@@ -231,20 +233,23 @@
   display: inline-flex;
   flex: 0 1 auto;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
-  max-width: 96px;
+  max-width: 108px;
   height: 24px;
-  padding: 0 6px;
+  padding: 0 8px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   background: transparent;
-  color: var(--color-slate-200);
+  color: var(--ink-2);
+  font-family: var(--font-sans);
   font-size: var(--text-caption);
+  transition: background 0.12s ease;
 }
 
 .nt-ticker:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink);
 }
 
 .nt-ticker-file {
@@ -255,30 +260,41 @@
 }
 
 .nt-add {
-  color: var(--diff-add-text);
+  color: var(--green-2);
+  font-weight: var(--weight-semibold);
 }
 
 .nt-del {
-  color: var(--diff-del-text);
+  color: var(--red-text);
+  font-weight: var(--weight-semibold);
 }
 
-/* A button (it opens the card, or in a page shows the rail): no browser border. */
+/* A button (it opens the card, or in a page shows the rail): Coucou Apple pill badge */
 .nt-chip {
   flex: none;
-  padding: 0 6px;
+  padding: 2px 8px;
   border: 0;
   border-radius: var(--radius-pill);
-  background: rgba(245, 158, 11, 0.16);
-  color: var(--color-amber);
-  font-size: var(--text-caption);
+  background: rgba(245, 165, 36, 0.18);
+  color: var(--amber);
+  font-family: var(--font-sans);
+  font-size: 11px;
   font-weight: var(--weight-semibold);
-  line-height: 18px;
+  line-height: 16px;
+  letter-spacing: -0.01em;
   white-space: nowrap;
   cursor: pointer;
+  transition:
+    background 0.12s ease,
+    transform 0.08s ease;
 }
 
 .nt-chip:hover {
-  background: rgba(245, 158, 11, 0.26);
+  background: rgba(245, 165, 36, 0.28);
+}
+
+.nt-chip:active {
+  transform: scale(0.94);
 }
 
 /* In a page the tag opens the task; with no task it names the project and is not a door. */

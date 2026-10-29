@@ -162,6 +162,12 @@ describe('settings helpers', () => {
     ]);
   });
 
+  it('offers a planner on this machine its server and model, never an Anthropic key (plan M12.1)', () => {
+    const local = brain({ provider: 'local', model: 'qwen2.5:7b', remote: false, key: 'not needed' });
+    expect(plannerSteps(local, 7).map((s) => s.command ?? s.text)).toEqual(['friday doctor']);
+    expect(JSON.stringify(plannerSteps(local, 7))).not.toMatch(/anthropic|allow-remote/i);
+  });
+
   it('counts the worktrees in use once per folder, for live runs with a ready workspace outside the checkout', () => {
     const board = makeSnapshot({
       runs: {

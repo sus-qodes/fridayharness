@@ -11,8 +11,10 @@ export {
   type CodexAdapterOptions,
   type CodexSandbox,
   codexHostUsage,
+  codexRules,
   FINAL_SCHEMA,
   parseFinal,
+  STRICT_FINAL_SCHEMA,
 } from './adapter.js';
 export { type CodexInstall, findCodex, hostEnvironment } from './detect.js';
 export { type CodexDoctorCheck, codexDoctor } from './doctor.js';

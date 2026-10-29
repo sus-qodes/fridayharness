@@ -136,7 +136,7 @@ describe('Master Brain', () => {
       status: 'PROPOSED',
       trigger: 'first plan',
       proposed_by: { kind: 'master_brain' },
-      prompt_version: 'plan-2',
+      prompt_version: 'plan-3',
     });
     expect(v1?.tasks.map((t) => [t.key, t.change])).toEqual([
       ['billing-service', 'new'],
@@ -191,7 +191,7 @@ describe('Master Brain', () => {
       status: 'PROPOSED',
       supersedes: 1,
       trigger: expect.stringContaining('verification failed'),
-      prompt_version: 'replan-3',
+      prompt_version: 'replan-4',
     });
     expect(v2?.tasks.map((t) => [t.key, t.change])).toEqual([
       ['billing-service', 'keep'],
@@ -329,7 +329,7 @@ describe('Master Brain', () => {
       goal_id: null,
       plan_id: null,
       purpose: 'plan',
-      prompt_version: 'plan-2',
+      prompt_version: 'plan-3',
       provider: 'anthropic',
       model: 'claude-opus-5-5',
       remote: true,
@@ -346,6 +346,191 @@ describe('Master Brain', () => {
     state.createGoal(PROJECT, human, { request: GOAL });
     await b.runOnce();
     expect(pending()).toMatchObject([{ kind: 'budget_exceeded' }]);
+  });
+
+  it('proposes a goal whose pieces run one after another as one task (plan M13.1)', async () => {
+    const serial = {
+      objective: 'Checkout takes a gift card',
+      summary: 'The contract, then the backend',
+      rationale: 'The backend needs the contract.',
+      tasks: [
+        {
+          key: 'contract',
+          summary: 'A gift card in the shared contract',
+          acceptance_criteria: ['node --test passes'],
+          scope: { write: ['shared/src/api.ts'] },
+          role: 'frontend',
+        },
+        {
+          key: 'redeem',
+          summary: 'Redeem the card in the backend',
+          acceptance_criteria: ['node --test passes', 'the balance is never exceeded'],
+          scope: { write: ['backend/**'] },
+          role: 'backend',
+          depends_on: ['contract'],
+        },
+      ],
+    };
+    const b = brain(new FakePlannerModel([{ purpose: 'plan', output: serial }]));
+    const goal = state.createGoal(PROJECT, human, { request: 'Checkout takes a gift card' });
+    await b.runOnce();
+    const v = state.q.planVersions(state.q.goal(PROJECT, goal.goal_id).plan_id as string)[0];
+    expect(v?.tasks.map((t) => t.key)).toEqual(['contract']);
+    expect(v?.tasks[0]).toMatchObject({ role: 'developer', scope: { write: ['shared/src/api.ts', 'backend/**'] } });
+    // The reviewer reads why in the plan's rationale.
+    expect(v?.rationale).toMatch(/Friday kept this as one task: its 2 parts \(contract, redeem\)/);
+  });
+
+  it('gives a small, low-risk task to the cheapest capable agent and its rework to a stronger one (plan M13.3)', async () => {
+    const cheap = spawnAgent('be-cheap', 'backend');
+    const std = spawnAgent('be-std', 'backend');
+    const classOf = (agentId: string) => (agentId === cheap.agent_id ? 'cheap' : 'standard');
+    const b = new MasterBrain({
+      state,
+      projectId: PROJECT,
+      model: new FakePlannerModel([
+        {
+          purpose: 'plan',
+          output: {
+            objective: 'A VAT note on receipts',
+            summary: 'One small backend task',
+            tasks: [
+              {
+                key: 'vat-note',
+                summary: 'Add a VAT note to receipts',
+                acceptance_criteria: ['node --test passes'],
+                scope: { write: ['backend/src/receipt.ts'] },
+                role: 'backend',
+                risk_level: 'low',
+              },
+            ],
+          },
+        },
+      ]),
+      settings: SETTINGS,
+      projectContext: () => 'fixture-shop',
+      // The standard agent's model fits better and would win on the score alone.
+      modelFit: (_t, agentId) => ({
+        fit: agentId === cheap.agent_id ? 0.7 : 0.9,
+        cost: 0,
+        cost_class: classOf(agentId),
+      }),
+    });
+    state.costClassOf = (_t, agentId) => classOf(agentId);
+    const goal = state.createGoal(PROJECT, human, { request: 'A VAT note on receipts' });
+    await b.runOnce();
+    state.approvePlan(PROJECT, human, state.q.goal(PROJECT, goal.goal_id).plan_id as string, 1);
+    await b.runOnce();
+    let t = byKey(goal.goal_id)['vat-note'] as TaskView;
+    expect(agentKeyOf(t)).toBe('be-cheap');
+    expect(state.q.assignments(t.task_id)[0]?.reason).toMatch(/the cheapest capable agent \(cheap\)/);
+    expect(accept(cheap)).toEqual([t.task_id]);
+    // Verification refuses the cheap agent's claim: the rework goes to the standard agent.
+    finish(cheap, t, false);
+    state.reworkTask(PROJECT, human, t.task_id, 'the test of the note fails');
+    t = state.q.task(PROJECT, t.task_id);
+    expect(t).toMatchObject({ status: 'READY', reserved_for_agent_key: 'be-std', reserved_by: 'rework' });
+    await b.runOnce();
+    expect(agentKeyOf(state.q.task(PROJECT, t.task_id))).toBe('be-std');
+    expect(accept(std)).toEqual([t.task_id]);
+  });
+
+  it('keeps a rework with the agent that did the work when no stronger agent is there (plan M13.3)', async () => {
+    const cheap = spawnAgent('be-cheap', 'backend');
+    spawnAgent('fe-std', 'frontend');
+    state.costClassOf = (_t, agentId) => (agentId === cheap.agent_id ? 'cheap' : 'standard');
+    const task = state.createTask(PROJECT, human, {
+      summary: 'Add a VAT note',
+      scope: { write: ['backend/**'], read: [] },
+      ready: true,
+    });
+    state.assignTask(PROJECT, human, task.task_id, 'be-cheap');
+    accept(cheap);
+    finish(cheap, task, false);
+    state.reworkTask(PROJECT, human, task.task_id, 'try again');
+    // The only stronger agent is of another role: the rework stays with be-cheap.
+    expect(state.q.task(PROJECT, task.task_id).reserved_for_agent_key).toBe('be-cheap');
+  });
+
+  it('never escalates a rework to an agent whose route blocks the task, or that is busy (review of M13)', async () => {
+    const cheap = spawnAgent('be-cheap', 'backend');
+    const blocked = spawnAgent('be-blocked', 'backend');
+    const busy = spawnAgent('be-busy', 'backend');
+    // The router has no class for an agent whose route blocks the task; a failing router none at all.
+    state.costClassOf = (_t, agentId) => {
+      if (agentId === cheap.agent_id) return 'cheap';
+      if (agentId === blocked.agent_id) return null;
+      return 'standard';
+    };
+    const other = state.createTask(PROJECT, human, {
+      summary: 'other work',
+      scope: { write: ['docs/**'], read: [] },
+      ready: true,
+    });
+    state.assignTask(PROJECT, human, other.task_id, 'be-busy');
+    accept(busy);
+    const task = state.createTask(PROJECT, human, {
+      summary: 'Add a VAT note',
+      scope: { write: ['backend/**'], read: [] },
+      ready: true,
+    });
+    state.assignTask(PROJECT, human, task.task_id, 'be-cheap');
+    accept(cheap);
+    finish(cheap, task, false);
+    state.reworkTask(PROJECT, human, task.task_id, 'try again');
+    expect(state.q.task(PROJECT, task.task_id).reserved_for_agent_key).toBe('be-cheap');
+    // A router that throws never stops a rework.
+    state.costClassOf = () => {
+      throw new Error('routing is down');
+    };
+    const again = state.createTask(PROJECT, human, {
+      summary: 'Another',
+      scope: { write: ['backend/x/**'], read: [] },
+      ready: true,
+    });
+    state.unreserveTask(PROJECT, human, task.task_id, 'free it');
+    state.assignTask(PROJECT, human, again.task_id, 'be-cheap');
+    accept(cheap);
+    finish(cheap, again, false);
+    expect(state.reworkTask(PROJECT, human, again.task_id, 'try again').reserved_for_agent_key).toBe('be-cheap');
+  });
+
+  it('proposes the plan as the model wrote it when a human asked for it with feedback (review of M13)', async () => {
+    const serial = {
+      objective: 'Checkout takes a gift card',
+      summary: 'The contract, then the backend',
+      tasks: [
+        {
+          key: 'contract',
+          summary: 'The contract',
+          acceptance_criteria: ['ok'],
+          scope: { write: ['shared/src/api.ts'] },
+        },
+        {
+          key: 'redeem',
+          summary: 'The backend',
+          acceptance_criteria: ['ok'],
+          scope: { write: ['backend/**'] },
+          depends_on: ['contract'],
+        },
+      ],
+    };
+    const b = brain(
+      new FakePlannerModel([
+        { purpose: 'plan', output: serial },
+        { purpose: 'plan', output: serial },
+      ]),
+    );
+    const goal = state.createGoal(PROJECT, human, { request: 'Checkout takes a gift card' });
+    await b.runOnce();
+    const planId = state.q.goal(PROJECT, goal.goal_id).plan_id as string;
+    expect(state.q.planVersion(planId, 1)?.tasks).toHaveLength(1);
+    state.rejectPlan(PROJECT, human, planId, 1, 'not as one task');
+    await b.requestReplan(goal.goal_id, 'split it into the contract and the backend');
+    await b.runOnce();
+    const latest = state.q.planVersions(planId).at(-1);
+    expect(latest?.version).toBe(2);
+    expect(latest?.tasks.map((t) => t.key)).toEqual(['contract', 'redeem']);
   });
 
   it('escalates with the validation errors when the plan is invalid twice', async () => {

@@ -78,18 +78,3 @@ describe('hook evidence', () => {
     });
   });
 });
-
-describe('OpenCode A/B enforcement', () => {
-  it('stays unverified even when a spawn client claims fail-closed hooks', () => {
-    expect(
-      achievedEnforcement({
-        vendor: 'opencode',
-        attach_mode: 'spawn',
-        claimed: 'L1',
-        hooks_seen: true,
-        host_version: '1.19.3',
-        capabilities: { hook_failure: 'fail-closed' },
-      }),
-    ).toMatchObject({ level: 'L1', status: 'unverified' });
-  });
-});

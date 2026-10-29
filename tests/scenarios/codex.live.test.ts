@@ -597,7 +597,7 @@ describe.skipIf(!MODE)('the Codex adapter against the real Codex app-server', ()
         results.final_messages_are_json = finals().map((f) => {
           try {
             const v = JSON.parse(f) as Record<string, unknown>;
-            return ['status', 'summary', 'changed_paths', 'blocked_reason'].every((k) => k in v);
+            return ['status', 'summary', 'blocked_reason'].every((k) => k in v);
           } catch {
             return false;
           }

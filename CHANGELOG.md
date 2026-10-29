@@ -2,6 +2,15 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M13, fewer sessions and fewer tokens per goal
+
+- **A small goal is one task:** the Master Brain's plan prompt (`plan-3`) keeps work one agent can finish as one task, and Friday merges a first plan of two or three tasks that would only run one after another into one, saying so in the plan's rationale. Plans you write, or ask for with feedback, are never merged. On the benefit comparison's goal: 38% less input than as two tasks, and as fast as one plain session.
+- **A rework continues its session:** when the agent that did the work reworks it, spawned Claude Code (`--resume`) and Codex (`thread/resume`) continue the session that did the work, told why the claim was refused; a session the host cannot resume is replaced by a new one. Measured: 43% less input and half the calls for the rework.
+- **Cost classes:** every agent is `free`, `cheap` or `standard` (`friday harness run claude-code|codex --cost-class`, else its model's class from the registry; `--models` limits the models routing may run for it). A small, low-risk task goes to the cheapest capable agent of its role, and a refused claim is reworked by a stronger agent when one is free.
+- **A forgiving final answer:** a spawned session's final answer needs only its status; the changed paths come from the worktree. No missing or added field makes Claude Code refuse an answer.
+- **Slimmer tools in spawned sessions:** Friday's tools are described in one line each, with only the fields an agent needs, and `friday_run_operation` only where the project declares an operation. With the final answer above: 943 tokens fewer in every call.
+- **Measured:** `docs/measurements/2026-10-19-fewer-sessions.md`; the benefit comparison has a `friday-one` arm and the baseline a rework variant (`FRIDAY_TOKEN_BASELINE_REWORK`).
+
 ## Unreleased — the benefit comparison
 
 - **Measured whether Friday helps:** `tests/scenarios/benefit.live.test.ts` (gated by `FRIDAY_BENEFIT`) does one goal three ways on the same host and model (one plain Claude Code session, two plain sessions at once in one folder, and Friday with two spawned agents) and judges each result by the same hidden checks no agent sees. The first record (`docs/measurements/2026-10-18-benefit.md`): on an easy goal of two tasks on one shared file, all three got everything right; Friday spent 51% more input and took 1.7 times as long as one session, and 17% less input than two sessions working at once, where the shared file collided in both runs and one session reported itself blocked with the work done.

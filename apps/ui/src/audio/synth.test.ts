@@ -153,7 +153,7 @@ describe('Synth', () => {
     expect(fake.state).toBe('suspended');
     s.play('emergency_halt');
     expect(fake.resumes).toBe(1);
-    const wait = Math.round(SOUND_LENGTH.emergency_halt * 1000) + IDLE_SUSPEND_MS;
+    const wait = Math.round((SOUND_LENGTH.emergency_halt ?? 0) * 1000) + IDLE_SUSPEND_MS;
     vi.advanceTimersByTime(wait - 1);
     expect(fake.suspends).toBe(1);
     // Another sound restarts the idle time.

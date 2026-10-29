@@ -48,9 +48,10 @@ function fakeAreas(
 ): AreaSet {
   const part =
     (name: 'studio' | 'dock' | 'palette' | 'tray' | 'notch') =>
-    (_ctx: AppContext, container: HTMLElement, hooks?: ShellHooks) => {
+    (_ctx: AppContext, container: HTMLElement, third?: unknown) => {
       if (opts.failing === name) throw new Error(`${name} broke`);
-      if (name === 'notch' && hooks) opts.onNotchHooks?.(hooks);
+      // The Notch gets the shell's hooks; the tray its collapse option.
+      if (name === 'notch' && third) opts.onNotchHooks?.(third as ShellHooks);
       const el = h('div', { class: `fake-${name}` }, name);
       container.append(el);
       log.push(`mount:${name}`);

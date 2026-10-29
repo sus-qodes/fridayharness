@@ -1,0 +1,501 @@
+/*
+ * Coucou-style Settings Hub layout and design system (plan §7.10, Coucou parity).
+ * Features:
+ * - Pure OLED-black sidebar with 3 distinct groups (General, AI & Governance, System & Desktop)
+ * - Live animated mascot in brand header and category hero banners
+ * - Rounded floating content panel (margin 12px 14px 14px 0, 22px squircle radius, #0e0f11 background)
+ * - Apple-style segmented switcher in the Studio header [ Canvas | Settings ]
+ * - 14px rounded cards with hairline borders and refined micro-interactions
+ */
+
+:root {
+  --hub-panel: #0e0f11;
+  --hub-card: #18191c;
+  --hub-card-hover: #1f2024;
+  --hub-field: #1f2024;
+  --hub-line: rgba(255, 255, 255, 0.07);
+  --hub-line-light: rgba(255, 255, 255, 0.12);
+  --hub-text: #f5f6f8;
+  --hub-body: #e1e3e6;
+  --hub-secondary: #8e939c;
+  --hub-muted: #6b7079;
+  --hub-accent: #fb923c;
+  --hub-on-accent: #170c04;
+  --hub-green: #34d399;
+  --hub-red: #ff453a;
+  --hub-amber: #f7b32b;
+}
+
+/* ── Full Window Settings Mode Transitions ──────────────────────────────────── */
+
+.sh-view-settings .sh-rail,
+.sh-view-settings .sh-dock-layer,
+.sh-view-settings .sh-notch-layer,
+.sh-view-settings .sh-studio,
+.sh-view-settings .sh-drawer-host,
+.sh-view-settings .sh-drawer {
+  display: none !important;
+}
+
+.sh-view-settings .sh-stage {
+  flex: 1 1 100%;
+  width: 100%;
+}
+
+.sh-settings-hub {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+  z-index: 15;
+}
+
+.sh-settings-hub[hidden] {
+  display: none !important;
+}
+
+/* ── Header Segmented Switcher ────────────────────────────────────────────── */
+
+.sh-views {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
+  padding: 2px;
+  gap: 2px;
+  margin: 0;
+}
+
+.sh-view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  height: 26px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.65);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.sh-view-btn svg {
+  width: 14px;
+  height: 14px;
+  opacity: 0.8;
+  stroke-width: 1.8;
+}
+
+.sh-view-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.sh-view-btn.active {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+.sh-view-btn.active svg {
+  opacity: 1;
+}
+
+/* ── Sidebar (Coucou Left Panel Layout) ─────────────────────────────────────── */
+
+.hub-side {
+  width: 236px;
+  flex: 0 0 236px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 16px 12px 14px;
+  overflow-y: auto;
+  background: #000;
+  border-right: 1px solid rgba(255, 255, 255, 0.04);
+  user-select: none;
+}
+
+.hub-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 16px;
+  font: 700 17px var(--font);
+  color: #fff;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  margin-bottom: 6px;
+}
+
+.hub-brand-canvas-wrap {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 30px;
+}
+
+.hub-brand-canvas-wrap canvas {
+  width: 30px !important;
+  height: 30px !important;
+}
+
+.hub-brand-text {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.hub-brand-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--hub-secondary);
+  margin-left: auto;
+}
+
+.hub-group {
+  font: 700 10.5px var(--font);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--hub-muted);
+  padding: 14px 10px 6px;
+}
+
+.hub-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 0 12px;
+  height: 34px;
+  border-radius: 9px;
+  background: transparent;
+  color: #c7cad0;
+  font: 500 13px var(--font);
+  text-align: start;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+  border: none;
+}
+
+.hub-item svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  opacity: 0.85;
+}
+
+.hub-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}
+
+.hub-item.on {
+  background: rgba(255, 255, 255, 0.11);
+  color: #fff;
+  font-weight: 600;
+}
+
+.hub-item.on svg {
+  opacity: 1;
+  color: var(--hub-accent);
+}
+
+.hub-side .spacer {
+  flex: 1 1 auto;
+  min-height: 16px;
+}
+
+.hub-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--hub-secondary);
+  font-size: 11.5px;
+  line-height: 1.3;
+}
+
+.hub-status .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 7px;
+  background: var(--hub-green);
+  box-shadow: 0 0 8px currentColor;
+}
+
+.hub-version {
+  color: var(--hub-muted);
+  font-size: 11px;
+  padding: 8px 12px 2px;
+  text-align: start;
+}
+
+/* ── Right Panel (Coucou Floating Squircle) ────────────────────────────────── */
+
+.hub-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 12px 14px 14px 0;
+  border-radius: 22px;
+  background: var(--hub-panel);
+  border: 1px solid var(--hub-line);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.hub-scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 24px 28px 28px;
+}
+
+.hub-page {
+  max-width: 1000px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* ── Hero Banner ──────────────────────────────────────────────────────────── */
+
+.hub-hero {
+  position: relative;
+  min-height: 136px;
+  border-radius: 18px;
+  overflow: hidden;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(135deg, rgba(251, 146, 60, 0.09) 0%, rgba(20, 21, 26, 0.95) 75%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 28px;
+}
+
+.hub-hero-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 2;
+  max-width: 70%;
+}
+
+.hub-hero-copy h1 {
+  font: 700 24px var(--font);
+  letter-spacing: -0.02em;
+  color: #fff;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.hub-hero-copy p {
+  font-size: 13.5px;
+  color: #9aa0a9;
+  margin: 0;
+  line-height: 1.45;
+  max-width: 560px;
+}
+
+.hub-hero-mascot {
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 80px;
+  height: 80px;
+  filter: drop-shadow(0 8px 24px rgba(0, 0, 0, 0.45));
+}
+
+.hub-hero-mascot canvas {
+  width: 80px !important;
+  height: 80px !important;
+}
+
+/* ── Settings Content Cards ───────────────────────────────────────────────── */
+
+#settings-root.hub-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.hub-card {
+  background: var(--hub-card);
+  border: 1px solid var(--hub-line);
+  border-radius: 14px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  transition: border-color 0.15s ease;
+}
+
+.hub-card:hover {
+  border-color: rgba(255, 255, 255, 0.11);
+}
+
+.hub-card-title {
+  font: 700 14px var(--font);
+  color: #fff;
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.hub-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 32px;
+}
+
+.hub-row .text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.hub-row .title {
+  font: 600 13px var(--font);
+  color: #fff;
+}
+
+.hub-row .detail {
+  font-size: 12px;
+  color: var(--hub-secondary);
+  line-height: 1.4;
+}
+
+.hub-divider {
+  height: 1px;
+  background: var(--hub-line);
+  margin: 4px -2px;
+}
+
+.hub-btn {
+  border-radius: 9px;
+  padding: 6px 14px;
+  font: 600 12.5px var(--font);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--hub-text);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.hub-btn svg {
+  stroke-width: 1.8;
+}
+
+.hub-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.13);
+  color: #fff;
+}
+
+.hub-btn.primary {
+  background: var(--hub-accent);
+  color: var(--hub-on-accent);
+  border: none;
+  font-weight: 700;
+}
+
+.hub-btn.primary:hover:not(:disabled) {
+  background: #fdba74;
+}
+
+.hub-btn.danger {
+  background: rgba(255, 69, 58, 0.14);
+  color: #ff8a80;
+  border: 1px solid rgba(255, 69, 58, 0.2);
+}
+
+.hub-btn.danger:hover:not(:disabled) {
+  background: rgba(255, 69, 58, 0.24);
+}
+
+.hub-keycap {
+  font: 600 12px var(--font);
+  padding: 2px 8px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--hub-text);
+  white-space: nowrap;
+}
+
+.hub-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.hub-badge.good {
+  background: rgba(52, 211, 153, 0.16);
+  color: var(--hub-green);
+}
+
+.hub-badge.warn {
+  background: rgba(247, 179, 43, 0.16);
+  color: var(--hub-amber);
+}
+
+.hub-kv {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  row-gap: 8px;
+  column-gap: 16px;
+  font-size: 13px;
+  margin: 0;
+}
+
+.hub-kv dt {
+  color: var(--hub-secondary);
+}
+
+.hub-kv dd {
+  margin: 0;
+  color: var(--hub-text);
+}

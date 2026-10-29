@@ -10,13 +10,15 @@
  *   to work in parallel without Friday;
  * - `friday`: Friday plans the goal from the same tasks, gives each to a spawned Claude Code agent
  *   in its own worktree, verifies each claim with the project's tests, sends a failed one back once,
- *   and integrates verified work into the goal's branch.
+ *   and integrates verified work into the goal's branch;
+ * - `friday-one`: the same, with the plan the Master Brain proposes for this goal (plan M13.1): its
+ *   two tasks run one after another on the shared contract, so they are one task for one agent.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { FINAL_SCHEMA } from '@friday/adapter-generic';
-import { formatIssues, PlanDraft } from '@friday/planner';
+import { consolidatePlan, formatIssues, PlanDraft } from '@friday/planner';
 import { killTree } from '@friday/test-support';
 import { REPO_ROOT } from './cli.js';
 import type { Msg } from './live-claude.js';
@@ -24,7 +26,7 @@ import type { TraceLine, TurnBudget } from './token-baseline.js';
 
 export const BENEFIT_PLAN_FILE = path.join(REPO_ROOT, 'tests', 'fixtures', 'benefit', 'plan.json');
 export const BENEFIT_HIDDEN_TESTS = path.join(REPO_ROOT, 'tests', 'fixtures', 'benefit', 'acceptance.hidden.test.mjs');
-export const BENEFIT_ARMS = ['plain-one', 'plain-two', 'friday'] as const;
+export const BENEFIT_ARMS = ['plain-one', 'plain-two', 'friday', 'friday-one'] as const;
 export type BenefitArm = (typeof BENEFIT_ARMS)[number];
 
 /** The spawned agents of the Friday arm, each of the role of the task it takes. */
@@ -59,6 +61,13 @@ export function loadBenefitPlan(file: string = BENEFIT_PLAN_FILE): PlanDraft {
   return parsed.data;
 }
 
+/** The benefit plan as the Master Brain proposes it (plan M13.1): its serial tasks merged into one. */
+export function oneTaskPlan(plan: PlanDraft): { plan: PlanDraft; merged: string[] } {
+  const c = consolidatePlan(plan);
+  if (!c.merged) throw new Error('the benefit plan was expected to merge into one task');
+  return { plan: c.draft, merged: c.merged };
+}
+
 type PlanTask = PlanDraft['tasks'][number];
 
 const taskText = (t: PlanTask) =>
@@ -72,7 +81,7 @@ const taskText = (t: PlanTask) =>
   ].join('\n');
 
 const FINAL_LINE =
-  'When you are done, give the final answer in the structured format you were given: status "completed", a short summary and the paths you changed; or status "blocked" with the reason in blocked_reason.';
+  'When you are done, give the final answer in the structured format you were given: status "completed" and a short summary, or status "blocked" with the reason in blocked_reason.';
 
 /** The prompt of the single plain session: the goal and both tasks, as the plan states them. */
 export function plainOnePrompt(plan: PlanDraft): string {

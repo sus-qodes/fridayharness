@@ -127,6 +127,15 @@ export function plannerSteps(
   brain: BrainStatusView | null | undefined,
   budget: number,
 ): { text: string; command?: string }[] {
+  // A model on this machine needs no key and no budget: its server and model (plan M12.1).
+  if (brain?.provider === 'local') {
+    return [
+      {
+        text: 'Start the model server on this machine (Ollama or LM Studio) with the model master_brain.model names, and check it:',
+        command: 'friday doctor',
+      },
+    ];
+  }
   const steps: { text: string; command?: string }[] = [];
   if (!brain?.remote || brain.key === 'missing')
     steps.push({

@@ -12,10 +12,12 @@
 import type { UiSnapshot } from '@friday/protocol';
 import type { AppContext } from '../shell/context.js';
 import type { ReactionKind, RootState } from '../store/state.js';
-import { type SoundName, Synth } from './synth.js';
+import { COUCOU_SOUND_NAMES, type SoundName, Synth } from './synth.js';
 
 /** A sound of a kind plays at most this often. */
+// The character sounds have no gap of their own: each plays when its moment comes.
 export const MIN_GAP_MS: Readonly<Record<SoundName, number>> = Object.freeze({
+  ...(Object.fromEntries(COUCOU_SOUND_NAMES.map((n) => [n, 0])) as Record<(typeof COUCOU_SOUND_NAMES)[number], number>),
   node_appear: 1_500,
   escalation_alert: 1_000,
   allow_success: 250,
@@ -169,10 +171,12 @@ export function initAudioWith(
   target.addEventListener('keydown', onGesture, true);
 }
 
-/** Plays a sound now (when sound is on and a `startSound` runs); false otherwise. */
-export function playSound(name: SoundName): boolean {
-  if (active === 0) return false;
-  return synth().play(name);
+/** Plays a sound now (when sound is on and a `startSound` runs, or when force is requested); false otherwise. */
+export function playSound(name: SoundName, opts: { force?: boolean } = {}): boolean {
+  if (active === 0 && !opts.force) return false;
+  const s = synth();
+  if (!s.ready) s.init();
+  return s.play(name);
 }
 
 const tickLimiter = new RateLimiter();

@@ -84,17 +84,18 @@ export type RiskLevel = z.infer<typeof RiskLevel>;
 export const TaskKind = z.enum(['implementation', 'verification', 'review', 'research', 'docs', 'chore']);
 export type TaskKind = z.infer<typeof TaskKind>;
 
+/**
+ * What an agent's work costs (plan M13.3), cheapest first: `free` (a model on this machine),
+ * `cheap` (a vendor's smallest model) or `standard`. Declared with `friday harness run --cost-class`,
+ * else the class of the model routing runs for the agent, else `standard`.
+ */
+export const CostClass = z.enum(['free', 'cheap', 'standard']);
+export type CostClass = z.infer<typeof CostClass>;
+/** Cost classes, cheapest first. */
+export const COST_ORDER: readonly CostClass[] = CostClass.options;
+
 /** The hosts Friday knows; `antigravity` and `gemini` (Gemini CLI) from M8b, with Cursor's hooks. */
-export const Vendor = z.enum([
-  'claude-code',
-  'codex',
-  'cursor',
-  'antigravity',
-  'gemini',
-  'opencode',
-  'october',
-  'generic',
-]);
+export const Vendor = z.enum(['claude-code', 'codex', 'cursor', 'antigravity', 'gemini', 'october', 'generic']);
 export type Vendor = z.infer<typeof Vendor>;
 
 export const AttachMode = z.enum(['attach', 'spawn']);

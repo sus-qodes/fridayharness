@@ -205,9 +205,6 @@ importers:
       '@friday/adapter-gemini':
         specifier: workspace:*
         version: link:../../packages/adapters/gemini
-      '@friday/adapter-opencode':
-        specifier: workspace:*
-        version: link:../../packages/adapters/opencode
       '@friday/daemon':
         specifier: workspace:*
         version: link:../daemon
@@ -466,28 +463,6 @@ importers:
       '@friday/sdk':
         specifier: workspace:*
         version: link:../../sdk
-
-  packages/adapters/opencode:
-    dependencies:
-      '@friday/adapter-claude':
-        specifier: workspace:*
-        version: link:../claude
-      '@friday/adapter-generic':
-        specifier: workspace:*
-        version: link:../generic
-      '@friday/execution':
-        specifier: workspace:*
-        version: link:../../execution
-      '@friday/protocol':
-        specifier: workspace:*
-        version: link:../../protocol
-      '@friday/sdk':
-        specifier: workspace:*
-        version: link:../../sdk
-    devDependencies:
-      '@friday/test-support':
-        specifier: workspace:*
-        version: link:../../../tests/support
 
   packages/code-graph:
     dependencies:
@@ -759,9 +734,6 @@ importers:
       '@friday/adapter-generic':
         specifier: workspace:*
         version: link:../packages/adapters/generic
-      '@friday/adapter-opencode':
-        specifier: workspace:*
-        version: link:../packages/adapters/opencode
       '@friday/cli':
         specifier: workspace:*
         version: link:../apps/cli

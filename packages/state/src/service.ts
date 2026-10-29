@@ -28,8 +28,10 @@ import {
   type AgentResultParams,
   type AgentStatus,
   type AgentView,
+  COST_ORDER,
   type ContextPacket,
   type ControlState,
+  type CostClass,
   type EnforcementLevel,
   type EnforcementStatus,
   type FileReservationView,
@@ -325,12 +327,6 @@ export function achievedEnforcement(h: {
   host_version: string | null;
   capabilities?: Record<string, unknown> | null;
 }): { level: EnforcementLevel; status: EnforcementStatus; basis: string } {
-  if (h.vendor === 'opencode')
-    return {
-      level: h.claimed === 'L1' ? 'L1' : 'L0',
-      status: h.claimed === 'L1' ? 'unverified' : 'observed',
-      basis: 'OpenCode is experimental; live hook enforcement has not been verified',
-    };
   const hooked = HOOKED_HOSTS[h.vendor];
   if (hooked && h.attach_mode === 'attach') {
     if (!h.hooks_seen) {
@@ -1790,7 +1786,7 @@ export class FridayState {
           ctx,
           harness.harness_id,
           'task.start',
-          this.startParams(projectId, task, run, agent.role),
+          this.taskStartParams(projectId, task, run, agent.role),
           run.run_id,
         );
       }
@@ -2523,14 +2519,67 @@ export class FridayState {
     let task = this.q.task(projectId, taskId);
     const prevAgent = task.assigned_agent_id ? this.q.findAgent(task.assigned_agent_id) : undefined;
     task = this.moveTask(ctx, task, 'task.rework', { reason });
-    // The agent that did the work gets the first chance, for a while (review F08).
+    // A stronger agent of the role reworks what a cheaper one could not finish (plan M13.3);
+    // otherwise the agent that did the work gets the first chance, for a while (review F08), and
+    // continues its own session where its host can (plan M13.2).
     const changes: Record<string, unknown> = { assigned_agent_id: null, assigned_harness_id: null };
-    if (prevAgent) {
-      changes.reserved_for_agent_key = prevAgent.agent_key;
+    const next = prevAgent ? (this.strongerAgent(projectId, task, prevAgent) ?? prevAgent) : undefined;
+    if (next) {
+      changes.reserved_for_agent_key = next.agent_key;
       changes.reserved_by = 'rework';
       changes.reserved_until = addMs(ctx.now, this.config.reservationTtlMs);
     }
-    return this.moveTask(ctx, task, 'task.ready', { changes });
+    return this.moveTask(ctx, task, 'task.ready', {
+      changes,
+      ...(next && prevAgent && next.agent_id !== prevAgent.agent_id
+        ? { reason: `reworked by ${next.agent_key}, an agent of a higher cost class than ${prevAgent.agent_key}` }
+        : {}),
+    });
+  }
+
+  /**
+   * The agent a rework escalates to (plan M13.3): of the role of the agent that did the work, in the
+   * next cost class above that agent's, the lowest agent key among equals, and only one Friday can
+   * hand the work to now: a spawned agent with a live session, free and holding no reservation,
+   * whose route does not block the task. None otherwise, and the agent that did the work keeps it.
+   */
+  private strongerAgent(projectId: string, task: TaskView, prev: AgentView): AgentView | undefined {
+    const classOf = this.costClassOf;
+    if (!classOf) return undefined;
+    // A routing failure never stops a rework: nobody is stronger, and the previous agent keeps it.
+    const costOf = (a: AgentView): CostClass | null => {
+      try {
+        return classOf(task, a.agent_id);
+      } catch {
+        return null;
+      }
+    };
+    const from = COST_ORDER.indexOf(costOf(prev) ?? 'standard');
+    const reserved = new Set(
+      this.q
+        .tasks(projectId, { statuses: ['READY'] })
+        .map((t) => t.reserved_for_agent_key)
+        .filter((k): k is string => Boolean(k)),
+    );
+    const free = (a: AgentView) => {
+      const h = a.harness_id ? this.q.findHarness(a.harness_id) : undefined;
+      return Boolean(
+        h &&
+          h.attach_mode === 'spawn' &&
+          !h.shadow &&
+          !['DISCONNECTED', 'TERMINATED'].includes(h.status) &&
+          a.status === 'AVAILABLE' &&
+          !a.current_task_id &&
+          !reserved.has(a.agent_key),
+      );
+    };
+    const stronger = this.q
+      .agents(projectId)
+      .filter((a) => a.agent_id !== prev.agent_id && a.role === prev.role && free(a))
+      .map((a) => ({ a, rank: COST_ORDER.indexOf(costOf(a) ?? ('none' as CostClass)) }))
+      .filter((x) => x.rank > from)
+      .sort((x, y) => x.rank - y.rank || x.a.agent_key.localeCompare(y.a.agent_key));
+    return stronger[0]?.a;
   }
 
   /**
@@ -2696,6 +2745,20 @@ export class FridayState {
    * Without it, plan tasks are recorded as the planner wrote them.
    */
   planBounds: (() => PlanBounds) | null = null;
+
+  /**
+   * What an agent's work on a task costs (plan M13.3): the cost class its harness declared, else
+   * the class of the model routing runs for it. The daemon sets it from routing; without it, every
+   * agent is `standard` and a rework stays with the agent that did the work.
+   */
+  costClassOf: ((task: TaskView, agentId: string) => CostClass | null) | null = null;
+
+  /**
+   * The version of the project's effective policy now (review F02): a rework continues an earlier
+   * session only under the policy that session's packet was compiled under (plan M13.2). The daemon
+   * sets it; without it, a project has no policy version.
+   */
+  policyVersion: (() => string | null) | null = null;
 
   /**
    * Bounds one plan task by the ceiling of its role (plan M12.2): a task never holds more
@@ -4332,7 +4395,13 @@ export class FridayState {
       });
       const ready = this.q.run(run.run_id);
       const agent = this.q.agent(run.agent_id);
-      this.enqueue(ctx, run.harness_id, 'task.start', this.startParams(projectId, task, ready, agent.role), run.run_id);
+      this.enqueue(
+        ctx,
+        run.harness_id,
+        'task.start',
+        this.taskStartParams(projectId, task, ready, agent.role),
+        run.run_id,
+      );
       return ready;
     });
   }
@@ -4828,6 +4897,7 @@ export class FridayState {
       model_binding: run.model_binding,
       // The session to resume, as the adapter reported it when it accepted the run (ADR-0032 §3).
       session_ref: run.session_ref ?? null,
+      continue_session: null,
       note,
       // The task's spending cap (plan M11.5), for a host that can enforce one itself.
       budget_usd:
@@ -4835,6 +4905,63 @@ export class FridayState {
           ? this.config.taskBudgetUsd
           : null,
     };
+  }
+
+  /** A new attempt's `task.start`: with the session it continues, when it is a rework that can (plan M13.2). */
+  private taskStartParams(projectId: string, task: TaskView, run: RunView, role: string): TaskStartParams {
+    const cont = this.continuation(projectId, task, run);
+    return {
+      ...this.startParams(projectId, task, run, role, cont?.note ?? null),
+      continue_session: cont?.session ?? null,
+    };
+  }
+
+  /**
+   * A rework continues the session that did the work (plan M13.2): when the new attempt's agent and
+   * harness are those of the attempt verification refused, that attempt left a session, and the
+   * harness declared `capabilities.resume_session`, its `task.start` names that session and says,
+   * as the session's next message, why the claim was refused. The session already holds the task,
+   * the files it read and what it did, so nothing is sent or read twice (B31). Null otherwise: the
+   * attempt starts a new session with its packet and the handoff summary.
+   */
+  private continuation(projectId: string, task: TaskView, run: RunView): { session: string; note: string } | null {
+    if (run.attempt <= 1 || run.session_ref) return null;
+    // The attempt whose claim was refused; attempts declined since started no session, so they are
+    // passed over, while any other session in between ends the chain.
+    const earlier = this.q.runs(task.task_id).filter((r) => r.attempt < run.attempt);
+    const at = earlier.findLastIndex((r) => r.claim);
+    const prev = at >= 0 ? earlier[at] : undefined;
+    if (!prev || earlier.slice(at + 1).some((r) => r.session_ref)) return null;
+    if (!prev.session_ref || prev.agent_id !== run.agent_id || prev.harness_id !== run.harness_id) return null;
+    const caps = (this.q.findHarness(run.harness_id)?.capabilities ?? {}) as { resume_session?: unknown };
+    if (caps.resume_session !== true) return null;
+    // Only a claim that verification refused: a lost or cancelled session is recovery's to judge.
+    const verification = this.q.latestVerificationForRun(prev.run_id);
+    if (!prev.claim || verification?.status !== 'FAILED') return null;
+    // The session holds the packet it was given and what it read: only under the policy that packet
+    // was compiled under (review M7.1e R02). A changed policy starts a new session with a new packet.
+    const now = this.policyVersion?.() ?? null;
+    const then = this.db
+      .prepare(
+        `SELECT json_extract(explanation_json, '$.policy_version') AS v FROM context_packets
+          WHERE task_id = ? AND json_extract(packet_json, '$.recipient.run_id') = ? ORDER BY created_at LIMIT 1`,
+      )
+      .get<{ v: string | null }>(task.task_id, prev.run_id);
+    if (then && (then.v ?? null) !== now) return null;
+    const rework = this.store.readByRef(projectId, 'task', task.task_id, { types: ['task.rework'] }).at(-1);
+    const why = (rework?.payload as { transition?: { reason?: string } } | undefined)?.transition?.reason;
+    const failed = verification.checks
+      .filter((c) => c.status === 'FAILED' || c.status === 'BLOCKED')
+      .map((c) => `${c.name}: ${c.summary ?? c.status}`.slice(0, 300));
+    const note = [
+      "Friday's verification refused your completion claim.",
+      why ? `Why: ${why}` : verification.summary ? `Why: ${verification.summary}` : '',
+      failed.length ? `Checks that failed: ${failed.join('; ')}` : '',
+      'Fix this in this worktree, then give your final answer again.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    return { session: prev.session_ref, note: note.slice(0, 2000) };
   }
 
   /**

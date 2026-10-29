@@ -26,7 +26,6 @@
     "@friday/adapter-codex": "workspace:*",
     "@friday/adapter-cursor": "workspace:*",
     "@friday/adapter-gemini": "workspace:*",
-    "@friday/adapter-opencode": "workspace:*",
     "@friday/daemon": "workspace:*",
     "@friday/db": "workspace:*",
     "@friday/git": "workspace:*",

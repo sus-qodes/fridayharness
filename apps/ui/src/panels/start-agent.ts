@@ -3,7 +3,8 @@
  * (`friday harness run <host>`), with its agent key, role and the host's own options (under an
  * Options fold, review §4), remembered as a profile that can start with Friday. The Host field says
  * what is installed, with "Check again" (the drawer's Installed hosts list folded in here). There is
- * no model field: models come from routing, whose pins live in Settings → Routing.
+ * no model field: models come from routing, whose pins live in Settings → Routing. Claude Code and
+ * Codex may name the models routing may run for the agent, and its cost class (plan M13.3).
  */
 import type { AgentHost, AgentLaunchRequest, AgentOptions, AgentProcessesView, UiSnapshot } from '@friday/protocol';
 import { visible } from '../model/text.js';
@@ -37,6 +38,11 @@ export const HOSTS: readonly { host: HostName; label: string; prefix: string }[]
 export const AGENT_KEY_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const ROLE_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 export const BUDGET = { min: 0.01, max: 100, default: 1 } as const;
+/** A model id as a registry or a local server names one; never a leading `-` (the launcher's rule). */
+export const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/;
+export const MAX_MODELS = 8;
+
+export type CostClassChoice = '' | NonNullable<AgentOptions['cost_class']>;
 
 export type ClaudeEffort = '' | 'low' | 'medium' | 'high';
 export type CodexSandbox = NonNullable<AgentOptions['sandbox']>;
@@ -54,6 +60,8 @@ export interface AgentForm {
     effort: CodexEffort;
     service_tier: '' | 'default' | 'priority';
   };
+  /** Claude Code and Codex: what the agent's work costs, and the models routing may run for it (plan M13.3). */
+  routing: { cost_class: CostClassChoice; models: string };
 }
 
 export function hostPrefix(host: HostName): string {
@@ -87,11 +95,27 @@ export function defaultForm(host: HostName, taken: Iterable<string>): AgentForm 
     autostart: true,
     claude: { effort: '', max_budget_usd: String(BUDGET.default) },
     codex: { sandbox: 'workspace-write', windows_sandbox: '', effort: '', service_tier: '' },
+    routing: { cost_class: '', models: '' },
   };
 }
 
-export function formErrors(form: AgentForm): { agent_key?: string; role?: string; max_budget_usd?: string } {
-  const errors: { agent_key?: string; role?: string; max_budget_usd?: string } = {};
+/** The models a form names, one per comma. */
+export function formModels(form: AgentForm): string[] {
+  return form.routing.models
+    .split(',')
+    .map((m) => m.trim())
+    .filter(Boolean);
+}
+
+const ROUTED_HOSTS = new Set<HostName>(['claude-code', 'codex']);
+
+export function formErrors(form: AgentForm): {
+  agent_key?: string;
+  role?: string;
+  max_budget_usd?: string;
+  models?: string;
+} {
+  const errors: { agent_key?: string; role?: string; max_budget_usd?: string; models?: string } = {};
   if (!AGENT_KEY_RE.test(form.agent_key))
     errors.agent_key = 'use lowercase letters, digits and dashes (up to 64), starting with a letter or digit';
   if (!ROLE_RE.test(form.role))
@@ -100,6 +124,12 @@ export function formErrors(form: AgentForm): { agent_key?: string; role?: string
     const n = Number(form.claude.max_budget_usd);
     if (!form.claude.max_budget_usd.trim() || !Number.isFinite(n) || n < BUDGET.min || n > BUDGET.max)
       errors.max_budget_usd = `between ${BUDGET.min} and ${BUDGET.max} dollars`;
+  }
+  if (ROUTED_HOSTS.has(form.host)) {
+    const models = formModels(form);
+    if (models.length > MAX_MODELS) errors.models = `at most ${MAX_MODELS} models`;
+    else if (models.some((m) => !MODEL_RE.test(m)))
+      errors.models = 'model ids such as claude-haiku-5-5, separated by commas';
   }
   return errors;
 }
@@ -115,6 +145,11 @@ export function launchBody(form: AgentForm): AgentLaunchRequest {
     if (form.codex.windows_sandbox) options.windows_sandbox = form.codex.windows_sandbox;
     if (form.codex.effort) options.effort = form.codex.effort;
     if (form.codex.service_tier) options.service_tier = form.codex.service_tier;
+  }
+  if (ROUTED_HOSTS.has(form.host)) {
+    if (form.routing.cost_class) options.cost_class = form.routing.cost_class;
+    const models = formModels(form);
+    if (models.length) options.models = models;
   }
   return {
     host: form.host,
@@ -175,9 +210,43 @@ export function startAgentModal(
 
   const optionsBox = h('div', { class: 'pn-host-options' });
   let budgetField: ReturnType<typeof field> | null = null;
+  let modelsField: ReturnType<typeof field> | null = null;
+
+  /** The cost class and the models, for Claude Code and Codex (plan M13.3). */
+  function routingOptions(): HTMLElement {
+    const cost = select<CostClassChoice>(
+      [
+        { value: '', label: 'From its model' },
+        { value: 'free', label: 'Free (a model on this machine)' },
+        { value: 'cheap', label: 'Cheap' },
+        { value: 'standard', label: 'Standard' },
+      ],
+      form.routing.cost_class,
+      (v) => {
+        form.routing.cost_class = v;
+      },
+    );
+    const models = input({ class: 'input mono', value: form.routing.models, maxLength: 900 });
+    models.addEventListener('input', () => {
+      form.routing.models = models.value;
+      update();
+    });
+    modelsField = field('Models', models, {
+      hint: 'optional, comma-separated: the only models routing may run for this agent',
+    });
+    return h(
+      'div',
+      { class: 'pn-grid2' },
+      field('Cost class', cost, {
+        hint: 'small, low-risk tasks go to the cheapest capable agent; a refused claim to a stronger one',
+      }).el,
+      modelsField.el,
+    );
+  }
 
   function renderOptions() {
     budgetField = null;
+    modelsField = null;
     if (form.host === 'claude-code') {
       const effort = select<ClaudeEffort>(
         [
@@ -205,7 +274,10 @@ export function startAgentModal(
       budgetField = field('Spending cap per attempt (USD)', budget, {
         hint: `${BUDGET.min} to ${BUDGET.max}; Claude Code stops an attempt that would spend more`,
       });
-      optionsBox.replaceChildren(h('div', { class: 'pn-grid2' }, field('Effort', effort).el, budgetField.el));
+      optionsBox.replaceChildren(
+        h('div', { class: 'pn-grid2' }, field('Effort', effort).el, budgetField.el),
+        routingOptions(),
+      );
     } else if (form.host !== 'codex') {
       // The Cursor CLI and Gemini CLI take no options here: their models come from routing too.
       optionsBox.replaceChildren(
@@ -292,6 +364,7 @@ export function startAgentModal(
           field('Effort', effort).el,
           field('Service tier', tier).el,
         ),
+        routingOptions(),
       );
     }
   }
@@ -321,7 +394,8 @@ export function startAgentModal(
     keyField.setError(errors.agent_key ?? null);
     roleField.setError(errors.role ?? null);
     budgetField?.setError(errors.max_budget_usd ?? null);
-    if (errors.max_budget_usd) options.open = true;
+    modelsField?.setError(errors.models ?? null);
+    if (errors.max_budget_usd || errors.models) options.open = true;
     const info = hostInfo();
     if (hostsFailed)
       hostNote.textContent = 'Friday could not check the installed hosts; it checks again when the agent starts.';

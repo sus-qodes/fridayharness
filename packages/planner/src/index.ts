@@ -16,6 +16,7 @@ export {
   type RemotePolicy,
   redactRequest,
 } from './brain.js';
+export { CONSOLIDATE_MAX_TASKS, type Consolidation, consolidatePlan } from './consolidate.js';
 export {
   DELEGATION_WEIGHTS,
   type DelegationCandidate,

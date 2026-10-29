@@ -361,10 +361,14 @@ export interface AgentHost {
   reason: string | null;
 }
 
-/** Options per host; models come from routing, never from here. */
+/** Options per host; routing chooses the model, among `models` when they are given. */
 export interface AgentOptions {
   /** Claude Code and Codex. */
   effort?: string;
+  /** Claude Code and Codex: what the agent's work costs (plan M13.3); else its model's class. */
+  cost_class?: 'free' | 'cheap' | 'standard';
+  /** Claude Code and Codex: the only models routing may run for this agent (plan M13.3). */
+  models?: string[];
   /** Claude Code: a spending cap per attempt (default 1). */
   max_budget_usd?: number;
   /** Codex. */

@@ -65,6 +65,23 @@ describe('agent key prefill', () => {
     });
     expect(JSON.stringify(launchBody(codex))).not.toContain('model');
   });
+
+  it("sends an agent's cost class and models for Claude Code and Codex only (plan M13.3)", () => {
+    const f = defaultForm('claude-code', []);
+    const routed = { ...f, routing: { cost_class: 'cheap' as const, models: ' claude-haiku-5-5 , qwen2.5:7b ' } };
+    expect(formErrors(routed)).toEqual({});
+    expect(launchBody(routed).options).toEqual({
+      max_budget_usd: 1,
+      cost_class: 'cheap',
+      models: ['claude-haiku-5-5', 'qwen2.5:7b'],
+    });
+    // Never a leading dash, and at most eight.
+    expect(formErrors({ ...f, routing: { cost_class: '', models: '--model=x' } }).models).toBeTruthy();
+    expect(formErrors({ ...f, routing: { cost_class: '', models: Array(9).fill('m').join(',') } }).models).toBeTruthy();
+    // The Cursor CLI and Gemini CLI take none of them.
+    const gemini = { ...defaultForm('gemini', []), routing: { cost_class: 'cheap' as const, models: 'x' } };
+    expect(launchBody(gemini).options).toEqual({});
+  });
 });
 
 describe('start agent modal', () => {

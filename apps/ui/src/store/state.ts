@@ -90,7 +90,11 @@ export interface Reaction {
 
 export type { DrawerBack, DrawerKind } from '../shell/context.js';
 
+export type StudioView = 'canvas' | 'settings';
+
 export interface UiState {
+  activeView: StudioView;
+  settingsTab?: string;
   selectedTaskId: string | null;
   drawer: DrawerRequest | null;
   modal: ModalRequest | null;
@@ -159,6 +163,8 @@ export function initialState(prefs: Prefs = DEFAULT_PREFS): RootState {
     board: null,
     activity: { agents: {}, files: {}, pulses: [], lastActivityAt: 0, reactions: [] },
     ui: {
+      activeView: 'canvas',
+      settingsTab: undefined,
       selectedTaskId: null,
       drawer: null,
       modal: null,

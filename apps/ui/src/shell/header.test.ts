@@ -226,6 +226,7 @@ describe('header', () => {
     more.click();
     item('about').click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'about' });
+    expect(ctx.store.select('ui').activeView).toBe('settings');
   });
 
   it('shows the pause banner with its reason, and Resume resumes', async () => {

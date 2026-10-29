@@ -208,8 +208,16 @@ export class Registry {
   }
 }
 
-/** Opens a drawer (replacing the open one). */
+/** Opens a drawer (replacing the open one). Settings also switches activeView to settings. */
 export function openDrawer(ctx: Pick<AppContext, 'store'>, request: DrawerRequest): void {
+  if (request.kind === 'settings') {
+    ctx.store.patch('ui', {
+      activeView: 'settings',
+      settingsTab: request.tab,
+      drawer: request,
+    });
+    return;
+  }
   ctx.store.patch('ui', { drawer: request });
 }
 
