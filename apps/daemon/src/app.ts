@@ -16,7 +16,16 @@ import {
   VerifyRequest,
 } from '@friday/protocol';
 import { FRIDAY_DIR, FRIDAY_VERSION, type ProjectRef } from '@friday/sdk';
-import { backupTo, createSnapshot, type FridayState, listSnapshots, replayInto } from '@friday/state';
+import {
+  backupTo,
+  createSnapshot,
+  type FridayState,
+  listSnapshots,
+  type MemoryActor,
+  type MemoryInput,
+  type MemoryKind,
+  replayInto,
+} from '@friday/state';
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
@@ -641,6 +650,51 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     return c.json(
       await backupTo(state, pid, target(body, 'a backup'), { artifactsDir, fridayVersion: FRIDAY_VERSION }),
       201,
+    );
+  });
+
+  // Scoped memory (M4c, ADR-0021). A human here: every scope is readable and writable.
+  const humanMemory: MemoryActor = { kind: 'human', actor: HUMAN };
+  app.get(`${P}/memory`, allow(...OPERATOR), (c) => {
+    const kinds = c.req.queries('kind')?.flatMap((k) => k.split(',')) as MemoryKind[] | undefined;
+    return c.json({
+      memories: state.memory.search(pid, humanMemory, {
+        ...(c.req.query('query') ? { query: c.req.query('query') as string } : {}),
+        ...(kinds?.length ? { kinds } : {}),
+        include_inactive: c.req.query('all') === 'true',
+        limit: Number(c.req.query('limit') ?? 20) || 20,
+      }),
+    });
+  });
+  app.get(`${P}/memory/review`, allow(...OPERATOR), (c) =>
+    c.json({ memories: state.memory.search(pid, humanMemory, { limit: 200 }).filter((m) => m.needs_review) }),
+  );
+  app.get(`${P}/memory/:mid`, allow(...OPERATOR), (c) => c.json(state.memory.get(c.req.param('mid'))));
+  app.post(`${P}/memory`, allow(...OPERATOR), async (c) => {
+    const body = await json(c);
+    return c.json(state.memory.record(pid, humanMemory, body as unknown as MemoryInput), 201);
+  });
+  app.post(`${P}/memory/:mid/approve`, allow(...OPERATOR), (c) =>
+    c.json(state.memory.approve(pid, HUMAN, c.req.param('mid'))),
+  );
+  app.post(`${P}/memory/:mid/retract`, allow(...OPERATOR), async (c) => {
+    const body = await json(c);
+    return c.json(
+      state.memory.retract(pid, humanMemory, c.req.param('mid'), String(body.reason ?? 'retracted by a human')),
+    );
+  });
+  app.post(`${P}/memory/:mid/supersede`, allow(...OPERATOR), async (c) => {
+    const body = await json(c);
+    if (typeof body.by !== 'string')
+      throw new FridayError('invalid_request', 'supersede needs "by": the memory that replaces it');
+    return c.json(
+      state.memory.supersede(
+        pid,
+        humanMemory,
+        c.req.param('mid'),
+        body.by,
+        String(body.reason ?? 'superseded by a human'),
+      ),
     );
   });
 

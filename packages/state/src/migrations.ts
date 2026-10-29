@@ -502,6 +502,70 @@ INSERT OR IGNORE INTO event_consumers (consumer_id, project_id, last_sequence, u
   },
 ];
 
+/**
+ * M4c: scoped memory (ADR-0021). `memories` and `memory_links` are domain tables written by the
+ * projector; the FTS5 index follows `memories` through triggers on every write path, replay and
+ * snapshot restore included; `memory_usage` is operational (reuse counts).
+ */
+export const MEMORY_MIGRATIONS: Migration[] = [
+  {
+    version: 8,
+    name: 'memory',
+    up: `
+CREATE TABLE memories (
+  memory_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  scope_type TEXT NOT NULL CHECK (scope_type IN ('project', 'team', 'agent', 'task', 'session')),
+  scope_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  subject_key TEXT NOT NULL,
+  content TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  tags_json TEXT NOT NULL DEFAULT '[]',
+  source_events_json TEXT NOT NULL DEFAULT '[]',
+  source_kind TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  authority TEXT NOT NULL CHECK (authority IN ('human-approved', 'verified', 'system', 'agent')),
+  verification_status TEXT NOT NULL CHECK (verification_status IN ('verified', 'unverified')),
+  status TEXT NOT NULL CHECK (status IN ('active', 'superseded', 'retracted')),
+  supersedes TEXT,
+  superseded_by TEXT,
+  needs_review INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX ix_memories_subject ON memories(project_id, kind, subject_key, status);
+CREATE INDEX ix_memories_scope ON memories(project_id, scope_type, scope_id, status);
+CREATE TABLE memory_links (
+  project_id TEXT NOT NULL,
+  from_id TEXT NOT NULL,
+  to_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('supersedes', 'contradicts')),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (from_id, to_id, kind)
+);
+CREATE VIRTUAL TABLE memories_fts USING fts5(subject, content, tags, content='memories', content_rowid='rowid');
+CREATE TRIGGER memories_fts_insert AFTER INSERT ON memories BEGIN
+  INSERT INTO memories_fts(rowid, subject, content, tags) VALUES (new.rowid, new.subject, new.content, new.tags_json);
+END;
+CREATE TRIGGER memories_fts_delete AFTER DELETE ON memories BEGIN
+  INSERT INTO memories_fts(memories_fts, rowid, subject, content, tags) VALUES ('delete', old.rowid, old.subject, old.content, old.tags_json);
+END;
+CREATE TRIGGER memories_fts_update AFTER UPDATE ON memories BEGIN
+  INSERT INTO memories_fts(memories_fts, rowid, subject, content, tags) VALUES ('delete', old.rowid, old.subject, old.content, old.tags_json);
+  INSERT INTO memories_fts(rowid, subject, content, tags) VALUES (new.rowid, new.subject, new.content, new.tags_json);
+END;
+CREATE TABLE memory_usage (
+  memory_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  uses INTEGER NOT NULL DEFAULT 0,
+  last_used_at TEXT
+);
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -510,10 +574,13 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...STABILIZATION_MIGRATIONS,
   ...MESSAGING_MIGRATIONS,
   ...CONSUMER_MIGRATIONS,
+  ...MEMORY_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */
 export const DOMAIN_TABLES = [
+  'memory_links',
+  'memories',
   'message_deliveries',
   'messages',
   'model_calls',

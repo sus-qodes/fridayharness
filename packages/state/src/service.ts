@@ -54,6 +54,7 @@ import {
 } from '@friday/protocol';
 import type { z } from 'zod';
 import { CommandBus, type CommandContext, type CommandMeta } from './bus.js';
+import { MemoryService } from './memory.js';
 import { ALL_MIGRATIONS } from './migrations.js';
 import { StateProjector } from './projector.js';
 import { type HarnessRecord, Queries } from './queries.js';
@@ -354,6 +355,8 @@ export class FridayState {
   /** The project's artifacts folder (`.friday/artifacts`); snapshots live in its `snapshots/`. */
   readonly artifactsDir: string | undefined;
   readonly config: StateConfig;
+  /** Scoped memory (M4c, ADR-0021). */
+  readonly memory: MemoryService;
   /**
    * Per project: sessions that last reported at or before `since` are not judged until `until`
    * (daemon start, after a pause), because they could not report in between.
@@ -398,6 +401,7 @@ export class FridayState {
       idempotencyTtlMs: this.config.idempotencyTtlMs,
     });
     this.artifactsDir = deps.artifactsDir;
+    this.memory = new MemoryService(this);
     this.artifacts = deps.artifactsDir
       ? new ArtifactStore(this.db, deps.artifactsDir, { ids: this.ids, clock: this.clock, redactor: this.redactor })
       : undefined;

@@ -15,6 +15,13 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - Parse results are cached by file content in `.friday/graph/`, so an edit re-parses one file, and worktrees share the cache. Friday's own repository (218 files) builds in under a second.
   - `friday graph` (summary, contracts, what is not resolved), `friday graph query <file> [--depth n]`, `friday graph reindex`.
   - Decision: ADR-0020.
+- **M4c, project memory:**
+  - Decisions, conventions, constraints and lessons are recorded with their scope (project, team, agent, task, session), who recorded them and how much they count: a human's are human-approved, the Master Brain's and agents' are unverified.
+  - A newer memory on the same subject supersedes an older one only when it has more authority (or the same author updates it); the old one is kept, marked superseded. **A human-approved decision is never replaced automatically**: a contradicting memory waits for review. A task's memory never changes project memory.
+  - Agents write only their own task, agent and session memory.
+  - Search ranks by text relevance, authority, verification, recency and reuse; approved decisions do not fade, guesses do.
+  - `friday memory add|search|review|show|approve|supersede|retract`.
+  - Decision: ADR-0021.
 
 ## Unreleased — M3.5 second-harness spike (Codex app-server)
 

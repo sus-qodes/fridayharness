@@ -367,6 +367,71 @@ export class StateProjector implements Projector {
             .run(str(p.reason), e.occurred_at, str(p.message_id));
         }
         return;
+      // ---- scoped memory (M4c, ADR-0021)
+      case 'memory.recorded': {
+        const m = p.memory as Payload;
+        this.db
+          .prepare(
+            `INSERT INTO memories (memory_id, project_id, scope_type, scope_id, kind, subject, subject_key, content,
+               content_hash, tags_json, source_events_json, source_kind, source_id, authority, verification_status,
+               status, supersedes, superseded_by, needs_review, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, NULL, ?, ?, ?)`,
+          )
+          .run(
+            str(m.memory_id),
+            e.project_id,
+            str(m.scope_type),
+            str(m.scope_id),
+            str(m.kind),
+            str(m.subject),
+            str(m.subject_key),
+            str(m.content),
+            str(m.content_hash),
+            toJson(m.tags ?? []),
+            toJson(m.source_events ?? []),
+            str(m.source_kind),
+            str(m.source_id),
+            str(m.authority),
+            str(m.verification_status),
+            opt(m.supersedes),
+            m.needs_review ? 1 : 0,
+            e.occurred_at,
+            e.occurred_at,
+          );
+        const link = this.db.prepare(
+          'INSERT OR IGNORE INTO memory_links (project_id, from_id, to_id, kind, created_at) VALUES (?, ?, ?, ?, ?)',
+        );
+        for (const to of (p.contradicts as string[]) ?? [])
+          link.run(e.project_id, str(m.memory_id), to, 'contradicts', e.occurred_at);
+        return;
+      }
+      case 'memory.superseded': {
+        const res = this.db
+          .prepare(
+            "UPDATE memories SET status = 'superseded', superseded_by = ?, needs_review = 0, updated_at = ? WHERE memory_id = ?",
+          )
+          .run(str(p.by), e.occurred_at, str(p.memory_id));
+        if (res.changes !== 1)
+          throw new FridayError('internal_error', `event ${e.type}: memory ${str(p.memory_id)} not found`);
+        this.db
+          .prepare(
+            "INSERT OR IGNORE INTO memory_links (project_id, from_id, to_id, kind, created_at) VALUES (?, ?, ?, 'supersedes', ?)",
+          )
+          .run(e.project_id, str(p.by), str(p.memory_id), e.occurred_at);
+        return;
+      }
+      case 'memory.approved':
+        this.db
+          .prepare(
+            "UPDATE memories SET authority = 'human-approved', verification_status = 'verified', needs_review = 0, updated_at = ? WHERE memory_id = ?",
+          )
+          .run(e.occurred_at, str(p.memory_id));
+        return;
+      case 'memory.retracted':
+        this.db
+          .prepare("UPDATE memories SET status = 'retracted', needs_review = 0, updated_at = ? WHERE memory_id = ?")
+          .run(e.occurred_at, str(p.memory_id));
+        return;
       case 'communication.resolved':
         for (const id of (p.delivery_ids as string[]) ?? []) {
           this.updateDelivery(e, id, {

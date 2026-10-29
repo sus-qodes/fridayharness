@@ -6,6 +6,23 @@ export const PACKAGE_NAME = '@friday/state';
 
 export { CommandBus, type CommandContext, type CommandMeta, type CommandOutcome, stableStringify } from './bus.js';
 export {
+  decayWeight,
+  ftsQuery,
+  MEMORY_KINDS,
+  MEMORY_SCOPES,
+  type MemoryActor,
+  type MemoryAuthority,
+  type MemoryInput,
+  type MemoryKind,
+  type MemoryScope,
+  MemoryService,
+  type MemoryView,
+  type RecordResult,
+  type SearchHit,
+  type SearchQuery,
+  subjectKey,
+} from './memory.js';
+export {
   ALL_MIGRATIONS,
   CONSUMER_MIGRATIONS,
   DOMAIN_TABLES,

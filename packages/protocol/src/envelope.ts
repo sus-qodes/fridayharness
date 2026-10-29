@@ -29,6 +29,8 @@ export const RefKind = z.enum([
   'call',
   // M3: agent messages.
   'message',
+  // M4: scoped memory.
+  'memory',
 ]);
 export type RefKind = z.infer<typeof RefKind>;
 
@@ -103,6 +105,10 @@ export const EVENT_TYPES = [
   'communication.dead_lettered',
   'communication.escalated',
   'communication.resolved',
+  'memory.recorded',
+  'memory.superseded',
+  'memory.approved',
+  'memory.retracted',
   'escalation.requested',
   'command.rejected',
 ] as const;
