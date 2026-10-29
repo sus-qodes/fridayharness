@@ -91,4 +91,11 @@ describe('capabilities', () => {
     expect(judge('operation.run', 'lint', { risk: { 'operation.run': 'low' } })).toEqual(['allow', 'low']);
     expect(judge('operation.run', 'lint')).toEqual(['review', 'medium']);
   });
+
+  it('judges a third-party MCP tool by the server policy (ADR-0030 §4)', () => {
+    expect(judge('mcp.call', 'github/create_pull_request')).toEqual(['review', 'medium']);
+    expect(judge('mcp.call', 'github/search_code', { mcpLevel: 'auto' })).toEqual(['allow', 'medium']);
+    expect(judge('mcp.call', 'fs/write_file', { mcpLevel: 'never' })).toEqual(['deny', 'medium']);
+    expect(judge('mcp.call', 'github/merge', { mcpLevel: 'manual' })).toEqual(['review', 'medium']);
+  });
 });

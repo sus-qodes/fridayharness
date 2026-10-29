@@ -442,6 +442,22 @@ export const TaskReleaseParams = z.object({
 });
 export const TaskReleaseResult = z.object({ task_status: TaskStatus });
 
+// ---- approvals in the host (M6d, ADR-0030 §5) -----------------------------------------------
+
+/**
+ * The human's answer to a low- or medium-risk approval, given in the host's own interface (MCP
+ * elicitation) and relayed by the requesting session's Friday MCP server.
+ */
+export const ApprovalElicitedParams = z.object({
+  ...Base,
+  approval_id: z.string().min(1),
+  decision: z.enum(['approve', 'reject']),
+});
+export const ApprovalElicitedResult = z.object({
+  approval_id: z.string(),
+  status: z.enum(['pending', 'granted', 'denied', 'used', 'revoked', 'expired']),
+});
+
 // ---- operations (M6c, ADR-0029) ---------------------------------------------------------------
 
 const OperationName = z.string().regex(/^[a-z][a-z0-9-]{0,47}$/, 'an operation name such as "stripe-test"');
@@ -479,6 +495,8 @@ export const OperationResult = z.object({
   output_truncated: z.boolean(),
   artifact_ref: z.string().nullable(),
   redactions: z.number().int(),
+  /** The operation's risk tier, when it is known (a human decides medium and high). */
+  risk: z.enum(['low', 'medium', 'high']).nullable().default(null),
 });
 export type OperationResult = z.infer<typeof OperationResult>;
 export const OperationListParams = z.object({ ...Base });
@@ -525,6 +543,7 @@ export const METHODS = {
   'operation.run': { params: OperationRunParams, result: OperationResult },
   'operation.status': { params: OperationStatusParams, result: OperationResult },
   'operation.list': { params: OperationListParams, result: OperationListResult },
+  'approval.elicited': { params: ApprovalElicitedParams, result: ApprovalElicitedResult },
 } as const;
 
 export type MethodName = keyof typeof METHODS;

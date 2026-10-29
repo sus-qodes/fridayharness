@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { evaluateSensitive } from '@friday/policy';
 import { actionFromTool, stripHookPayload } from './actions.js';
-import { COMMAND_TOOLS, NETWORK_TOOLS, WRITE_TOOLS } from './types.js';
+import { COMMAND_TOOLS, isFridayTool, NETWORK_TOOLS, thirdPartyMcp, WRITE_TOOLS } from './types.js';
 
 export const LAUNCHER_VERSION = '0.1.0';
 
@@ -135,7 +135,7 @@ export function failureOutput(event: string, toolName: string | undefined, why: 
         `edits are paused because Friday is unavailable (${why}). Ask the human to run "friday run".`,
       );
     }
-    if (COMMAND_TOOLS.has(toolName) || NETWORK_TOOLS.has(toolName)) {
+    if (COMMAND_TOOLS.has(toolName) || NETWORK_TOOLS.has(toolName) || thirdPartyMcp(toolName)) {
       return preDecision('ask', `Friday is unavailable (${why}), so a human must confirm this.`);
     }
     return null;
@@ -152,6 +152,8 @@ export async function main(argv: string[] = process.argv, env: NodeJS.ProcessEnv
   const event = argv[2] ?? 'unknown';
   const hook = readStdin();
   const toolName = typeof hook.tool_name === 'string' ? hook.tool_name : undefined;
+  // Friday's own MCP tools are judged by the protocol behind them (ADR-0030 §1): nothing to add.
+  if (toolName && isFridayTool(toolName)) return 0;
   const start = env.CLAUDE_PROJECT_DIR || (typeof hook.cwd === 'string' ? hook.cwd : '') || process.cwd();
   const root = findRoot(start);
   if (!root) return 0; // not a Friday project: stay out of the way

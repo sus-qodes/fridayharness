@@ -26,6 +26,12 @@ All notable changes, one section per milestone tag. Format: what changed for som
   - `friday operations`, `friday operations runs`, `friday operations show <run>`.
   - **Fix:** the memory search index named a column the memory table does not have; searches worked, but rebuilding or reading the index failed (migration v16).
   - Decision: ADR-0029.
+- **M6d, other MCP servers' tools, approvals in Claude Code, the security suite:**
+  - **Fix:** tools of other MCP servers (`mcp__<server>__<tool>`) were not seen by Friday's hook, so a filesystem or shell MCP server could reach Friday's files or rewrite `.claude/settings.json`. Now every MCP tool passes the hook: one given a protected location is denied even with the daemon down, and the project sets a level per server (`mcp: servers:`; `review` by default, `auto` after trust, `manual`, `never`). Run `friday harness config claude-code` again to install the new matcher; `friday harness doctor` reports the old one.
+  - **Approve in Claude Code:** for a low- or medium-risk request, Friday asks you in Claude Code's own dialog when it offers one; your answer covers one use. High-risk requests stay on `friday approve` and the status page. `approvals.elicitation: false` turns the dialog off.
+  - The capability `mcp.call` asks for a tool the project set to `manual`.
+  - **The security suite:** every security case of the spec (Part 11 §14) has an end-to-end test that checks the forbidden effect did not happen; `docs/security/model.md` maps each case to its test.
+  - Decision: ADR-0030.
 
 ## Unreleased — M5 verification, recovery, worktrees
 

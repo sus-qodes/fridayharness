@@ -110,7 +110,42 @@ async function held(session: FridaySession): Promise<{ me: MeView; task: TaskVie
  * The 14 Friday tools (plan Appendix 3), transport-agnostic so the stdio server and the
  * Agent SDK spawn adapter (M8) share them.
  */
-export function createFridayTools(session: FridaySession): FridayTool[] {
+/** What the host can do for Friday's tools (ADR-0030 §5). */
+export interface HostUi {
+  /** Asks the human to approve or reject; null when the host cannot ask or the human dismissed it. */
+  ask?: (message: string) => Promise<'approve' | 'reject' | null>;
+}
+
+/**
+ * Asks the human in the host about a pending low- or medium-risk approval and relays the answer.
+ * Null when nothing was decided here: the host cannot ask, the human dismissed it, or Friday did not
+ * accept an answer from this session (the CLI and the status page can still decide it).
+ */
+async function askInHost(
+  session: FridaySession,
+  host: HostUi,
+  approvalId: string,
+  q: { what: string; risk: string; task: string | null; reason: string },
+): Promise<ResultOf<'approval.elicited'> | null> {
+  if (!host.ask) return null;
+  const me = await session.me().catch(() => undefined);
+  const who = me?.agent.agent_key ?? 'an agent';
+  const message = [
+    `Friday: ${who} asks to ${q.what} (${q.risk} risk)${q.task ? ` for ${q.task}` : ''}.`,
+    `The agent says: "${q.reason.slice(0, 500)}"`,
+    `Approve it once? (${approvalId}; you can also decide later with "friday approve ${approvalId}".)`,
+  ].join('\n');
+  const decision = await host.ask(message).catch(() => null);
+  if (!decision) return null;
+  try {
+    const client = await session.ready();
+    return await client.call('approval.elicited', { approval_id: approvalId, decision });
+  } catch {
+    return null;
+  }
+}
+
+export function createFridayTools(session: FridaySession, host: HostUi = {}): FridayTool[] {
   return [
     {
       name: 'friday_whoami',
@@ -552,6 +587,28 @@ export function createFridayTools(session: FridaySession): FridayTool[] {
           ...(me?.current_task ? { task_id: me.current_task.task_id } : {}),
           ...(me?.current_run ? { run_id: me.current_run.run_id } : {}),
         });
+        // Low and medium risk: the human may decide right here, in the host (ADR-0030 §5).
+        if (res.status === 'pending' && res.approval_id && (res.risk === 'low' || res.risk === 'medium')) {
+          const answer = await askInHost(session, host, res.approval_id, {
+            what: `${res.capability ?? a.action_class} ${a.resource ?? a.command ?? ''}`.trim(),
+            risk: res.risk,
+            task: me?.current_task?.task_id ?? null,
+            reason: a.justification as string,
+          });
+          if (answer) {
+            const status = answer.status === 'granted' ? 'granted' : answer.status === 'denied' ? 'denied' : res.status;
+            const done = { ...res, status: status as typeof res.status };
+            return {
+              text:
+                status === 'granted'
+                  ? `The human approved ${res.approval_id} in this session, for one use. Go ahead with exactly that.`
+                  : status === 'denied'
+                    ? `The human rejected ${res.approval_id}. Do not try to do it another way; report the task as blocked if you cannot continue without it.`
+                    : `Permission request ${res.approval_id} is still waiting for a human. Do not retry the blocked action until it is granted.`,
+              structured: done,
+            };
+          }
+        }
         const text =
           res.approval_id === null
             ? res.status === 'granted'
@@ -605,14 +662,33 @@ export function createFridayTools(session: FridaySession): FridayTool[] {
         }
         const me = await session.me().catch(() => undefined);
         // No idempotency key: running the same operation again is a new run.
-        const res = await client.call('operation.run', {
-          operation: a.name,
-          reason: a.reason,
-          wait_ms,
-          ...(a.reuse ? { reuse: a.reuse as 'once' | 'run' | 'task' } : {}),
-          ...(me?.current_task ? { task_id: me.current_task.task_id } : {}),
-          ...(me?.current_run ? { run_id: me.current_run.run_id } : {}),
-        });
+        const run = () =>
+          client.call('operation.run', {
+            operation: a.name as string,
+            reason: a.reason as string,
+            wait_ms,
+            ...(a.reuse ? { reuse: a.reuse as 'once' | 'run' | 'task' } : {}),
+            ...(me?.current_task ? { task_id: me.current_task.task_id } : {}),
+            ...(me?.current_run ? { run_id: me.current_run.run_id } : {}),
+          });
+        const res = await run();
+        // Below high risk the human may approve it here, in the host, and it runs at once (ADR-0030 §5).
+        if (res.status === 'approval_required' && res.approval_id && (res.risk === 'low' || res.risk === 'medium')) {
+          const answer = await askInHost(session, host, res.approval_id, {
+            what: `run the operation ${res.operation}`,
+            risk: res.risk,
+            task: me?.current_task?.task_id ?? null,
+            reason: a.reason,
+          });
+          if (answer?.status === 'granted') {
+            const again = await run();
+            return { text: operationText(again), structured: again };
+          }
+          if (answer?.status === 'denied') {
+            const rejected = { ...res, status: 'denied' as const, reason: `the human rejected ${res.approval_id}` };
+            return { text: operationText(rejected), structured: rejected };
+          }
+        }
         return { text: operationText(res), structured: res };
       },
     },

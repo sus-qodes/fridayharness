@@ -68,7 +68,7 @@ const SHELL: Record<'Bash' | 'PowerShell', Partial<Record<SensitiveClass, string
 };
 
 describe('Claude Code tool coverage', () => {
-  it('intercepts the ten M1 tools and maps each to a policy action', () => {
+  it('intercepts the ten M1 tools and every MCP tool, and maps each to a policy action', () => {
     expect(matched).toEqual([
       'Read',
       'Glob',
@@ -80,6 +80,7 @@ describe('Claude Code tool coverage', () => {
       'PowerShell',
       'WebFetch',
       'WebSearch',
+      'mcp__.*',
     ]);
     const sample: Record<string, Record<string, unknown>> = {
       Read: { file_path: p('a.ts') },
@@ -93,7 +94,11 @@ describe('Claude Code tool coverage', () => {
       WebFetch: { url: 'https://example.com', prompt: 'x' },
       WebSearch: { query: 'x' },
     };
-    for (const tool of matched) expect(actionFromTool(tool, sample[tool] ?? {}), tool).not.toBeNull();
+    // The MCP pattern stands for every server's tools (ADR-0030): a third-party one is judged...
+    const named = (t: string) => (t === 'mcp__.*' ? 'mcp__github__search_code' : t);
+    for (const tool of matched) expect(actionFromTool(named(tool), sample[tool] ?? {}), tool).not.toBeNull();
+    // ...Friday's own are not: the protocol behind them judges them.
+    expect(actionFromTool('mcp__friday__friday_whoami', {})).toBeNull();
     // Writes and commands are also observed after they run (changed paths, outcomes).
     const post = POST_TOOL_MATCHER.split('|');
     for (const tool of [...WRITE_TOOLS, ...COMMAND_TOOLS].filter((t) => matched.includes(t)))
@@ -141,6 +146,19 @@ describe('Claude Code tool coverage', () => {
         });
       }
     }
+  });
+
+  it('denies every protected location given to a third-party MCP tool, without the daemon (ADR-0030 §2)', () => {
+    for (const cls of CLASSES) {
+      for (const input of [{ path: FILE_TARGET[cls] }, { args: { files: [FILE_TARGET[cls]] } }]) {
+        const action = actionFromTool('mcp__fs__read_file', input);
+        expect(action ? evaluateSensitive(action, ctx)?.decision : 'none', `${cls} ${JSON.stringify(input)}`).toBe(
+          'deny',
+        );
+      }
+    }
+    const plain = actionFromTool('mcp__github__search_code', { query: 'checkout service' });
+    expect(plain && evaluateSensitive(plain, ctx)).toBeNull();
   });
 
   it('never auto-allows shell writes to host configuration (they need a human)', () => {

@@ -28,6 +28,8 @@ export const CAPABILITIES = [
   'human.escalate',
   // M6c: an operation the project declared, run by Friday's gateway (ADR-0029).
   'operation.run',
+  // M6d: a tool of a third-party MCP server, target `<server>/<tool>` (ADR-0030).
+  'mcp.call',
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 export type Risk = 'low' | 'medium' | 'high';
@@ -53,6 +55,7 @@ export const DEFAULT_RISK: Record<Capability, Risk> = {
   'human.escalate': 'low',
   // Each operation has its own tier (high when it uses a credential); this is the fallback.
   'operation.run': 'medium',
+  'mcp.call': 'medium',
 };
 
 /** The capability each command class needs. */
@@ -103,6 +106,8 @@ export interface CapabilityRequest {
   risk?: Partial<Record<Capability, Risk>>;
   /** The project's deny rules (ADR-0028); the task's team scopes come with the task. */
   deny?: { write: readonly string[]; read: readonly string[] };
+  /** For `mcp.call`: the target tool's level under the project's server policy (ADR-0030 §3). */
+  mcpLevel?: Autonomy;
 }
 
 export interface CapabilityDecision {
@@ -139,6 +144,13 @@ export function evaluateCapability(req: CapabilityRequest): CapabilityDecision {
     case 'task.reassign':
     case 'policy.request':
       return d('review', 'capability.human', `${req.capability} is decided by a human`);
+    case 'mcp.call': {
+      const level = req.mcpLevel ?? 'review';
+      if (level === 'never')
+        return d('deny', 'capability.mcp_never', `the project's policy never lets agents use ${req.target}`);
+      if (level === 'auto') return d('allow', 'capability.mcp_auto', `${req.target} runs without review`);
+      return d('review', 'capability.mcp', `using ${req.target ?? 'the tool'} needs a human decision (${risk} risk)`);
+    }
     case 'operation.run':
       // The operation itself was declared by the project and trusted on this clone (ADR-0029 §3).
       return risk === 'low'

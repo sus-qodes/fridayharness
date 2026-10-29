@@ -2,7 +2,14 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
-import { ExecutionSettings, type FridayConfig, type OperationSpec, Operations } from './config.js';
+import {
+  ApprovalSettings,
+  ExecutionSettings,
+  type FridayConfig,
+  McpSettings,
+  type OperationSpec,
+  Operations,
+} from './config.js';
 import { writePrivateFile } from './discovery.js';
 
 /**
@@ -28,6 +35,9 @@ export const PolicyFile = z
     operations: Operations.default({}),
     /** Additions to the execution profile (ADR-0029 §4). */
     execution: ExecutionSettings,
+    /** Third-party MCP servers' tools (ADR-0030 §3). */
+    mcp: McpSettings,
+    approvals: ApprovalSettings,
   })
   .strict();
 export type PolicyFile = z.infer<typeof PolicyFile>;
@@ -45,6 +55,8 @@ export interface PolicySourceData {
   operations?: Record<string, OperationSpec>;
   execution?: { binaries?: string[]; env_passthrough?: string[] };
   auto_verification?: boolean;
+  mcp?: Record<string, { default?: string; tools?: Record<string, string> }>;
+  elicitation?: boolean;
 }
 
 export const POLICY_DIR = path.join('.friday', 'policies');
@@ -65,6 +77,8 @@ export function readPolicySources(
       operations: config.operations,
       execution: config.execution,
       auto_verification: config.verification.auto_on_completion,
+      mcp: config.mcp.servers,
+      elicitation: config.approvals.elicitation,
     },
   ];
   const errors: { file: string; error: string }[] = [];
@@ -75,8 +89,8 @@ export function readPolicySources(
     .sort()) {
     const name = `policies/${f}`;
     try {
-      const data = PolicyFile.parse(parseYaml(readFileSync(path.join(dir, f), 'utf8')) ?? {});
-      sources.push({ name, ...data });
+      const { mcp, approvals, ...data } = PolicyFile.parse(parseYaml(readFileSync(path.join(dir, f), 'utf8')) ?? {});
+      sources.push({ name, ...data, mcp: mcp.servers, elicitation: approvals.elicitation });
     } catch (e) {
       const issues = (e as { issues?: { path: PropertyKey[]; message: string }[] }).issues;
       errors.push({

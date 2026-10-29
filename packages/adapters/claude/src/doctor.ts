@@ -305,7 +305,7 @@ export async function claudeDoctor(ref: ProjectRef, opts: ClaudeDoctorOptions = 
         ? {
             id: 'cc.hooks',
             status: 'ok',
-            message: `${events.length} hook events in ${where}; PreToolUse covers ${PRE_TOOL_MATCHER.split('|').length} tools with onFailure=block`,
+            message: `${events.length} hook events in ${where}; PreToolUse covers ${PRE_TOOL_MATCHER.split('|').filter((t) => !t.startsWith('mcp__')).length} tools and every MCP tool with onFailure=block`,
           }
         : {
             id: 'cc.hooks',

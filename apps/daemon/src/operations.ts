@@ -49,6 +49,7 @@ const blank = (operation: string): OperationResult => ({
   output_truncated: false,
   artifact_ref: null,
   redactions: 0,
+  risk: null,
 });
 
 /**
@@ -97,6 +98,7 @@ export class OperationManager {
     const base = blank(p.operation);
     const denied = (reason: string): OperationResult => ({ ...base, status: 'denied', reason });
     const op = policy.operations[p.operation];
+    if (op) base.risk = op.risk;
     if (!op) {
       const held = policy.operations_held.find((h) => h.name === p.operation);
       return denied(
@@ -352,6 +354,7 @@ export class OperationManager {
     if (!view) throw new FridayError('invalid_request', `operation run ${id} not found`);
     const out: OperationResult = {
       ...blank(view.operation),
+      risk: view.risk,
       status: view.status,
       operation_run_id: id,
       approval_id: view.approval_id,

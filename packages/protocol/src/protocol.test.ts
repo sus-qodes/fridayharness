@@ -148,7 +148,8 @@ describe('method schemas', () => {
     expect(isMethodName('message.inbox')).toBe(true);
     expect(isMethodName('memory.record')).toBe(true);
     expect(isMethodName('operation.run')).toBe(true);
-    expect(Object.keys(METHODS)).toHaveLength(23);
+    expect(isMethodName('approval.elicited')).toBe(true);
+    expect(Object.keys(METHODS)).toHaveLength(24);
   });
 });
 

@@ -186,6 +186,16 @@ describe('hook launcher with no daemon', () => {
     await expectDecision('Read', { file_path: p('README.md') }, null);
     await expectDecision('Glob', { pattern: 'src/**/*.ts' }, null);
     await expectDecision('Agent', { prompt: 'x' }, null);
+    // Third-party MCP tools (ADR-0030): protected locations denied here, the rest asks; Friday's own pass.
+    await expectDecision(
+      'mcp__fs__write_file',
+      { path: p('.claude', 'settings.json'), content: '{}' },
+      'deny',
+      'host.config',
+    );
+    await expectDecision('mcp__fs__read_file', { path: p('.friday', 'run', 'daemon.json') }, 'deny', 'friday.runtime');
+    await expectDecision('mcp__github__search_code', { query: 'checkout' }, 'ask', 'Friday is unavailable');
+    await expectDecision('mcp__friday__friday_whoami', {}, null);
 
     const start = await launch(w, 'SessionStart', {
       session_id: 's',

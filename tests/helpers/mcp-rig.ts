@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { TestWorkspace } from '@friday/test-support';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { ElicitRequestSchema, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import { REPO_ROOT } from './cli.js';
 
 const MCP_SOURCE = path.join(REPO_ROOT, 'packages', 'mcp-server', 'src', 'bin.ts');
@@ -26,6 +27,10 @@ export async function startMcp(
   ws: TestWorkspace,
   env: Record<string, string> = {},
   clientInfo: { name: string; version: string } = { name: 'claude-code', version: '2.1.296' },
+  opts: {
+    /** The human answering the host's form dialogs (MCP elicitation); without it the host offers none. */
+    elicit?: (message: string) => ElicitResult | Promise<ElicitResult>;
+  } = {},
 ): Promise<McpRig> {
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -45,7 +50,11 @@ export async function startMcp(
   transport.stderr?.on('data', (c: Buffer) => {
     errText += c.toString('utf8');
   });
-  const client = new Client(clientInfo);
+  const client = new Client(clientInfo, opts.elicit ? { capabilities: { elicitation: {} } } : {});
+  if (opts.elicit) {
+    const answer = opts.elicit;
+    client.setRequestHandler(ElicitRequestSchema, async (req) => answer(req.params.message));
+  }
   await client.connect(transport);
   const rig: McpRig = {
     client,

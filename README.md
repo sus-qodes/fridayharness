@@ -25,6 +25,7 @@ The architecture is called **ContextOS** in the original specification.
 - **M6a** judges what agents ask for against one capability catalogue, answers what the policy decides alone at once, and binds every human approval to its task, attempt, exact target and policy, for one use unless you say otherwise.
 - **M6b** puts the project's own policy behind a trust boundary: what tracked files restrict applies at once, what they loosen only after you trust it on your clone; policy files add deny rules and team scopes ([docs/policy.md](docs/policy.md)).
 - **M6c** runs work that needs a secret for the agent instead of handing the secret over: the project declares an operation (such as a sandbox integration test), you trust it and approve each run, and the agent gets the outcome with the secret removed. Checks run in a minimal execution profile, secrets are encrypted with DPAPI on Windows, and claims can be verified automatically once you trust that.
+- **M6d** puts the tools of other MCP servers behind Friday's policy hook (none can reach Friday's files; the project sets a level per server), lets you answer low- and medium-risk requests in Claude Code's own dialog, and proves each security case of the spec with an end-to-end test.
 
 See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 

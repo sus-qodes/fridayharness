@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { PolicyAction } from '@friday/policy';
-import { COMMAND_TOOLS, NETWORK_TOOLS, WRITE_TOOLS } from './types.js';
+import { COMMAND_TOOLS, NETWORK_TOOLS, thirdPartyMcp, WRITE_TOOLS } from './types.js';
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.length > 0 ? v : undefined);
 
@@ -38,7 +38,43 @@ export function actionFromTool(toolName: string, input: Record<string, unknown>)
   if (NETWORK_TOOLS.has(toolName)) {
     return { tool: toolName, kind: 'network', url: str(input.url) ?? `search: ${str(input.query) ?? ''}` };
   }
+  const mcp = thirdPartyMcp(toolName);
+  if (mcp) {
+    const { texts, pathish } = inputStrings(input);
+    return { tool: toolName, kind: 'mcp', server: mcp.server, mcpTool: mcp.tool, texts, pathish };
+  }
   return null;
+}
+
+const PATH_KEY = /path|file|dir|folder|uri|url|target|dest|source|cwd|root|location/i;
+
+/**
+ * The strings of an MCP tool's input (ADR-0030 §2), bounded: every one is checked like a command,
+ * and the ones that look like paths (by their key, a separator or a leading dot) like a write.
+ */
+export function inputStrings(input: unknown): { texts: string[]; pathish: string[] } {
+  const texts: string[] = [];
+  const pathish: string[] = [];
+  const walk = (v: unknown, key: string, depth: number): void => {
+    if (texts.length >= 200 || depth > 6) return;
+    if (typeof v === 'string') {
+      const t = v.length > 8000 ? v.slice(0, 8000) : v;
+      texts.push(t);
+      const looks =
+        t.length <= 1024 && !/[\r\n]/.test(t) && (PATH_KEY.test(key) || /[\\/]/.test(t) || t.startsWith('.'));
+      if (looks) pathish.push(t);
+      return;
+    }
+    if (Array.isArray(v)) {
+      for (const x of v.slice(0, 100)) walk(x, key, depth + 1);
+      return;
+    }
+    if (v && typeof v === 'object') {
+      for (const [k, x] of Object.entries(v as Record<string, unknown>).slice(0, 100)) walk(x, k, depth + 1);
+    }
+  };
+  walk(input, '', 0);
+  return { texts, pathish };
 }
 
 const BODY_FIELDS = new Set(['content', 'new_string', 'old_string', 'new_source', 'old_source']);

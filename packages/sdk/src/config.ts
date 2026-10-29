@@ -80,6 +80,49 @@ export const ExecutionSettings = z
   .strict()
   .prefault({});
 
+const McpLevel = z.enum(['auto', 'review', 'manual', 'never']);
+const MCP_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * Levels for the tools of third-party MCP servers (ADR-0030 §3): `auto` (no review; loosening),
+ * `review` (the host asks the human; the default), `manual` (denied unless approved), `never`.
+ * Friday's own server is not configurable.
+ */
+export const McpSettings = z
+  .object({
+    servers: z
+      .record(
+        z.string(),
+        z
+          .object({ default: McpLevel.optional(), tools: z.record(z.string(), McpLevel).default({}) })
+          .strict()
+          .superRefine((m, ctx) => {
+            for (const t of Object.keys(m.tools)) {
+              if (!MCP_NAME.test(t)) ctx.addIssue({ code: 'custom', path: ['tools', t], message: `${t}: a tool name` });
+            }
+          }),
+      )
+      .default({})
+      .superRefine((r, ctx) => {
+        for (const k of Object.keys(r)) {
+          if (!MCP_NAME.test(k)) ctx.addIssue({ code: 'custom', path: [k], message: `${k}: a server name` });
+          else if (k === 'friday')
+            ctx.addIssue({ code: 'custom', path: [k], message: "Friday's own MCP server is not configurable" });
+        }
+      }),
+  })
+  .strict()
+  .prefault({});
+
+/** Who decides approvals where (ADR-0030 §5). */
+export const ApprovalSettings = z
+  .object({
+    /** false: low- and medium-risk approvals are decided on the CLI and the status page only. */
+    elicitation: z.boolean().default(true),
+  })
+  .strict()
+  .prefault({});
+
 const Check = z.object({
   name: z.string().min(1),
   kind: z.enum(['test', 'lint', 'build', 'typecheck', 'other']).default('test'),
@@ -260,6 +303,9 @@ export const FridayConfig = z
     operations: Operations.default({}),
     /** The execution profile checks and operations run in (ADR-0029 §4). */
     execution: ExecutionSettings,
+    /** Third-party MCP servers' tools (ADR-0030 §3). */
+    mcp: McpSettings,
+    approvals: ApprovalSettings,
   })
   .passthrough();
 export type FridayConfig = z.infer<typeof FridayConfig>;

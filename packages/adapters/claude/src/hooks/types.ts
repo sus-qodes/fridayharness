@@ -137,10 +137,21 @@ export const HOOK_INPUT_KEYS: Record<HookEventName, readonly string[]> = {
   ],
 };
 
-/** Tools whose PreToolUse decision Friday makes (ADR-0009, spike S8). */
-export const PRE_TOOL_MATCHER = 'Read|Glob|Grep|Edit|Write|NotebookEdit|Bash|PowerShell|WebFetch|WebSearch';
+/**
+ * Tools whose PreToolUse decision Friday makes (ADR-0009, spike S8), and from M6d every MCP tool
+ * (ADR-0030): Friday's own get no decision, third-party ones pass the server policy.
+ */
+export const PRE_TOOL_MATCHER = 'Read|Glob|Grep|Edit|Write|NotebookEdit|Bash|PowerShell|WebFetch|WebSearch|mcp__.*';
 /** Tools Friday observes after they ran. EnterWorktree/ExitWorktree change the working directory. */
-export const POST_TOOL_MATCHER = 'Edit|Write|NotebookEdit|Bash|PowerShell|EnterWorktree|ExitWorktree';
+export const POST_TOOL_MATCHER = 'Edit|Write|NotebookEdit|Bash|PowerShell|EnterWorktree|ExitWorktree|mcp__.*';
+/** Friday's own MCP tools: judged by the protocol behind them, never by the hook. */
+export const isFridayTool = (name: string) => name.startsWith('mcp__friday__');
+/** `mcp__<server>__<tool>` of another server, or null. */
+export function thirdPartyMcp(name: string): { server: string; tool: string } | null {
+  if (!name.startsWith('mcp__') || isFridayTool(name)) return null;
+  const [, server, ...rest] = name.split('__');
+  return server && rest.length ? { server, tool: rest.join('__') } : null;
+}
 export const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 export const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
 export const NETWORK_TOOLS = new Set(['WebFetch', 'WebSearch']);

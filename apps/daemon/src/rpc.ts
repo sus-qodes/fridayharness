@@ -5,6 +5,7 @@ import {
   type CommandClass,
   capabilityOf,
   evaluateCapability,
+  mcpLevel,
   type ProjectPolicy,
   type Risk,
 } from '@friday/policy';
@@ -16,6 +17,7 @@ import {
   isMethodName,
   METHODS,
   RESERVED_METHODS,
+  type ResultOf,
   RpcRequest,
   type RpcResponse,
   rpcError,
@@ -59,6 +61,54 @@ export function callerFor(state: FridayState, projectId: string, harnessId: stri
     bound ?? (harness.requested_agent_key ? state.q.agentByKey(projectId, harness.requested_agent_key) : undefined);
   if (!agent) throw new FridayError('agent_not_found', 'no agent is attached to this session');
   return { harness_id: harnessId, agent_id: agent.agent_id };
+}
+
+/**
+ * A human's answer given in the host (MCP elicitation, ADR-0030 §5), relayed by the session that
+ * asked: it counts only for that agent's pending request in this session's attempt, at low or
+ * medium risk, from a session whose Friday hooks are enforcing, and grants one use.
+ */
+function elicitedAnswer(deps: RpcDeps, c: Caller, approvalId: string, decision: 'approve' | 'reject') {
+  const { state, project } = deps;
+  const pid = project.project_id;
+  if (deps.policy && !deps.policy().elicitation) {
+    throw new FridayError(
+      'permission_denied',
+      'this project decides approvals on the CLI and the status page (approvals.elicitation: false)',
+    );
+  }
+  const harness = state.q.harness(c.harness_id);
+  if (harness.enforcement_level !== 'L1' || harness.enforcement_status !== 'enforcing') {
+    throw new FridayError(
+      'permission_denied',
+      'an answer given in the host counts only from a session whose Friday hooks are enforcing; decide it with "friday approve"',
+    );
+  }
+  const row = state.q.approvals(pid).find((a) => a.approval_id === approvalId) as
+    | { requested_by_kind: string; requested_by_id: string; run_id: string | null; risk: string | null; status: string }
+    | undefined;
+  if (row?.requested_by_kind !== 'agent' || row.requested_by_id !== c.agent_id) {
+    throw new FridayError('permission_denied', `${approvalId} is not a request of this agent`);
+  }
+  const run = row.run_id ? state.q.findRun(row.run_id) : undefined;
+  if (!run || run.harness_id !== c.harness_id) {
+    throw new FridayError('permission_denied', `${approvalId} was not asked for in this session's attempt`);
+  }
+  if (row.risk !== 'low' && row.risk !== 'medium') {
+    throw new FridayError(
+      'permission_denied',
+      `${approvalId} is ${row.risk ?? 'of unknown'} risk: a human decides it with "friday approve" or on the status page`,
+    );
+  }
+  if (row.status !== 'pending') {
+    return { approval_id: approvalId, status: row.status as ResultOf<'approval.elicited'>['status'] };
+  }
+  state.decideApproval(pid, { kind: 'human', id: 'host-user' }, approvalId, decision === 'approve', {
+    reuse: 'once',
+    via: 'elicitation',
+    note: `answered in the ${harness.vendor} session ${harness.harness_id}`,
+  });
+  return { approval_id: approvalId, status: decision === 'approve' ? ('granted' as const) : ('denied' as const) };
 }
 
 function gateway(deps: RpcDeps): OperationManager {
@@ -302,6 +352,16 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
               autonomy: effective?.autonomy ?? (project.config.autonomy as Partial<Record<CommandClass, Autonomy>>),
               risk: effective?.risk ?? (project.config.risk as Partial<Record<Capability, Risk>>),
               ...(effective ? { deny: effective.deny } : {}),
+              // A third-party MCP tool, `<server>/<tool>`: the project's level for it (ADR-0030 §4).
+              ...(capability === 'mcp.call' && effective && p.resource?.includes('/')
+                ? {
+                    mcpLevel: mcpLevel(
+                      effective,
+                      p.resource.slice(0, p.resource.indexOf('/')),
+                      p.resource.slice(p.resource.indexOf('/') + 1),
+                    ),
+                  }
+                : {}),
             });
             // An agent asking for a secret is pointed at the operations that use one (Part 12 §5).
             const ops = capability === 'secret.resolve' ? (deps.operations?.withSecrets() ?? []) : [];
@@ -341,6 +401,10 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
     case 'human.escalation': {
       const p = METHODS[method].params.parse(raw);
       return state.requestEscalation(pid, caller(), p);
+    }
+    case 'approval.elicited': {
+      const p = METHODS[method].params.parse(raw);
+      return elicitedAnswer(deps, caller(), p.approval_id, p.decision);
     }
     case 'operation.list':
       return gateway(deps).list(caller());

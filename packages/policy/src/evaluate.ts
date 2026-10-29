@@ -4,7 +4,7 @@ import { type Autonomy, type CommandClass, classifyCommand } from './commands.js
 import { canonicalize, globsOverlap, matchesAny, type PathContext } from './paths.js';
 import { type SensitiveClass, sensitiveClassOf, sensitiveInText, sensitivePattern } from './sensitive.js';
 
-export type ActionKind = 'read' | 'search' | 'write' | 'command' | 'network';
+export type ActionKind = 'read' | 'search' | 'write' | 'command' | 'network' | 'mcp';
 
 export interface PolicyAction {
   /** Host tool name (Read, Edit, Bash, …). */
@@ -15,6 +15,13 @@ export interface PolicyAction {
   patterns?: string[];
   command?: string;
   url?: string;
+  /** A third-party MCP tool (ADR-0030): its server and tool name. */
+  server?: string;
+  mcpTool?: string;
+  /** Strings from an MCP tool's input, checked like a command (ADR-0030 §2). */
+  texts?: string[];
+  /** Those that look like paths, also checked like a write. */
+  pathish?: string[];
 }
 
 export interface PolicyTask {
@@ -54,6 +61,8 @@ export interface PolicyInput {
   reservations?: { required: readonly string[]; held: readonly { pattern: string; task_id: string }[] };
   /** The project's deny rules (ADR-0028): paths no task writes or reads without a human approving that path. */
   deny?: { write: readonly string[]; read: readonly string[] };
+  /** The level of a third-party MCP tool under the project's server policy (ADR-0030 §3); default review. */
+  mcp?: (server: string, tool: string) => Autonomy;
 }
 
 export type Decision = 'allow' | 'deny' | 'ask';
@@ -123,6 +132,35 @@ export function evaluateSensitive(action: PolicyAction, ctx: PathContext): Polic
       });
     }
   }
+  // A third-party MCP tool: Friday cannot know what it does with its input (ADR-0030 §2).
+  for (const t of action.texts ?? []) {
+    const hit = sensitiveInText(t, ctx);
+    if (hit) {
+      return r('deny', `sensitive.${hit.class}`, `${action.tool} was given a protected location (${hit.class}).`, {
+        sensitive_class: hit.class,
+        targets: [hit.path],
+      });
+    }
+  }
+  for (const p of action.pathish ?? []) {
+    let hit: ReturnType<typeof sensitiveClassOf> = null;
+    try {
+      hit = sensitiveClassOf(p.replace(/^file:\/\/\/?/i, ''), ctx, 'write');
+    } catch {
+      hit = null; // not a usable path
+    }
+    if (hit) {
+      return r(
+        'deny',
+        `sensitive.${hit.class}`,
+        `${action.tool} was given ${hit.path}, which Friday protects (${hit.class}).`,
+        {
+          sensitive_class: hit.class,
+          targets: [hit.path],
+        },
+      );
+    }
+  }
   return null;
 }
 
@@ -152,6 +190,28 @@ export function evaluate(input: PolicyInput): PolicyResult {
       });
     }
     return r('allow', 'read.default', 'reading is not restricted by task scope in M1.');
+  }
+
+  if (action.kind === 'mcp') {
+    const server = action.server ?? '';
+    const tool = action.mcpTool ?? '';
+    const target = `${server}/${tool}`;
+    const level = input.mcp?.(server, tool) ?? 'review';
+    if (level === 'never')
+      return r('deny', 'mcp.never', `the project's policy never lets agents use ${target}.`, { targets: [target] });
+    if (level === 'auto') return r('allow', 'mcp.auto', `${target} runs without review.`, { targets: [target] });
+    if (input.approved?.('mcp.call', target)) {
+      return r('allow', 'mcp.approved', `a human approved using ${target}.`, {
+        targets: [target],
+        relied_on: [{ capability: 'mcp.call', target }],
+      });
+    }
+    if (level === 'manual') {
+      return r('deny', 'mcp.manual', `${target} needs an explicit human approval first (mcp.call). ${HOW_TO_ASK}`, {
+        targets: [target],
+      });
+    }
+    return r('ask', 'mcp.review', `${target} is a tool of another MCP server; a human decides.`, { targets: [target] });
   }
 
   if (action.kind === 'network') {

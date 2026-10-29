@@ -5,7 +5,7 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mc
 import { z } from 'zod';
 import { SERVER_INSTRUCTIONS } from './instructions.js';
 import type { FridaySession } from './session.js';
-import { createFridayTools } from './tools.js';
+import { createFridayTools, type HostUi } from './tools.js';
 
 function errorResult(e: unknown) {
   const code = isFridayError(e) ? e.code : ((e as { code?: string }).code ?? 'COS-9000');
@@ -39,7 +39,33 @@ export function createFridayMcpServer(session: FridaySession): McpServer {
     },
   );
 
-  for (const tool of createFridayTools(session)) {
+  // Approvals in the host (ADR-0030 §5): asked through MCP form elicitation when the host offers it.
+  const host: HostUi = {
+    ask: async (message) => {
+      if (!server.server.getClientCapabilities()?.elicitation?.form) return null;
+      const r = await server.server.elicitInput(
+        {
+          message,
+          requestedSchema: {
+            type: 'object',
+            properties: {
+              decision: {
+                type: 'string',
+                title: 'Decision',
+                enum: ['approve', 'reject'],
+                description: 'approve covers one use',
+              },
+            },
+            required: ['decision'],
+          },
+        },
+        { timeout: 300_000 },
+      );
+      if (r.action === 'accept') return r.content?.decision === 'approve' ? 'approve' : 'reject';
+      return r.action === 'decline' ? 'reject' : null;
+    },
+  };
+  for (const tool of createFridayTools(session, host)) {
     server.registerTool(
       tool.name,
       {

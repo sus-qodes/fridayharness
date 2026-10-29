@@ -2,7 +2,7 @@
  * A project's own policy and the trust boundary (plan M6b, ADR-0028; spec Part 07 §3, §11).
  */
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_BINARIES, projectPolicy } from './index.js';
+import { DEFAULT_BINARIES, mcpLevel, projectPolicy } from './index.js';
 
 const config = { name: 'config.yaml', autonomy: { 'git.push': 'auto', 'package.install': 'manual' } };
 const infra = {
@@ -111,6 +111,44 @@ describe('project policy', () => {
       ['lint', 'config.yaml'],
       ['lint', 'policies/ops.yaml'],
     ]);
+  });
+
+  it('judges third-party MCP tools per server: auto after trust, and the strictest source wins (ADR-0030)', () => {
+    const config = {
+      name: 'config.yaml',
+      mcp: { github: { default: 'review', tools: { search_code: 'auto', create_pull_request: 'manual' } } },
+    };
+    const infra = {
+      name: 'policies/infra.yaml',
+      mcp: { filesystem: { default: 'never', tools: { read_file: 'auto' } } },
+    };
+    const untrusted = projectPolicy([config, infra], null);
+    expect(untrusted.loosening.map((l) => l.setting)).toEqual(['mcp.filesystem.read_file', 'mcp.github.search_code']);
+    expect(mcpLevel(untrusted, 'github', 'search_code')).toBe('review');
+    expect(mcpLevel(untrusted, 'github', 'create_pull_request')).toBe('manual');
+    expect(mcpLevel(untrusted, 'filesystem', 'read_file')).toBe('never');
+    expect(mcpLevel(untrusted, 'slack', 'post_message')).toBe('review');
+    const trusted = projectPolicy([config, infra], untrusted.loosening_hash);
+    expect(mcpLevel(trusted, 'github', 'search_code')).toBe('auto');
+    // The same source's tool level overrides its own default...
+    expect(mcpLevel(trusted, 'filesystem', 'read_file')).toBe('auto');
+    // ...but not what another source says about the same tool.
+    const strict = projectPolicy(
+      [config, infra, { name: 'policies/strict.yaml', mcp: { github: { default: 'never' } } }],
+      null,
+    );
+    expect(
+      mcpLevel(
+        projectPolicy(
+          [config, infra, { name: 'policies/strict.yaml', mcp: { github: { default: 'never' } } }],
+          strict.loosening_hash,
+        ),
+        'github',
+        'search_code',
+      ),
+    ).toBe('never');
+    expect(trusted.elicitation).toBe(true);
+    expect(projectPolicy([config, { name: 'policies/x.yaml', elicitation: false }], null).elicitation).toBe(false);
   });
 
   it('treats lower enforcement, reservations off and auto-approved plans as loosening', () => {

@@ -251,4 +251,32 @@ describe('evaluate', () => {
         .decision,
     ).toBe('ask');
   });
+
+  it("judges third-party MCP tools by the server policy, and never lets one reach Friday's files (ADR-0030)", () => {
+    const mcp = (texts: string[], pathish: string[] = [], extra: Partial<PolicyInput> = {}) =>
+      evaluate({
+        ctx: WIN,
+        task: running(['**']),
+        action: { tool: 'mcp__fs__write_file', kind: 'mcp', server: 'fs', mcpTool: 'write_file', texts, pathish },
+        ...extra,
+      });
+    expect(mcp(['hello']).decision).toBe('ask');
+    expect(mcp(['hello'], [], { mcp: () => 'auto' }).decision).toBe('allow');
+    expect(mcp(['hello'], [], { mcp: () => 'never' })).toMatchObject({ decision: 'deny', rule: 'mcp.never' });
+    expect(mcp(['hello'], [], { mcp: () => 'manual' })).toMatchObject({ decision: 'deny', rule: 'mcp.manual' });
+    expect(
+      mcp(['hello'], [], { mcp: () => 'manual', approved: (c, t) => c === 'mcp.call' && t === 'fs/write_file' }),
+    ).toMatchObject({ decision: 'allow', relied_on: [{ capability: 'mcp.call', target: 'fs/write_file' }] });
+    // Whatever the server's level: Friday's state, runtime files, host config and secrets stay out of reach.
+    for (const [texts, pathish] of [
+      [['%LOCALAPPDATA%\\Friday\\credentials\\stripe.key'], []],
+      [['cat .friday/run/daemon.json'], []],
+      [['.claude/settings.json'], ['.claude/settings.json']],
+      [['C:\\demo\\shop\\.mcp.json'], ['C:\\demo\\shop\\.mcp.json']],
+      [['.git/config'], ['.git/config']],
+      [['file:///C:/demo/shop/.env'], ['file:///C:/demo/shop/.env']],
+    ] as [string[], string[]][]) {
+      expect(mcp(texts, pathish, { mcp: () => 'auto' }).decision, texts[0]).toBe('deny');
+    }
+  });
 });

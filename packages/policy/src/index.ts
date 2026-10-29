@@ -51,6 +51,8 @@ export {
   describeOperation,
   type EffectiveOperation,
   type Loosening,
+  type McpServerPolicy,
+  mcpLevel,
   type OperationDefinition,
   operationRisk,
   type PolicySource,

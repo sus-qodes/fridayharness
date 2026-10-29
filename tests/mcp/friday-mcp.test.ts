@@ -260,6 +260,72 @@ describe('friday-mcp over stdio', () => {
     expect(request).toMatchObject({ status: 'settled', settled_reason: 'replied' });
   });
 
+  it('lets the human decide low- and medium-risk requests in the host, never high-risk ones (ADR-0030 §5)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
+    await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Save the pricing work',
+      scope: { write: ['src/**'], read: [] },
+      assign_agent_key: 'dev-1',
+    });
+    const asked: string[] = [];
+    let answer: 'approve' | 'reject' = 'approve';
+    const mcp = await startMcp(ws(), {}, undefined, {
+      elicit: (message) => {
+        asked.push(message);
+        return { action: 'accept', content: { decision: answer } };
+      },
+    });
+    await eventually(
+      () => mcp.call('friday_whoami'),
+      (r) => (r.structured.daemon as { reachable?: boolean } | undefined)?.reachable === true,
+    );
+    const daemon = { url: td.url, projectId: td.project.project_id, token: td.daemon.tokens.bootstrap };
+    const start = await postHook(
+      daemon,
+      'SessionStart',
+      { session_id: 'sess-test-1', cwd: ws().projectDir, hook_event_name: 'SessionStart', source: 'startup' },
+      { claudePid: process.pid },
+    );
+    expect(start.status, JSON.stringify(start.body)).toBe(200);
+    expect((await mcp.call('friday_task_claim', { next: true })).isError).toBe(false);
+    const approvals = () =>
+      td.operator
+        .get<{ approvals: Record<string, unknown>[] }>(td.operator.projectPath('/approvals'))
+        .then((r) => r.approvals);
+
+    // Medium risk: asked in the host, approved there, for one use.
+    const commit = await mcp.call('friday_request_permission', {
+      action_class: 'shell.git.commit',
+      command: 'git commit -m wip',
+      justification: 'save the pricing work',
+      reuse: 'task',
+    });
+    expect(commit.text).toContain('approved');
+    expect(asked[0]).toContain('dev-1 asks to shell.git.commit git commit -m wip (medium risk)');
+    expect(asked[0]).toContain('The agent says: "save the pricing work"');
+    expect((await approvals()).at(-1)).toMatchObject({ status: 'granted', reuse: 'once', decided_via: 'elicitation' });
+
+    // Rejected in the host.
+    answer = 'reject';
+    const second = await mcp.call('friday_request_permission', {
+      action_class: 'shell.git.commit',
+      command: 'git commit -m more',
+      justification: 'one more',
+    });
+    expect(second.text).toContain('rejected');
+    expect((await approvals()).at(-1)).toMatchObject({ status: 'denied', decided_via: 'elicitation' });
+
+    // High risk is never put to the host: it waits for the CLI or the status page.
+    const before = asked.length;
+    const push = await mcp.call('friday_request_permission', {
+      action_class: 'shell.git.push',
+      command: 'git push',
+      justification: 'publish',
+    });
+    expect(asked).toHaveLength(before);
+    expect(push.structured).toMatchObject({ status: 'pending', risk: 'high' });
+  });
+
   it('rejects invalid tool arguments without crashing', async () => {
     await startTestDaemon(ws());
     const mcp = await startMcp(ws());

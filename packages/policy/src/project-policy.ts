@@ -49,6 +49,12 @@ export const DEFAULT_BINARIES: readonly string[] = [
   'py',
 ];
 
+/** A project's levels for the tools of a third-party MCP server (ADR-0030 §3). */
+export interface McpServerPolicy {
+  default?: string;
+  tools?: Record<string, string>;
+}
+
 /** One tracked source: `config.yaml`, or a file in `.friday/policies/`. */
 export interface PolicySource {
   name: string;
@@ -67,6 +73,10 @@ export interface PolicySource {
   execution?: { binaries?: string[]; env_passthrough?: string[] };
   /** `verification.auto_on_completion` (ADR-0029 §6). */
   auto_verification?: boolean;
+  /** Levels for third-party MCP servers (ADR-0030 §3). */
+  mcp?: Record<string, McpServerPolicy>;
+  /** `approvals.elicitation`: false keeps every decision on the CLI and the status page (ADR-0030 §5). */
+  elicitation?: boolean;
 }
 
 export interface Loosening {
@@ -93,6 +103,10 @@ export interface ProjectPolicy {
   execution: { binaries: string[]; env_passthrough: string[] };
   /** Whether a completion claim starts verification without a human. */
   auto_verification: boolean;
+  /** Each source's levels for third-party MCP servers; loosening counted only when trusted. */
+  mcp: { source: string; server: string; default?: Autonomy; tools: Record<string, Autonomy> }[];
+  /** Whether a human may decide low- and medium-risk approvals in the host (MCP elicitation). */
+  elicitation: boolean;
   /** What tracked files loosen, with where each comes from. */
   loosening: Loosening[];
   /** The hash `friday policy trust` records; null when nothing loosens. */
@@ -175,6 +189,16 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     if (s.auto_verification) {
       loosening.push({ source: s.name, setting: 'verification.auto_on_completion', from: 'false', to: 'true' });
     }
+    // A third-party MCP tool without review (ADR-0030 §3).
+    for (const [server, m] of Object.entries(s.mcp ?? {})) {
+      if (m.default === 'auto') {
+        loosening.push({ source: s.name, setting: `mcp.${server}.default`, from: 'review', to: 'auto' });
+      }
+      for (const [tool, v] of Object.entries(m.tools ?? {})) {
+        if (v === 'auto')
+          loosening.push({ source: s.name, setting: `mcp.${server}.${tool}`, from: 'review', to: 'auto' });
+      }
+    }
   }
   loosening.sort((a, b) => `${a.setting} ${a.source} ${a.to}`.localeCompare(`${b.setting} ${b.source} ${b.to}`));
   const loosening_hash = loosening.length ? hash(loosening) : null;
@@ -254,6 +278,20 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     env_passthrough: trusted ? [...new Set(sources.flatMap((s) => s.execution?.env_passthrough ?? []))].sort() : [],
   };
   const auto_verification = trusted && sources.some((s) => s.auto_verification === true);
+  const level = (v: string | undefined): Autonomy | undefined =>
+    v && isAutonomy(v) && (trusted || A[v] >= A.review) ? v : undefined;
+  const mcp: ProjectPolicy['mcp'] = sources.flatMap((s) =>
+    Object.entries(s.mcp ?? {}).map(([server, m]) => {
+      const d = level(m.default);
+      const tools: Record<string, Autonomy> = {};
+      for (const [tool, v] of Object.entries(m.tools ?? {})) {
+        const t = level(v);
+        if (t) tools[tool] = t;
+      }
+      return { source: s.name, server, ...(d ? { default: d } : {}), tools };
+    }),
+  );
+  const elicitation = !sources.some((s) => s.elicitation === false);
 
   const effective = {
     autonomy,
@@ -266,6 +304,8 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     operations,
     execution,
     auto_verification,
+    mcp,
+    elicitation,
   };
   return {
     ...effective,
@@ -276,4 +316,17 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     version: hash(effective),
     sources: sources.map((s) => s.name),
   };
+}
+
+/**
+ * The level of a third-party MCP tool (ADR-0030 §3): each source's tool level, else its server
+ * default; the strictest wins. A server no source names is `review`.
+ */
+export function mcpLevel(policy: Pick<ProjectPolicy, 'mcp'>, server: string, tool: string): Autonomy {
+  const values = policy.mcp.flatMap((l) => {
+    if (l.server !== server) return [];
+    const v = l.tools[tool] ?? l.default;
+    return v ? [v] : [];
+  });
+  return values.length ? values.reduce((a, b) => (A[b] > A[a] ? b : a)) : 'review';
 }

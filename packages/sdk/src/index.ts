@@ -16,12 +16,14 @@ export {
 } from './access.js';
 export { DaemonClient, type DaemonClientOptions, DaemonUnreachableError, type RequestOptions } from './client.js';
 export {
+  ApprovalSettings,
   type CheckConfig,
   EnvName,
   ExecutionSettings,
   FridayConfig,
   loadConfig,
   type MasterBrainConfig,
+  McpSettings,
   OPERATION_NAME,
   OperationSpec,
   type ProviderConfig,

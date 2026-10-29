@@ -1,0 +1,25 @@
+{
+  "$id": "urn:friday:protocol:v1:approval.elicited:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "approval_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "granted",
+        "denied",
+        "used",
+        "revoked",
+        "expired"
+      ]
+    }
+  },
+  "required": [
+    "approval_id",
+    "status"
+  ]
+}

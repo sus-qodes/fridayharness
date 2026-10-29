@@ -5,6 +5,7 @@ import {
   type CommandClass,
   canonicalize,
   evaluate,
+  mcpLevel,
   type OtherWriter,
   type PolicyResult,
   patternsOverlap,
@@ -230,6 +231,8 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
             autonomy: effective?.autonomy ?? (project.config.autonomy as Partial<Record<CommandClass, Autonomy>>),
             ...(effective ? { deny: effective.deny } : {}),
             ...(reservations ? { reservations } : {}),
+            // Third-party MCP tools: the project's level for the server and tool (ADR-0030 §3).
+            mcp: (server, tool) => (effective ? mcpLevel(effective, server, tool) : 'review'),
           });
           // A task worktree belongs to its task: a session that does not hold it (a stale attempt
           // after recovery, or one that never claimed it) may not write there (ADR-0026 §2).
