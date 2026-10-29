@@ -3,6 +3,7 @@ import {
   type AgentView,
   type AssignmentView,
   type ContextPacket,
+  type ControlState,
   type FileReservationView,
   FridayError,
   type GoalView,
@@ -803,6 +804,26 @@ export class Queries {
           .prepare('SELECT * FROM escalations WHERE project_id = ? AND status = ? ORDER BY created_at')
           .all(projectId, status)
       : this.db.prepare('SELECT * FROM escalations WHERE project_id = ? ORDER BY created_at').all(projectId);
+  }
+
+  /** Pause, resume and halt (M9, docs/frontend/PLAN.md §5.4). */
+  control(projectId: string): ControlState {
+    const r = this.db
+      .prepare('SELECT paused, reason, changed_at, changed_by, halted_at FROM project_controls WHERE project_id = ?')
+      .get<{
+        paused: number;
+        reason: string | null;
+        changed_at: string | null;
+        changed_by: string | null;
+        halted_at: string | null;
+      }>(projectId);
+    return {
+      paused: r?.paused === 1,
+      reason: r?.reason ?? null,
+      changed_at: r?.changed_at ?? null,
+      changed_by: r?.changed_by ?? null,
+      halted_at: r?.halted_at ?? null,
+    };
   }
 
   statusCounts(projectId: string): Record<string, number> {

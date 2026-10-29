@@ -149,6 +149,12 @@ export const TaskStartParams = z.object({
    * (ADR-0032 §3): null for a new attempt; on `task.resume`, the session to resume.
    */
   session_ref: z.string().nullable().default(null),
+  /**
+   * On `task.resume` of a run whose session ended to wait for a human (plan M9 §5.6): why it
+   * continues ("A human granted your request …", "Friday runs again …", the human's answer). The
+   * adapter sends it as the resumed session's next message; without it, its restart text.
+   */
+  note: z.string().max(2000).nullable().default(null),
 });
 export type TaskStartParams = z.infer<typeof TaskStartParams>;
 export const TaskCancelParams = z.object({ task_id: z.string(), run_id: z.string(), reason: z.string().optional() });

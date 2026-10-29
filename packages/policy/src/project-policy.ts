@@ -77,6 +77,11 @@ export interface PolicySource {
   mcp?: Record<string, McpServerPolicy>;
   /** `approvals.elicitation`: false keeps every decision on the CLI and the status page (ADR-0030 §5). */
   elicitation?: boolean;
+  /**
+   * `daemon.port`: a fixed port. Loosening (plan M9 §5.13): a repository must not choose the
+   * address a browser signs in at, which an earlier program there may have poisoned (LESSONS UI-24).
+   */
+  daemon_port?: number;
 }
 
 export interface Loosening {
@@ -107,6 +112,8 @@ export interface ProjectPolicy {
   mcp: { source: string; server: string; default?: Autonomy; tools: Record<string, Autonomy> }[];
   /** Whether a human may decide low- and medium-risk approvals in the host (MCP elicitation). */
   elicitation: boolean;
+  /** The fixed port the daemon listens on, once trusted; null: a random port at every start. */
+  daemon_port: number | null;
   /** What tracked files loosen, with where each comes from. */
   loosening: Loosening[];
   /** The hash `friday policy trust` records; null when nothing loosens. */
@@ -188,6 +195,9 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     }
     if (s.auto_verification) {
       loosening.push({ source: s.name, setting: 'verification.auto_on_completion', from: 'false', to: 'true' });
+    }
+    if (s.daemon_port) {
+      loosening.push({ source: s.name, setting: 'daemon.port', from: 'random', to: String(s.daemon_port) });
     }
     // A third-party MCP tool without review (ADR-0030 §3).
     for (const [server, m] of Object.entries(s.mcp ?? {})) {
@@ -278,6 +288,7 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     env_passthrough: trusted ? [...new Set(sources.flatMap((s) => s.execution?.env_passthrough ?? []))].sort() : [],
   };
   const auto_verification = trusted && sources.some((s) => s.auto_verification === true);
+  const daemon_port = trusted ? (sources.find((s) => s.daemon_port)?.daemon_port ?? null) : null;
   const level = (v: string | undefined): Autonomy | undefined =>
     v && isAutonomy(v) && (trusted || A[v] >= A.review) ? v : undefined;
   const mcp: ProjectPolicy['mcp'] = sources.flatMap((s) =>
@@ -306,6 +317,7 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     auto_verification,
     mcp,
     elicitation,
+    daemon_port,
   };
   return {
     ...effective,

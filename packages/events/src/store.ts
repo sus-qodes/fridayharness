@@ -32,6 +32,27 @@ export interface ReadOptions {
   /** Exact types or prefixes ending in `*` (e.g. `task.*`). */
   types?: string[];
   limit?: number;
+  /** Only events with `sequence < before` (paging back through history). */
+  before?: number;
+  /** Only events with `sequence > after` (reads by reference; `readSince` takes it as an argument). */
+  after?: number;
+  /** Newest first. */
+  desc?: boolean;
+}
+
+/** The extra conditions and order of a read, with their parameters. */
+function paging(opts: ReadOptions, column: string): { sql: string; params: number[]; order: string } {
+  let sql = '';
+  const params: number[] = [];
+  if (opts.before !== undefined) {
+    sql += ` AND ${column} < ?`;
+    params.push(opts.before);
+  }
+  if (opts.after !== undefined) {
+    sql += ` AND ${column} > ?`;
+    params.push(opts.after);
+  }
+  return { sql, params, order: `ORDER BY ${column}${opts.desc ? ' DESC' : ''}` };
 }
 
 const SENSITIVITY_RANK: Record<Sensitivity, number> = { public: 0, internal: 1, sensitive: 2, secret: 3 };
@@ -177,9 +198,10 @@ export class EventStore {
   /** Events with `sequence > since`, oldest first. */
   readSince(projectId: string, since = 0, opts: ReadOptions = {}): StoredEvent[] {
     const f = typeFilter(opts.types);
+    const w = paging(opts, 'sequence');
     return this.db
-      .prepare(`SELECT * FROM events WHERE project_id = ? AND sequence > ?${f.sql} ORDER BY sequence LIMIT ?`)
-      .all<EventRow>(projectId, since, ...f.params, opts.limit ?? 500)
+      .prepare(`SELECT * FROM events WHERE project_id = ? AND sequence > ?${f.sql}${w.sql} ${w.order} LIMIT ?`)
+      .all<EventRow>(projectId, since, ...f.params, ...w.params, opts.limit ?? 500)
       .map(toEvent);
   }
 
@@ -192,13 +214,14 @@ export class EventStore {
 
   readByRef(projectId: string, kind: RefKind, id: string, opts: ReadOptions = {}): StoredEvent[] {
     const f = typeFilter(opts.types);
+    const w = paging(opts, 'e.sequence');
     return this.db
       .prepare(
         `SELECT e.* FROM events e JOIN event_refs r ON r.event_id = e.event_id
-         WHERE e.project_id = ? AND r.ref_kind = ? AND r.ref_id = ?${f.sql.replaceAll('type', 'e.type')}
-         ORDER BY e.sequence LIMIT ?`,
+         WHERE e.project_id = ? AND r.ref_kind = ? AND r.ref_id = ?${f.sql.replaceAll('type', 'e.type')}${w.sql}
+         ${w.order} LIMIT ?`,
       )
-      .all<EventRow>(projectId, kind, id, ...f.params, opts.limit ?? 500)
+      .all<EventRow>(projectId, kind, id, ...f.params, ...w.params, opts.limit ?? 500)
       .map(toEvent);
   }
 

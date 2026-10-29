@@ -1,0 +1,108 @@
+/* Design tokens (frontend handoff Part 08 §2). Every colour, size and curve in the interface comes from here. */
+:root {
+  /* Surfaces and backgrounds */
+  --bg-obsidian: #090d16;
+  --bg-canvas: #0c121e;
+  --bg-surface: rgba(15, 23, 42, 0.72);
+  --bg-surface-elevated: rgba(22, 33, 56, 0.85);
+  --bg-surface-active: rgba(30, 41, 59, 0.95);
+  --bg-surface-glass: rgba(13, 20, 36, 0.65);
+  --bg-input: rgba(9, 13, 22, 0.8);
+
+  /* Hairline borders and dividers */
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-medium: rgba(255, 255, 255, 0.16);
+  --border-strong: rgba(255, 255, 255, 0.28);
+  --border-accent-glow: rgba(6, 182, 212, 0.35);
+
+  /* Semantic accents */
+  --color-cyan: #06b6d4;
+  --color-cyan-glow: #22d3ee;
+  --color-blue: #3b82f6;
+  --color-neon-blue: #38bdf8;
+  --color-indigo: #6366f1;
+  --color-emerald: #10b981;
+  --color-amber: #f59e0b;
+  --color-amber-red: #ea580c;
+  --color-crimson: #ef4444;
+  --color-violet: #a855f7;
+  --color-slate-600: #475569;
+  --color-slate-500: #64748b;
+  --color-slate-400: #94a3b8;
+  --color-slate-200: #e2e8f0;
+  --color-white: #ffffff;
+  --color-grid-dot: #334155;
+
+  /* Diff colours (handoff Part 08 §5: at least 7:1 against dark slate) */
+  --diff-add-text: #34d399;
+  --diff-add-bg: rgba(16, 185, 129, 0.12);
+  --diff-del-text: #f87171;
+  --diff-del-bg: rgba(239, 68, 68, 0.12);
+
+  /* Task status tokens (handoff Part 04 §3) */
+  --status-proposed: #475569;
+  --status-ready: #06b6d4;
+  --status-assigned: #a855f7;
+  --status-running: #38bdf8;
+  --status-waiting: #f59e0b;
+  --status-claimed: #6366f1;
+  --status-verifying: #a855f7;
+  --status-completed: #10b981;
+  --status-failed: #ef4444;
+  --status-rework: #ea580c;
+  --status-lost: #ef4444;
+  --status-cancelled: #64748b;
+
+  /* Mascot palette (Blip: an original character, ERRATA F15) */
+  --mascot-shell: #1e293b;
+  --mascot-shell-highlight: #334155;
+  --mascot-visor: #05080f;
+  --mascot-led: #22d3ee;
+  --mascot-blush: rgba(251, 113, 133, 0.65);
+
+  /* Typography (no font files are bundled: system stacks, ERRATA F18) */
+  --font-sans:
+    "Inter", "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Cascadia Mono", "Fira Code", Menlo, Consolas, monospace;
+
+  --text-micro: 10px;
+  --text-caption: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-title-sm: 14px;
+  --text-title-md: 16px;
+  --text-title-lg: 20px;
+  --text-display: 28px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* Radii and elevations */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 9999px;
+
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.7);
+  --shadow-glow-cyan: 0 0 24px rgba(6, 182, 212, 0.25);
+  --shadow-glow-amber: 0 0 24px rgba(245, 158, 11, 0.3);
+
+  /* Spring and timing curves */
+  --ease-snappy: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-elastic: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 120ms;
+  --duration-base: 220ms;
+  --duration-slow: 360ms;
+
+  /* Layout */
+  --header-height: 48px;
+  --drawer-width: 540px;
+  --drawer-height: 320px;
+  --focus-ring: 0 0 0 2px var(--bg-canvas), 0 0 0 4px var(--color-cyan-glow);
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@friday/ui",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Friday's interface: the Studio canvas, the Notch and the mascot Blip (browser bundle served by the daemon at /ui/).",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "dev": "vite"
+  },
+  "devDependencies": {
+    "@friday/protocol": "workspace:*",
+    "@friday/sdk": "workspace:*",
+    "happy-dom": "^21.0.1",
+    "vite": "^8.3.4"
+  }
+}

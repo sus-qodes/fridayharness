@@ -1,0 +1,201 @@
+/* Form controls shared by every area: fields, inputs, choices, badges (plan §6). */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.field-label {
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  color: var(--color-slate-400);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.field-hint {
+  font-size: var(--text-caption);
+  color: var(--color-slate-500);
+}
+
+.field-error {
+  font-size: var(--text-caption);
+  color: var(--color-crimson);
+}
+
+.input,
+.textarea,
+.select {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--color-slate-200);
+  font: inherit;
+  font-size: var(--text-base);
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.textarea {
+  min-height: 72px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.input.mono,
+.textarea.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.input:focus,
+.textarea:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--color-cyan);
+  box-shadow: 0 0 0 2px var(--border-accent-glow);
+}
+
+.input[aria-invalid="true"],
+.textarea[aria-invalid="true"] {
+  border-color: var(--color-crimson);
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-base);
+  color: var(--color-slate-200);
+  cursor: pointer;
+}
+
+.check input {
+  accent-color: var(--color-cyan);
+}
+
+/* A row of exclusive choices (reach, motion, diff layout). */
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.segmented button {
+  padding: 4px 10px;
+  border: 0;
+  border-right: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--color-slate-400);
+  font-size: var(--text-sm);
+}
+
+.segmented button:last-child {
+  border-right: 0;
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--bg-surface-active);
+  color: var(--color-white);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.badge-good {
+  color: var(--color-emerald);
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+.badge-info {
+  color: var(--color-neon-blue);
+  border-color: rgba(56, 189, 248, 0.4);
+}
+
+.badge-warn {
+  color: var(--color-amber);
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.badge-danger {
+  color: var(--color-crimson);
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
+.badge-muted {
+  color: var(--color-slate-400);
+}
+
+.badge-strong {
+  color: var(--color-violet);
+  border-color: rgba(168, 85, 247, 0.45);
+}
+
+/* Agent-written text shown in full (plan FD-28): wrapped, monospaced, never cut off. */
+.agent-text {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--color-slate-200);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  padding: 6px 8px;
+}
+
+.hidden-warning {
+  font-size: var(--text-caption);
+  color: var(--color-amber);
+}
+
+.empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--color-slate-500);
+  font-size: var(--text-sm);
+}
+
+.section-title {
+  margin: 16px 0 8px;
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  color: var(--color-slate-400);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.row-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.spacer {
+  flex: 1;
+}

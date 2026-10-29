@@ -15,6 +15,8 @@ import {
 } from '@friday/adapter-claude';
 import { newId } from '@friday/protocol';
 import { type Command, Option } from 'commander';
+import { createAgentLauncher } from './agent-launcher.js';
+import { claudeSetupExtension } from './claude-setup-ext.js';
 import { doctorCodex, registerSpawnRun } from './codex.js';
 import { type GlobalOptions, out, project, UsageError } from './context.js';
 import { extraDoctorChecks, renderDoctor } from './doctor.js';
@@ -133,7 +135,14 @@ function registerHarness(program: Command): void {
           host,
           applied: !opts.print,
           removed: Boolean(opts.remove),
-          changes: changes.map((c) => ({ path: c.display, action: actionOf(c), tracked: c.tracked, note: c.note })),
+          changes: changes.map((c) => ({
+            path: c.display,
+            action: actionOf(c),
+            tracked: c.tracked,
+            note: c.note,
+            // A short line diff, so an interface can show what changes before it applies (plan M9 §5.10).
+            diff: changeDiff(c),
+          })),
           claude_code: install ? { version: install.version, source: install.source, hook_level: level } : null,
         };
         out(g(), summary, () => {
@@ -235,10 +244,19 @@ function registerFixture(program: Command): void {
     });
 }
 
+/** At most 80 lines of a change's diff; none for Friday's bundled launcher or private files. */
+function changeDiff(c: { display: string; before: string | null; after: string | null }): string | null {
+  if (c.after === null || c.display.endsWith('hook.mjs') || c.display.startsWith('(private)')) return null;
+  const diff = c.before === null ? c.after.split('\n').map((l) => `+ ${l}`) : lineDiff(c.before, c.after);
+  const more = diff.length > 80 ? [`... ${diff.length - 80} more line(s)`] : [];
+  return [...diff.slice(0, 80), ...more].join('\n');
+}
+
 let registered = false;
 if (!registered) {
   registered = true;
-  daemonPlugins.extensions.push(claudeCodeHooks());
+  // The hooks route, and the interface's agent launcher and Claude Code setup (plan M9 §5.9, §5.10).
+  daemonPlugins.extensions.push(claudeCodeHooks(), createAgentLauncher(), claudeSetupExtension());
   commandPlugins.push(registerHarness, registerFixture);
   extraDoctorChecks.push(async (ref) => {
     if (!ref || !existsSync(path.join(ref.root, '.friday', 'harness', 'claude-code'))) return [];

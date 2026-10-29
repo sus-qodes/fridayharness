@@ -1,0 +1,205 @@
+/* Base layer: reset, page, focus, glass surfaces (handoff Part 08 §3), reduced motion. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg-obsidian);
+  color: var(--color-slate-200);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+#app {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+a {
+  color: var(--color-cyan-glow);
+}
+
+code,
+pre,
+.mono {
+  font-family: var(--font-mono);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Glass card surface */
+.glass-panel {
+  background: var(--bg-surface);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-md);
+  border-radius: var(--radius-md);
+}
+
+.glow-cyan {
+  border-color: var(--color-cyan);
+  box-shadow: 0 0 16px rgba(6, 182, 212, 0.35);
+}
+
+.glow-amber {
+  border-color: var(--color-amber);
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.35);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-medium);
+  background: var(--bg-surface-elevated);
+  color: var(--color-slate-200);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--bg-surface-active);
+  border-color: var(--border-strong);
+}
+
+.btn-primary {
+  background: rgba(6, 182, 212, 0.18);
+  border-color: rgba(6, 182, 212, 0.6);
+  color: var(--color-white);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: rgba(6, 182, 212, 0.3);
+}
+
+.btn-danger {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.26);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.btn-icon {
+  width: 30px;
+  padding: 0;
+}
+
+.kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-medium);
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  line-height: 16px;
+  text-align: center;
+  color: var(--color-slate-400);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-medium);
+  font-size: var(--text-caption);
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.muted {
+  color: var(--color-slate-400);
+}
+
+.scroll {
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/*
+ * Reduced motion: components take their durations from the tokens, so zeroing the tokens stops
+ * every transition; decorative loops check `.reduce-motion` themselves, and the springs, the
+ * mascot and the pulses read the same preference in code (plan §6). Hidden views use the
+ * `hidden` attribute (display: none), which stops their animations without any rule here.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root:not(.motion-on) {
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+    --duration-slow: 0ms;
+  }
+}
+
+:root.reduce-motion {
+  --duration-fast: 0ms;
+  --duration-base: 0ms;
+  --duration-slow: 0ms;
+}

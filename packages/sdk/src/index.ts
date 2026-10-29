@@ -9,6 +9,7 @@ export const FRIDAY_VERSION = '0.1.0';
 export {
   type AccessReport,
   allowedPrincipals,
+  checkFolderAccess,
   checkPrivateAccess,
   currentUserSid,
   protectPrivateDir,

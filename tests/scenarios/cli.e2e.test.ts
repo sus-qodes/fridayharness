@@ -129,8 +129,22 @@ describe('friday CLI end to end', () => {
     expect(missing.code).toBe(4);
     expect(missing.stderr).toContain('COS-2001');
 
-    const ui = await cli(['--project', dir, 'ui']);
-    expect(ui.stdout.trim()).toBe(`${daemon.url}/ui`);
+    // A one-time sign-in link (plan M9 §5.12): printed, never opened, under tests.
+    const ui = await cli(['--project', dir, 'ui', '--print-link']);
+    const link = ui.stdout.trim();
+    expect(link.startsWith(`${daemon.url}/ui/`)).toBe(true);
+    const code = /#code=([A-Za-z0-9_-]{43})$/.exec(link)?.[1];
+    expect(code).toBeTruthy();
+    const exchange = () =>
+      fetch(`${daemon.url}/ui/session`, {
+        method: 'POST',
+        headers: { origin: daemon.url, 'content-type': 'application/json' },
+        body: JSON.stringify({ code }),
+      }).then((r) => r.status);
+    expect(await exchange()).toBe(200);
+    expect(await exchange()).toBe(401);
+    const legacy = await cli(['--project', dir, 'ui', '--token']);
+    expect(legacy.stdout).toContain(`${daemon.url}/ui`);
 
     const stop = await cli(['--project', dir, 'daemon', 'stop']);
     expect(stop.code).toBe(0);

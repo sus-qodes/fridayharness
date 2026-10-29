@@ -132,7 +132,7 @@ export function failureOutput(event: string, toolName: string | undefined, why: 
     if (WRITE_TOOLS.has(toolName)) {
       return preDecision(
         'deny',
-        `edits are paused because Friday is unavailable (${why}). Ask the human to run "friday run".`,
+        `edits are paused because Friday is unavailable (${why}). Ask the human to start Friday (its shortcut, the desktop app, or "friday run").`,
       );
     }
     if (COMMAND_TOOLS.has(toolName) || NETWORK_TOOLS.has(toolName) || thirdPartyMcp(toolName)) {
@@ -141,7 +141,7 @@ export function failureOutput(event: string, toolName: string | undefined, why: 
     return null;
   }
   if (event === 'SessionStart') {
-    return `Friday is not available for this session (${why}). Ask the human to run "friday run" in the project, then restart the session. Do not edit files until Friday is available.`;
+    return `Friday is not available for this session (${why}). Ask the human to start Friday (its shortcut, the desktop app, or "friday run" in the project), then restart the session. Do not edit files until Friday is available.`;
   }
   return null;
 }

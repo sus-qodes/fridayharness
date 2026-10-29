@@ -131,6 +131,25 @@ describe('snapshots and replay', () => {
     expect(listSnapshots(state, PROJECT)).toMatchObject([{ snapshot_id: snap.snapshot_id, present: true }]);
   });
 
+  it('replays pause, resume and halt into the same control row (plan M9 §5.5)', async () => {
+    activity(1);
+    state.pauseProject(PROJECT, human, 'lunch');
+    state.resumeProject(PROJECT, human);
+    state.pauseProject(PROJECT, human, 'review');
+    state.recordHalt(PROJECT, human, 'runaway', []);
+    const snap = await createSnapshot(state, PROJECT);
+    expect(snap.tables.project_controls).toBe(1);
+    const full = await replayInto(state, PROJECT, path.join(ws().root, 'controls'));
+    expect(full.equal).toBe(true);
+    const copy = openDatabase(path.join(ws().root, 'controls', 'project.db'));
+    const row = copy
+      .prepare('SELECT paused, reason, halted_at FROM project_controls')
+      .get<{ paused: number; reason: string; halted_at: string | null }>();
+    copy.close();
+    expect(row).toMatchObject({ paused: 1, reason: 'runaway' });
+    expect(row?.halted_at).not.toBeNull();
+  });
+
   it('refuses corrupt, interrupted, foreign, old-format and old-schema snapshots, and a used destination', async () => {
     activity(1);
     const snap = await createSnapshot(state, PROJECT);

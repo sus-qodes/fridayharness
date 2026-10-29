@@ -28,4 +28,7 @@ export const rootSuites = [
   suite('security', ['security']),
   // Spawns real processes (daemon, friday-mcp, hooks): run files one at a time.
   suite('e2e', ['conformance', 'mcp', 'hooks', 'scenarios'], { fileParallelism: false, testTimeout: 90_000 }),
+  // The interface in the installed Edge or Chrome against a real daemon, gated by FRIDAY_TEST_UI_E2E=1
+  // (Turbo passes only FRIDAY_TEST_* variables; docs/frontend/PLAN.md §10.3). One file at a time.
+  suite('ui-e2e', ['ui-e2e'], { fileParallelism: false, testTimeout: 120_000 }),
 ];

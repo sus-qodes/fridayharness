@@ -23,6 +23,33 @@ interface SpawnRunOptions {
   serviceTier?: string;
   windowsSandbox?: 'elevated' | 'unelevated';
   maxBudgetUsd?: string;
+  /** Stop when standard input closes: the agent launcher ties the adapter's life to the daemon's. */
+  parentStdin?: boolean;
+  /** The host binary to run, resolved by the launcher outside the project (review SEC-12). */
+  hostBin?: string;
+}
+
+/**
+ * Runs until a signal, or, with `--parent-stdin`, until standard input closes (plan M9 §5.12);
+ * then the adapter closes its hosts and disconnects.
+ */
+function untilStopped(close: () => Promise<void>, parentStdin: boolean | undefined): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let stopping = false;
+    const stop = () => {
+      if (stopping) return;
+      stopping = true;
+      void close().finally(resolve);
+    };
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+    if (process.platform === 'win32') process.once('SIGBREAK', stop);
+    if (parentStdin) {
+      process.stdin.on('end', stop);
+      process.stdin.on('close', stop);
+      process.stdin.resume();
+    }
+  });
 }
 
 /**
@@ -68,11 +95,14 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
       ).choices(['elevated', 'unelevated']),
     )
     .option('--max-budget-usd <amount>', "claude-code: a spending cap for each run attempt's session")
+    .option('--parent-stdin', 'stop when standard input closes (used by the agent launcher)')
+    .option('--host-bin <path>', 'the host binary to run, instead of finding it')
     .action(async (host: string, o: SpawnRunOptions) => {
       if (host === 'claude-code') return runClaudeSpawn(g, o);
       if (host !== 'codex') throw new UsageError(`spawn mode is built for codex and claude-code; ${host} is not`);
       const ref = project(g());
-      const install = findCodex();
+      const found = findCodex();
+      const install = o.hostBin ? { ...found, binary: o.hostBin } : found;
       if (!install.binary) throw new UsageError(install.problem ?? 'Codex was not found');
       const agentKey = o.agent ?? process.env.FRIDAY_AGENT ?? 'codex-1';
       const adapter = new CodexAdapter({
@@ -97,14 +127,42 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
       process.stdout.write(
         `Codex ${install.version ?? ''} works for Friday as ${reg.agent_key} (${reg.harness_id}), sandbox ${o.sandbox}. Ctrl+C stops it and its work.\n`,
       );
-      await new Promise<void>((resolve) => {
-        const stop = () => {
-          void adapter.close().finally(resolve);
-        };
-        process.once('SIGINT', stop);
-        process.once('SIGTERM', stop);
-        if (process.platform === 'win32') process.once('SIGBREAK', stop);
-      });
+      await untilStopped(() => adapter.close(), o.parentStdin);
+    });
+
+  harness
+    .command('hosts')
+    .description('the coding hosts Friday can start on this machine (used by the agent launcher)')
+    .action(() => {
+      const claude = detectClaudeCode();
+      const codex = findCodex();
+      const hosts = [
+        {
+          host: 'claude-code',
+          found: Boolean(claude),
+          version: claude?.version ?? null,
+          supported: Boolean(claude?.version && compareVersions(claude.version, SPAWN_MIN) >= 0),
+          path: claude?.binary ?? null,
+          reason: !claude
+            ? 'Claude Code was not found (PATH, CLAUDE_CODE_BIN, the VS Code extension)'
+            : claude.version && compareVersions(claude.version, SPAWN_MIN) < 0
+              ? `spawn mode needs Claude Code ${SPAWN_MIN} or newer; this is ${claude.version}`
+              : null,
+        },
+        {
+          host: 'codex',
+          found: Boolean(codex.binary),
+          version: codex.version ?? null,
+          supported: Boolean(codex.binary),
+          path: codex.binary ?? null,
+          reason: codex.binary ? null : (codex.problem ?? 'Codex was not found'),
+        },
+      ];
+      out(g(), { hosts }, () =>
+        hosts
+          .map((h) => `${h.host.padEnd(12)} ${h.found ? (h.version ?? '?') : '-'}  ${h.reason ?? h.path ?? ''}`)
+          .join('\n'),
+      );
     });
 }
 
@@ -114,7 +172,8 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
  */
 async function runClaudeSpawn(g: () => GlobalOptions, o: SpawnRunOptions): Promise<void> {
   const ref = project(g());
-  const install = detectClaudeCode();
+  const found = detectClaudeCode();
+  const install = o.hostBin ? { binary: o.hostBin, version: found?.version ?? null, source: 'PATH' as const } : found;
   if (!install) throw new UsageError('Claude Code was not found (PATH, CLAUDE_CODE_BIN, the VS Code extension)');
   if (install.version && compareVersions(install.version, SPAWN_MIN) < 0) {
     throw new UsageError(
@@ -139,14 +198,7 @@ async function runClaudeSpawn(g: () => GlobalOptions, o: SpawnRunOptions): Promi
   process.stdout.write(
     `Claude Code ${install.version ?? ''} works for Friday as ${reg.agent_key} (${reg.harness_id}), restricted to the tools Friday's hooks judge. Ctrl+C stops it and its work.\n`,
   );
-  await new Promise<void>((resolve) => {
-    const stop = () => {
-      void adapter.close().finally(resolve);
-    };
-    process.once('SIGINT', stop);
-    process.once('SIGTERM', stop);
-    if (process.platform === 'win32') process.once('SIGBREAK', stop);
-  });
+  await untilStopped(() => adapter.close(), o.parentStdin);
 }
 
 /** `friday harness doctor codex`: what Friday would run, and the level it gives (no model call). */

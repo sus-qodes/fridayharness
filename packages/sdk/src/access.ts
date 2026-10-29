@@ -63,11 +63,11 @@ interface Entry {
 }
 
 /** DACLs of a directory and everything below it, as SDDL (`icacls /save`, locale-independent). */
-function readAcls(dir: string): Entry[] {
+function readAcls(dir: string, recursive = true): Entry[] {
   const tmp = mkdtempSync(path.join(os.tmpdir(), 'fr-acl-'));
   const out = path.join(tmp, 'acl.txt');
   try {
-    execFileSync(ICACLS, [dir, '/save', out, '/T', '/C', '/Q'], {
+    execFileSync(ICACLS, [dir, '/save', out, ...(recursive ? ['/T'] : []), '/C', '/Q'], {
       windowsHide: true,
       timeout: 20_000,
       stdio: 'ignore',
@@ -102,12 +102,12 @@ function principalName(sid: string): string {
   return NAMES[sid] ?? sid;
 }
 
-function checkWindows(dir: string): AccessReport {
+function checkWindows(dir: string, recursive = true): AccessReport {
   const me = currentUserSid();
   const problems: string[] = [];
   let entries: Entry[];
   try {
-    entries = readAcls(dir);
+    entries = readAcls(dir, recursive);
   } catch (e) {
     return { path: dir, ok: false, problems: [`cannot read the ACL: ${(e as Error).message}`], method: 'windows-acl' };
   }
@@ -138,6 +138,21 @@ function checkPosix(dir: string): AccessReport {
     problems.push(`cannot inspect: ${(e as Error).message}`);
   }
   return { path: dir, ok: problems.length === 0, problems: problems.slice(0, 10), method: 'posix-mode' };
+}
+
+/**
+ * Read-only check of one folder's own access list, not its contents: a browser profile holds too
+ * many files to walk (plan M9 FD-30, `friday doctor`).
+ */
+export function checkFolderAccess(dir: string): AccessReport {
+  if (!existsSync(dir)) return { path: dir, ok: false, problems: ['does not exist'], method: methodFor() };
+  if (process.platform === 'win32') return checkWindows(dir, false);
+  const st = statSync(dir);
+  const uid = process.getuid?.();
+  const problems: string[] = [];
+  if (uid !== undefined && st.uid !== uid) problems.push(`owned by uid ${st.uid}, not ${uid}`);
+  if ((st.mode & 0o077) !== 0) problems.push(`mode ${(st.mode & 0o777).toString(8)}: group or others can open it`);
+  return { path: dir, ok: problems.length === 0, problems, method: 'posix-mode' };
 }
 
 /** Read-only check of a private directory (for `friday doctor`). */

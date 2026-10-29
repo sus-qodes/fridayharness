@@ -64,6 +64,18 @@
         "string",
         "null"
       ]
+    },
+    "note": {
+      "default": null,
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 2000
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [

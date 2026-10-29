@@ -886,6 +886,27 @@ ALTER TABLE model_outcomes ADD COLUMN checks_version TEXT;
   },
 ];
 
+/**
+ * M9: pause, resume and halt (docs/frontend/PLAN.md §5.4): one row per project, written only by the
+ * projector from `control.paused`, `control.resumed` and `control.halted`.
+ */
+export const CONTROL_MIGRATIONS: Migration[] = [
+  {
+    version: 22,
+    name: 'control',
+    up: `
+CREATE TABLE project_controls (
+  project_id TEXT PRIMARY KEY,
+  paused INTEGER NOT NULL DEFAULT 0,
+  reason TEXT,
+  changed_at TEXT,
+  changed_by TEXT,
+  halted_at TEXT
+);
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -906,10 +927,12 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...ROUTING_MIGRATIONS,
   ...LAYA_MIGRATIONS,
   ...REVIEW_M7_MIGRATIONS,
+  ...CONTROL_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */
 export const DOMAIN_TABLES = [
+  'project_controls',
   'laya_calibrations',
   'laya_answers',
   'model_outcomes',

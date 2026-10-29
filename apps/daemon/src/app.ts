@@ -36,6 +36,8 @@ import { backupCode } from './backup-code.js';
 import type { BrainHandle } from './brain.js';
 import { escalationView, mountBrainRoutes } from './brain-routes.js';
 import type { CompileInput, ContextService } from './context.js';
+import type { ControlManager } from './control.js';
+import { countMatches, listFiles } from './files.js';
 import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
 import type { IntegrationManager } from './integration.js';
 import type { LayaService } from './laya.js';
@@ -45,8 +47,12 @@ import type { EffectivePolicy } from './policy.js';
 import type { RecoveryManager } from './recovery.js';
 import type { RoutingService } from './routing.js';
 import { type AuthInfo, callerFor, dispatchRpc } from './rpc.js';
+import { goalDiff, taskDiff } from './task-diff.js';
 import type { ToolJudge } from './tool-policy.js';
 import { statusPageHtml } from './ui.js';
+import type { UiAuth } from './ui-auth.js';
+import { buildUiSnapshot, type UiSnapshotInfo } from './ui-snapshot.js';
+import { mountUiStatic, type UiBundle, uiPath } from './ui-static.js';
 import type { WorkspaceManager } from './workspaces.js';
 
 export interface AppDeps {
@@ -93,12 +99,22 @@ export interface AppDeps {
   judgeTool?: ToolJudge;
   /** Laya (M7c, ADR-0031 §10). */
   laya?: LayaService;
+  /** The interface's built bundle, served at /ui/ (M9); without it /ui is the legacy status page. */
+  ui?: UiBundle;
+  /** Browser sign-in by one-time link (M9). */
+  uiAuth?: UiAuth;
+  /** Halt: stop every running attempt, its work preserved (M9). */
+  control?: ControlManager;
+  /** What the board snapshot says about the daemon itself (M9). */
+  uiInfo?: () => UiSnapshotInfo;
 }
 
 type Env = { Variables: { auth: AuthInfo; requestId: string } };
 export type AppEnv = Env;
 
 const OPERATOR: TokenClass[] = ['operator'];
+/** Routes a UI session may not call (plan M9 §5.2). */
+const UI_SESSION_REFUSED = /^\/admin\/|^\/protocol\/|\/harness-sessions\/bind$|\/ui\/login-codes$/;
 const HUMAN: Actor = { kind: 'human', id: 'local-operator' };
 
 function errorResponse(c: Context, err: FridayError) {
@@ -152,9 +168,25 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     }),
   );
 
-  // Static status page: public HTML, the data behind it needs the operator token.
-  app.get('/ui', (c) => c.html(statusPageHtml(pid, project.name)));
+  // The interface's bundle (or the legacy status page): public files, the data behind them needs a token.
+  mountUiStatic(app, deps.ui, () => statusPageHtml(pid, project.name));
   app.get('/', (c) => c.redirect('/ui'));
+
+  // Exchanging a one-time sign-in code for a UI session (plan M9 §5.1): public, but only from the
+  // daemon's own origin (never `trusted_origins`) and only as JSON, so no other page can do it.
+  app.post('/ui/session', async (c) => {
+    if (!deps.uiAuth) throw new FridayError('capability_unsupported', 'browser sign-in is not available here');
+    if (deps.isDraining()) throw new FridayError('daemon_shutting_down', 'the daemon is shutting down');
+    if (c.req.header('origin') !== `http://127.0.0.1:${deps.port()}`) {
+      throw new FridayError('permission_denied', 'sign in from the page Friday opened');
+    }
+    if (!(c.req.header('content-type') ?? '').toLowerCase().startsWith('application/json')) {
+      throw new FridayError('invalid_request', 'the sign-in request must be JSON');
+    }
+    const body = await json(c);
+    c.header('cache-control', 'no-store');
+    return c.json(deps.uiAuth.session(body.code));
+  });
 
   app.use('*', async (c, next) => {
     const header = c.req.header('authorization') ?? '';
@@ -166,12 +198,26 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     if (status.status !== 'valid') return errorResponse(c, new FridayError('authentication_failed', 'unknown token'));
     if (status.info.project_id !== pid)
       return errorResponse(c, new FridayError('permission_denied', 'token belongs to another project'));
+    // A UI session past its age limit is revoked here, on the request that finds it (plan M9 §5.1).
+    if (deps.uiAuth?.expire(status.info.credential_id)) {
+      return errorResponse(c, new FridayError('token_revoked', 'the interface session ended; open Friday again'));
+    }
+    // A UI session is for the interface's own routes: no admin, no protocol, no session binding
+    // (plan M9 §5.2). The CLI and the desktop shell use the operator token itself.
+    if (deps.uiAuth?.isSession(status.info.credential_id) && UI_SESSION_REFUSED.test(c.req.path)) {
+      return errorResponse(
+        c,
+        new FridayError('token_scope_insufficient', 'an interface session cannot use this route; use the CLI'),
+      );
+    }
     c.set('auth', {
       token_class: status.info.token_class,
       harness_id: status.info.harness_id,
       credential_id: status.info.credential_id,
     });
-    return next();
+    await next();
+    // Nothing the API answers is kept in a browser's cache (plan M9 §5.2, FD-30).
+    if (c.req.path.startsWith('/api/')) c.res.headers.set('cache-control', 'no-store');
   });
 
   app.use('*', async (c, next) => {
@@ -231,6 +277,80 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   const P = '/api/v1/projects/:pid';
   app.get('/api/v1/projects', allow(...OPERATOR), (c) => c.json({ projects: [projectInfo()] }));
   app.get(P, allow(...OPERATOR), (c) => c.json(projectInfo()));
+
+  // ---- browser sign-in (plan M9 §5.1) --------------------------------------------------------
+
+  // Minting needs the operator token itself: a UI session cannot create more sessions.
+  app.post(`${P}/ui/login-codes`, allow(...OPERATOR), (c) => {
+    if (!deps.uiAuth) throw new FridayError('capability_unsupported', 'browser sign-in is not available here');
+    if (deps.uiAuth.isSession(c.get('auth').credential_id)) {
+      throw new FridayError('permission_denied', 'an interface session cannot mint sign-in links');
+    }
+    c.header('cache-control', 'no-store');
+    return c.json(deps.uiAuth.loginCode(deps.port(), deps.ui ? uiPath(deps.ui) : '/ui/'), 201);
+  });
+  app.post(`${P}/ui/logout`, allow(...OPERATOR), (c) => {
+    const credential = c.get('auth').credential_id;
+    if (!deps.uiAuth?.isSession(credential)) {
+      throw new FridayError('permission_denied', 'only an interface session can log out');
+    }
+    deps.uiAuth.end(credential, 'logged out');
+    return c.json({ ok: true });
+  });
+
+  // ---- the interface's views and controls (plan M9 §5.2–§5.4) ------------------------------
+
+  app.get(`${P}/ui/snapshot`, allow(...OPERATOR), (c) => {
+    c.header('cache-control', 'no-store');
+    return c.json(
+      buildUiSnapshot({
+        state,
+        project,
+        port: deps.port(),
+        daemonVersion: deps.daemonVersion,
+        brain: deps.brain,
+        info: deps.uiInfo?.(),
+        nowMs: state.clock.nowMs(),
+      }),
+    );
+  });
+  const diffOpts = (c: Context) => ({
+    stat: c.req.query('stat') === '1' || c.req.query('stat') === 'true',
+    ...(deps.stateDir ? { stateDir: deps.stateDir } : {}),
+  });
+  app.get(`${P}/tasks/:tid/diff`, allow(...OPERATOR), async (c) =>
+    c.json(await taskDiff(state, project, c.req.param('tid'), diffOpts(c))),
+  );
+  app.get(`${P}/goals/:gid/diff`, allow(...OPERATOR), async (c) =>
+    c.json(await goalDiff(state, project, c.req.param('gid'), diffOpts(c))),
+  );
+  // The scope picker's view of the repository (plan M9 §5.11): tracked files only, capped.
+  app.get(`${P}/files`, allow(...OPERATOR), async (c) =>
+    c.json(await listFiles(project.root, c.req.query('dir') ?? '')),
+  );
+  app.post(`${P}/files/match`, allow(...OPERATOR), async (c) => {
+    const body = z.object({ globs: z.array(z.string().trim().min(1).max(300)).max(50) }).parse(await json(c));
+    return c.json(await countMatches(project.root, body.globs));
+  });
+  const ControlBody = z.object({ reason: z.string().trim().min(1).max(500).optional() });
+  app.post(`${P}/control/pause`, allow(...OPERATOR), async (c) => {
+    const body = ControlBody.parse(await json(c));
+    if (!deps.control)
+      return c.json({ control: state.pauseProject(pid, HUMAN, body.reason ?? null), tasks: [], operations_stopped: 0 });
+    return c.json(await deps.control.pause(HUMAN, body.reason ?? null));
+  });
+  app.post(`${P}/control/resume`, allow(...OPERATOR), (c) =>
+    c.json(
+      deps.control
+        ? deps.control.resume(HUMAN)
+        : { control: state.resumeProject(pid, HUMAN), tasks: [], operations_stopped: 0 },
+    ),
+  );
+  app.post(`${P}/control/halt`, allow(...OPERATOR), async (c) => {
+    const body = ControlBody.parse(await json(c));
+    if (!deps.control) throw new FridayError('capability_unsupported', 'halt is not available in this daemon');
+    return c.json(await deps.control.halt(HUMAN, body.reason ?? null));
+  });
   function projectInfo() {
     return {
       project_id: pid,
@@ -349,11 +469,25 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     });
   });
 
+  // A task's history: oldest first by default; `order=desc` with `before` pages back from the newest
+  // (plan M9 §5.11), since a busy task has more events than one page.
   app.get(`${P}/tasks/:tid/events`, allow(...OPERATOR), (c) => {
     const tid = c.req.param('tid');
     state.q.task(pid, tid);
-    const limit = Number(c.req.query('limit') ?? 500);
-    return c.json({ events: state.store.readByRef(pid, 'task', tid, { limit }) });
+    const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 500) || 500, 1), 500);
+    const before = c.req.query('before');
+    const desc = c.req.query('order') === 'desc';
+    return c.json({
+      events: state.store.readByRef(pid, 'task', tid, {
+        limit,
+        desc,
+        ...(before !== undefined && Number.isFinite(Number(before)) ? { before: Number(before) } : {}),
+      }),
+    });
+  });
+  app.post(`${P}/tasks/:tid/continue`, allow(...OPERATOR), async (c) => {
+    const body = z.object({ note: z.string().trim().min(1).max(2000).optional() }).parse(await json(c));
+    return c.json(state.continueTask(pid, HUMAN, c.req.param('tid'), body.note ?? null));
   });
 
   const action = (name: 'ready' | 'release' | 'cancel' | 'rework' | 'assign' | 'unreserve') =>
@@ -593,10 +727,9 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     const limit = Math.min(Number(c.req.query('limit') ?? 200), 1000);
     const types = c.req.queries('type');
     const task = c.req.query('task');
+    // `since` applies before `limit`, so a task's events page forward (plan M9 §5.11).
     const events = task
-      ? state.store
-          .readByRef(pid, 'task', task, { limit, ...(types ? { types } : {}) })
-          .filter((e) => e.sequence > since)
+      ? state.store.readByRef(pid, 'task', task, { limit, after: since, ...(types ? { types } : {}) })
       : state.store.readSince(pid, since, { limit, ...(types ? { types } : {}) });
     return c.json({ events, head: state.store.head(pid) });
   });
@@ -606,11 +739,18 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     const types = c.req.queries('type');
     const ctrl = new AbortController();
     deps.streams.add(ctrl);
+    // A stream is authenticated when it opens; it ends as soon as its credential does (logout,
+    // the session cap, rotation, any revocation), checked on every pass (LESSONS UI-23).
+    const header = c.req.header('authorization') ?? '';
+    const raw = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    const credential = c.get('auth').credential_id;
+    const stillValid = () => state.tokenStatus(raw).status === 'valid' && !deps.uiAuth?.expire(credential);
     return streamSSE(c, async (stream) => {
       stream.onAbort(() => ctrl.abort());
       let lastPing = Date.now();
       try {
         while (!ctrl.signal.aborted && !stream.aborted) {
+          if (!stillValid()) break;
           const events = state.store.readSince(pid, since, { limit: 200, ...(types ? { types } : {}) });
           for (const e of events) {
             await stream.writeSSE({ id: String(e.sequence), event: e.type, data: JSON.stringify(e) });
@@ -688,6 +828,11 @@ export function buildApp(deps: AppDeps): Hono<Env> {
 
   app.post('/admin/shutdown', allow(...OPERATOR), (c) => {
     deps.requestShutdown('admin request');
+    return c.json({ ok: true, status: 'shutting_down' }, 202);
+  });
+  // The interface's Stop Friday (plan M9 §5.2): the same graceful stop, open to UI sessions.
+  app.post(`${P}/daemon/stop`, allow(...OPERATOR), (c) => {
+    deps.requestShutdown('stopped from the interface');
     return c.json({ ok: true, status: 'shutting_down' }, 202);
   });
 
@@ -807,7 +952,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.get(`${P}/policy`, allow(...OPERATOR), (c) => c.json({ policy: effective() }));
   app.post(`${P}/policy/reload`, allow(...OPERATOR), (c) => c.json({ policy: deps.reloadPolicy?.() ?? effective() }));
   app.post(`${P}/policy/trust`, allow(...OPERATOR), async (c) => {
-    const body = z.object({ loosening_hash: z.string().min(1).max(64) }).parse(await c.req.json());
+    const body = z.object({ loosening_hash: z.string().min(1).max(64) }).parse(await json(c));
     const now = deps.reloadPolicy?.() ?? effective();
     // Trust is for exactly what the human was shown: refused when the files changed since.
     if (now.loosening_hash !== body.loosening_hash) {
@@ -836,7 +981,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
         action: z.enum(['reassign', 'restart', 'rebind', 'needs_human', 'cancel']),
         reason: z.string().min(1).max(500).optional(),
       })
-      .parse(await c.req.json());
+      .parse(await json(c));
     return c.json(await recovery().perform(c.req.param('tid'), body.action, HUMAN, body.reason));
   });
 
@@ -985,7 +1130,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.post(`${P}/file-reservations`, allow(...OPERATOR), async (c) => {
     const body = z
       .object({ task_id: z.string().min(1), pattern: z.string().min(1), note: z.string().max(500).optional() })
-      .parse(await c.req.json());
+      .parse(await json(c));
     const [reservation] = deps.state.reserveFiles(
       pid,
       HUMAN,

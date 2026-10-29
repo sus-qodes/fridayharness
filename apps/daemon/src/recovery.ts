@@ -285,6 +285,11 @@ export class RecoveryManager {
     };
   }
 
+  /** Whether a recovery action is under way for the task (halt leaves such a task alone). */
+  isBusy(taskId: string): boolean {
+    return this.#busy.has(taskId);
+  }
+
   /** Performs one recovery action, preserving the worktree's state first where work could be lost. */
   async perform(
     taskId: string,
@@ -380,6 +385,12 @@ export class RecoveryManager {
         },
       });
       logger.info('task recovered', { task_id: taskId, action, preserved_ref: preserved, reason: why, note });
+      // A human acted on the task: its recovery question is settled, or the Master Brain would
+      // keep skipping the task and the card would stay (plan M9 §5.7).
+      // (`needs_human` is the action that asks it.)
+      if (actor.kind === 'human' && action !== 'needs_human') {
+        state.settleRecoveryQuestions(this.pid, actor, taskId, action);
+      }
       return { task, preserved_ref: preserved, assessment: a };
     } finally {
       this.#busy.delete(taskId);

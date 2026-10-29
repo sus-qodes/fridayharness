@@ -1,0 +1,476 @@
+/* The dock, the command palette, the quick prompt and the halt dialog (plan §7.6, handoff Part 06 §6–§7). */
+
+/* ---- Dock: bottom centre, semi-transparent until hovered or focused */
+.dk-dock {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: calc(100% - 32px);
+  padding: 5px 6px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface-glass);
+  transform: translateX(-50%);
+  opacity: 0.62;
+  transition:
+    opacity var(--duration-base) var(--ease-standard),
+    box-shadow var(--duration-base) var(--ease-standard);
+}
+
+.dk-dock:hover,
+.dk-dock:focus-within {
+  opacity: 1;
+  box-shadow: var(--shadow-lg);
+}
+
+.dk-dock-paused {
+  opacity: 0.9;
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
+.dk-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.dk-group[hidden] {
+  display: none;
+}
+
+.dk-sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--border-subtle);
+}
+
+.dk-btn {
+  min-height: 32px;
+  border-radius: var(--radius-sm);
+}
+
+.dk-btn[hidden] {
+  display: none;
+}
+
+.dk-btn.btn-icon {
+  width: 32px;
+}
+
+.dk-icon {
+  display: inline-flex;
+}
+
+.dk-search {
+  color: var(--color-slate-400);
+}
+
+.dk-kbd {
+  margin-left: 4px;
+}
+
+.dk-pause.dk-paused {
+  color: var(--color-amber);
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
+.dk-mute[aria-pressed="true"] {
+  color: var(--color-amber);
+}
+
+.dk-halt-btn {
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
+}
+
+@media (max-width: 720px) {
+  .dk-label,
+  .dk-kbd {
+    display: none;
+  }
+}
+
+/* ---- Palette: spotlight overlay */
+.dk-pal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12vh 16px 16px;
+  background: rgba(9, 13, 22, 0.55);
+}
+
+.dk-pal-backdrop[hidden] {
+  display: none;
+}
+
+.dk-pal {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: 64vh;
+  overflow: hidden;
+  background: var(--bg-surface-elevated);
+  border-color: var(--border-medium);
+  box-shadow: var(--shadow-lg), var(--shadow-glow-cyan);
+  border-radius: var(--radius-lg);
+  animation: dk-rise var(--duration-base) var(--ease-snappy);
+}
+
+@keyframes dk-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.dk-pal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dk-pal-search {
+  display: inline-flex;
+  color: var(--color-cyan-glow);
+}
+
+.dk-pal-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-white);
+  font-size: var(--text-title-sm);
+}
+
+.dk-pal-input:focus,
+.dk-pal-input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.dk-pal-input::placeholder {
+  color: var(--color-slate-500);
+}
+
+.dk-pal-list {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 6px 8px;
+}
+
+.dk-pal-heading {
+  padding: 10px 8px 4px;
+  font-size: var(--text-micro);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-slate-500);
+}
+
+.dk-pal-item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border-left: 2px solid transparent;
+  cursor: pointer;
+  color: var(--color-slate-200);
+}
+
+.dk-pal-active {
+  background: var(--bg-surface-active);
+  border-left-color: var(--color-cyan);
+}
+
+.dk-pal-icon {
+  display: inline-flex;
+  justify-content: center;
+  color: var(--color-slate-400);
+}
+
+.dk-pal-active .dk-pal-icon {
+  color: var(--color-cyan-glow);
+}
+
+.dk-pal-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dk-pal-label,
+.dk-pal-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dk-pal-detail {
+  font-size: var(--text-caption);
+  color: var(--color-slate-400);
+}
+
+.dk-pal-hit {
+  background: transparent;
+  color: var(--color-cyan-glow);
+  font-weight: var(--weight-semibold);
+}
+
+.dk-pal-group {
+  font-size: var(--text-micro);
+  color: var(--color-slate-500);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.dk-pal-foot {
+  display: flex;
+  gap: 16px;
+  padding: 6px 14px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--text-caption);
+}
+
+.dk-pal-foot .kbd {
+  margin-right: 2px;
+}
+
+/* ---- Quick prompt (inside the Notch's expanded card) */
+.dk-qp {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dk-qp-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dk-qp-mark {
+  display: inline-flex;
+  color: var(--color-cyan-glow);
+}
+
+.dk-qp-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: var(--text-sm);
+}
+
+.dk-qp-busy .dk-qp-input {
+  opacity: 0.7;
+}
+
+.dk-qp-feedback {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--text-caption);
+  color: var(--color-slate-400);
+  overflow-wrap: anywhere;
+}
+
+.dk-qp-feedback:empty {
+  display: none;
+}
+
+.dk-qp-ok {
+  color: var(--color-emerald);
+}
+
+.dk-qp-error {
+  color: var(--color-amber);
+}
+
+.dk-qp-ask {
+  color: var(--color-slate-200);
+}
+
+.dk-qp-cap {
+  font-family: var(--font-mono);
+  color: var(--color-cyan-glow);
+}
+
+.dk-qp-target {
+  display: inline;
+  padding: 0 4px;
+}
+
+.dk-qp-goal {
+  font-style: italic;
+  color: var(--color-white);
+}
+
+.dk-qp-help {
+  color: var(--color-slate-500);
+}
+
+/* ---- Halt dialog */
+.dk-halt {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dk-halt-lead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--text-title-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-white);
+}
+
+.dk-halt-icon {
+  display: inline-flex;
+  color: var(--color-crimson);
+}
+
+.dk-halt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dk-halt-list li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 6px;
+  align-items: start;
+}
+
+.dk-halt-bullet {
+  display: inline-flex;
+  padding-top: 2px;
+}
+
+.dk-halt-does .dk-halt-bullet {
+  color: var(--color-emerald);
+}
+
+.dk-halt-not .dk-halt-bullet {
+  color: var(--color-slate-400);
+}
+
+.dk-halt-field {
+  margin: 8px 0 0;
+}
+
+.dk-halt-meter {
+  --dk-halt-left: 1;
+  height: 3px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--border-subtle);
+}
+
+.dk-halt-meter-fill {
+  width: 100%;
+  height: 100%;
+  background: var(--color-crimson);
+  transform-origin: left center;
+  transform: scaleX(var(--dk-halt-left));
+  transition: transform var(--duration-slow) linear;
+}
+
+.dk-halt-armed .dk-halt-meter {
+  background: rgba(239, 68, 68, 0.35);
+}
+
+.dk-halt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dk-halt-confirm .kbd {
+  margin-left: 6px;
+  color: var(--color-slate-200);
+}
+
+.dk-halt-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dk-halt-heading {
+  margin: 0;
+  font-weight: var(--weight-semibold);
+  color: var(--color-white);
+}
+
+.dk-halt-summary p {
+  margin: 0;
+}
+
+.dk-halt-groups,
+.dk-halt-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dk-halt-group {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.dk-halt-group-stop {
+  color: var(--color-slate-400);
+  text-align: right;
+}
+
+.dk-halt-group-attached .dk-halt-group-stop {
+  color: var(--color-amber);
+}
+
+.dk-halt-task {
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.dk-halt-ref {
+  display: block;
+  font-size: var(--text-caption);
+  color: var(--color-slate-400);
+  overflow-wrap: anywhere;
+}
+
+.dk-halt-note {
+  font-size: var(--text-sm);
+  color: var(--color-slate-400);
+}

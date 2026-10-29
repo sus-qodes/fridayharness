@@ -1,0 +1,46 @@
+Friday interface (apps/ui)
+
+Blip, Friday's mascot, is an original character: a small screen-faced robot
+with LED eyes on a dark visor, an antenna light and side pads, drawn in code
+with the Canvas 2D API (src/mascot). Friday's sounds are synthesised in code
+with the Web Audio API (src/audio); no audio files are shipped.
+
+Some generic animation techniques in src/mascot were learned from the
+MIT-licensed source code of the project "coucou"
+(https://github.com/Louis-CFM/coucou):
+
+  - spring smoothing: damped springs integrated in fixed sub-steps of
+    1/240 s, frame-rate-independent smoothing x += (t - x)(1 - c^dt), and
+    channel tweens whose keys start from the previous key's target;
+  - eye tracking: the cursor's offset from the face, clamped, smoothed, and
+    projected as features on a curved surface;
+  - an on-demand frame loop that stops when nothing moves, randomised blinks,
+    and particles positioned from their age with a ramped alpha.
+
+No names, characters, artwork, icons, expressions, geometry, colours or sounds
+were taken from that project. Its names and its character are reserved by
+their author and are not used by Friday.
+
+The MIT licence of that project's code:
+
+  MIT License
+
+  Copyright (c) 2026 Louis Raillé
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to
+  deal in the Software without restriction, including without limitation the
+  rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+  sell copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+  FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+  IN THE SOFTWARE.

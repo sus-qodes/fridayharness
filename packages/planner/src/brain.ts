@@ -553,6 +553,8 @@ export class MasterBrain {
   /** The next model job that can run now: pending and due, or waiting with nothing left to wait for. */
   #nextModelJob(): BrainJob | undefined {
     const { state, projectId } = this.#deps;
+    // While a human has paused Friday nothing spends the user's key; the jobs wait (plan M9 §5.5).
+    if (state.q.control(projectId).paused) return undefined;
     const now = Date.parse(state.clock.now());
     return state
       .brainJobs(projectId, ['pending', 'waiting'])
@@ -674,11 +676,20 @@ export class MasterBrain {
       promptVersion,
       signal: this.#abort.signal,
       outbound: (req) => redactRequest(req, this.#deps.state.redactor),
-      onCall: (req) =>
+      onCall: (req) => {
         this.#deps.state.updateBrainJob(job.job_id, {
           status: 'calling',
           call_estimate_usd: requestEstimate(model, req, policy.prices),
-        }),
+        });
+        // An observation, so an interface knows to look again while the call runs (plan M9 §5.11).
+        this.#deps.state.recordObservation(
+          this.#deps.projectId,
+          MASTER_BRAIN,
+          'brain.call_started',
+          { job_id: job.job_id, kind: job.kind, goal_id: job.goal_id ?? null },
+          [],
+        );
+      },
     });
   }
 
@@ -1136,6 +1147,8 @@ export class MasterBrain {
   /** Assigns READY plan tasks of active goals, best first (ADR-0013 §9). */
   #delegate(): string[] {
     const { state, projectId } = this.#deps;
+    // A human paused Friday: nothing new starts until they resume it (docs/frontend/PLAN.md §5.4).
+    if (state.q.control(projectId).paused) return [];
     const now = state.clock.now();
     const active = new Set(state.q.goals(projectId, { statuses: ['ACTIVE'] }).map((g) => g.goal_id));
     // A human was asked how the task goes on (its work is in another clone, review F08; its host ran

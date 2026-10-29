@@ -1,6 +1,6 @@
 import { POST_TOOL_MATCHER, PRE_TOOL_MATCHER } from '../hooks/types.js';
 
-export const TEMPLATE_VERSION = 3;
+export const TEMPLATE_VERSION = 4;
 /**
  * Claude Code permission rule for every tool of the friday MCP server (the documented server-level form).
  * Claude Code ignores a project's `permissions.allow` until the folder is trusted, so headless runs in an
@@ -71,7 +71,7 @@ Friday decides who you are from this session; never claim another identity.
 
 ## Start of a session
 1. Call \`friday_whoami\`.
-   - If Friday is unreachable, tell the human to run \`friday run\` in the project and do not edit files.
+   - If Friday is unreachable, tell the human to start Friday (its shortcut, the desktop app, or \`friday run\` in the project) and do not edit files.
    - If this session is a *shadow* (another live session already uses the same agent key), tell the human; you cannot claim work.
 2. If you hold a task, read it with \`friday_task_current\` and continue it.
 3. Otherwise claim one: \`friday_task_claim\` with a \`task_id\`, or \`next: true\`. Read the context it returns before touching files.

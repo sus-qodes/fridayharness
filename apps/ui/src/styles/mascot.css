@@ -1,0 +1,22 @@
+/* The mascot Blip (plan §7.9): its canvas. The drawing itself is Canvas 2D (src/mascot). */
+
+.ms-canvas {
+  display: block;
+  flex: none;
+  /* The canvas is drawn at the device ratio; CSS keeps it at its size in CSS pixels. */
+  image-rendering: auto;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+.ms-interactive {
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  transition: box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.ms-interactive:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}

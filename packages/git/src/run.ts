@@ -12,12 +12,16 @@ export interface RunOptions {
   okCodes?: number[];
   /** Extra environment (a commit identity, for example). */
   env?: Record<string, string>;
+  /** Also keep stdout as raw bytes (`bytes`): content that may not be UTF-8. */
+  raw?: boolean;
 }
 
 export interface RunResult {
   code: number;
   stdout: string;
   stderr: string;
+  /** Stdout as bytes, with `raw`. */
+  bytes?: Buffer;
 }
 
 /**
@@ -80,10 +84,12 @@ export function runGit(root: string, args: string[], opts: RunOptions = {}): Pro
     );
     child.on('close', (code) =>
       finish(() => {
-        const result = {
+        const bytes = Buffer.concat(out);
+        const result: RunResult = {
           code: code ?? -1,
-          stdout: Buffer.concat(out).toString('utf8'),
+          stdout: opts.raw ? '' : bytes.toString('utf8'),
           stderr: Buffer.concat(err).toString('utf8'),
+          ...(opts.raw ? { bytes } : {}),
         };
         if (result.code === 0 || opts.okCodes?.includes(result.code)) resolve(result);
         else reject(gitError(root, args, result));

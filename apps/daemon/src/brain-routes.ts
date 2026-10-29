@@ -55,6 +55,24 @@ function parseJson<T>(text: unknown, fallback: T): T {
   }
 }
 
+/** A plan version with each task's live state next to what the plan says. */
+export function liveVersion(state: FridayState, projectId: string, v: PlanVersionView) {
+  return {
+    ...v,
+    tasks: v.tasks.map((t) => {
+      const live = t.task_id ? state.q.findTask(projectId, t.task_id) : undefined;
+      const agentId = live?.assigned_agent_id ?? null;
+      return {
+        ...t,
+        status: live?.status ?? null,
+        waiting_reason: live?.waiting_reason ?? null,
+        agent_key: agentId ? (state.q.findAgent(agentId)?.agent_key ?? null) : null,
+        reserved_for_agent_key: live?.reserved_for_agent_key ?? null,
+      };
+    }),
+  };
+}
+
 /** Escalation rows with their JSON columns decoded. */
 export function escalationView(row: Record<string, unknown>) {
   const { options_json, details_json, ...rest } = row;
@@ -75,8 +93,6 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
     if (!d.brain) throw new FridayError('capability_unsupported', 'the Master Brain is not running in this daemon');
     return d.brain;
   };
-  const liveTask = (id: string) => state.q.findTask(pid, id);
-  const agentKey = (agentId: string | null) => (agentId ? (state.q.findAgent(agentId)?.agent_key ?? null) : null);
   const version = (planId: string, v: string | undefined): PlanVersionView => {
     const n = Number(v);
     const found = Number.isInteger(n) ? state.q.planVersion(planId, n) : undefined;
@@ -84,20 +100,8 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
     return found;
   };
 
-  /** A version with each task's live state next to what the plan says. */
-  const withLive = (v: PlanVersionView) => ({
-    ...v,
-    tasks: v.tasks.map((t) => {
-      const live = t.task_id ? liveTask(t.task_id) : undefined;
-      return {
-        ...t,
-        status: live?.status ?? null,
-        waiting_reason: live?.waiting_reason ?? null,
-        agent_key: agentKey(live?.assigned_agent_id ?? null),
-        reserved_for_agent_key: live?.reserved_for_agent_key ?? null,
-      };
-    }),
-  });
+  const liveTask = (id: string) => state.q.findTask(pid, id);
+  const withLive = (v: PlanVersionView) => liveVersion(state, pid, v);
 
   const goalDetail = (goalId: string) => {
     const goal = state.q.goal(pid, goalId);

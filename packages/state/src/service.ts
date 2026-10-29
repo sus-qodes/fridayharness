@@ -29,6 +29,7 @@ import {
   type AgentStatus,
   type AgentView,
   type ContextPacket,
+  type ControlState,
   type EnforcementLevel,
   type EnforcementStatus,
   type FileReservationView,
@@ -416,11 +417,29 @@ const OBSERVATION_TYPES = new Set([
   'recovery.performed',
   // M7c: Laya did not answer (ADR-0031 §10).
   'laya.unavailable',
+  // The daemon noticed it had been paused (a sleeping machine); it was refused before it was listed.
+  'daemon.paused',
+  // M9: browser sign-in and agents started from the interface (docs/frontend/PLAN.md §5).
+  'ui.session_started',
+  'ui.session_ended',
+  'agent.process_started',
+  'agent.process_exited',
+  'control.task_stopped',
+  // The Master Brain began a model call, so a client can show it thinking (plan M9 §5.11).
+  'brain.call_started',
 ]);
 
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
 const TERMINAL_TASK = new Set(['COMPLETED', 'CANCELLED', 'ABANDONED']);
 /** The Master Brain's questions about what to do with a failed task (not `ambiguous_intent`). */
+/**
+ * Friday's own questions about one task's way forward (plan M9 §5.7): answering them only records
+ * text, so Friday answers them itself, as moot, once their cause is resolved.
+ */
+const RECOVERY_QUESTIONS = new Set(['recovery_needed']);
+const ROUTING_QUESTIONS = new Set(['routing_blocked', 'routing_violated']);
+const INTEGRATION_QUESTIONS = new Set(['integration_conflict', 'integration_failed']);
+const SYSTEM_QUESTIONS = new Set([...RECOVERY_QUESTIONS, ...ROUTING_QUESTIONS, ...INTEGRATION_QUESTIONS]);
 const FAILURE_QUESTIONS = new Set([
   'planner_unavailable',
   'budget_exceeded',
@@ -550,6 +569,12 @@ export class FridayState {
     if (tr.to === 'REWORK' || tr.to === 'COMPLETED' || tr.to === 'CANCELLED') {
       this.settleFailureQuestions(ctx, task.task_id, tr.to);
     }
+    // A cancelled task needs none of Friday's questions about it; a task that got a run needs no
+    // answer about why routing could not start one (plan M9 §5.7).
+    if (tr.to === 'CANCELLED') this.settleQuestions(ctx, task.task_id, SYSTEM_QUESTIONS, 'the task was cancelled');
+    if (tr.to === 'ASSIGNED' || tr.to === 'RUNNING') {
+      this.settleQuestions(ctx, task.task_id, ROUTING_QUESTIONS, 'the task got a run');
+    }
     const awaitsIntegration = tr.to === 'COMPLETED' && this.awaitsIntegration(task);
     if ((tr.to === 'COMPLETED' && !awaitsIntegration) || tr.to === 'CANCELLED' || tr.to === 'ABANDONED') {
       this.endFileReservations(ctx, task.task_id, 'released', `the task was ${tr.to.toLowerCase()}`);
@@ -574,6 +599,29 @@ export class FridayState {
         refs: [{ kind: 'escalation', id: String(e.escalation_id) }],
       });
     }
+  }
+
+  /** Answers a task's pending questions of these kinds as moot, in the caller's transaction. */
+  private settleQuestions(ctx: CommandContext, taskId: string, kinds: Set<string>, why: string): void {
+    for (const e of this.q.escalations(ctx.project_id, 'pending')) {
+      if (e.task_id !== taskId || !kinds.has(String(e.kind))) continue;
+      ctx.emit({
+        type: 'escalation.answered',
+        actor: SYSTEM,
+        payload: { escalation_id: e.escalation_id, answer: `no longer needed: ${why}`, moot: true },
+        refs: [{ kind: 'escalation', id: String(e.escalation_id) }],
+      });
+    }
+  }
+
+  /**
+   * A human performed a recovery action on a task: its recovery question is answered (plan M9 §5.7),
+   * so the Master Brain no longer skips the task and the card goes away.
+   */
+  settleRecoveryQuestions(projectId: string, actor: Actor, taskId: string, action: string): void {
+    this.exec({ name: 'escalation.settle', project_id: projectId, actor, params: { taskId, action } }, (ctx) =>
+      this.settleQuestions(ctx, taskId, RECOVERY_QUESTIONS, `recovery action ${action} was performed`),
+    );
   }
 
   /**
@@ -1247,6 +1295,104 @@ export class FridayState {
     );
   }
 
+  // ================================================================ pause, resume, halt (M9)
+
+  /** Refuses new work while a human has paused Friday (docs/frontend/PLAN.md §5.4). */
+  private assertNotPaused(projectId: string): void {
+    if (this.q.control(projectId).paused) {
+      throw new FridayError('permission_denied', 'Friday is paused; a human resumes it before new work starts');
+    }
+  }
+
+  /** Pauses the project: no delegation, claims, starts or operations; mutating tool calls are denied. */
+  pauseProject(projectId: string, actor: Actor, reason: string | null): ControlState {
+    if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human can pause Friday');
+    this.exec({ name: 'control.pause', project_id: projectId, actor, params: { reason } }, (ctx) => {
+      if (this.q.control(projectId).paused) return;
+      ctx.emit({ type: 'control.paused', payload: { reason }, refs: [] });
+    });
+    return this.q.control(projectId);
+  }
+
+  /**
+   * Resumes the project. Spawned tasks that ended their turn blocked while Friday was paused (their
+   * tool calls were refused) continue in their sessions (plan M9 §5.6); withheld starts go out.
+   */
+  resumeProject(projectId: string, actor: Actor): ControlState {
+    if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human can resume Friday');
+    this.exec({ name: 'control.resume', project_id: projectId, actor, params: {} }, (ctx) => {
+      const control = this.q.control(projectId);
+      if (!control.paused) return;
+      const pausedAt = control.changed_at;
+      ctx.emit({ type: 'control.resumed', payload: {}, refs: [] });
+      if (!pausedAt) return;
+      for (const t of this.q.tasks(projectId, { statuses: ['WAITING'] })) {
+        if (t.waiting_reason !== 'blocked') continue;
+        const waited = this.store.readByRef(projectId, 'task', t.task_id, {
+          types: ['task.waiting'],
+          limit: 1,
+          desc: true,
+        })[0];
+        if (!waited || waited.occurred_at < pausedAt) continue;
+        this.queueContinue(ctx, projectId, t, 'Friday was paused and runs again: continue the task.');
+      }
+    });
+    return this.q.control(projectId);
+  }
+
+  /**
+   * Stops one running attempt for a halt: its task goes back to READY and a live spawn host is told
+   * to stop, as recovery's reassign does (ADR-0026). The caller preserved the worktree's work first.
+   */
+  haltTask(projectId: string, actor: Actor, taskId: string, reason: string, preservedRef: string | null): TaskView {
+    if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human can halt Friday');
+    const task = this.exec(
+      { name: 'control.halt_task', project_id: projectId, actor, params: { taskId, reason } },
+      (ctx) => {
+        const before = this.q.task(projectId, taskId);
+        const run = before.current_run_id ? this.q.findRun(before.current_run_id) : undefined;
+        const released = this.releaseWithin(ctx, projectId, actor, taskId, `halted: ${reason}`);
+        const h = run ? this.q.findHarness(run.harness_id) : undefined;
+        if (
+          run?.status === 'ACTIVE' &&
+          h?.attach_mode === 'spawn' &&
+          !['DISCONNECTED', 'TERMINATED'].includes(h.status)
+        ) {
+          this.enqueue(
+            ctx,
+            run.harness_id,
+            'task.cancel',
+            { task_id: taskId, run_id: run.run_id, reason: `halted: ${reason}` },
+            run.run_id,
+          );
+        }
+        return released;
+      },
+    );
+    this.recordObservation(
+      projectId,
+      actor,
+      'control.task_stopped',
+      { task_id: taskId, reason, preserved_ref: preservedRef },
+      [{ kind: 'task', id: taskId }],
+    );
+    return task;
+  }
+
+  /** Records a halt once its attempts are stopped (Friday stays paused). */
+  recordHalt(
+    projectId: string,
+    actor: Actor,
+    reason: string | null,
+    stopped: { task_id: string; preserved_ref: string | null }[],
+  ): ControlState {
+    if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human can halt Friday');
+    this.exec({ name: 'control.halt', project_id: projectId, actor, params: { reason } }, (ctx) => {
+      ctx.emit({ type: 'control.halted', payload: { reason, stopped }, refs: [] });
+    });
+    return this.q.control(projectId);
+  }
+
   /**
    * Runs a command that may create a run. When routing blocks it, nothing of the command commits;
    * the block is recorded in its own transaction (review F01), and the error goes to the caller.
@@ -1334,6 +1480,8 @@ export class FridayState {
     taskId: string,
     agentKey: string,
   ): { mode: 'assigned' | 'reserved'; task: TaskView } {
+    // Every assignment passes here: an operator's and the Master Brain's delegation (plan M9 §5.5).
+    this.assertNotPaused(projectId);
     {
       let task = this.q.task(projectId, taskId);
       if (task.status === 'PROPOSED') task = this.moveTask(ctx, task, 'task.ready');
@@ -1411,6 +1559,7 @@ export class FridayState {
     p: { task_id?: string | undefined; next?: boolean | undefined },
     opts: { idempotency_key?: string | undefined; head?: string | null },
   ): { task: TaskView; run_id: string; attempt: number; resumed: boolean } {
+    this.assertNotPaused(projectId);
     return this.exec(
       { name: 'task.claim', project_id: projectId, actor, idempotency_key: opts.idempotency_key, params: p },
       (ctx) => {
@@ -3369,11 +3518,15 @@ export class FridayState {
   pollOutbox(projectId: string, harnessId: string, max = 10): OutboundMessage[] {
     const now = this.clock.now();
     const redeliverBefore = addMs(now, -this.config.ackTimeoutMs);
+    // While a human has paused Friday, no work is handed to an agent: starts and resumes wait in
+    // the outbox and go out after the resume (plan M9 §5.5). Cancels and context still go.
+    const held = this.q.control(projectId).paused ? 1 : 0;
     return this.db.transaction(() => {
       const rows = this.db
         .prepare(
           `SELECT * FROM outbox_messages WHERE project_id = ? AND harness_id = ? AND expires_at > ?
              AND (status = 'queued' OR (status = 'delivered' AND delivered_at <= ?))
+             AND NOT (? = 1 AND method IN ('task.start', 'task.resume'))
            ORDER BY created_at LIMIT ?`,
         )
         .all<{
@@ -3382,7 +3535,7 @@ export class FridayState {
           params_json: string;
           attempts: number;
           expires_at: string;
-        }>(projectId, harnessId, now, redeliverBefore, max);
+        }>(projectId, harnessId, now, redeliverBefore, held, max);
       const mark = this.db.prepare(
         "UPDATE outbox_messages SET status = 'delivered', delivered_at = ?, attempts = attempts + 1 WHERE message_id = ?",
       );
@@ -3421,6 +3574,15 @@ export class FridayState {
         continue;
       }
       const work = (m.method === 'task.start' || m.method === 'task.resume') && m.run_id ? m.run_id : null;
+      // A start or resume delivered before a pause and accepted during it is not applied: the
+      // message waits in the outbox again, is not current, so the harness starts nothing, and it
+      // is delivered once Friday runs again (plan M9 §5.5).
+      if (work && a.accepted && m.status !== 'acked' && m.status !== 'expired' && this.q.control(projectId).paused) {
+        this.db
+          .prepare("UPDATE outbox_messages SET status = 'queued', delivered_at = NULL WHERE message_id = ?")
+          .run(a.message_id);
+        continue;
+      }
       if (m.status !== 'acked') {
         if (m.method === 'task.start' && m.run_id && m.status !== 'expired') {
           if (a.accepted) this.acceptRun(projectId, harnessId, m.run_id, a.session_ref ?? null);
@@ -3429,6 +3591,7 @@ export class FridayState {
         }
         if (m.method === 'task.resume' && m.run_id && m.status !== 'expired' && a.accepted) {
           this.resumeRun(projectId, harnessId, m.run_id);
+          this.continueRun(projectId, harnessId, m.run_id);
         }
         this.db
           .prepare(
@@ -3463,6 +3626,19 @@ export class FridayState {
       this.moveTask(ctx, task, 'run.accepted', { changes: { started_at: task.started_at ?? ctx.now } });
       const agent = this.q.agent(run.agent_id);
       this.agentToBusy(ctx, agent, { current_task_id: run.task_id, current_run_id: run.run_id });
+      this.syncHarnessBusy(ctx, harnessId);
+    });
+  }
+
+  /** A waiting task's ACTIVE run continues in its session (plan M9 §5.6): WAITING → RUNNING. */
+  private continueRun(projectId: string, harnessId: string, runId: string): void {
+    this.exec({ name: 'run.continue', project_id: projectId, actor: { kind: 'harness', id: harnessId } }, (ctx) => {
+      const run = this.q.run(runId);
+      if (run.harness_id !== harnessId || run.status !== 'ACTIVE') return;
+      const task = this.q.task(projectId, run.task_id);
+      if (task.status !== 'WAITING' || task.current_run_id !== runId) return;
+      this.moveTask(ctx, task, 'task.resume', { reason: 'the session continues after a human decided' });
+      this.agentToBusy(ctx, this.q.agent(run.agent_id), { current_task_id: run.task_id, current_run_id: run.run_id });
       this.syncHarnessBusy(ctx, harnessId);
     });
   }
@@ -3771,6 +3947,9 @@ export class FridayState {
             { kind: 'task', id: rec.task_id },
           ],
         });
+        if (rec.status === 'integrated' || rec.status === 'not_needed') {
+          this.settleQuestions(ctx, rec.task_id, INTEGRATION_QUESTIONS, 'the work was integrated');
+        }
         if (rec.status === 'conflicted' || rec.status === 'failed') {
           this.escalationWithin(ctx, {
             kind: rec.status === 'conflicted' ? 'integration_conflict' : 'integration_failed',
@@ -3831,6 +4010,7 @@ export class FridayState {
         params: { operation: op.operation, task_id: op.task_id, run_id: op.run_id, reason: op.reason },
       },
       (ctx) => {
+        this.assertNotPaused(projectId);
         const task = this.q.findTask(projectId, op.task_id);
         const run = op.run_id ? this.q.findRun(op.run_id) : undefined;
         if (task?.status !== 'RUNNING' || task.assigned_agent_id !== caller.agent_id) {
@@ -4026,7 +4206,13 @@ export class FridayState {
     ]);
   }
 
-  private startParams(projectId: string, task: TaskView, run: RunView, role: string): TaskStartParams {
+  private startParams(
+    projectId: string,
+    task: TaskView,
+    run: RunView,
+    role: string,
+    note: string | null = null,
+  ): TaskStartParams {
     return {
       task_id: task.task_id,
       run_id: run.run_id,
@@ -4042,7 +4228,98 @@ export class FridayState {
       model_binding: run.model_binding,
       // The session to resume, as the adapter reported it when it accepted the run (ADR-0032 §3).
       session_ref: run.session_ref ?? null,
+      note,
     };
+  }
+
+  /**
+   * A task WAITING on a still-ACTIVE run of a live spawn harness continues in the same run and
+   * session (plan M9 §5.6, FD-22): `task.resume` with a note saying why. The acknowledgement moves
+   * the task back to RUNNING. A spawned agent cannot wait inside its turn, so this is how a human's
+   * decision reaches it. Returns false when the task's host cannot be resumed this way.
+   */
+  private queueContinue(ctx: CommandContext, projectId: string, task: TaskView, note: string): boolean {
+    if (task.status !== 'WAITING' || !task.current_run_id) return false;
+    const run = this.q.findRun(task.current_run_id);
+    if (run?.status !== 'ACTIVE') return false;
+    const h = this.q.findHarness(run.harness_id);
+    if (h?.attach_mode !== 'spawn' || h.shadow || ['DISCONNECTED', 'TERMINATED'].includes(h.status)) return false;
+    const queued = this.db
+      .prepare(
+        "SELECT 1 AS one FROM outbox_messages WHERE run_id = ? AND method = 'task.resume' AND status IN ('queued', 'delivered') LIMIT 1",
+      )
+      .get<{ one: number }>(run.run_id);
+    if (queued) return true;
+    const agent = this.q.agent(run.agent_id);
+    this.enqueue(
+      ctx,
+      run.harness_id,
+      'task.resume',
+      this.startParams(projectId, task, run, agent.role, note.slice(0, 2000)),
+      run.run_id,
+    );
+    return true;
+  }
+
+  /**
+   * A human asks a waiting task to go on (plan M9 §5.6): the note reaches the agent as a message,
+   * and a spawned run continues in its session; an attached session in an editor must be asked there.
+   */
+  continueTask(
+    projectId: string,
+    actor: Actor,
+    taskId: string,
+    note: string | null,
+  ): { continued: boolean; reason: string | null; task: TaskView } {
+    if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human can ask a task to continue');
+    return this.exec({ name: 'task.continue', project_id: projectId, actor, params: { taskId, note } }, (ctx) => {
+      const task = this.q.task(projectId, taskId);
+      if (task.status !== 'WAITING') {
+        throw new FridayError(
+          'invalid_state_transition',
+          `${taskId} is ${task.status}; only a waiting task can continue`,
+        );
+      }
+      const run = task.current_run_id ? this.q.findRun(task.current_run_id) : undefined;
+      const h = run ? this.q.findHarness(run.harness_id) : undefined;
+      const live = h && !['DISCONNECTED', 'TERMINATED'].includes(h.status);
+      if (run?.status !== 'ACTIVE' || !h || !live) {
+        throw new FridayError(
+          'invalid_state_transition',
+          `no live session holds ${taskId}; release it or recover it instead`,
+        );
+      }
+      const agent = this.q.agent(run.agent_id);
+      if (note) {
+        this.sendWithin(
+          ctx,
+          projectId,
+          { kind: 'human', actor },
+          {
+            to: agent.agent_key,
+            mode: 'notification',
+            subject: 'From the human',
+            content: note,
+            task_id: taskId,
+            priority: 'high',
+          },
+        );
+      }
+      if (h.attach_mode !== 'spawn') {
+        return {
+          continued: false,
+          reason: 'its session runs in an editor: ask it there to continue',
+          task: this.q.task(projectId, taskId),
+        };
+      }
+      this.queueContinue(
+        ctx,
+        projectId,
+        task,
+        note ? `A human answered: ${note}` : 'A human asked you to continue the task.',
+      );
+      return { continued: true, reason: null, task: this.q.task(projectId, taskId) };
+    });
   }
 
   // ================================================================ approvals, escalations, communication, context, observations
@@ -4187,29 +4464,69 @@ export class FridayState {
           },
           refs: [{ kind: 'approval', id: approvalId }],
         });
-        if (granted) this.resumeAfterApproval(ctx, projectId, approvalId);
+        this.afterApprovalDecision(ctx, projectId, approvalId, granted, opts.note ?? null);
       },
     );
   }
 
   /**
-   * A task its agent set waiting for a human resumes when the approval it waited on is granted
-   * (task lifecycle: WAITING → RUNNING on an approval granted; LESSONS D-46), unless another
-   * request of the same attempt still waits for a human.
+   * What an approval decision does for the agent that asked (plan M9 §5.6): a denial's note reaches
+   * it as a message from the human; an attached task waiting on the request runs again (granted as
+   * before, denied now too, so the agent goes on knowing); a spawned run that ended its turn to
+   * wait continues in its session with a note saying what was decided.
    */
-  private resumeAfterApproval(ctx: CommandContext, projectId: string, approvalId: string): void {
+  private afterApprovalDecision(
+    ctx: CommandContext,
+    projectId: string,
+    approvalId: string,
+    granted: boolean,
+    note: string | null,
+  ): void {
     const a = this.db
-      .prepare('SELECT task_id, run_id FROM approvals WHERE approval_id = ? AND project_id = ?')
-      .get<{ task_id: string | null; run_id: string | null }>(approvalId, projectId);
-    if (!a?.task_id || !a.run_id) return;
+      .prepare(
+        'SELECT task_id, run_id, capability, target, requested_by_kind, requested_by_id FROM approvals WHERE approval_id = ? AND project_id = ?',
+      )
+      .get<{
+        task_id: string | null;
+        run_id: string | null;
+        capability: string;
+        target: string | null;
+        requested_by_kind: string;
+        requested_by_id: string;
+      }>(approvalId, projectId);
+    if (!a) return;
+    const what = `${a.capability}${a.target ? ` ${a.target.slice(0, 300)}` : ''}`;
+    if (!granted && a.requested_by_kind === 'agent') {
+      const agent = this.q.findAgent(a.requested_by_id);
+      if (agent) {
+        this.sendWithin(
+          ctx,
+          projectId,
+          { kind: 'human', actor: ctx.actor },
+          {
+            to: agent.agent_key,
+            mode: 'notification',
+            subject: 'Request denied',
+            content: `A human denied your request to ${what} (${approvalId}). ${note ? `Reason: ${note}` : 'No reason was given.'} Do not get the same effect another way.`,
+            ...(a.task_id ? { task_id: a.task_id } : {}),
+            priority: 'high',
+          },
+        );
+      }
+    }
+    if (!a.task_id || !a.run_id) return;
     const task = this.q.findTask(projectId, a.task_id);
-    if (task?.status !== 'WAITING' || task.waiting_reason !== 'human_approval') return;
-    if (task.current_run_id !== a.run_id) return;
+    if (task?.status !== 'WAITING' || task.current_run_id !== a.run_id) return;
     const others = this.db
       .prepare("SELECT COUNT(*) AS n FROM approvals WHERE run_id = ? AND status = 'pending' AND approval_id <> ?")
       .get<{ n: number }>(a.run_id, approvalId);
     if ((others?.n ?? 0) > 0) return;
-    this.moveTask(ctx, task, 'task.resume', { reason: `${approvalId} was granted` });
+    const decided = granted ? 'granted' : 'denied';
+    const message = `A human ${decided} your request to ${what}.${note ? ` Note: ${note}` : ''}${granted ? '' : ' Continue without it.'}`;
+    if (this.queueContinue(ctx, projectId, task, message)) return;
+    if (task.waiting_reason === 'human_approval') {
+      this.moveTask(ctx, task, 'task.resume', { reason: `${approvalId} was ${decided}` });
+    }
   }
 
   /** Records that an action relied on approvals (ADR-0027 §5); a `once` grant is used up. */
@@ -4285,12 +4602,29 @@ export class FridayState {
         correlation_id: request?.correlation_id,
       },
       (ctx) => {
+        // An answer for nothing, or a second answer, is refused rather than recorded (LESSONS UI-12).
+        const row = this.q.escalation(escalationId);
+        if (!row || row.project_id !== projectId) {
+          throw new FridayError('invalid_request', `unknown escalation ${escalationId}`);
+        }
+        if (row.status !== 'pending') {
+          throw new FridayError('invalid_state_transition', `${escalationId} was already answered`);
+        }
         ctx.emit({
           type: 'escalation.answered',
           payload: { escalation_id: escalationId, answer },
           refs: [{ kind: 'escalation', id: escalationId }],
         });
         if (request) this.replyFor(ctx, projectId, actor, request, answer);
+        // A spawned agent that ended its turn to wait for this answer continues in its session,
+        // with the answer as its next message (plan M9 §5.6).
+        const taskId = row.task_id ? String(row.task_id) : null;
+        if (taskId && (row.kind === null || row.kind === 'unanswered_request')) {
+          const task = this.q.findTask(projectId, taskId);
+          if (task?.status === 'WAITING') {
+            this.queueContinue(ctx, projectId, task, `A human answered your question: ${answer}`);
+          }
+        }
       },
     );
   }
@@ -5305,9 +5639,16 @@ export class FridayState {
       .get<TokenInfo>(sha256(raw));
   }
 
-  revokeTokens(filter: { token_class?: TokenClass; harness_id?: string; project_id?: string }, reason: string): number {
+  revokeTokens(
+    filter: { token_class?: TokenClass; harness_id?: string; project_id?: string; credential_id?: string },
+    reason: string,
+  ): number {
     const where: string[] = ['revoked_at IS NULL'];
     const params: (string | null)[] = [];
+    if (filter.credential_id) {
+      where.push('credential_id = ?');
+      params.push(filter.credential_id);
+    }
     if (filter.token_class) {
       where.push('token_class = ?');
       params.push(filter.token_class);

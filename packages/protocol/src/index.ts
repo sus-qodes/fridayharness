@@ -13,4 +13,5 @@ export * from './errors.js';
 export * from './ids.js';
 export * from './methods.js';
 export * from './rpc.js';
+export type * from './ui.js';
 export * from './version.js';

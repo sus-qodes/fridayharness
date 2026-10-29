@@ -451,7 +451,8 @@ export class CodexAdapter {
   async #turn(a: Attempt, p: TaskStartParams, why: 'start' | 'resume'): Promise<void> {
     const text =
       why === 'resume'
-        ? 'The previous session of this task ended unexpectedly. Continue the task where you left off.'
+        ? // A human's decision says why the run continues (plan M9 §5.6); otherwise it restarted.
+          (p.note ?? 'The previous session of this task ended unexpectedly. Continue the task where you left off.')
         : [
             `Task ${p.task_id}: ${p.instruction}`,
             ...(p.acceptance_criteria.length

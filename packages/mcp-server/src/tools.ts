@@ -163,7 +163,7 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
           me = await session.me();
         } catch (e) {
           return {
-            text: `Friday is not available: ${(e as Error).message}. Do not edit files until it is; ask the human to start it with "friday run".`,
+            text: `Friday is not available: ${(e as Error).message}. Do not edit files until it is; ask the human to start it (its shortcut, the desktop app, or "friday run").`,
             structured: { daemon: { reachable: false }, problem: (e as Error).message },
           };
         }

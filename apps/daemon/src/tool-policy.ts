@@ -215,6 +215,24 @@ export function createToolJudge(deps: {
         reason: `this checkout is the worktree of ${tree.task_id}, which this session does not hold. Claim it with friday_task_claim to continue its work; if Friday gave it to another attempt, stop here.`,
       };
     }
+    // While a human has paused Friday, nothing that changes the project runs; reads and searches
+    // still pass (plan M9 §5.4). Judged here, so attached and spawned hosts stop alike.
+    if (
+      result.decision !== 'deny' &&
+      action.kind !== 'read' &&
+      action.kind !== 'search' &&
+      state.q.control(pid).paused
+    ) {
+      result = {
+        ...result,
+        decision: 'deny',
+        rule: 'control.paused',
+        reason:
+          'Friday is paused by a human. Wait and do not retry another way: nothing that changes the project runs until they resume Friday.',
+        reserve: [],
+        relied_on: [],
+      };
+    }
     if (result.decision === 'allow' && result.reserve?.length && task) {
       try {
         state.reserveFiles(pid, actor, task.task_id, result.reserve, 'write', patternsOverlap);

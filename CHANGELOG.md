@@ -2,6 +2,16 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M9, the user interface (the desktop shell still to come)
+
+Friday can be used from a browser for daily work: `friday ui` (or `friday ui --start` and `friday shortcut`, which start Friday when it is not running) opens the Studio signed in ([the plan](docs/frontend/PLAN.md)).
+
+- **The Studio:** goals, tasks and agents on a canvas, with an inspector, the diff, the code graph, memory and a live terminal; approvals and questions in a Decisions tray beside it; plans written in the page or proposed by the Master Brain, approved on the board; verification, integration and landing; pause, resume and halt in the dock; the Notch at the top with Blip.
+- **Starting agents:** Claude Code or Codex started from the Agents drawer, remembered as profiles that start again with Friday.
+- **Sign-in:** a one-time link opened through a file in the private folder, so the code is on no command line; a session per tab, at most 12 hours; a page served under a path new at every start, never cached, so nothing an earlier program left on the address runs in it.
+- **Daemon:** pause, resume and halt by effect; spawned agents continue in their run after a human decides; Friday's own questions act by kind and close when their cause is resolved; verification runs Friday's own checks when a project has none.
+- **Tests:** `tests/ui-e2e` drives the real page in the installed Edge or Chrome against a real Friday (`FRIDAY_TEST_UI_E2E=1`), including a day in the life from `friday init` to a verified, integrated goal across a restart. What those runs found is fixed and recorded ([lessons](docs/frontend/LESSONS.md) UI-43 to UI-52).
+
 ## Unreleased — the recorded live MVP demonstration
 
 Part 12 §18 ran once with two real hosts: Claude Code 2.1.301 and Codex 0.162.1, both spawned, on one goal ([the record](docs/integration/mvp-demo.md#recorded-live-2026-10-16)). Two tasks ran in parallel worktrees; the shared contract's change reached only the backend agent; the Codex adapter was killed mid-turn and the same run resumed in the same Codex thread, with Friday's tools; a failed verification was reworked; both tasks were verified and integrated, and the goal completed. What it found is fixed, each with a regression that failed before the change (LESSONS D-49, D-50):

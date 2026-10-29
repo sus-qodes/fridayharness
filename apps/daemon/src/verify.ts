@@ -38,10 +38,12 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
   const { state, project, logger } = ctx;
   const pid = project.project_id;
   const configured = project.config.verification.checks;
-  if (configured.length === 0) {
+  // Without project checks a human's request runs Friday's own checks; nothing completes a task
+  // automatically on those alone (docs/frontend/PLAN.md §5.8).
+  if (configured.length === 0 && actor.kind !== 'human') {
     throw new FridayError(
       'verification_unavailable',
-      'no checks are configured: add verification.checks to .friday/config.yaml, or record a result with --result passed|failed',
+      "no project checks are configured, so the task waits for a human to verify it (Friday's scope and credential checks run then), or to record a result with --result passed|failed",
     );
   }
   const task = state.q.task(pid, taskId);
@@ -388,7 +390,11 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     `${requiredRan - requiredFailed}/${requiredRan} required checks passed`,
     ...(advisoryFailed ? [`${advisoryFailed} advisory check(s) failed`] : []),
     ...(warnings ? [`${warnings} warning(s)`] : []),
-    ...(checks.length === 0 ? [`no configured check applies to ${task.kind} tasks`] : []),
+    ...(configured.length === 0
+      ? ["no project checks are configured; Friday's scope and credential checks ran"]
+      : checks.length === 0
+        ? [`no configured check applies to ${task.kind} tasks`]
+        : []),
   ];
   // The outcome counts with others judged by the same checks (review F15).
   const finished = state.finishVerification(

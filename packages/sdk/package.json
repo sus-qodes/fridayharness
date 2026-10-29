@@ -9,6 +9,11 @@
       "development": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./sse": {
+      "development": "./src/sse.ts",
+      "types": "./dist/sse.d.ts",
+      "default": "./dist/sse.js"
     }
   },
   "files": [

@@ -44,12 +44,18 @@ export async function startTestDaemon(
     extensions?: DaemonOptions['extensions'];
     verify?: DaemonOptions['verify'];
     brain?: DaemonOptions['brain'];
+    /** A built interface bundle to serve at /ui/ (M9). */
+    uiDir?: string;
+    /** The project is already a Friday project (`friday init` ran, or a restart): keep its config. */
+    initialized?: boolean;
   } = {},
 ): Promise<TestDaemon> {
-  initTestProject(ws, {
-    ...(opts.extraConfig ? { extraConfig: opts.extraConfig } : {}),
-    ...(opts.editConfig ? { editConfig: opts.editConfig } : {}),
-  });
+  if (!opts.initialized) {
+    initTestProject(ws, {
+      ...(opts.extraConfig ? { extraConfig: opts.extraConfig } : {}),
+      ...(opts.editConfig ? { editConfig: opts.editConfig } : {}),
+    });
+  }
   if (opts.git) {
     writeFileSync(path.join(ws.projectDir, 'README.md'), '# test project\n');
     const git = deterministicGit(ws.projectDir);
@@ -66,6 +72,7 @@ export async function startTestDaemon(
     ...(opts.extensions ? { extensions: opts.extensions } : {}),
     ...(opts.verify ? { verify: opts.verify } : {}),
     ...(opts.brain !== undefined ? { brain: opts.brain } : {}),
+    ...(opts.uiDir ? { uiDir: opts.uiDir } : {}),
   });
   ws.track({ close: () => daemon.close('test cleanup') });
   const base = { baseUrl: daemon.url, projectId: daemon.project.project_id };

@@ -109,7 +109,7 @@ export class FridaySession {
     } catch (e) {
       this.problem =
         e instanceof DaemonUnreachableError
-          ? 'the Friday daemon is not running; ask the human to run "friday run" in the project'
+          ? 'the Friday daemon is not running; ask the human to start Friday (its shortcut, the desktop app, or "friday run" in the project)'
           : (e as Error).message;
       this.scheduleRetry();
       return false;
@@ -140,7 +140,7 @@ export class FridaySession {
     } catch (e) {
       this.problem =
         e instanceof DaemonUnreachableError
-          ? 'the Friday daemon is not reachable; ask the human to run "friday run"'
+          ? 'the Friday daemon is not reachable; ask the human to start Friday (its shortcut, the desktop app, or "friday run")'
           : (e as Error).message;
       this.scheduleRetry();
       return false;

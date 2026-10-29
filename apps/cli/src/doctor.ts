@@ -1,8 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { openDatabase } from '@friday/db';
 import {
+  checkFolderAccess,
   checkPrivateAccess,
   credentialsDir,
   DaemonClient,
@@ -144,6 +146,23 @@ export async function doctor(projectDir?: string): Promise<CheckResult[]> {
               status: 'fail',
               message: `${dir} can be opened by others: ${access.problems.join('; ')}`,
               fix: '"friday run" (or "friday secrets set") repairs the access list of Friday\'s own directories; then rotate tokens with "friday token rotate"',
+            },
+      );
+    }
+
+    // The interface keeps its session in the browser's profile while it is valid (plan M9 FD-30):
+    // a profile other accounts can read would hand them that session.
+    for (const profile of browserProfiles()) {
+      if (!existsSync(profile.dir)) continue;
+      const access = checkFolderAccess(profile.dir);
+      out.push(
+        access.ok
+          ? { id: 'browser.profile', status: 'ok', message: `${profile.name}: only you can open ${profile.dir}` }
+          : {
+              id: 'browser.profile',
+              status: 'warn',
+              message: `${profile.name}'s profile ${profile.dir} can be opened by others: ${access.problems.join('; ')}`,
+              fix: 'a Friday interface session kept there could be used by those accounts; ask an administrator to make the folder yours only, or use the desktop app',
             },
       );
     }
@@ -306,4 +325,28 @@ export function renderDoctor(results: CheckResult[]): string {
   return results
     .map((r) => `${tag[r.status]} ${r.id.padEnd(12)} ${r.message}${r.fix ? `\n              fix: ${r.fix}` : ''}`)
     .join('\n');
+}
+
+/** The browser profile folders on this machine (Edge and Chrome), where a UI session is kept. */
+function browserProfiles(): { name: string; dir: string }[] {
+  const home = os.homedir();
+  if (process.platform === 'win32') {
+    const local = process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local');
+    return [
+      { name: 'Edge', dir: path.join(local, 'Microsoft', 'Edge', 'User Data') },
+      { name: 'Chrome', dir: path.join(local, 'Google', 'Chrome', 'User Data') },
+    ];
+  }
+  if (process.platform === 'darwin') {
+    const support = path.join(home, 'Library', 'Application Support');
+    return [
+      { name: 'Edge', dir: path.join(support, 'Microsoft Edge') },
+      { name: 'Chrome', dir: path.join(support, 'Google', 'Chrome') },
+    ];
+  }
+  const config = process.env.XDG_CONFIG_HOME ?? path.join(home, '.config');
+  return [
+    { name: 'Edge', dir: path.join(config, 'microsoft-edge') },
+    { name: 'Chrome', dir: path.join(config, 'google-chrome') },
+  ];
 }

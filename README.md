@@ -45,6 +45,8 @@ The architecture is called **ContextOS** in the original specification.
   - work that was finished in a lost clone continues in the restored one (`friday recover --action rebind`);
   - history shows only commits the agent may read about, and a restore checks the backup's database before it changes anything.
 
+- **M9** (under way) gives Friday an interface, so daily work needs no terminal ([plan](docs/frontend/PLAN.md)): the **Studio**, a canvas of goals, tasks and agents with drawers for a task's context, diff and history; the **Notch**, an island at the top of the screen with the mascot Blip, which opens when an agent needs your approval or an answer; and a desktop shell that floats the Notch over your editor. From it you start agents, write or approve plans, decide requests (agents started from the interface carry on afterwards), verify, integrate, recover, see what is ready to land, and pause, resume or halt everything.
+
 See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 
 ## Documentation
@@ -69,6 +71,30 @@ See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 | [docs/integration/codex.md](docs/integration/codex.md) | Codex as a spawn-mode harness: running it, what Friday pins and decides, what is not mediated |
 | [docs/integration/codex-spike.md](docs/integration/codex-spike.md) | The M3.5 Codex app-server spike: what works, what does not, and the contract changes before M8 |
 | [docs/reviews/](docs/reviews/) | External reviews of the plan and the project, and how each finding was handled |
+| [docs/frontend/](docs/frontend/) | The interface: its plan, where it deviates from the [design handoff](docs/frontend-handoff/), and its lessons |
+
+## Use the interface
+
+Once per machine, in a terminal (PowerShell) in the Friday repository:
+
+```powershell
+pnpm install; pnpm build
+node apps\cli\bin\friday.mjs setup
+```
+
+Once per project, in the project's folder (a git repository with at least one commit):
+
+```powershell
+node C:\friday\apps\cli\bin\friday.mjs init --shortcut
+```
+
+This creates `.friday/config.yaml` and `.friday/.gitignore` (commit both) and a desktop shortcut "Friday - <project>". Every day after that, double-click the shortcut: it starts Friday if it is not running and opens the Studio in your browser, already signed in. From the Studio:
+- **Agents** (dock): start Claude Code or Codex for this project, or set up Claude Code in VS Code.
+- **New goal**: describe what you want; write the plan yourself, or let the Master Brain plan it once a provider key is set up (Settings → Planner says how).
+- When an agent needs you, the request appears in full under **Waiting for you** at the right, and the Notch at the top of the page shows how many wait; decide it there (a high-risk request asks you to hold the button), and the agent carries on in its run.
+- When a task claims it is done, **Verify** on its card runs the checks; verified work is integrated into the goal's branch, and the goal card says when it is **Ready to land**.
+
+A sign-in link works once, for a minute; a browser session lasts until Friday stops or restarts, at most 12 hours. `friday ui` opens it again from a terminal. See [docs/frontend/README.md](docs/frontend/README.md).
 
 ## Try it (Windows, PowerShell)
 
@@ -80,7 +106,7 @@ friday setup                                   # once per machine
 
 friday fixture init C:\demo\shop              # a small repository that is already a Friday project
 cd C:\demo\shop
-friday run                                     # terminal 1: the daemon and the status page URL
+friday run                                     # terminal 1: the daemon; "friday ui" opens the interface
 
 # terminal 2
 friday harness config claude-code --agent dev-1

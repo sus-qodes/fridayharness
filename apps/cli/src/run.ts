@@ -1,4 +1,13 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Daemon, DaemonOptions } from '@friday/daemon';
+
+/** The interface's built bundle, next to the CLI in the repository (plan M9 FD-04). */
+export function uiBundleDir(): string | undefined {
+  const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'ui', 'dist');
+  return existsSync(path.join(dir, 'index.html')) ? dir : undefined;
+}
 
 /** Hooks M1c adds to every daemon started by `friday run` (Claude Code hook routes, verification runner). */
 export const daemonPlugins: { extensions: NonNullable<DaemonOptions['extensions']>; verify?: DaemonOptions['verify'] } =
@@ -22,12 +31,13 @@ export async function runDaemon(opts: RunOptions): Promise<void> {
     ...(opts.port !== undefined ? { port: opts.port } : {}),
     ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
     extensions: daemonPlugins.extensions,
+    ...(uiBundleDir() ? { uiDir: uiBundleDir() as string } : {}),
     ...(daemonPlugins.verify ? { verify: daemonPlugins.verify } : {}),
   });
   process.stdout.write(`FRIDAY_READY ${JSON.stringify({ port: daemon.port(), url: daemon.url })}\n`);
   process.stdout.write(
     `Friday daemon for "${daemon.project.name}" is listening on ${daemon.url}\n` +
-      `Status page: ${daemon.url}/ui   (token: friday ui --token)\n` +
+      `Open the interface: friday ui   (or ${daemon.url}/ui)\n` +
       'Press Ctrl+C to stop.\n',
   );
   const stop = (signal: string) => {

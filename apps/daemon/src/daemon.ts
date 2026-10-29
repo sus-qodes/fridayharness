@@ -23,6 +23,7 @@ import type { Hono } from 'hono';
 import { buildApp } from './app.js';
 import { type BrainHandle, createMasterBrain } from './brain.js';
 import { type CompileInput, createContextService } from './context.js';
+import { ControlManager } from './control.js';
 import { profileCache } from './execution.js';
 import { GraphService } from './graph-service.js';
 import { IntegrationManager } from './integration.js';
@@ -33,6 +34,9 @@ import { type EffectivePolicy, loadEffectivePolicy, reloadingPolicy, writePolicy
 import { RecoveryManager } from './recovery.js';
 import { RoutingService } from './routing.js';
 import { createToolJudge, type ToolJudge } from './tool-policy.js';
+import { UiAuth } from './ui-auth.js';
+import { fileHasher } from './ui-snapshot.js';
+import { openUiBundle } from './ui-static.js';
 import { runVerification } from './verify.js';
 import { WorkspaceManager } from './workspaces.js';
 
@@ -53,7 +57,12 @@ export interface DaemonOptions {
   logToFile?: boolean;
   logToConsole?: boolean;
   /** Extra routes (e.g. Claude Code hook endpoints) mounted on the app before it starts serving. */
-  extensions?: ((app: Hono, ctx: DaemonContext) => void)[];
+  /**
+   * Routes mounted after the daemon's own (the Claude Code hooks, the agent launcher). One may return
+   * a `close()` that the daemon awaits, bounded, before it drains: its children can still reach it
+   * to disconnect (plan M9 §5.9, LESSONS UI-33).
+   */
+  extensions?: ((app: Hono, ctx: DaemonContext) => void | { close(): Promise<void> })[];
   /** Runs verification checks for `POST /tasks/:id/verify` without a manual result. */
   verify?: (ctx: DaemonContext, taskId: string, actor: Actor) => Promise<unknown>;
   state?: Partial<StateConfig>;
@@ -62,6 +71,8 @@ export interface DaemonOptions {
    * `autoStart: false` leaves it idle until `brain.runOnce()`.
    */
   brain?: false | { model?: PlannerModel | null; autoStart?: boolean };
+  /** The interface's built bundle (`apps/ui/dist`), served at /ui/ (M9); `friday run` passes it. */
+  uiDir?: string;
 }
 
 export interface DaemonContext {
@@ -168,10 +179,14 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   const gitRoot = await GitRoot.open(project.root).catch(() => null);
   const head = gitRoot ? ((await gitRoot.refs().catch(() => null))?.head ?? null) : null;
   const worktreeMode = project.config.worktrees.mode === 'per_task' && head ? 'per_task' : 'off';
+  // config.yaml is read only at start; the board says when it changed since (plan M9 §5.3).
+  const configHash = fileHasher(path.join(fridayDir, 'config.yaml'));
 
   // The project's own policy (ADR-0028): what tracked files tighten applies now, what they loosen
   // only once this clone trusted exactly that.
   let policy = loadEffectivePolicy(project, privateDir);
+  // A fixed port from the tracked config applies once this clone trusts it (plan M9 §5.13).
+  const listenPort = policy.daemon_port ?? 0;
 
   const leases = project.config.leases;
   const stateConfig: Partial<StateConfig> = {
@@ -317,6 +332,11 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       }
       const taskId = (e.payload as { task_id?: string }).task_id;
       if (!taskId) return;
+      // While a human has paused Friday nothing moves a goal branch; the resume sweeps (plan M9 §5.5).
+      if (e.type === 'task.completed' && state.q.control(project.project_id).paused) {
+        const t = state.q.findTask(project.project_id, taskId);
+        if (t && state.awaitsIntegration(t)) return;
+      }
       const done =
         e.type === 'task.completed'
           ? integration.completed(taskId)
@@ -340,9 +360,12 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       reconnectWindowMs: state.config.reconnectWindowMs,
     },
   });
-  void integration
-    .sweep()
-    .catch((err) => logger.warn('integrating completed tasks failed', { message: (err as Error).message }));
+  // Paused at start (Friday stopped while paused): the resume sweeps instead (plan M9 §5.5).
+  if (!state.q.control(project.project_id).paused) {
+    void integration
+      .sweep()
+      .catch((err) => logger.warn('integrating completed tasks failed', { message: (err as Error).message }));
+  }
   // The per-user state folder (it holds every project's private folder): never gathered into context.
   const context = createContextService({
     state,
@@ -396,15 +419,33 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     verify(taskId, AUTO).catch((e: unknown) =>
       logger.warn('automatic verification did not run', { task_id: taskId, message: (e as Error).message }),
     );
+  const autoVerifies = () => currentPolicy().auto_verification && project.config.verification.checks.length > 0;
+  const paused = () => state.q.control(project.project_id).paused;
   const stopAutoVerify = state.transport.subscribe(
     { project_id: project.project_id, types: ['task.completion_claimed'] },
     (e) => {
       const taskId = (e.payload as { task_id?: string }).task_id;
-      if (taskId && currentPolicy().auto_verification && project.config.verification.checks.length)
-        void autoVerify(taskId);
+      // A claim made while Friday is paused is recorded; its checks run after the resume (plan M9 §5.5).
+      if (taskId && autoVerifies() && !paused()) void autoVerify(taskId);
     },
   );
-  if (policy.auto_verification && project.config.verification.checks.length) {
+  // A human resumed Friday: what waited for it runs now, as after a restart.
+  const stopResumeSweep = state.transport.subscribe(
+    { project_id: project.project_id, types: ['control.resumed'] },
+    () => {
+      void (async () => {
+        if (autoVerifies()) {
+          for (const t of state.q.tasks(project.project_id, { statuses: ['READY_FOR_VERIFICATION'] })) {
+            await autoVerify(t.task_id);
+          }
+        }
+        await integration.sweep();
+      })().catch((err) =>
+        logger.warn('running what waited for the resume failed', { message: (err as Error).message }),
+      );
+    },
+  );
+  if (autoVerifies() && !paused()) {
     // Claims made while the daemon was down, or whose verification it interrupted.
     void (async () => {
       for (const t of state.q.tasks(project.project_id, { statuses: ['READY_FOR_VERIFICATION'] })) {
@@ -429,10 +470,20 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
         });
 
   let closing: Promise<void> | undefined;
+  const uiAuth = new UiAuth(state, project.project_id, () => state.clock.nowMs(), { privateDir });
   const app = buildApp({
     state,
     project,
     logger,
+    ui: openUiBundle(opts.uiDir),
+    uiAuth,
+    control: new ControlManager({ state, project, logger, operations, recovering: (t) => recovery.isBusy(t) }),
+    uiInfo: () => ({
+      has_commit: Boolean(head),
+      worktrees_mode: worktreeMode,
+      config: { loaded_hash: configHash.loaded, current_hash: configHash.current() },
+      auto_verification: autoVerifies(),
+    }),
     instanceId,
     daemonVersion: FRIDAY_VERSION,
     port: () => port,
@@ -441,7 +492,11 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     requestShutdown: (reason) => {
       setTimeout(() => void close(reason), 50);
     },
-    rotateTokens,
+    // Rotation revokes every operator-class credential, UI sessions included; forget their records too.
+    rotateTokens: () => {
+      uiAuth.clear();
+      return rotateTokens();
+    },
     streams,
     verify,
     ...(opts.pollIntervalMs ? { pollIntervalMs: opts.pollIntervalMs } : {}),
@@ -463,16 +518,25 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     laya,
     judgeTool,
   });
-  for (const ext of opts.extensions ?? []) ext(app as unknown as Hono, ctx);
+  const extensionClosers: (() => Promise<void>)[] = [];
+  for (const ext of opts.extensions ?? []) {
+    const handle = ext(app as unknown as Hono, ctx) as { close(): Promise<void> } | undefined;
+    if (handle) extensionClosers.push(() => handle.close());
+  }
 
-  const server = await new Promise<Server>((resolve, reject) => {
-    const s = serve(
-      { fetch: app.fetch, hostname: '127.0.0.1', port: opts.port ?? project.config.daemon.port },
-      (info) => {
-        port = info.port;
-        resolve(s as Server);
+  if (opts.port === undefined && project.config.daemon.port && !policy.daemon_port) {
+    logger.warn(
+      'config.yaml fixes daemon.port, which applies once this clone trusts it ("friday policy trust"); using a random port',
+      {
+        port: project.config.daemon.port,
       },
-    ) as Server;
+    );
+  }
+  const server = await new Promise<Server>((resolve, reject) => {
+    const s = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: opts.port ?? listenPort }, (info) => {
+      port = info.port;
+      resolve(s as Server);
+    }) as Server;
     s.once('error', reject);
   }).catch((e: NodeJS.ErrnoException) => {
     rmSync(lockFile, { force: true });
@@ -576,6 +640,12 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   async function close(reason = 'shutdown'): Promise<void> {
     if (closing) return closing;
     closing = (async () => {
+      // Extensions first, while requests are still answered (their children disconnect over RPC).
+      if (extensionClosers.length) {
+        const all = Promise.allSettled(extensionClosers.map((close) => close()));
+        const bound = new Promise((r) => setTimeout(r, 15_000).unref());
+        await Promise.race([all, bound]);
+      }
       draining = true;
       // Stop the Master Brain first: it aborts a model call in flight and finishes its current step.
       if (brain) await brain.brain.stop().catch(() => undefined);
@@ -583,6 +653,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       clearInterval(sweep);
       stopWorkspaces();
       stopAutoVerify();
+      stopResumeSweep();
       stopLaya();
       laya.close();
       // Integrations and worktree jobs in flight finish first, within a bound: no git process the
@@ -611,6 +682,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
           reason,
           instanceId,
         );
+        uiAuth.clear();
         state.revokeTokens({ token_class: 'operator', project_id: project.project_id }, 'daemon stopped');
         state.revokeTokens({ token_class: 'bootstrap', project_id: project.project_id }, 'daemon stopped');
       } catch (e) {

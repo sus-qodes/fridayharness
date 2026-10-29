@@ -13,6 +13,7 @@ import { registerGraphCommands } from './graph.js';
 import { registerIntegrationCommands } from './integrations.js';
 import { registerMemoryCommands } from './memory.js';
 import { registerMessageCommands } from './messages.js';
+import { openTarget, runningDaemon, startDetached } from './open-link.js';
 import { registerOperationCommands } from './operations.js';
 import { clip, describeEvent, kv, shortTime, table, verificationLines } from './output.js';
 import { registerPolicyCommands } from './policy.js';
@@ -21,6 +22,7 @@ import { registerReservationCommands } from './reservations.js';
 import { restoreProject } from './restore.js';
 import { registerLayaCommands, registerRoutingCommands } from './routing.js';
 import { runDaemon } from './run.js';
+import { createShortcut } from './shortcut.js';
 import { FRIDAY_DIR_GITIGNORE } from './templates.js';
 import { registerWorktreeCommands } from './worktrees.js';
 
@@ -80,7 +82,8 @@ export function buildProgram(): Command {
     .description('create .friday/config.yaml and .friday/.gitignore in the current repository')
     .option('--name <name>', 'project name (default: directory name)')
     .option('--force', 'rewrite .friday/.gitignore and keep the existing project id')
-    .action((opts: { name?: string; force?: boolean }) => {
+    .option('--shortcut', 'also create a desktop shortcut that opens Friday for this project')
+    .action((opts: { name?: string; force?: boolean; shortcut?: boolean }) => {
       const root = path.resolve(g().project ?? process.cwd());
       const dir = path.join(root, FRIDAY_DIR);
       const configPath = path.join(dir, 'config.yaml');
@@ -96,12 +99,14 @@ export function buildProgram(): Command {
       }
       writeFileSync(path.join(dir, '.gitignore'), FRIDAY_DIR_GITIGNORE);
       const ref = project({ project: root });
-      out(g(), { project_id: ref.project_id, name: ref.name, root: ref.root }, () =>
+      const shortcuts = opts.shortcut ? createShortcut(ref) : [];
+      out(g(), { project_id: ref.project_id, name: ref.name, root: ref.root, shortcuts }, () =>
         [
           `Initialized Friday project "${ref.name}" (${ref.project_id})`,
           `  ${path.relative(process.cwd(), configPath) || configPath}  (commit this)`,
           '  .friday/.gitignore  (commit this; it keeps runtime files out of git)',
-          'Next: friday run',
+          ...shortcuts.map((f) => `  shortcut: ${f}`),
+          shortcuts.length ? 'Next: double-click the shortcut' : 'Next: friday ui --start (or friday shortcut)',
         ].join('\n'),
       );
     });
@@ -717,15 +722,52 @@ export function buildProgram(): Command {
 
   program
     .command('ui')
-    .description('print the status page URL (and, with --token, the operator token to paste into it)')
-    .option('--token', 'also print the operator token (it grants full control of this project)')
-    .action((o: { token?: boolean }) => {
-      const { client, ref } = operator(g());
-      const token = o.token ? readToken(ref, 'operator') : undefined;
-      out(
-        g(),
-        { url: `${client.baseUrl}/ui`, ...(token ? { token } : {}) },
-        () => `${client.baseUrl}/ui${token ? `\noperator token: ${token}` : ''}`,
+    .description('open the interface in your browser, already signed in (plan M9)')
+    .option('--start', 'start Friday first (hidden, in the background) when it is not running')
+    .option('--print-link', 'print the one-time sign-in link instead of opening it (it works once, for 60 s)')
+    .option('--token', 'print the operator token for the legacy status page instead (it grants full control)')
+    .action(async (o: { start?: boolean; printLink?: boolean; token?: boolean }) => {
+      const ref = project(g());
+      if (o.start && !(await runningDaemon(ref))) {
+        process.stderr.write('Starting Friday...\n');
+        await startDetached(ref);
+      }
+      const { client } = operator(g());
+      if (o.token) {
+        const token = readToken(ref, 'operator');
+        out(
+          g(),
+          { url: `${client.baseUrl}/ui`, ...(token ? { token } : {}) },
+          () => `${client.baseUrl}/ui${token ? `\noperator token: ${token}` : ''}`,
+        );
+        return;
+      }
+      const login = await client.post<{ url: string; redirect_file: string | null; expires_at: string }>(
+        client.projectPath('/ui/login-codes'),
+        {},
+      );
+      const address = login.url.split('#')[0] ?? `${client.baseUrl}/ui/`;
+      if (o.printLink) {
+        out(g(), { url: login.url, expires_at: login.expires_at }, () => login.url);
+        return;
+      }
+      // The redirect file, so the one-time code is on no command line (LESSONS UI-22).
+      openTarget(login.redirect_file ?? login.url);
+      out(g(), { opened: true, address }, () => `Opened Friday for "${ref.name}" in your browser (${address}).`);
+    });
+
+  program
+    .command('shortcut')
+    .description('create a shortcut that opens Friday for this project, starting it when needed')
+    .option('--no-desktop', 'not on the desktop')
+    .option('--start-menu', 'also in the start menu (applications menu on Linux)')
+    .action((o: { desktop: boolean; startMenu?: boolean }) => {
+      const ref = project(g());
+      const files = createShortcut(ref, { desktop: o.desktop, ...(o.startMenu ? { startMenu: true } : {}) });
+      out(g(), { files }, () =>
+        files.length
+          ? [`Created:`, ...files.map((f) => `  ${f}`), 'Double-click it to open Friday, signed in.'].join('\n')
+          : 'Nothing created: choose --start-menu or leave out --no-desktop.',
       );
     });
 

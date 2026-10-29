@@ -345,6 +345,28 @@ export class StateProjector implements Projector {
         }
         return;
       }
+      case 'control.paused':
+      case 'control.resumed':
+      case 'control.halted': {
+        const paused = e.type === 'control.resumed' ? 0 : 1;
+        this.db
+          .prepare(
+            `INSERT INTO project_controls (project_id, paused, reason, changed_at, changed_by, halted_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(project_id) DO UPDATE SET paused = excluded.paused, reason = excluded.reason,
+               changed_at = excluded.changed_at, changed_by = excluded.changed_by,
+               halted_at = COALESCE(excluded.halted_at, project_controls.halted_at)`,
+          )
+          .run(
+            e.project_id,
+            paused,
+            paused ? opt(p.reason) : null,
+            e.occurred_at,
+            `${e.actor.kind}:${e.actor.id}`,
+            e.type === 'control.halted' ? e.occurred_at : null,
+          );
+        return;
+      }
       case 'routing.pinned': {
         const x = p.pin as Payload;
         this.db

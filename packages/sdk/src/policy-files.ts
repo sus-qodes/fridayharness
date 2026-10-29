@@ -57,6 +57,8 @@ export interface PolicySourceData {
   auto_verification?: boolean;
   mcp?: Record<string, { default?: string; tools?: Record<string, string> }>;
   elicitation?: boolean;
+  /** `daemon.port` when fixed (loosening, plan M9 §5.13). */
+  daemon_port?: number;
 }
 
 export const POLICY_DIR = path.join('.friday', 'policies');
@@ -79,6 +81,7 @@ export function readPolicySources(
       auto_verification: config.verification.auto_on_completion,
       mcp: config.mcp.servers,
       elicitation: config.approvals.elicitation,
+      ...(config.daemon.port ? { daemon_port: config.daemon.port } : {}),
     },
   ];
   const errors: { file: string; error: string }[] = [];
