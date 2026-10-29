@@ -6,6 +6,7 @@ import {
   type ControlState,
   type FileReservationView,
   FridayError,
+  type GoalSummary,
   type GoalView,
   type HarnessView,
   type IntegrationView,
@@ -97,6 +98,28 @@ export interface LayaCalibrationRecord {
 }
 
 const LIVE_HARNESS = "('REGISTERED','READY','BUSY','DEGRADED','RECONNECTING')";
+
+/** SQLite binds at most 999 variables in older builds; `IN (...)` lists stay under it. */
+const IN_CHUNK = 400;
+
+function chunks<T>(items: readonly T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += IN_CHUNK) out.push(items.slice(i, i + IN_CHUNK));
+  return out;
+}
+
+/** The events of a goal's tasks that the goal summary counts, one row each (plan M12.7). */
+interface GoalFactRow {
+  type: string;
+  /** `verification.finished`: PASSED or FAILED. */
+  status: string | null;
+  /** `policy.evaluated`: allow, deny or review. */
+  decision: string | null;
+  /** A task transition's `from` and `to`, for the events that left HARNESS_LOST. */
+  from_status: string | null;
+  to_status: string | null;
+  task_id: string;
+}
 
 /**
  * Whether a granted approval covers a use (ADR-0027 §4–§5): under the current policy version,
@@ -265,6 +288,28 @@ export class Queries {
          WHERE s.project_id = ? AND s.vendor = ? AND s.host_session_id = ? ORDER BY s.bound_at DESC LIMIT 1`,
       )
       .get<HarnessRow>(projectId, vendor, sessionId);
+    return row ? toRecord(row) : undefined;
+  }
+
+  /**
+   * The live attached session of `vendor` working as `agentKey` that no hook has reached and no
+   * host session is bound to yet (plan M8b): the MCP server of a host that runs its hooks through a
+   * shell, whose hooks therefore report another parent's pid. A non-shadow one first, then the newest.
+   */
+  hooklessAttachHarness(
+    projectId: string,
+    vendor: string,
+    agentKey: string,
+    nowIso: string,
+  ): HarnessRecord | undefined {
+    const row = this.db
+      .prepare(
+        `${this.harnessSelect} WHERE h.project_id = ? AND h.vendor = ? AND h.attach_mode = 'attach'
+           AND h.hooks_seen_at IS NULL AND h.host_session_id IS NULL AND h.requested_agent_key = ?
+           AND h.status IN ${LIVE_HARNESS} AND l.lease_expires_at > ?
+         ORDER BY h.shadow ASC, h.registered_at DESC LIMIT 1`,
+      )
+      .get<HarnessRow>(projectId, vendor, agentKey, nowIso);
     return row ? toRecord(row) : undefined;
   }
 
@@ -710,12 +755,19 @@ export class Queries {
     return row?.explanation_json ? JSON.parse(row.explanation_json) : undefined;
   }
 
-  approvals(projectId: string, status?: string): Record<string, unknown>[] {
-    return status
-      ? this.db
-          .prepare('SELECT * FROM approvals WHERE project_id = ? AND status = ? ORDER BY created_at')
-          .all(projectId, status)
-      : this.db.prepare('SELECT * FROM approvals WHERE project_id = ? ORDER BY created_at').all(projectId);
+  /** Approvals of the project, oldest first; by status and, for one task's record, by task. */
+  approvals(projectId: string, status?: string, filter: { task_id?: string } = {}): Record<string, unknown>[] {
+    const where = ['project_id = ?'];
+    const args: string[] = [projectId];
+    if (status) {
+      where.push('status = ?');
+      args.push(status);
+    }
+    if (filter.task_id) {
+      where.push('task_id = ?');
+      args.push(filter.task_id);
+    }
+    return this.db.prepare(`SELECT * FROM approvals WHERE ${where.join(' AND ')} ORDER BY created_at`).all(...args);
   }
 
   /** Valid, unexpired grants for a capability and target. */
@@ -821,12 +873,27 @@ export class Queries {
       .all<{ escalation_id: string; answer: string }>(projectId);
   }
 
-  escalations(projectId: string, status?: string): Record<string, unknown>[] {
-    return status
-      ? this.db
-          .prepare('SELECT * FROM escalations WHERE project_id = ? AND status = ? ORDER BY created_at')
-          .all(projectId, status)
-      : this.db.prepare('SELECT * FROM escalations WHERE project_id = ? ORDER BY created_at').all(projectId);
+  /** Escalations of the project, oldest first; by status and, for one task's or goal's record, by that. */
+  escalations(
+    projectId: string,
+    status?: string,
+    filter: { task_id?: string; goal_id?: string } = {},
+  ): Record<string, unknown>[] {
+    const where = ['project_id = ?'];
+    const args: string[] = [projectId];
+    if (status) {
+      where.push('status = ?');
+      args.push(status);
+    }
+    if (filter.task_id) {
+      where.push('task_id = ?');
+      args.push(filter.task_id);
+    }
+    if (filter.goal_id) {
+      where.push('goal_id = ?');
+      args.push(filter.goal_id);
+    }
+    return this.db.prepare(`SELECT * FROM escalations WHERE ${where.join(' AND ')} ORDER BY created_at`).all(...args);
   }
 
   /** Pause, resume and halt (M9, docs/frontend/PLAN.md §5.4). */
@@ -980,6 +1047,111 @@ export class Queries {
       .prepare('SELECT * FROM tasks WHERE project_id = ? AND goal_id = ? ORDER BY created_at, task_id')
       .all<TaskRow>(projectId, goalId)
       .map((r) => toTaskView(r, this.deps(r.task_id)));
+  }
+
+  /**
+   * What Friday did for a goal (plan M12.7), counted from its records and never estimated: the
+   * events that name the goal's tasks (verdicts, rework, approvals asked, policy refusals, lost
+   * and resumed attempts), the usage its attempts' hosts reported (the usage report's rows, so the
+   * same attempts and the same "last report wins" rule), and the Master Brain's calls for the
+   * goal. A figure nobody reported is null, never 0.
+   */
+  goalSummary(projectId: string, goalId: string): GoalSummary {
+    this.goal(projectId, goalId);
+    const tasks = this.goalTasks(projectId, goalId);
+    const verified = new Set<string>();
+    const counts = { claims_refused: 0, reworked: 0, held_for_human: 0, refused_by_policy: 0, lost: 0, recovered: 0 };
+    for (const ids of chunks(tasks.map((t) => t.task_id))) {
+      const marks = ids.map(() => '?').join(',');
+      // The reference index narrows the read to the goal's tasks first; the type list and the
+      // transition's origin are then judged on those rows alone.
+      const rows = this.db
+        .prepare(
+          `SELECT e.type AS type, r.ref_id AS task_id,
+                  json_extract(e.payload_json, '$.status') AS status,
+                  json_extract(e.payload_json, '$.decision') AS decision,
+                  json_extract(e.payload_json, '$.transition.from') AS from_status,
+                  json_extract(e.payload_json, '$.transition.to') AS to_status
+             FROM events e JOIN event_refs r ON r.event_id = e.event_id
+            WHERE e.project_id = ? AND r.ref_kind = 'task' AND r.ref_id IN (${marks})
+              AND (e.type IN ('verification.finished', 'task.rework', 'approval.requested', 'policy.evaluated', 'task.harness_lost')
+                   OR json_extract(e.payload_json, '$.transition.from') = 'HARNESS_LOST')
+            ORDER BY e.sequence`,
+        )
+        .all<GoalFactRow>(projectId, ...(ids as SqlValue[]));
+      for (const r of rows) {
+        switch (r.type) {
+          case 'verification.finished':
+            if (r.status === 'PASSED') verified.add(r.task_id);
+            else if (r.status === 'FAILED') counts.claims_refused += 1;
+            break;
+          case 'task.rework':
+            counts.reworked += 1;
+            break;
+          case 'approval.requested':
+            counts.held_for_human += 1;
+            break;
+          case 'policy.evaluated':
+            if (r.decision === 'deny') counts.refused_by_policy += 1;
+            break;
+          case 'task.harness_lost':
+            counts.lost += 1;
+            break;
+          default:
+            // A task that left HARNESS_LOST for work (resumed, or released for another attempt)
+            // is a recovered session; one cancelled there is not.
+            if (r.from_status === 'HARNESS_LOST' && r.to_status !== 'CANCELLED' && r.to_status !== 'ABANDONED')
+              counts.recovered += 1;
+        }
+      }
+    }
+
+    const usage = this.usageReport(projectId, { goalId });
+    const hosts = {
+      tokens: null as number | null,
+      tokens_reporters: 0,
+      cost_usd: null as number | null,
+      cost_reporters: 0,
+    };
+    for (const { host } of usage.rows) {
+      if (host.input_tokens !== null || host.output_tokens !== null) {
+        hosts.tokens = (hosts.tokens ?? 0) + (host.input_tokens ?? 0) + (host.output_tokens ?? 0);
+        hosts.tokens_reporters += 1;
+      }
+      if (host.cost_usd !== null) {
+        hosts.cost_usd = (hosts.cost_usd ?? 0) + host.cost_usd;
+        hosts.cost_reporters += 1;
+      }
+    }
+
+    const calls = this.modelCalls(projectId, { goalId, limit: 500 });
+    const known = calls.filter((c) => c.cost_usd !== null);
+    const round = (n: number | null) => (n === null ? null : Math.round(n * 1e6) / 1e6);
+    return {
+      tasks: {
+        total: tasks.filter((t) => t.status !== 'CANCELLED' && t.status !== 'ABANDONED').length,
+        verified: verified.size,
+      },
+      claims_refused: counts.claims_refused,
+      reworked: counts.reworked,
+      held_for_human: counts.held_for_human,
+      refused_by_policy: counts.refused_by_policy,
+      sessions_lost: counts.lost,
+      sessions_recovered: counts.recovered,
+      hosts: {
+        attempts: usage.totals.attempts,
+        reported: usage.totals.host_reported,
+        tokens: hosts.tokens,
+        tokens_reporters: hosts.tokens_reporters,
+        cost_usd: round(hosts.cost_usd),
+        cost_reporters: hosts.cost_reporters,
+      },
+      planning: {
+        calls: calls.length,
+        cost_usd: known.length ? round(known.reduce((sum, c) => sum + (c.cost_usd ?? 0), 0)) : null,
+        unknown_cost_calls: calls.length - known.length,
+      },
+    };
   }
 
   modelCalls(projectId: string, opts: { goalId?: string; limit?: number } = {}): ModelCallView[] {

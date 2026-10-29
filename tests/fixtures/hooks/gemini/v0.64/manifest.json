@@ -1,0 +1,24 @@
+{
+  "host": "gemini",
+  "host_version": "0.64",
+  "os": "any",
+  "written_at": "2026-10-18",
+  "recorded": false,
+  "source": "Written by hand from Gemini CLI's documented hook input and replies (its hooks reference and the hook runner's source at v0.64.0, read 2026-10-18), not recorded from a run. Replace with recordings after the live check (plan M8b.4).",
+  "fixtures": [
+    "AfterAgent",
+    "AfterTool",
+    "AfterTool.error",
+    "BeforeTool.mcp",
+    "BeforeTool.mcp-friday",
+    "BeforeTool.read_file",
+    "BeforeTool.replace",
+    "BeforeTool.run_shell_command",
+    "BeforeTool.run_shell_command.dir_path",
+    "BeforeTool.web_fetch",
+    "BeforeTool.write_file",
+    "BeforeTool.write_todos",
+    "SessionEnd",
+    "SessionStart"
+  ]
+}

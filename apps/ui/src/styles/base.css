@@ -1,4 +1,4 @@
-/* Base layer: reset, page, focus, Apple glass surfaces, Coucou pill buttons and tabs. */
+/* Base layer: reset, page, focus, glass surfaces (handoff Part 08 §3), reduced motion. */
 *,
 *::before,
 *::after {
@@ -8,18 +8,14 @@
 html,
 body {
   margin: 0;
-  width: 100%;
   height: 100%;
   background: var(--bg-obsidian);
-  color: var(--ink);
+  color: var(--color-slate-200);
   font-family: var(--font-sans);
   font-size: var(--text-base);
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
-  user-select: none;
-  cursor: default;
 }
 
 #app {
@@ -42,7 +38,7 @@ button {
 
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: 0.5;
 }
 
 :focus-visible {
@@ -51,11 +47,7 @@ button:disabled {
 }
 
 a {
-  color: var(--cyan);
-  text-decoration: none;
-}
-a:hover {
-  text-decoration: underline;
+  color: var(--color-cyan-glow);
 }
 
 code,
@@ -76,115 +68,73 @@ pre,
   border: 0;
 }
 
-/* Apple Pro Glass Card Surface */
-.glass-panel,
-.card {
-  position: relative;
-  background: var(--card);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid var(--hairline);
-  box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  border-radius: var(--radius-card);
-  overflow: hidden;
-}
-
-/* Coucou Card Radial Light Wash */
-.card.wash::after,
-.wash::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: radial-gradient(
-    280px 280px at 50% 130%,
-    var(--wash, rgba(255, 255, 255, 0.035)) 0%,
-    rgba(0, 0, 0, 0) 70%
-  );
-  pointer-events: none;
+/* Glass card surface */
+.glass-panel {
+  background: var(--bg-surface);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-md);
+  border-radius: var(--radius-md);
 }
 
 .glow-cyan {
-  border-color: var(--cyan);
-  box-shadow: 0 0 16px rgba(34, 211, 238, 0.3);
+  border-color: var(--color-cyan);
+  box-shadow: 0 0 16px rgba(6, 182, 212, 0.35);
 }
 
 .glow-amber {
-  border-color: var(--amber);
-  box-shadow: 0 0 16px rgba(245, 165, 36, 0.3);
+  border-color: var(--color-amber);
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.35);
 }
 
-/* ── Coucou Apple Pill Buttons ────────────────────────────────────────────── */
-
+/* Buttons */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  min-height: 28px;
-  padding: 6px 14px;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--ink-2);
-  font-family: var(--font-sans);
-  font-size: 12.5px;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-medium);
+  background: var(--bg-surface-elevated);
+  color: var(--color-slate-200);
+  font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  letter-spacing: -0.01em;
   white-space: nowrap;
-  cursor: default;
-  transition: transform 0.08s ease-out, background 0.12s ease-out, color 0.12s ease-out;
-}
-
-.btn:active:not(:disabled) {
-  transform: scale(0.94);
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
 }
 
 .btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.14);
-  color: var(--ink);
+  background: var(--bg-surface-active);
+  border-color: var(--border-strong);
 }
 
-.btn.primary,
 .btn-primary {
-  background: var(--ink);
-  color: #0b0c0e;
-  font-weight: var(--weight-semibold);
+  background: rgba(6, 182, 212, 0.18);
+  border-color: rgba(6, 182, 212, 0.6);
+  color: var(--color-white);
 }
 
-.btn.primary:hover:not(:disabled),
 .btn-primary:hover:not(:disabled) {
-  background: #ffffff;
-  color: #000000;
+  background: rgba(6, 182, 212, 0.3);
 }
 
-.btn.secondary,
-.btn-secondary {
-  background: rgba(255, 255, 255, 0.09);
-  color: var(--ink-2);
-}
-
-.btn.secondary:hover:not(:disabled),
-.btn-secondary:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.15);
-  color: var(--ink);
-}
-
-.btn.danger,
 .btn-danger {
-  background: rgba(244, 80, 94, 0.16);
-  color: var(--red-text);
-  border: 1px solid rgba(244, 80, 94, 0.28);
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.55);
 }
 
-.btn.danger:hover:not(:disabled),
 .btn-danger:hover:not(:disabled) {
-  background: rgba(244, 80, 94, 0.26);
+  background: rgba(239, 68, 68, 0.26);
 }
 
 .btn-ghost {
   background: transparent;
-  border: 0;
+  border-color: transparent;
 }
 
 .btn-ghost:hover:not(:disabled) {
@@ -192,103 +142,21 @@ pre,
 }
 
 .btn-icon {
-  width: 28px;
-  min-height: 28px;
+  width: 30px;
   padding: 0;
-  border-radius: 50%;
 }
 
-.icon-btn {
-  width: 20px;
-  height: 20px;
-  border: 0;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.07);
-  color: var(--dim-3);
-  display: grid;
-  place-items: center;
-  cursor: default;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-
-.icon-btn:hover {
-  background: rgba(255, 255, 255, 0.14);
-  color: var(--ink);
-}
-
-/* Coucou Keyboard Hint Badge */
-.kbd,
-.btn .kbd {
+.kbd {
   display: inline-block;
-  min-width: 16px;
-  padding: 1px 4px;
-  border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  min-width: 18px;
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-medium);
   font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 14px;
+  font-size: var(--text-micro);
+  line-height: 16px;
   text-align: center;
-  opacity: 0.65;
-}
-
-.btn.primary .kbd {
-  border: 1px solid rgba(0, 0, 0, 0.35);
-  color: #0b0c0e;
-}
-
-/* Coucou Apple Segmented Tabs */
-.tabs {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-
-.tab {
-  height: 24px;
-  padding: 0 10px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  background: transparent;
-  border-radius: 12px;
-  color: var(--dim-2);
-  font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: var(--weight-medium);
-  cursor: default;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-
-.tab:hover {
-  background: rgba(255, 255, 255, 0.07);
-  color: var(--ink);
-}
-
-.tab.on,
-.tab.active {
-  background: var(--tab-on);
-  color: var(--ink);
-  font-weight: var(--weight-semibold);
-}
-
-/* Diff Ticker Badges */
-.tick-count {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: var(--weight-semibold);
-  padding: 1px 7px;
-  border-radius: var(--radius-pill);
-}
-
-.tick-count.plus {
-  background: var(--diff-add-bg);
-  color: var(--diff-add-text);
-}
-
-.tick-count.minus {
-  background: var(--diff-del-bg);
-  color: var(--diff-del-text);
+  color: var(--color-slate-400);
 }
 
 .pill {
@@ -296,7 +164,7 @@ pre,
   align-items: center;
   gap: 4px;
   max-width: 100%;
-  padding: 2px 8px;
+  padding: 1px 8px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--border-medium);
   font-size: var(--text-caption);
@@ -307,16 +175,21 @@ pre,
 }
 
 .muted {
-  color: var(--dim);
+  color: var(--color-slate-400);
 }
 
 .scroll {
   overflow: auto;
   scrollbar-width: thin;
-  scrollbar-color: var(--border-medium) transparent;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
-/* Reduced motion support */
+/*
+ * Reduced motion: components take their durations from the tokens, so zeroing the tokens stops
+ * every transition; decorative loops check `.reduce-motion` themselves, and the springs, the
+ * mascot and the pulses read the same preference in code (plan §6). Hidden views use the
+ * `hidden` attribute (display: none), which stops their animations without any rule here.
+ */
 @media (prefers-reduced-motion: reduce) {
   :root:not(.motion-on) {
     --duration-fast: 0ms;

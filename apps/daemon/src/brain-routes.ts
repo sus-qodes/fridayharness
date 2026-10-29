@@ -119,6 +119,9 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
         .filter((e) => e.goal_id === goalId)
         .map(escalationView),
       model_calls: { count: calls.length, ...spend(calls) },
+      // What Friday did for the goal, from its records (plan M12.7): the card's line, the landing
+      // dialog's rows and `friday goal show` are built from this.
+      summary: state.q.goalSummary(pid, goalId),
     };
   };
 
@@ -174,15 +177,19 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
     const active = (goal.plan_id ? state.q.planVersions(goal.plan_id) : []).find((v) => v.status === 'ACTIVE');
     const trigger = typeof body.trigger === 'string' && body.trigger ? body.trigger : 'written by a human';
     let proposal: PlanProposal;
+    // The ceiling of each task's role (plan M12.2) is checked with the draft, so a human's plan is
+    // refused with the task and the ceiling named, as the planner's is; the version recorded
+    // carries the cut scope and its note on each task.
+    const bound = (t: Parameters<FridayState['boundPlanTask']>[0]) => state.boundPlanTask(t);
     if (active) {
-      const r = parseReplanDraft(existingTasks(active, liveTask))(body.draft);
+      const r = parseReplanDraft(existingTasks(active, liveTask), bound)(body.draft);
       if (!r.ok)
         throw new FridayError('schema_mismatch', `the revision is not valid: ${r.errors.join('; ')}`, {
           errors: r.errors,
         });
       proposal = proposalFromReplan(active, r.value, liveTask, { trigger });
     } else {
-      const r = parsePlanDraft(body.draft);
+      const r = parsePlanDraft(body.draft, bound);
       if (!r.ok)
         throw new FridayError('schema_mismatch', `the plan is not valid: ${r.errors.join('; ')}`, { errors: r.errors });
       proposal = proposalFromDraft(r.value, { trigger });

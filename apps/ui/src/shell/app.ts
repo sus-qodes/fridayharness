@@ -33,9 +33,7 @@ import { loadPrefs, startPrefsSync, watchPrefs } from '../store/prefs.js';
 import { createStore, type FridayStore, type ReactionKind } from '../store/state.js';
 import { Dispatcher } from '../sync/dispatcher.js';
 import { SyncEngine, UNREACHABLE_MESSAGE } from '../sync/sync-engine.js';
-import { button, h, setText } from '../ui/dom.js';
-import { icon } from '../ui/svg.js';
-import { decisionItems } from '../governance/tray.js';
+import { h } from '../ui/dom.js';
 import { Keyboard } from '../ui/keys.js';
 import { errorDetail, makeAct } from './act.js';
 import { mountBanners, mountChecklist } from './banners.js';
@@ -55,7 +53,15 @@ import { focusQuietly, LayerStack } from './layers.js';
 import { type LoginReason, type LoginScreenOptions, loginScreen } from './login-screen.js';
 import { mountModalHost } from './modal-host.js';
 import { createToastHost, type ToastHost } from './toast.js';
-import { mountCoucouSettingsHub } from '../panels/coucou-settings.js';
+
+/**
+ * What the shell lends the areas it mounts. The header's *Waiting for you* count and the browser
+ * pill's *N waiting* chip are two doors to one place, so they share one function (plan §7.5).
+ */
+export interface ShellHooks {
+  /** Shows the *Waiting for you* rail: scrolled to its top and given the keyboard. */
+  onShowWaiting: () => void;
+}
 
 /** What the areas contribute; `main.ts` (and the desktop entry) fill it in. */
 export interface AreaSet {
@@ -68,9 +74,13 @@ export interface AreaSet {
   /** The command palette (an overlay). */
   palette: (ctx: AppContext, container: HTMLElement) => Component;
   /** The decisions tray: the right rail. */
-  tray: (ctx: AppContext, container: HTMLElement, opts?: { onCollapse?: () => void }) => Component;
-  /** The in-page Notch at the top centre (browser only; the desktop's Studio window draws none). */
-  notch?: (ctx: AppContext, container: HTMLElement) => Component;
+  tray: (ctx: AppContext, container: HTMLElement) => Component;
+  /**
+   * The in-page Notch at the top centre (browser only; the desktop's Studio window draws none). It
+   * gets the shell's hooks, so its *N waiting* chip shows the rail through the same function as the
+   * header's count.
+   */
+  notch?: (ctx: AppContext, container: HTMLElement, hooks: ShellHooks) => Component;
   /** The getting-started checklist, shown under the header until dismissed. */
   gettingStarted?: (ctx: AppContext) => Component;
   /** Background services (sound, notifier); each returns the function that stops it. */
@@ -128,16 +138,7 @@ export function createAppContext(o: AppContextOptions): AppContext {
   };
 }
 
-export type ShellRegion =
-  | 'top'
-  | 'stage'
-  | 'studio'
-  | 'notch'
-  | 'dock'
-  | 'rail'
-  | 'palette'
-  | 'overlays'
-  | 'settingsHub';
+export type ShellRegion = 'top' | 'stage' | 'studio' | 'notch' | 'dock' | 'rail' | 'palette' | 'overlays';
 
 export interface ShellOptions {
   /** The connection strip's "Try again" (the sync engine's `retry`). */
@@ -182,55 +183,13 @@ export function mountShell(
   const studio = h('div', { class: 'sh-studio' });
   const notch = h('div', { class: 'sh-notch-layer' });
   const dock = h('div', { class: 'sh-dock-layer' });
-  const settingsHub = h('div', { class: 'sh-settings-hub' });
-  const stage = h('div', { class: 'sh-stage' }, studio, settingsHub, notch, dock);
+  const stage = h('div', { class: 'sh-stage' }, studio, notch, dock);
   const rail = h('aside', { class: ['sh-rail', 'scroll'], tabIndex: -1, aria: { label: 'Waiting for you' } });
   const main = h('div', { class: 'sh-main' }, stage, rail);
   const palette = h('div', { class: 'sh-palette-layer' });
   const overlays = h('div', { class: 'sh-overlays' }, palette, services.confirms.el, services.toasts.el);
   const app = h('div', { class: 'sh-app' }, top, main, overlays);
   root.append(app);
-
-  const expandBadge = h('span', { class: 'badge badge-warn gv-tray-count' }, '0');
-  expandBadge.hidden = true;
-  let railCollapsed = false;
-  try {
-    railCollapsed = localStorage.getItem('friday.rail.collapsed') === 'true';
-  } catch {}
-
-  const expandBtn = button(
-    [icon('chevronLeft', 14), h('span', 'Waiting for you'), expandBadge],
-    () => setRailCollapsed(false),
-    {
-      class: 'sh-rail-expand-btn',
-      ariaLabel: 'Expand Waiting for you panel',
-      title: 'Expand Waiting for you panel (Ctrl+\\)',
-    },
-  );
-  expandBtn.style.display = 'none';
-  stage.appendChild(expandBtn);
-
-  function setRailCollapsed(collapsed: boolean): void {
-    railCollapsed = collapsed;
-    rail.classList.toggle('sh-rail-collapsed', collapsed);
-    const isSettings = ctx.store.select('ui').activeView === 'settings';
-    expandBtn.style.display = collapsed && !isSettings ? 'inline-flex' : 'none';
-    try {
-      localStorage.setItem('friday.rail.collapsed', String(collapsed));
-    } catch {}
-    if (!collapsed) {
-      focusQuietly(rail);
-    }
-  }
-
-  function updateExpandBadge(): void {
-    const board = ctx.store.select('board');
-    const items = decisionItems(board, Date.now());
-    setText(expandBadge, String(items.length));
-    expandBadge.hidden = items.length === 0;
-  }
-  stops.push(ctx.store.subscribe('board', () => updateExpandBadge()));
-  updateExpandBadge();
 
   function mount(what: string, container: HTMLElement, make: () => Component, before?: Node | null): void {
     try {
@@ -242,107 +201,28 @@ export function mountShell(
     }
   }
 
-  mount('The header', top, () =>
-    mountHeader(ctx, {
-      onShowWaiting: () => {
-        if (railCollapsed) {
-          setRailCollapsed(false);
-        }
-        rail.scrollTop = 0;
-        focusQuietly(rail);
-      },
-    }),
-  );
+  // One way to the rail for every door that promises it: the header's count and the pill's chip.
+  const hooks: ShellHooks = {
+    onShowWaiting: () => {
+      rail.scrollTop = 0;
+      focusQuietly(rail);
+    },
+  };
+
+  mount('The header', top, () => mountHeader(ctx, { onShowWaiting: hooks.onShowWaiting }));
   mount('The banners', top, () => mountBanners(ctx, { reload: opts.reload }));
   mount('The connection strip', top, () => mountConnectionStrip(ctx.store, { onRetry: opts.onRetry }));
   mount('The Studio', studio, () => areas.studio(ctx, studio));
-  mount('The Settings Hub', settingsHub, () => mountCoucouSettingsHub(ctx));
-  mount('The decisions', rail, () => areas.tray(ctx, rail, { onCollapse: () => setRailCollapsed(true) }));
+  mount('The decisions', rail, () => areas.tray(ctx, rail));
   const checklistArea = areas.gettingStarted;
   if (checklistArea) mount('Getting started', rail, () => mountChecklist(ctx, checklistArea));
   mount('The dock', dock, () => areas.dock(ctx, dock));
   mount('The palette', palette, () => areas.palette(ctx, palette));
   const notchArea = areas.notch;
-  if (notchArea && opts.notch !== false) mount('The Notch', notch, () => notchArea(ctx, notch));
+  if (notchArea && opts.notch !== false) mount('The Notch', notch, () => notchArea(ctx, notch, hooks));
   // Drawers and modals sit under the confirm dialogs and the toasts.
   mount('The drawers', overlays, () => mountDrawerHost(ctx, services.layers), services.confirms.el);
   mount('The dialogs', overlays, () => mountModalHost(ctx, services.layers), services.confirms.el);
-
-  let popSettingsKeys: (() => void) | null = null;
-  const popGlobalKeys = ctx.keys.push({
-    name: 'shell-view',
-    bindings: [
-      {
-        key: ',',
-        ctrl: true,
-        run: () => {
-          const cur = ctx.store.select('ui').activeView;
-          ctx.store.update('ui', (u) => ({ ...u, activeView: cur === 'settings' ? 'canvas' : 'settings' }));
-        },
-        description: 'Toggle Settings Hub',
-      },
-      {
-        key: '\\',
-        ctrl: true,
-        run: () => setRailCollapsed(!railCollapsed),
-        description: 'Toggle Waiting for you panel',
-      },
-      {
-        key: 'b',
-        ctrl: true,
-        run: () => setRailCollapsed(!railCollapsed),
-        description: 'Toggle Waiting for you panel',
-      },
-    ],
-  });
-  stops.push(popGlobalKeys);
-
-  function renderView(): void {
-    const isSettings = ctx.store.select('ui').activeView === 'settings';
-    app.classList.toggle('sh-view-settings', isSettings);
-    stage.classList.toggle('sh-settings-mode', isSettings);
-    studio.hidden = isSettings;
-    dock.hidden = isSettings;
-    notch.hidden = isSettings;
-    rail.hidden = isSettings;
-    settingsHub.hidden = !isSettings;
-    expandBtn.style.display = railCollapsed && !isSettings ? 'inline-flex' : 'none';
-
-    if (railCollapsed) {
-      setRailCollapsed(true);
-    }
-
-    if (isSettings) {
-      if (!popSettingsKeys) {
-        popSettingsKeys = ctx.keys.push({
-          name: 'settings-hub',
-          bindings: [
-            {
-              key: 'Escape',
-              inFields: false,
-              run: () => {
-                ctx.store.update('ui', (u) => ({ ...u, activeView: 'canvas' }));
-              },
-              description: 'Return to Canvas',
-            },
-          ],
-        });
-      }
-    } else {
-      if (popSettingsKeys) {
-        popSettingsKeys();
-        popSettingsKeys = null;
-      }
-    }
-  }
-  stops.push(() => {
-    if (popSettingsKeys) {
-      popSettingsKeys();
-      popSettingsKeys = null;
-    }
-  });
-  stops.push(ctx.store.subscribe('ui', renderView));
-  renderView();
 
   for (const start of areas.start ?? []) {
     try {
@@ -355,7 +235,7 @@ export function mountShell(
   let destroyed = false;
   return {
     el: app,
-    regions: { top, stage, studio, notch, dock, rail, palette, overlays, settingsHub },
+    regions: { top, stage, studio, notch, dock, rail, palette, overlays },
     destroy() {
       if (destroyed) return;
       destroyed = true;

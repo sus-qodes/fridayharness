@@ -65,12 +65,36 @@
         "null"
       ]
     },
+    "continue_session": {
+      "default": null,
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 200
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "note": {
       "default": null,
       "anyOf": [
         {
           "type": "string",
           "maxLength": 2000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "budget_usd": {
+      "default": null,
+      "anyOf": [
+        {
+          "type": "number",
+          "exclusiveMinimum": 0
         },
         {
           "type": "null"

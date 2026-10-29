@@ -164,6 +164,8 @@ function requestCapability(deps: RpcDeps, c: Caller, p: ParsedParamsOf<'permissi
                 scope: task.scope,
                 kind: task.kind,
                 teams: effective?.teams[state.q.findAgent(c.agent_id)?.role ?? ''] ?? [],
+                // The ceiling of the task is its own role's team scope (plan M12.2).
+                ceiling: (task.role ? effective?.teams[task.role] : undefined) ?? [],
               }
             : null,
           ctx: {
@@ -320,19 +322,29 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
         { task_id: p.task_id, next: p.next },
         { idempotency_key: p.idempotency_key, head },
       );
-      const context = await deps.compile(
-        {
-          recipient: { kind: 'agent', id: c.agent_id, harness_id: harnessId, run_id: out.run_id },
-          task_id: out.task.task_id,
-          purpose: 'task_claim',
-        },
-        { kind: 'agent', id: c.agent_id },
-      );
+      // The claim is committed: the agent holds the task whatever happens to its context. A packet
+      // that cannot be compiled or recorded (the context evals of plan M12.6 found one whose record
+      // was too large) must not turn the claim into an error that leaves the agent holding a task
+      // it was told nothing about; it gets the claim, the reason, and the way to ask again.
+      let context: ContextPacket | null = null;
+      let note: string | null = null;
+      try {
+        context = await deps.compile(
+          {
+            recipient: { kind: 'agent', id: c.agent_id, harness_id: harnessId, run_id: out.run_id },
+            task_id: out.task.task_id,
+            purpose: 'task_claim',
+          },
+          { kind: 'agent', id: c.agent_id },
+        );
+      } catch (e) {
+        note = `the task is yours, but its context could not be delivered: ${(e as Error).message}. Ask for it with friday_request_context.`;
+      }
       // Friday's model suggestion for this run (ADR-0031 §6): advisory unless the harness applies it.
       const run = state.q.findRun(out.run_id);
       const decision = run?.routing_decision_id ? state.q.routingDecision(run.routing_decision_id) : undefined;
       const routing = decision ? { model: decision.model, binding: decision.binding, reason: decision.reason } : null;
-      return { ...out, context, routing };
+      return { ...out, context, routing, note };
     }
     case 'task.update': {
       const p = METHODS[method].params.parse(raw);
@@ -419,6 +431,17 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
           reported.model,
           typeof reported.basis === 'string' ? reported.basis : 'reported',
         );
+      }
+      // The task's spending cap (plan M11.5): a `host.usage` whose cost reached
+      // `routing.task_budget_usd` ends the attempt, once. The cap is read from the project's
+      // configuration at each report, so a changed setting applies to the next one; a report
+      // without a cost never trips it, and the state service decides the rest.
+      if (p.event_type === 'host.usage' && p.run_id) {
+        state.enforceTaskBudget(pid, {
+          run_id: p.run_id,
+          cost_usd: (p.data as { cost_usd?: unknown } | undefined)?.cost_usd,
+          cap_usd: deps.project.config.routing.task_budget_usd ?? null,
+        });
       }
       const paths = (p.data as { changed_paths?: unknown } | undefined)?.changed_paths;
       if (p.run_id && Array.isArray(paths)) {

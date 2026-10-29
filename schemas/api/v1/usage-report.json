@@ -42,6 +42,8 @@
                   "claude-code",
                   "codex",
                   "cursor",
+                  "antigravity",
+                  "gemini",
                   "october",
                   "generic"
                 ]
@@ -206,6 +208,12 @@
                   "null"
                 ]
               },
+              "cap_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
               "turns": {
                 "anyOf": [
                   {
@@ -232,6 +240,7 @@
               "cache_read_input_tokens",
               "cache_creation_input_tokens",
               "cost_usd",
+              "cap_usd",
               "turns",
               "model"
             ]

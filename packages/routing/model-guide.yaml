@@ -94,6 +94,7 @@ models:
       test_generation: 0.68
       review: 0.6
       security_analysis: 0.55
+    cost_class: cheap
     notes: small and fast; cheapest
   - id: gpt-5.6-luna
     provider: openai

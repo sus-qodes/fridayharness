@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { type AgentOptions, type AgentProfile, FridayError } from '@friday/protocol';
+import { type AgentHostName, type AgentOptions, type AgentProfile, FridayError } from '@friday/protocol';
 import { writePrivateFile } from '@friday/sdk';
 
 /**
@@ -15,20 +15,45 @@ const MAX_PROFILES = 32;
 export const AGENT_KEY = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const ROLE = /^[a-z][a-z0-9_-]{0,31}$/;
 const WORD = /^[a-z][a-z0-9-]{1,15}$/;
+/** A model id as a registry or a local server names one (`qwen2.5:7b`): no leading `-`, so it never becomes an option. */
+const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/;
+/** The hosts a remembered agent may name. */
+const PROFILE_HOSTS: readonly AgentHostName[] = ['claude-code', 'codex', 'cursor', 'gemini'];
 
 /**
  * Options per host, validated against enums or strict patterns with no leading `-`, so nothing a
  * request sends can become another command-line option of the host (review SEC-12).
  */
-export function validateOptions(host: 'claude-code' | 'codex', raw: unknown): AgentOptions {
+export function validateOptions(host: AgentHostName, raw: unknown): AgentOptions {
   const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const out: AgentOptions = {};
   const bad = (name: string): never => {
     throw new FridayError('invalid_request', `option ${name} is not valid for ${host}`);
   };
+  // The Cursor CLI and Gemini CLI take none of these: their models come from routing too.
+  if (host === 'cursor' || host === 'gemini') {
+    for (const k of ['effort', 'max_budget_usd', 'sandbox', 'windows_sandbox', 'service_tier', 'cost_class', 'models'])
+      if (o[k] !== undefined) bad(k);
+    return out;
+  }
   if (o.effort !== undefined) {
     if (typeof o.effort !== 'string' || !WORD.test(o.effort)) bad('effort');
     out.effort = o.effort as string;
+  }
+  if (o.cost_class !== undefined) {
+    if (o.cost_class !== 'free' && o.cost_class !== 'cheap' && o.cost_class !== 'standard') bad('cost_class');
+    out.cost_class = o.cost_class as AgentOptions['cost_class'];
+  }
+  if (o.models !== undefined) {
+    const ms = o.models;
+    if (
+      !Array.isArray(ms) ||
+      ms.length === 0 ||
+      ms.length > 8 ||
+      !ms.every((m) => typeof m === 'string' && MODEL.test(m))
+    )
+      bad('models');
+    out.models = [...(ms as string[])];
   }
   if (host === 'claude-code') {
     const budget = o.max_budget_usd ?? 1;
@@ -53,9 +78,11 @@ export function validateOptions(host: 'claude-code' | 'codex', raw: unknown): Ag
 }
 
 /** The command-line flags of `friday harness run` for these options (`--name=value`, one argument each). */
-export function optionFlags(host: 'claude-code' | 'codex', o: AgentOptions): string[] {
+export function optionFlags(host: AgentHostName, o: AgentOptions): string[] {
   const flags: string[] = [];
   if (o.effort) flags.push(`--effort=${o.effort}`);
+  if (o.cost_class) flags.push(`--cost-class=${o.cost_class}`);
+  if (o.models?.length) flags.push(`--models=${o.models.join(',')}`);
   if (host === 'claude-code' && o.max_budget_usd !== undefined) flags.push(`--max-budget-usd=${o.max_budget_usd}`);
   if (host === 'codex') {
     if (o.sandbox) flags.push(`--sandbox=${o.sandbox}`);
@@ -77,15 +104,16 @@ export class AgentProfiles {
       const out: AgentProfile[] = [];
       for (const a of data.agents.slice(0, MAX_PROFILES)) {
         const p = a as Partial<AgentProfile>;
-        if (!p || (p.host !== 'claude-code' && p.host !== 'codex')) continue;
+        const host = PROFILE_HOSTS.find((h) => h === p?.host);
+        if (!p || !host) continue;
         if (typeof p.agent_key !== 'string' || !AGENT_KEY.test(p.agent_key)) continue;
         if (typeof p.role !== 'string' || !ROLE.test(p.role)) continue;
         try {
           out.push({
             agent_key: p.agent_key,
-            host: p.host,
+            host,
             role: p.role,
-            options: validateOptions(p.host, p.options),
+            options: validateOptions(host, p.options),
             autostart: p.autostart === true,
             updated_at: typeof p.updated_at === 'string' ? p.updated_at : new Date(0).toISOString(),
           });

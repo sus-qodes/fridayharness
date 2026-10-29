@@ -16,6 +16,7 @@ import {
   hookLevel,
   SPAWN_MIN,
 } from './detect.js';
+import { cursorRunsFriday } from './hooks/hosts/cursor.js';
 import { PRE_TOOL_MATCHER } from './hooks/types.js';
 
 /** Same shape as the CLI's doctor results (the CLI renders them). */
@@ -348,6 +349,18 @@ export async function claudeDoctor(ref: ProjectRef, opts: ClaudeDoctorOptions = 
       ? { id: 'cc.skill', status: 'ok', message: 'friday skill present' }
       : { id: 'cc.skill', status: 'warn', message: 'the friday skill is missing', fix: CONFIG_FIX },
   );
+
+  // Cursor runs these hooks too (its import of Claude Code's files, on by default). Without
+  // Friday's own Cursor hooks, nothing but the launcher's protected-file rules judges its calls.
+  if (existsSync(path.join(root, '.cursor')) && !cursorRunsFriday(root)) {
+    checks.push({
+      id: 'cc.cursor',
+      status: 'warn',
+      message:
+        "this project has a .cursor folder without Friday's Cursor hooks: opened in Cursor, its calls reach Friday only through these Claude Code hooks, where Friday applies its protected-file rules alone (no task scope, no record)",
+      fix: 'run "friday harness config cursor"',
+    });
+  }
 
   const info = readInstallInfo(opts.env);
   const mcpEntry = opts.env?.FRIDAY_MCP_ENTRY ?? info?.mcp_server_entry ?? undefined;

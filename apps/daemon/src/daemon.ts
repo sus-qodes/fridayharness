@@ -7,11 +7,13 @@ import { type ExecutionProfile, ProcessGroups } from '@friday/execution';
 import { GitRoot, rootKey, worktreesDir } from '@friday/git';
 import type { PlannerModel } from '@friday/planner';
 import { type Actor, API_VERSION, type ContextPacket, FridayError, PROTOCOL_VERSIONS } from '@friday/protocol';
+import { loadGuide, type ModelRecord, type ModelRecordInput, mergeModels, type RoutingSettings } from '@friday/routing';
 import {
   type DaemonDiscovery,
   ensurePrivateDir,
   FRIDAY_DIR,
   FRIDAY_VERSION,
+  type FridayConfig,
   loadProject,
   type ProjectRef,
   privateDirFor,
@@ -22,6 +24,7 @@ import { serve } from '@hono/node-server';
 import type { Hono } from 'hono';
 import { buildApp } from './app.js';
 import { type BrainHandle, createMasterBrain } from './brain.js';
+import { reloadingConfig } from './config-reload.js';
 import { type CompileInput, createContextService } from './context.js';
 import { ControlManager } from './control.js';
 import { profileCache } from './execution.js';
@@ -77,6 +80,7 @@ export interface DaemonOptions {
 
 export interface DaemonContext {
   state: FridayState;
+  /** The project; its `config` is the configuration in force, read again when config.yaml changes (plan M11.2). */
   project: ProjectRef;
   privateDir: string;
   logger: Logger;
@@ -120,6 +124,53 @@ export interface Daemon extends DaemonContext {
   close(reason?: string): Promise<void>;
   /** Resolves when the daemon has fully stopped (after close or an admin shutdown). */
   closed: Promise<void>;
+}
+
+/**
+ * The state's settings that follow config.yaml while Friday runs: the state reads each where it
+ * uses it, so a reload assigns them in place (plan M11.2). The lease timers are not among them.
+ */
+function stateSettings(cfg: FridayConfig): Partial<StateConfig> {
+  return {
+    requireEnforcingHooks: cfg.security.require_enforcing_hooks,
+    reservationTtlMs: cfg.master_brain.reservation_ttl_ms,
+    // The spending cap per task (plan M11.5), carried by every `task.start` as `budget_usd`.
+    taskBudgetUsd: cfg.routing.task_budget_usd ?? null,
+    allowBroadcast: cfg.communication.allow_broadcast,
+    messageReservationMs: cfg.communication.delivery_reservation_ms,
+    messageMaxAttempts: cfg.communication.max_delivery_attempts,
+    messageTtlMs: cfg.communication.message_ttl_ms,
+    blockingReplyMs: cfg.communication.blocking_reply_ms,
+    maxOpenPerRecipient: cfg.communication.max_open_per_recipient,
+    fileReservationTtlMs: cfg.reservations.ttl_ms,
+  };
+}
+
+/**
+ * The routing registry a configuration gives: Friday's priors, the project's models and, when the
+ * Master Brain plans on this machine, its local model (plan M12.1); throws on a bad record.
+ */
+function routingRegistry(cfg: FridayConfig): ModelRecord[] {
+  return mergeModels(loadGuide().models, cfg.routing.models as ModelRecordInput[], cfg.master_brain);
+}
+
+/**
+ * Routing copied its settings and registry when it was made (routing.ts); a changed config.yaml
+ * brings the one instance every reader holds up to date in place, so the next decision uses it.
+ */
+function applyRouting(routing: RoutingService, cfg: FridayConfig): void {
+  const r = cfg.routing;
+  Object.assign(routing.settings, {
+    mode: r.mode,
+    optimize: r.optimize,
+    default_model: r.default_model,
+    must_use_local: r.must_use_local,
+    prefer_cheaper_if_score_delta_below: r.prefer_cheaper_if_score_delta_below,
+    low_confidence: r.low_confidence,
+    min_samples: r.min_samples,
+    sensitive: r.sensitive,
+  } satisfies RoutingSettings);
+  routing.models.splice(0, routing.models.length, ...routingRegistry(cfg));
 }
 
 function pidAlive(pid: number): boolean {
@@ -179,8 +230,10 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   const gitRoot = await GitRoot.open(project.root).catch(() => null);
   const head = gitRoot ? ((await gitRoot.refs().catch(() => null))?.head ?? null) : null;
   const worktreeMode = project.config.worktrees.mode === 'per_task' && head ? 'per_task' : 'off';
-  // config.yaml is read only at start; the board says when it changed since (plan M9 §5.3).
-  const configHash = fileHasher(path.join(fridayDir, 'config.yaml'));
+  // config.yaml is read again when it changes (`reloadingConfig` below, plan M11.2); the board and
+  // `friday status` name the changed keys that still wait for a restart.
+  const configFile = path.join(fridayDir, 'config.yaml');
+  const configHash = fileHasher(configFile);
 
   // The project's own policy (ADR-0028): what tracked files tighten applies now, what they loosen
   // only once this clone trusted exactly that.
@@ -198,18 +251,10 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     ...(leases.max_delivery_attempts ? { maxDeliveryAttempts: leases.max_delivery_attempts } : {}),
     // Sessions below the project's enforcement requirement cannot take work (review F09).
     enforcementRequired: policy.enforcement_required,
-    requireEnforcingHooks: project.config.security.require_enforcing_hooks,
-    reservationTtlMs: project.config.master_brain.reservation_ttl_ms,
-    allowBroadcast: project.config.communication.allow_broadcast,
-    messageReservationMs: project.config.communication.delivery_reservation_ms,
-    messageMaxAttempts: project.config.communication.max_delivery_attempts,
-    messageTtlMs: project.config.communication.message_ttl_ms,
-    blockingReplyMs: project.config.communication.blocking_reply_ms,
-    maxOpenPerRecipient: project.config.communication.max_open_per_recipient,
+    ...stateSettings(project.config),
     worktreeMode,
     // This clone's worktree folder: a worktree recorded anywhere else is another clone's (review F08).
     worktreeRoot: gitRoot ? path.join(worktreesDir(env), rootKey(gitRoot.root)) : null,
-    fileReservationTtlMs: project.config.reservations.ttl_ms,
     ...opts.state,
   };
 
@@ -247,6 +292,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
         });
 
   // Read again whenever the policy files change, so what they tighten applies at once (LESSONS D-43).
+  let policyReason: string | null = null;
   const policies = reloadingPolicy({
     projectRoot: project.root,
     initial: policy,
@@ -255,10 +301,14 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       policy = p;
       (state.config as { enforcementRequired: StateConfig['enforcementRequired'] }).enforcementRequired =
         p.enforcement_required;
-      logger.info('policy reloaded', { why, version: p.version, trusted: p.trusted, errors: p.errors.length });
+      logger.info('policy reloaded', {
+        why: policyReason ?? why,
+        version: p.version,
+        trusted: p.trusted,
+        errors: p.errors.length,
+      });
     },
   });
-  const currentPolicy = () => policies.current();
 
   state.ensureProject({ project_id: project.project_id, name: project.name, root_path: project.root });
 
@@ -304,6 +354,50 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   );
   // READY tasks whose question was never answered (the daemon stopped meanwhile) are asked again.
   void laya.sweep().catch((err) => logger.warn('asking Laya again failed', { message: (err as Error).message }));
+  // config.yaml, read again whenever it changes (plan M11.2): `project.config`, which every service
+  // holds, becomes the configuration in force, so a key read where it is used applies at the next
+  // use; the keys captured at start keep their start values and are named as needing a restart.
+  const configs = reloadingConfig({
+    file: configFile,
+    initial: project.config,
+    check: (next) => void routingRegistry(next),
+    onApply: (change) => {
+      project.config = change.config;
+      // The state reads these where it uses them; settings a caller fixed (tests) stay as given.
+      const live = stateSettings(change.config);
+      for (const k of Object.keys(opts.state ?? {}) as (keyof StateConfig)[]) delete live[k];
+      Object.assign(state.config, live);
+      applyRouting(routing, change.config);
+      // What config.yaml tightens or loosens is part of the policy: read again, under the trust rule.
+      policyReason = 'config.yaml changed';
+      try {
+        policies.reload();
+      } finally {
+        policyReason = null;
+      }
+      const detail = { applied: change.applied, restart_needed: change.restart_needed, hash: change.hash };
+      logger.info('config.yaml read again', detail);
+      try {
+        state.recordObservation(project.project_id, { kind: 'system', id: 'daemon' }, 'config.reloaded', detail);
+      } catch (e) {
+        logger.error('config.reloaded was not recorded', { message: (e as Error).message });
+      }
+    },
+    onError: (error) => logger.error('config.yaml not applied; the settings in force are unchanged', { error }),
+  });
+  const currentPolicy = () => {
+    // The file first: what it changed is part of the policy read next.
+    configs.current();
+    return policies.current();
+  };
+  // The ceiling on delegated work (plan M12.2): every plan proposed or approved is bounded by the
+  // team scopes of the effective policy as it stands at that moment, so a tightened policy applies
+  // to the next plan without a restart.
+  state.planBounds = () => ({ teams: currentPolicy().teams });
+  // What each agent's work costs, for a rework that escalates to a stronger agent (plan M13.3).
+  state.costClassOf = (task, agentId) => routing.fitFor(task, agentId)?.cost_class ?? null;
+  // A rework continues a session only under the policy its packet was compiled under (plan M13.2).
+  state.policyVersion = () => currentPolicy().version ?? null;
   // Every check's and operation's process tree is a group that ends with it (review F07).
   const groups = new ProcessGroups(env);
   // Set once the execution gateway exists: a task's operations stop before its worktree is reused.
@@ -355,8 +449,13 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     logger,
     workspaces,
     settings: {
-      maxRetries: project.config.recovery.max_retries,
-      maxSameErrorRetries: project.config.recovery.max_same_error_retries,
+      // Read where they are used: a change to `recovery` in config.yaml decides the next assessment.
+      get maxRetries() {
+        return project.config.recovery.max_retries;
+      },
+      get maxSameErrorRetries() {
+        return project.config.recovery.max_same_error_retries;
+      },
       reconnectWindowMs: state.config.reconnectWindowMs,
     },
   });
@@ -413,7 +512,11 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   quiesce = (taskId, reason) => operations.stopTask(taskId, reason);
   for (const id of operations.sweep()) logger.warn('operation interrupted at start', { operation_run_id: id });
   // Automatic verification, once this clone trusted it (ADR-0029 §6): a claim is verified at once.
-  const verify = (taskId: string, actor: Actor) => (opts.verify ?? runVerification)(ctx, taskId, actor);
+  const verify = (taskId: string, actor: Actor) => {
+    // A human's request reads the configured checks before anything consults the policy (verify.ts).
+    configs.current();
+    return (opts.verify ?? runVerification)(ctx, taskId, actor);
+  };
   const AUTO: Actor = { kind: 'system', id: 'auto-verification' };
   const autoVerify = (taskId: string) =>
     verify(taskId, AUTO).catch((e: unknown) =>
@@ -478,15 +581,18 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     ui: openUiBundle(opts.uiDir),
     uiAuth,
     control: new ControlManager({ state, project, logger, operations, recovering: (t) => recovery.isBusy(t) }),
-    uiInfo: () => ({
-      has_commit: Boolean(head),
-      worktrees_mode: worktreeMode,
-      config: { loaded_hash: configHash.loaded, current_hash: configHash.current() },
-      auto_verification: autoVerifies(),
-      // Whether the project's loosening applies on this clone: the rail's "Policy change not yet
-      // trusted" row and the checklist's item rest on it (M9k.8).
-      policy_trusted: currentPolicy().trusted,
-    }),
+    uiInfo: () => {
+      configs.current();
+      return {
+        has_commit: Boolean(head),
+        worktrees_mode: worktreeMode,
+        config: { loaded_hash: configHash.loaded, current_hash: configHash.current(), changes: configs.changes() },
+        auto_verification: autoVerifies(),
+        // Whether the project's loosening applies on this clone: the rail's "Policy change not yet
+        // trusted" row and the checklist's item rest on it (M9k.8).
+        policy_trusted: currentPolicy().trusted,
+      };
+    },
     instanceId,
     daemonVersion: FRIDAY_VERSION,
     port: () => port,
@@ -611,6 +717,12 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
               // Recording is best effort; the hold is what matters.
             }
           }
+          // A changed config.yaml applies within a second even while nothing else reads it.
+          try {
+            configs.current();
+          } catch (e) {
+            logger.error('reading config.yaml again failed', { message: (e as Error).message });
+          }
           try {
             const r = tick();
             // Runs still waiting for a worktree (after a restart or a failure) are prepared again.
@@ -626,7 +738,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
               r.terminated.length ||
               r.declined.length ||
               r.messages_escalated.length ||
-              r.messages_replied.length
+              r.messages_replied.length ||
+              r.budget_stopped.length
             )
               logger.info('lease tick', r);
             if (r.messages_reply_failed.length)

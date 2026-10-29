@@ -54,7 +54,7 @@ function searchInput(tool: string, cls: SensitiveClass): Record<string, unknown>
   return { pattern: tool === 'Glob' ? '**/*' : 'needle', ...where[cls] };
 }
 
-const SHELL: Record<'Bash' | 'PowerShell', Partial<Record<SensitiveClass, string>>> = {
+const SHELL: Record<'Bash' | 'PowerShell' | 'Shell', Partial<Record<SensitiveClass, string>>> = {
   Bash: {
     'friday.private': 'cat ~/.local/state/friday/projects/proj-x/operator.token',
     'friday.runtime': 'sqlite3 .friday/project.db .dump',
@@ -65,7 +65,61 @@ const SHELL: Record<'Bash' | 'PowerShell', Partial<Record<SensitiveClass, string
     'friday.runtime': 'Get-Content .friday\\run\\daemon.json',
     secrets: 'Get-Content .env.local',
   },
+  // Another host's shell, whose dialect its hook does not say (Cursor, Antigravity, Gemini CLI).
+  Shell: {
+    'friday.private': 'type %LOCALAPPDATA%\\Friday\\projects\\proj-x\\bootstrap.token',
+    'friday.runtime': 'cat .friday/sessions/s.json',
+    secrets: 'Get-Content config/.env',
+    // A command that changes into .git, then reads by a relative name.
+    'git.internal': 'cd .git && cat config',
+  },
 };
+
+describe('the folder a command runs in and the folder it changes into', () => {
+  it('denies a command run inside, or changing into, .friday or .git, for every shell tool', () => {
+    for (const tool of ['Bash', 'PowerShell', 'Shell'] as const) {
+      for (const command of [
+        'cd .friday; cat logs/daemon.log',
+        'cd .friday && type sessions\\x.json',
+        'Set-Location .\\.friday; Get-Content run\\daemon.json',
+        'pushd ./.git && cat config',
+        `cd "${root}/.friday" ; cat logs/x`,
+      ]) {
+        const action = actionFromTool(tool, { command });
+        expect(action ? evaluateSensitive(action, ctx)?.decision : null, `${tool}: ${command}`).toBe('deny');
+      }
+    }
+    // Another host names the folder its shell runs in: inside a protected one, relative names are refused too.
+    for (const cwd of ['.friday', p('.friday', 'logs'), p('.git'), stateDir]) {
+      const action = actionFromTool('Shell', { command: 'Get-Content daemon.log', cwd });
+      expect(action ? evaluateSensitive(action, ctx)?.decision : null, cwd).toBe('deny');
+    }
+    // The project's own folders, and names that only start like a protected one, stay fine.
+    for (const [command, cwd] of [
+      ['cd src && npm test', undefined],
+      ['cd .github && ls', undefined],
+      ['ls', p('src')],
+      ['ls', p('.friday-notes')],
+    ] as const) {
+      const action = actionFromTool('Shell', { command, ...(cwd ? { cwd } : {}) });
+      expect(action ? evaluateSensitive(action, ctx) : null, `${command} in ${cwd ?? 'the root'}`).toBeNull();
+    }
+  });
+
+  it('protects the programs a hook command starts by name from the root, and only there', () => {
+    for (const name of ['node.cmd', 'node.exe', 'NODE.BAT', 'git.exe', 'node.js']) {
+      const action = actionFromTool('Write', { file_path: p(name), content: 'x' });
+      expect(action ? evaluateSensitive(action, ctx) : null, name).toMatchObject({
+        decision: 'deny',
+        sensitive_class: 'host.config',
+      });
+    }
+    for (const name of [['src', 'node.js'], ['tools', 'git.cmd'], ['node.mjs'], ['nodes.cmd']]) {
+      const action = actionFromTool('Write', { file_path: p(...name), content: 'x' });
+      expect(action ? evaluateSensitive(action, ctx) : null, name.join('/')).toBeNull();
+    }
+  });
+});
 
 describe('Claude Code tool coverage', () => {
   it('intercepts the ten M1 tools and every MCP tool, and maps each to a policy action', () => {
@@ -136,7 +190,7 @@ describe('Claude Code tool coverage', () => {
         }
         expect(res, `${tool} × ${cls}`).toMatchObject({ decision: 'deny', sensitive_class: cls });
       }
-      for (const tool of ['Bash', 'PowerShell'] as const) {
+      for (const tool of ['Bash', 'PowerShell', 'Shell'] as const) {
         const command = SHELL[tool][cls];
         if (!command) continue;
         const action = actionFromTool(tool, { command });
@@ -167,6 +221,14 @@ describe('Claude Code tool coverage', () => {
       ['Bash', 'cp evil.json .claude/settings.json'],
       ['PowerShell', "Set-Content .claude\\settings.json '{}'"],
       ['PowerShell', 'Remove-Item .friday\\harness\\claude-code\\hook.mjs'],
+      // Every host's own folders (plan M8b), through the shell tool of any host.
+      ['Shell', "Set-Content .agents\\hooks.json '{}'"],
+      ['Shell', 'echo {} > .gemini/settings.json'],
+      ['Shell', 'cp evil.json .cursor/hooks.json'],
+      ['Bash', 'echo {} > .agents/mcp_config.json'],
+      ['PowerShell', "Set-Content .gemini\\settings.json '{}'"],
+      // A program a host's hook command starts by its bare name from the root.
+      ['Shell', 'echo @echo off > node.cmd'],
     ] as const) {
       const action = actionFromTool(tool, { command });
       if (!action) throw new Error(`${tool} has no action`);

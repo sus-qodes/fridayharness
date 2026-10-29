@@ -4,40 +4,31 @@
 .dk-dock {
   position: absolute;
   left: 50%;
-  bottom: 20px;
+  bottom: 16px;
   z-index: 30;
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   max-width: calc(100% - 32px);
-  padding: 5px 8px;
-  border-radius: var(--radius-pill);
-  background: rgba(18, 19, 22, 0.78);
-  backdrop-filter: blur(28px) saturate(190%);
-  -webkit-backdrop-filter: blur(28px) saturate(190%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow:
-    0 16px 40px rgba(0, 0, 0, 0.6),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  padding: 5px 6px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface-glass);
   transform: translateX(-50%);
-  opacity: 0.88;
+  opacity: 0.62;
   transition:
     opacity var(--duration-base) var(--ease-standard),
-    box-shadow var(--duration-base) var(--ease-standard),
-    transform var(--spring-duration) var(--spring-bounce);
+    box-shadow var(--duration-base) var(--ease-standard);
 }
 
 .dk-dock:hover,
 .dk-dock:focus-within {
   opacity: 1;
-  box-shadow:
-    0 20px 48px rgba(0, 0, 0, 0.75),
-    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  box-shadow: var(--shadow-lg);
 }
 
 .dk-dock-paused {
-  opacity: 0.95;
-  border-color: rgba(245, 165, 36, 0.45);
+  opacity: 0.9;
+  border-color: rgba(245, 158, 11, 0.45);
 }
 
 .dk-group {
@@ -59,21 +50,7 @@
 
 .dk-btn {
   min-height: 32px;
-  border-radius: var(--radius-pill);
-  font-size: var(--text-caption);
-  transition:
-    transform var(--spring-duration) var(--spring-bounce),
-    background var(--duration-fast) var(--ease-standard),
-    color var(--duration-fast) var(--ease-standard);
-}
-
-.dk-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--ink);
-}
-
-.dk-btn:active {
-  transform: scale(0.94);
+  border-radius: var(--radius-sm);
 }
 
 .dk-btn[hidden] {
@@ -140,11 +117,9 @@
   width: min(640px, 100%);
   max-height: 64vh;
   overflow: hidden;
-  background: var(--card);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow:
-    0 24px 64px rgba(0, 0, 0, 0.8),
-    inset 0 1px 0 var(--glass-inner-bevel);
+  background: var(--bg-surface-elevated);
+  border-color: var(--border-medium);
+  box-shadow: var(--shadow-lg), var(--shadow-glow-cyan);
   border-radius: var(--radius-lg);
   animation: dk-rise var(--duration-base) var(--ease-snappy);
 }

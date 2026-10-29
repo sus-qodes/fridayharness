@@ -1,9 +1,17 @@
 /**
  * The Codex adapter's pure parts (ADR-0032): the JSON-RPC line client, the turn's final message,
- * and the environment its host gets.
+ * the usage record a thread's token counts become, and the environment its host gets.
  */
 import { describe, expect, it } from 'vitest';
-import { hostEnvironment, JsonRpcLines, MethodNotFound, parseFinal } from './index.js';
+import {
+  codexHostUsage,
+  FINAL_SCHEMA,
+  hostEnvironment,
+  JsonRpcLines,
+  MethodNotFound,
+  parseFinal,
+  STRICT_FINAL_SCHEMA,
+} from './index.js';
 
 describe('JSON-RPC over lines', () => {
   it('matches answers to requests, answers the server, and fails open requests when the server goes', async () => {
@@ -53,16 +61,88 @@ describe('JSON-RPC over lines', () => {
 
 describe('the final message', () => {
   it('reads the output schema, and takes prose as a summary', () => {
-    expect(
-      parseFinal(JSON.stringify({ status: 'blocked', summary: 's', changed_paths: [], blocked_reason: 'needs a key' })),
-    ).toEqual({ status: 'blocked', summary: 's', changed_paths: [], blocked_reason: 'needs a key' });
+    expect(parseFinal(JSON.stringify({ status: 'blocked', summary: 's', blocked_reason: 'needs a key' }))).toEqual({
+      status: 'blocked',
+      summary: 's',
+      blocked_reason: 'needs a key',
+    });
     expect(parseFinal('  I changed src/a.ts.  ')).toEqual({
       status: 'completed',
       summary: 'I changed src/a.ts.',
-      changed_paths: [],
       blocked_reason: '',
     });
     expect(parseFinal(JSON.stringify({ status: 'done' })).status).toBe('completed');
+  });
+
+  it('asks only for what Friday cannot read from the worktree (plan M13.4)', () => {
+    // Codex's structured output is strict: every field required, nothing else.
+    expect(STRICT_FINAL_SCHEMA.required).toEqual(['status', 'summary', 'blocked_reason']);
+    expect(STRICT_FINAL_SCHEMA.additionalProperties).toBe(false);
+    // A host that refuses an answer that does not fit requires only the status, and takes extra fields.
+    expect(FINAL_SCHEMA.required).toEqual(['status']);
+    expect('additionalProperties' in FINAL_SCHEMA).toBe(false);
+    expect(Object.keys(FINAL_SCHEMA.properties)).not.toContain('changed_paths');
+  });
+
+  it("keeps the model's summary and cuts another parameter's markup out of it (CC-35)", () => {
+    expect(
+      parseFinal({ status: 'completed', summary: 'Added the module.</summary> <parameter name="changed_paths">["a"]' }),
+    ).toEqual({ status: 'completed', summary: 'Added the module.', blocked_reason: '' });
+    // No summary at all: the session's last text stands in for it.
+    expect(parseFinal({ status: 'completed' }, ' I added backend/src/a.ts. ').summary).toBe(
+      'I added backend/src/a.ts.',
+    );
+    // An extra field is ignored, never an error.
+    expect(parseFinal({ status: 'completed', summary: 's', changed_paths: ['x'] })).toEqual({
+      status: 'completed',
+      summary: 's',
+      blocked_reason: '',
+    });
+  });
+});
+
+describe('the usage record (plan M11.4)', () => {
+  it("reads the thread's last token count into the shape every host's usage is recorded in", () => {
+    // The `total` of the sixth and last `thread/tokenUsage/updated` of the recorded live turn
+    // (0.162.1, tests/fixtures/codex/v0.162.1/live-adapter-transcript.jsonl): the thread's count so
+    // far, in which `inputTokens` holds the whole prompt, the cached part included.
+    const total = {
+      totalTokens: 64866,
+      inputTokens: 64178,
+      cachedInputTokens: 39936,
+      cacheWriteInputTokens: 0,
+      outputTokens: 688,
+      reasoningOutputTokens: 70,
+    };
+    expect(codexHostUsage(total, 1, 'gpt-5.6-luna')).toEqual({
+      cost_usd: null,
+      input_tokens: 64178,
+      output_tokens: 688,
+      cache_read_input_tokens: 39936,
+      cache_creation_input_tokens: 0,
+      turns: 1,
+      model: 'gpt-5.6-luna',
+    });
+    // A host that sent no count: every count unknown, never 0; the turn and the model still known.
+    expect(codexHostUsage(null, 1, 'gpt-5.6-luna')).toEqual({
+      cost_usd: null,
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+      turns: 1,
+      model: 'gpt-5.6-luna',
+    });
+    // A count that is not a finite number is unknown too.
+    expect(codexHostUsage({ inputTokens: '12', outputTokens: Number.NaN, cachedInputTokens: 3 }, 2, null)).toEqual({
+      cost_usd: null,
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_input_tokens: 3,
+      cache_creation_input_tokens: null,
+      turns: 2,
+      model: null,
+    });
   });
 });
 

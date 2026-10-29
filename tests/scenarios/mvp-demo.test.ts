@@ -19,7 +19,14 @@ import { CodexAdapter } from '@friday/adapter-codex';
 import { materializeFixtureShop } from '@friday/cli';
 import { createDaemon, type Daemon } from '@friday/daemon';
 import { runGit } from '@friday/git';
-import type { IntegrationView, TaskStartParams, TaskView, UsageReport, VerificationView } from '@friday/protocol';
+import type {
+  GoalSummary,
+  IntegrationView,
+  TaskStartParams,
+  TaskView,
+  UsageReport,
+  VerificationView,
+} from '@friday/protocol';
 import { DaemonClient } from '@friday/sdk';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -169,6 +176,8 @@ interface GoalDetail {
   goal: { goal_id: string; status: string };
   proposed: { tasks: { key: string; role: string | null }[] } | null;
   active: { tasks: { key: string; task_id: string | null; status: string | null; agent_key?: string | null }[] } | null;
+  /** What Friday did for the goal, from its records (plan M12.7). */
+  summary: GoalSummary;
 }
 
 /** The Codex adapter, its host scripted; started again on the same folder, it is the same harness. */
@@ -570,9 +579,10 @@ describe('the MVP demonstration (Part 12 §18)', () => {
     expect(kept?.artifact_ref).toMatch(/^artifact:/);
 
     // 17. The token baseline (plan M10a): one usage row per attempt of the goal, from Friday's own
-    // log. No host here reports what it spent (an attached session, a Codex thread, a plain
-    // harness), so every host field is unknown, never 0, while what Friday saw itself (the packets
-    // it delivered, the tool calls it judged, the verdict) is complete.
+    // log. Of the three hosts, the Codex thread alone counts what it spent, and its adapter records
+    // the host's last count with the claim (plan M11.4); the attached session and the plain harness
+    // report nothing, so their host fields are unknown, never 0. What Friday saw itself (the packets
+    // it delivered, the tool calls it judged, the verdict) is complete for every row.
     const usage = await friday('usage', '--goal', goal.goal_id, '--json');
     expect(usage.code, usage.stderr).toBe(0);
     const report = JSON.parse(usage.stdout) as UsageReport;
@@ -586,31 +596,33 @@ describe('the MVP demonstration (Part 12 §18)', () => {
       return row;
     };
     for (const row of report.rows) {
-      expect(row).toMatchObject({
-        goal_id: goal.goal_id,
-        attempt: 1,
-        host: {
-          reported: false,
-          input_tokens: null,
-          output_tokens: null,
-          cache_read_input_tokens: null,
-          cache_creation_input_tokens: null,
-          cost_usd: null,
-          turns: null,
-          model: null,
-        },
-        verification: { status: 'PASSED' },
-      });
+      expect(row).toMatchObject({ goal_id: goal.goal_id, attempt: 1, verification: { status: 'PASSED' } });
       expect(row.verification?.checks_passed).toBeGreaterThanOrEqual(1);
       expect(row.verification?.checks_total).toBeGreaterThanOrEqual(row.verification?.checks_passed ?? 0);
       // Verified attempts have ended.
       expect(row.ended_at).not.toBeNull();
       expect(row.duration_ms).not.toBeNull();
     }
+    /** A host that said nothing about what it spent. */
+    const unknownHost = {
+      reported: false,
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+      cost_usd: null,
+      turns: null,
+      model: null,
+    };
     // Claude Code's claim delivered its packet; its edits and its test run came through Friday's
-    // hooks (the denied write never ran, so it is not a call).
+    // hooks (the denied write never ran, so it is not a call); an attached session reports no spend.
     const contract = rowOf('discount-contract');
-    expect(contract).toMatchObject({ agent_key: 'fe-1', harness_vendor: 'claude-code', harness_mode: 'attach' });
+    expect(contract).toMatchObject({
+      agent_key: 'fe-1',
+      harness_vendor: 'claude-code',
+      harness_mode: 'attach',
+      host: unknownHost,
+    });
     expect(contract.packets.count).toBeGreaterThanOrEqual(1);
     expect(contract.packets.tokens).toBeGreaterThan(0);
     expect(contract.tool_calls.total).toBeGreaterThan(0);
@@ -631,29 +643,81 @@ describe('the MVP demonstration (Part 12 §18)', () => {
     expect(serviceRow.tool_calls.total).toBeGreaterThan(0);
     expect(serviceRow.tool_calls.by_kind.edit).toBeGreaterThanOrEqual(2);
     expect(serviceRow.tool_calls.by_kind.shell).toBeGreaterThanOrEqual(1);
-    // The docs agent asked for nothing and reported no tool call: nothing is made up for it.
+    // What the Codex thread cost, as its host counted it (plan M11.4): the `total` of the last token
+    // count the resumed app-server sent before the turn ended (the thread's count so far, which the
+    // scripted host carries across the resume), the one turn the adapter started after the restart
+    // (the turn the first adapter ran ended with it, before any report), and the model the thread
+    // reported; the app-server names no cost. The scripted host logs every count it sends.
+    const counted = restarted
+      .entries()
+      .filter((e) => e.tokenUsage)
+      .at(-1)?.tokenUsage as Record<string, number>;
+    expect(counted.inputTokens).toBeGreaterThan(0);
+    expect(serviceRow.host).toMatchObject({
+      reported: true,
+      input_tokens: counted.inputTokens,
+      output_tokens: counted.outputTokens,
+      cache_read_input_tokens: counted.cachedInputTokens,
+      cache_creation_input_tokens: counted.cacheWriteInputTokens,
+      cost_usd: null,
+      turns: 1,
+      model: ranModel,
+    });
+    // The docs agent asked for nothing, reported no tool call and no spend: nothing is made up for it.
     expect(rowOf('discount-docs')).toMatchObject({
       agent_key: 'dc-1',
       harness_vendor: 'generic',
+      host: unknownHost,
       packets: { count: 0, tokens: 0, chars: null, source_tokens: 0 },
       tool_calls: { total: 0, failed: 0 },
     });
-    expect(report.totals).toEqual({
+    // The totals sum the one host that reported, and say so per field; no host named a cost.
+    expect(report.totals).toMatchObject({
       attempts: 3,
-      host_reported: 0,
+      host_reported: 1,
       reporters: {
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_read_input_tokens: 0,
-        cache_creation_input_tokens: 0,
+        input_tokens: 1,
+        output_tokens: 1,
+        cache_read_input_tokens: 1,
+        cache_creation_input_tokens: 1,
         cost_usd: 0,
       },
-      input_tokens: null,
-      output_tokens: null,
-      cache_read_input_tokens: null,
-      cache_creation_input_tokens: null,
+      input_tokens: counted.inputTokens,
+      output_tokens: counted.outputTokens,
+      cache_read_input_tokens: counted.cachedInputTokens,
+      cache_creation_input_tokens: counted.cacheWriteInputTokens,
       cost_usd: null,
       tool_calls: contract.tool_calls.total + serviceRow.tool_calls.total,
     });
+
+    // 18. What Friday did for the goal (plan M12.7), counted from the records above: every task
+    // verified at its first claim; the write outside Claude Code's scope refused by policy; the
+    // Codex session lost and resumed; the tokens the one host that counted them reported, from one
+    // of three attempts, and no cost since no host named one; the planner's calls for the plan.
+    const did = (await detail()).summary;
+    expect(did).toMatchObject({
+      tasks: { total: 3, verified: 3 },
+      claims_refused: 0,
+      reworked: 0,
+      held_for_human: 0,
+      refused_by_policy: 1,
+      sessions_lost: 1,
+      sessions_recovered: 1,
+      hosts: {
+        attempts: 3,
+        reported: 1,
+        tokens: Number(counted.inputTokens) + Number(counted.outputTokens),
+        tokens_reporters: 1,
+        cost_usd: null,
+        cost_reporters: 0,
+      },
+    });
+    expect(did.planning.calls).toBeGreaterThanOrEqual(1);
+    const line = await friday('goal', 'show', goal.goal_id);
+    expect(line.code, line.stderr).toBe(0);
+    expect(line.stdout).toContain('tasks verified: 3 of 3');
+    expect(line.stdout).toContain('actions refused by policy: 1');
+    expect(line.stdout).toContain('sessions lost: 1, recovered');
+    expect(line.stdout).toMatch(/hosts reported: \S+ tokens \(1 of 3 attempts\)\r?\n/);
   });
 });

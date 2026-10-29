@@ -104,6 +104,12 @@ describe('a harness dies after changing files (Part 12 §8)', () => {
     writeFileSync(path.join(wt, 'src', 'done.ts'), 'export const done = true;\n');
     await deterministicGit(wt, { startEpoch: 1_767_225_800 }).commitAll('first half');
     writeFileSync(path.join(wt, 'src', 'half.ts'), 'export const half = true;\n');
+    await first.fake.client.update({
+      task_id: first.taskId,
+      run_id: first.start.run_id,
+      note: 'done.ts is committed; half.ts is started, its tests come next',
+      changed_paths: ['src/done.ts', 'src/half.ts'],
+    });
     await lose(td, clock, first.fake, 'lease');
 
     const waiting = await assessment(td, first.taskId);
@@ -148,6 +154,18 @@ describe('a harness dies after changing files (Part 12 §8)', () => {
     expect(second.start).toMatchObject({ working_directory: wt, git_ref: first.start.git_ref, attempt: 2 });
     expect(existsSync(path.join(wt, 'src', 'half.ts'))).toBe(true);
     expect((await git.run(['branch', '--list', 'friday/*'])).trim().split('\n')).toHaveLength(1);
+    // The second attempt is told what the first did, decided and left (plan M12.3): one fixed
+    // summary in place of loose notes, with the attempt it summarises.
+    const packet = await second.fake.client.requestContext({ kind: 'task', task_id: first.taskId });
+    const progress = packet.sections.find((s) => s.kind === 'task.progress')?.content ?? '';
+    expect(progress.startsWith(`Handoff: attempt 1 of ${first.taskId}, for attempt 2.`)).toBe(true);
+    for (const label of ['Goal:', 'Done so far:', 'Checked:', 'Decided:', 'Next:', 'Files:']) {
+      expect(progress).toContain(`\n${label}`);
+    }
+    expect(progress).toContain('(attempt 1): done.ts is committed; half.ts is started, its tests come next');
+    expect(progress).toContain('Next: done.ts is committed; half.ts is started, its tests come next');
+    expect(progress).toContain('Files: src/done.ts, src/half.ts');
+    expect(progress.length).toBeLessThanOrEqual(1500);
 
     // A Claude Code session started in that worktree, holding nothing, may not write there.
     const pid = 6101;
@@ -229,7 +247,11 @@ describe('recovery limits', () => {
     expect((await taskOf(td, t.taskId)).status).toBe('READY');
 
     await td.operator.post(td.operator.projectPath(`/tasks/${t.taskId}/assign`), { agent_key: 'be-1' });
-    const again = (await t.fake.waitFor('task.start', 20_000)).params as TaskStartParams;
+    // The second start, not the first still in `received`: attempt 2's error must name attempt 2's
+    // run, since an error for an ended run is recorded and changes nothing (plan M11.5).
+    const again = (
+      await t.fake.waitFor('task.start', 20_000, (m) => (m.params as TaskStartParams).run_id !== t.start.run_id)
+    ).params as TaskStartParams;
     await eventually(
       () => taskOf(td, t.taskId),
       (x) => x.status === 'RUNNING',

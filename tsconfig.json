@@ -56,6 +56,15 @@
       "path": "packages/adapters/codex"
     },
     {
+      "path": "packages/adapters/antigravity"
+    },
+    {
+      "path": "packages/adapters/cursor"
+    },
+    {
+      "path": "packages/adapters/gemini"
+    },
+    {
       "path": "apps/daemon"
     },
     {

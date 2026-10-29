@@ -7,48 +7,13 @@
  * Web Audio every call is a no-op.
  */
 
-export const COUCOU_SOUND_NAMES = [
-  'peek',
-  'open',
-  'close',
-  'hover',
-  'blip',
-  'slap',
-  'annoyed',
-  'dizzy',
-  'greet',
-  'work',
-  'finish',
-  'error',
-  'approval',
-  'question',
-  'approve',
-  'gulp',
-  'tick',
-  'send',
-  'love',
-  'pop',
-  'proud',
-  'wink',
-  'yawn',
-  'attach',
-  'think',
-  'search',
-  'rate',
-  'sleep',
-  'greeting',
-] as const;
-
-export type CoucouSoundName = (typeof COUCOU_SOUND_NAMES)[number];
-
 export type SoundName =
   | 'node_appear'
   | 'escalation_alert'
   | 'allow_success'
   | 'task_complete'
   | 'emergency_halt'
-  | 'click_tick'
-  | CoucouSoundName;
+  | 'click_tick';
 
 export const SOUND_NAMES: readonly SoundName[] = [
   'node_appear',
@@ -59,22 +24,13 @@ export const SOUND_NAMES: readonly SoundName[] = [
   'click_tick',
 ];
 
-export const WAV_MAP: Readonly<Record<string, CoucouSoundName>> = Object.freeze({
-  node_appear: 'pop',
-  escalation_alert: 'approval',
-  allow_success: 'approve',
-  task_complete: 'finish',
-  emergency_halt: 'error',
-  click_tick: 'tick',
-});
-
 /** The volume at the default setting (Part 08 §4.2: soft, not fatiguing). */
 export const DEFAULT_VOLUME = 0.18;
 /** Silence this long suspends the context. */
 export const IDLE_SUSPEND_MS = 1_500;
 
 /** How long each sound rings (seconds), for the idle timer. */
-export const SOUND_LENGTH: Readonly<Record<string, number>> = Object.freeze({
+export const SOUND_LENGTH: Readonly<Record<SoundName, number>> = Object.freeze({
   node_appear: 0.08,
   escalation_alert: 0.28,
   allow_success: 0.07,
@@ -140,8 +96,6 @@ export class Synth {
   #ctx: AudioContextLike | null = null;
   #master: GainNode | null = null;
   #noise: AudioBuffer | null = null;
-  #buffers = new Map<string, AudioBuffer>();
-  #preloadPromise: Promise<void> | null = null;
   #muted = false;
   #volume = DEFAULT_VOLUME;
   #idle: unknown = null;
@@ -165,47 +119,6 @@ export class Synth {
 
   get volume(): number {
     return this.#volume;
-  }
-
-  /** Preloads all Coucou WAV sounds into memory when running in a live browser or desktop app. */
-  async #preload(): Promise<void> {
-    if (this.#preloadPromise) return this.#preloadPromise;
-    const ctx = this.#ctx;
-    if (!ctx || typeof (ctx as unknown as { decodeAudioData?: unknown }).decodeAudioData !== 'function') return;
-    if (typeof fetch !== 'function') return;
-
-    this.#preloadPromise = (async () => {
-      const base =
-        typeof window !== 'undefined' && window.location
-          ? window.location.href.split('?')[0].split('#')[0]
-          : 'http://127.0.0.1:4310/ui/';
-      const dirUrl = base.endsWith('/') ? base : base.slice(0, base.lastIndexOf('/') + 1);
-
-      await Promise.all(
-        COUCOU_SOUND_NAMES.map(async (name) => {
-          try {
-            const urls = [new URL(`sounds/${name}.wav`, dirUrl).href, `/sounds/${name}.wav`];
-            for (const u of urls) {
-              try {
-                const res = await fetch(u);
-                if (!res.ok) continue;
-                const arrayBuf = await res.arrayBuffer();
-                const audioBuf = await (
-                  ctx as unknown as { decodeAudioData(data: ArrayBuffer): Promise<AudioBuffer> }
-                ).decodeAudioData(arrayBuf);
-                this.#buffers.set(name, audioBuf);
-                return;
-              } catch {
-                // try next URL
-              }
-            }
-          } catch {
-            // ignore loading error
-          }
-        }),
-      );
-    })();
-    return this.#preloadPromise;
   }
 
   /** The context, created on the first call (after a gesture, or at load in the desktop Notch). */
@@ -237,7 +150,6 @@ export class Synth {
     }
     this.#resume();
     this.#scheduleSuspend(0);
-    void this.#preload();
     return true;
   }
 
@@ -296,39 +208,14 @@ export class Synth {
     const ctx = this.#ctx;
     const master = this.#master;
     if (!ctx || !master || this.#muted || this.#volume <= 0) return false;
-    const isKnown =
-      (SOUND_NAMES as readonly string[]).includes(name) ||
-      (COUCOU_SOUND_NAMES as readonly string[]).includes(name);
-    if (!isKnown) return false;
+    if (!SOUND_NAMES.includes(name)) return false;
     this.#resume();
-
-    // Check if Coucou authentic WAV buffer is loaded
-    const wavName = (COUCOU_SOUND_NAMES as readonly string[]).includes(name)
-      ? (name as CoucouSoundName)
-      : WAV_MAP[name];
-    const buf = wavName ? this.#buffers.get(wavName) : undefined;
-    if (buf && typeof ctx.createBufferSource === 'function') {
-      try {
-        const src = ctx.createBufferSource();
-        src.buffer = buf;
-        const gain = ctx.createGain();
-        gain.gain.setValueAtTime(1, ctx.currentTime);
-        src.connect(gain);
-        gain.connect(master);
-        src.start(ctx.currentTime);
-        this.#scheduleSuspend(buf.duration || 0.3);
-        return true;
-      } catch {
-        // Fall back to synth
-      }
-    }
-
     try {
       this.#build(ctx, master, name, ctx.currentTime);
     } catch {
       return false;
     }
-    this.#scheduleSuspend(SOUND_LENGTH[name] ?? 0.3);
+    this.#scheduleSuspend(SOUND_LENGTH[name]);
     return true;
   }
 
@@ -386,21 +273,8 @@ export class Synth {
           now + 0.05,
         );
         break;
-      case 'pop':
-      case 'blip':
-      case 'peek':
-        this.#tone(ctx, master, 'sine', now, 0.08, 700, null, 0.16).frequency.exponentialRampToValueAtTime(
-          1050,
-          now + 0.05,
-        );
-        break;
       case 'escalation_alert':
         // A major third (C5 + E5) decaying over 280 ms.
-        for (const f of [523.25, 659.25]) this.#tone(ctx, master, 'sine', now, 0.28, f, null, 0.12);
-        break;
-      case 'question':
-      case 'think':
-      case 'search':
         for (const f of [523.25, 659.25]) this.#tone(ctx, master, 'sine', now, 0.28, f, null, 0.12);
         break;
       case 'allow_success': {
@@ -421,43 +295,14 @@ export class Synth {
         src.stop(now + 0.04);
         break;
       }
-      case 'approval':
-      case 'approve':
-      case 'proud':
-      case 'love':
-      case 'rate': {
-        this.#tone(ctx, master, 'sine', now, 0.18, 880, null, 0.18);
-        this.#tone(ctx, master, 'sine', now + 0.05, 0.22, 1760, null, 0.15);
-        break;
-      }
       case 'task_complete':
         // An ascending C5 E5 G5 arpeggio.
         [523.25, 659.25, 783.99].forEach((f, i) => {
           this.#tone(ctx, master, 'sine', now + i * 0.06, 0.15, f, null, 0.12);
         });
         break;
-      case 'finish':
-      case 'greet':
-      case 'greeting':
-      case 'send':
-        [523.25, 659.25, 783.99].forEach((f, i) => {
-          this.#tone(ctx, master, 'sine', now + i * 0.06, 0.16, f, null, 0.16);
-        });
-        break;
       case 'emergency_halt': {
         // A sawtooth falling 220 → 40 Hz through a closing low-pass.
-        const filter = ctx.createBiquadFilter();
-        filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(1800, now);
-        filter.frequency.exponentialRampToValueAtTime(160, now + 0.45);
-        filter.connect(master);
-        this.#tone(ctx, filter, 'sawtooth', now, 0.45, 220, 40, 0.25);
-        break;
-      }
-      case 'slap':
-      case 'error':
-      case 'annoyed':
-      case 'dizzy': {
         const filter = ctx.createBiquadFilter();
         filter.type = 'lowpass';
         filter.frequency.setValueAtTime(1800, now);
@@ -475,27 +320,6 @@ export class Synth {
         this.#tone(ctx, filter, 'square', now, 0.012, 1200, null, 0.05);
         break;
       }
-      case 'tick':
-      case 'hover': {
-        const filter = ctx.createBiquadFilter();
-        filter.type = 'highpass';
-        filter.frequency.setValueAtTime(1000, now);
-        filter.connect(master);
-        this.#tone(ctx, filter, 'square', now, 0.012, 1200, null, 0.08);
-        break;
-      }
-      case 'open':
-      case 'close':
-      case 'attach':
-      case 'gulp':
-      case 'wink':
-      case 'yawn':
-      case 'sleep':
-      case 'work':
-      default:
-        this.#tone(ctx, master, 'sine', now, 0.15, 784, null, 0.16);
-        this.#tone(ctx, master, 'sine', now + 0.04, 0.2, 1046.5, null, 0.18);
-        break;
     }
   }
 }

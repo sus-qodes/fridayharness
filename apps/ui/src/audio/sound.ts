@@ -169,12 +169,10 @@ export function initAudioWith(
   target.addEventListener('keydown', onGesture, true);
 }
 
-/** Plays a sound now (when sound is on and a `startSound` runs, or when force is requested); false otherwise. */
-export function playSound(name: SoundName, opts: { force?: boolean } = {}): boolean {
-  if (active === 0 && !opts.force) return false;
-  const s = synth();
-  if (!s.ready) s.init();
-  return s.play(name);
+/** Plays a sound now (when sound is on and a `startSound` runs); false otherwise. */
+export function playSound(name: SoundName): boolean {
+  if (active === 0) return false;
+  return synth().play(name);
 }
 
 const tickLimiter = new RateLimiter();

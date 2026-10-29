@@ -90,11 +90,7 @@ export interface Reaction {
 
 export type { DrawerBack, DrawerKind } from '../shell/context.js';
 
-export type StudioView = 'canvas' | 'settings';
-
 export interface UiState {
-  activeView: StudioView;
-  settingsTab?: string;
   selectedTaskId: string | null;
   drawer: DrawerRequest | null;
   modal: ModalRequest | null;
@@ -116,7 +112,6 @@ export interface UiState {
   /** Line counts per task from `tasks/:tid/diff?stat=1`. */
   stats: Record<string, { added: number; removed: number; at: number }>;
 }
-
 
 export interface Prefs {
   muted: boolean;
@@ -164,8 +159,6 @@ export function initialState(prefs: Prefs = DEFAULT_PREFS): RootState {
     board: null,
     activity: { agents: {}, files: {}, pulses: [], lastActivityAt: 0, reactions: [] },
     ui: {
-      activeView: 'canvas',
-      settingsTab: undefined,
       selectedTaskId: null,
       drawer: null,
       modal: null,
@@ -179,7 +172,6 @@ export function initialState(prefs: Prefs = DEFAULT_PREFS): RootState {
       stats: {},
     },
     prefs,
-
   };
 }
 

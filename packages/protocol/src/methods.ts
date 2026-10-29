@@ -150,11 +150,25 @@ export const TaskStartParams = z.object({
    */
   session_ref: z.string().nullable().default(null),
   /**
+   * On `task.start` of a rework (plan M13.2): the host session of the attempt whose claim
+   * verification refused, when the same agent on the same harness takes the rework and the harness
+   * declared `capabilities.resume_session`. The adapter continues that session for the new attempt,
+   * with `note` as its next message, and starts a new one when the host cannot resume it.
+   */
+  continue_session: z.string().max(200).nullable().default(null),
+  /**
    * On `task.resume` of a run whose session ended to wait for a human (plan M9 §5.6): why it
    * continues ("A human granted your request …", "Friday runs again …", the human's answer). The
-   * adapter sends it as the resumed session's next message; without it, its restart text.
+   * adapter sends it as the resumed session's next message; without it, its restart text. On a
+   * `task.start` with `continue_session`: why the claim was refused and what to fix.
    */
   note: z.string().max(2000).nullable().default(null),
+  /**
+   * The task's spending cap in dollars (`routing.task_budget_usd`, plan M11.5): null when none is
+   * set. An adapter whose host can enforce a cap passes it on (Claude Code's `--max-budget-usd`, the
+   * smaller of its own cap and this); Friday ends the attempt itself when its reported cost reaches it.
+   */
+  budget_usd: z.number().positive().nullable().default(null),
 });
 export type TaskStartParams = z.infer<typeof TaskStartParams>;
 export const TaskCancelParams = z.object({ task_id: z.string(), run_id: z.string(), reason: z.string().optional() });
@@ -176,6 +190,8 @@ export const TaskClaimResult = z.object({
     .object({ model: z.string().nullable(), binding: z.boolean(), reason: z.string() })
     .nullable()
     .default(null),
+  /** Why no context came with the claim, when `context` is null: the task is still the agent's. */
+  note: z.string().nullable().default(null),
 });
 
 export const TaskUpdateParams = z.object({

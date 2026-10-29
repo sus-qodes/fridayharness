@@ -159,5 +159,9 @@ export const EVENT_TYPES = [
   'memory.retracted',
   'escalation.requested',
   'command.rejected',
+  // M11.5: an attempt's reported cost reached the task's spending cap, and Friday ended it.
+  'budget.exceeded',
+  // M11.2: config.yaml read again while Friday ran; the keys applied and the keys that wait for a restart.
+  'config.reloaded',
 ] as const;
 export type KnownEventType = (typeof EVENT_TYPES)[number];

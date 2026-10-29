@@ -29,6 +29,7 @@ export {
 } from './commands.js';
 export {
   type ActionKind,
+  aboveCeiling,
   type Decision,
   evaluate,
   evaluateSensitive,
@@ -63,9 +64,11 @@ export {
   projectPolicy,
 } from './project-policy.js';
 export {
+  ROOT_PROGRAMS,
   type SensitiveClass,
   type SensitiveHit,
   sensitiveClassOf,
   sensitiveInText,
   sensitivePattern,
+  sensitiveWorkingFolder,
 } from './sensitive.js';

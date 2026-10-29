@@ -4,14 +4,14 @@
  * approvals answered through Friday's policy, the model the host reports, messages steered into
  * the running turn, and a turn's end reported as a claim, a blocked result or an error.
  */
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CODEX_RULES, CodexAdapter } from '@friday/adapter-codex';
 import { createDaemon } from '@friday/daemon';
 import { SPAWNED_AGENT_TOOLS } from '@friday/mcp-server';
 import type { TaskStartParams, TaskView } from '@friday/protocol';
-import { DaemonClient, loadProject } from '@friday/sdk';
+import { DaemonClient, firstTaskMessage, loadProject } from '@friday/sdk';
 import { FakeClock, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
@@ -115,6 +115,39 @@ async function assigned(td: TestDaemon, agent: string, write: string[], summary 
 
 const status = (td: TestDaemon, id: string) => td.daemon.state.q.task(td.project.project_id, id);
 
+/** The `host.usage` records of a task's attempts, as Friday kept them (plan M11.4). */
+const usageEvents = (td: TestDaemon, id: string) =>
+  td.daemon.state.store
+    .readByRef(td.project.project_id, 'task', id)
+    .filter((e) => e.type === 'agent.event' && (e.payload as { event_type: string }).event_type === 'host.usage')
+    .map((e) => {
+      const p = e.payload as { run_id?: string; data?: Record<string, unknown> };
+      return { run_id: p.run_id, data: p.data };
+    });
+
+/** The model the thread reports: the one Friday routed the run to, else the scripted host's own. */
+const threadModel = (c: ReturnType<typeof codex>) =>
+  (c.adapter.received.find((m) => m.method === 'task.start')?.params as TaskStartParams | undefined)?.model ??
+  'gpt-fake';
+
+/** The host's last count of the thread's tokens (`total`), as the scripted app-server logged it. */
+const lastTotal = (c: ReturnType<typeof codex>) =>
+  c
+    .entries()
+    .filter((e) => e.tokenUsage)
+    .at(-1)?.tokenUsage as Record<string, number> | undefined;
+
+/** The usage record every host's spend is recorded in, from the host's count (none: unknown, never 0). */
+const usageFrom = (total: Record<string, number> | undefined, model: string) => ({
+  cost_usd: null,
+  input_tokens: total?.inputTokens ?? null,
+  output_tokens: total?.outputTokens ?? null,
+  cache_read_input_tokens: total?.cachedInputTokens ?? null,
+  cache_creation_input_tokens: total?.cacheWriteInputTokens ?? null,
+  turns: 1,
+  model,
+});
+
 describe('the Codex adapter', () => {
   it("pins Friday's settings on its threads, answers approvals by Friday's policy, and claims the work", async () => {
     const td = await startTestDaemon(ws(), { git: true, brain: false });
@@ -154,6 +187,13 @@ describe('the Codex adapter', () => {
     expect(path.resolve(String(started.cwd))).toBe(path.resolve(root));
     expect(String(started.developerInstructions)).toContain(CODEX_RULES.split('\n')[0]);
     expect(String(started.developerInstructions)).toContain(id);
+    // The instructions hold the task's contract, so the first turn's message points at it instead
+    // of repeating it (plan M10b.2).
+    expect(String(started.developerInstructions)).toContain('[task.contract');
+    const firstTurn = c.entries().find((e) => e.request === 'turn/start')?.params as { input: { text: string }[] };
+    expect(firstTurn.input[0]?.text).toBe(
+      firstTaskMessage({ task_id: id, instruction: '', acceptance_criteria: [] }, true),
+    );
     // Its instructions name only the Friday tools the thread has (the M8a live check, review M8-R06).
     const named = new Set(String(started.developerInstructions).match(/friday_[a-z_]+/g) ?? []);
     expect(
@@ -162,7 +202,13 @@ describe('the Codex adapter', () => {
     ).toBe(true);
     expect(String(started.developerInstructions)).not.toMatch(/friday:\/\//);
     // ...and those tools are the thread's, served by the adapter.
-    expect((started.dynamicTools as { name: string }[]).map((t) => t.name)).toEqual([...SPAWNED_AGENT_TOOLS]);
+    // The project declares no operation, so the thread is not given friday_run_operation (plan M13.5).
+    expect((started.dynamicTools as { name: string }[]).map((t) => t.name)).toEqual(
+      SPAWNED_AGENT_TOOLS.filter((t) => t !== 'friday_run_operation'),
+    );
+    expect(String(started.developerInstructions)).not.toContain('friday_run_operation');
+    // Each tool is told in one line (plan M13.5).
+    for (const t of started.dynamicTools as { description: string }[]) expect(t.description.length).toBeLessThan(260);
     expect(c.entries().find((e) => e.request === 'initialize')?.params).toMatchObject({
       capabilities: { experimentalApi: true },
     });
@@ -241,6 +287,19 @@ describe('the Codex adapter', () => {
       [routed ?? 'gpt-fake', 'reported'],
       ['gpt-fake-mini', 'rerouted'],
     ]);
+    // What the thread cost (plan M11.4): the `total` of the host's last token count (one per model
+    // response, the last before the turn ended), the turn this adapter ran, and the model the
+    // thread reported last (the reroute), recorded once with the claim against the run that spent
+    // it; the app-server names no cost.
+    const total = lastTotal(c);
+    expect(total?.inputTokens).toBeGreaterThan(0);
+    expect(c.entries().filter((e) => e.tokenUsage).length).toBeGreaterThan(1);
+    expect(usageEvents(td, id)).toEqual([{ run_id: run?.run_id, data: usageFrom(total, 'gpt-fake-mini') }]);
+    // ...and the attempt's usage row shows a host that reported, in full.
+    expect(td.daemon.state.q.usageReport(pid, { taskId: id }).rows[0]?.host).toMatchObject({
+      reported: true,
+      ...usageFrom(total, 'gpt-fake-mini'),
+    });
     // The attempt's host ended with the attempt.
     expect(c.adapter.running(run?.run_id as string)).toBe(false);
   });
@@ -301,6 +360,66 @@ describe('the Codex adapter', () => {
       'the agent error',
     );
     expect(status(td, two).waiting_reason).toBe('agent_error');
+    // Both attempts record what they cost with their report (plan M11.4): the blocked turn the
+    // host's last count; the failed one, whose model never answered, every count unknown, never 0,
+    // and the turn and the model all the same.
+    const counted = lastTotal(blocked);
+    expect(counted?.inputTokens).toBeGreaterThan(0);
+    expect(usageEvents(td, one).map((e) => e.data)).toEqual([usageFrom(counted, threadModel(blocked))]);
+    expect(usageEvents(td, two).map((e) => e.data)).toEqual([usageFrom(undefined, threadModel(failing))]);
+    expect(td.daemon.state.q.usageReport(td.project.project_id, { taskId: two }).rows[0]?.host).toMatchObject({
+      reported: true,
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+      cost_usd: null,
+      turns: 1,
+      model: threadModel(failing),
+    });
+  });
+
+  it('continues the thread that did the work for a rework, and starts a new one when it is gone (plan M13.2)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const done = (summary: string) => ({ op: 'final', status: 'completed', summary, blocked_reason: '' });
+    const c = codex(td, 'cx-1', { turns: [[done('first')], [done('again')], [done('third')]] });
+    await c.adapter.start();
+    expect(c.adapter.descriptor().capabilities).toMatchObject({ resume_session: true });
+    const id = await assigned(td, 'cx-1', ['src/**']);
+    const claimed = (what: string) =>
+      eventually(
+        () => status(td, id).status,
+        (s) => s === 'READY_FOR_VERIFICATION',
+        what,
+      );
+    const refuse = async (reason: string) => {
+      await td.operator.post(td.operator.projectPath(`/tasks/${id}/verify`), { result: 'failed', note: 'not yet' });
+      await td.operator.post(td.operator.projectPath(`/tasks/${id}/rework`), { reason });
+      await td.operator.post(td.operator.projectPath(`/tasks/${id}/assign`), { agent_key: 'cx-1' });
+    };
+    const requests = (m: string) => c.entries().filter((e) => e.request === m) as { params: Record<string, unknown> }[];
+    await claimed('the first claim');
+    const thread = td.daemon.state.q.findRun(status(td, id).current_run_id as string)?.session_ref;
+    await refuse('cover the edge case');
+    await claimed('the second claim');
+    // The rework resumed the first thread with the instructions it started with; its turn is the reason.
+    expect(requests('thread/resume')[0]?.params).toMatchObject({ threadId: thread });
+    expect(requests('thread/resume')[0]?.params.developerInstructions).toBe(
+      requests('thread/start')[0]?.params.developerInstructions,
+    );
+    const turns = requests('turn/start').map((r) => (r.params.input as { text: string }[])[0]?.text);
+    expect(turns[1]).toMatch(/refused your completion claim[\s\S]*Why: cover the edge case/);
+    // The thread is gone: the next rework starts a new thread, given the task as a new attempt is.
+    const second = td.daemon.state.q.findRun(status(td, id).current_run_id as string)?.session_ref;
+    rmSync(path.join(c.dir, 'work', `thread-${second}.json`));
+    await refuse('once more');
+    await claimed('the claim of the new thread');
+    expect(requests('thread/start')).toHaveLength(2);
+    expect(
+      requests('turn/start')
+        .map((r) => (r.params.input as { text: string }[])[0]?.text)
+        .at(-1),
+    ).toBe(firstTaskMessage({ task_id: id, instruction: '', acceptance_criteria: [] }, true));
   });
 
   it('steers a message for its agent into the running turn, and acknowledges it', async () => {
@@ -520,6 +639,54 @@ describe('the Codex adapter', () => {
         .filter((e) => e.type === 'task.completion_claimed');
       expect(claimed, id).toHaveLength(1);
     }
+  });
+
+  it("keeps the host's count of what the turn cost with the result until Friday records both (plan M11.4, review M8-R05)", async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const pid = td.project.project_id;
+    const x = interceptedBootstrap(td);
+    // Friday is out of reach the moment the turn ends: the usage record does not get through.
+    x.on(
+      method('agent.event', (p) => p.event_type === 'host.usage'),
+      notDelivered,
+    );
+    const c = codex(
+      td,
+      'h-1',
+      { turns: [[{ op: 'final', status: 'completed', summary: 'done', changed_paths: [] }]] },
+      { bootstrap: x.client },
+    );
+    await c.adapter.start();
+    const id = await assigned(td, 'h-1', ['src/**']);
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the claim',
+      15_000,
+    );
+    // The record was tried again and recorded, once, before the claim it belongs with.
+    const events = td.daemon.state.store.readByRef(pid, 'task', id);
+    const usage = events.filter(
+      (e) => e.type === 'agent.event' && (e.payload as { event_type: string }).event_type === 'host.usage',
+    );
+    expect(usage).toHaveLength(1);
+    const claimed = events.find((e) => e.type === 'task.completion_claimed');
+    expect(usage[0]?.sequence).toBeLessThan(claimed?.sequence as number);
+    expect(
+      x.calls.filter((call) => call.method === 'agent.event' && call.params.event_type === 'host.usage'),
+    ).toHaveLength(2);
+    // The attempt's row shows what the host counted (one response: the scripted host's first
+    // figures), not a host that said nothing.
+    expect(td.daemon.state.q.usageReport(pid, { taskId: id }).rows[0]?.host).toMatchObject({
+      reported: true,
+      input_tokens: 10200,
+      output_tokens: 50,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 1024,
+      cost_usd: null,
+      turns: 1,
+      model: threadModel(c),
+    });
   });
 
   it('reports the result of a finished attempt after the adapter restarts, without a new turn (review M8-R05)', async () => {

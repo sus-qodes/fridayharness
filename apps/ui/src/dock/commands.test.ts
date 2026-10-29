@@ -116,14 +116,13 @@ describe('core commands', () => {
       ['agents', 'agents'],
       ['memory', 'memory'],
       ['graph', 'graph'],
+      ['settings', 'settings'],
       ['inbox', 'inbox'],
     ];
     for (const [id, kind] of drawers) {
       await run(ctx, id);
       expect(ctx.store.select('ui').drawer).toEqual({ kind });
     }
-    await run(ctx, 'settings');
-    expect(ctx.store.select('ui').activeView).toBe('settings');
     await run(ctx, 'new-goal');
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'new-goal' });
   });

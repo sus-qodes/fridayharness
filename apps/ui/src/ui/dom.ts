@@ -35,7 +35,7 @@ export interface Props {
   aria?: Record<string, string | number | boolean>;
   /** Other attributes; event-handler attributes (`on…`) and URL attributes are refused. */
   attrs?: Record<string, string>;
-  style?: string | Partial<Record<StyleKey, string>>;
+  style?: Partial<Record<StyleKey, string>>;
   on?: Handlers;
   ref?: (el: HTMLElement) => void;
 }
@@ -98,11 +98,7 @@ export function applyProps(el: HTMLElement, props: Props | null | undefined): vo
       el.setAttribute(k, v);
     }
   }
-  if (typeof props.style === 'string') {
-    el.style.cssText = props.style;
-  } else if (props.style) {
-    for (const [k, v] of Object.entries(props.style)) setStyle(el, k as StyleKey, v);
-  }
+  if (props.style) for (const [k, v] of Object.entries(props.style)) setStyle(el, k as StyleKey, v);
   if (props.on) {
     for (const [event, handler] of Object.entries(props.on)) {
       if (handler) el.addEventListener(event, handler as EventListener);

@@ -1,4 +1,4 @@
-import type { TaskView } from '@friday/protocol';
+import { CostClass, type TaskView } from '@friday/protocol';
 import {
   decideRoute,
   type Evidence,
@@ -7,6 +7,7 @@ import {
   type ModelRecord,
   type ModelRecordInput,
   mergeModels,
+  modelCostClass,
   type RouteInput,
   type RoutingDecision,
   type RoutingPin,
@@ -35,7 +36,8 @@ export class RoutingService {
     const guide = loadGuide();
     const r = deps.project.config.routing;
     this.guideVersion = guide.version;
-    this.models = mergeModels(guide.models, r.models as ModelRecordInput[]);
+    // The Master Brain's local model is in the registry too (plan M12.1), so the locality rule knows it.
+    this.models = mergeModels(guide.models, r.models as ModelRecordInput[], deps.project.config.master_brain);
     this.settings = {
       mode: r.mode,
       optimize: r.optimize,
@@ -110,17 +112,27 @@ export class RoutingService {
    * How well the model routing would run on an agent's harness fits a task, and its cost relative to
    * the dearest model Friday knows (ADR-0031 §9): what delegation weighs.
    */
-  fitFor(task: TaskView, agentId: string): { fit: number; cost: number; blocked?: string } | null {
+  fitFor(
+    task: TaskView,
+    agentId: string,
+  ): { fit: number; cost: number; cost_class: CostClass | null; blocked?: string } | null {
     const agent = this.deps.state.q.findAgent(agentId);
     const harness = agent?.harness_id ? this.deps.state.q.findHarness(agent.harness_id) : undefined;
     if (!agent || !harness) return null;
     const d = decideRoute(this.input({ task_id: task.task_id, kind: task.kind, role: agent.role }, harness));
-    if (d.blocked) return { fit: 0, cost: 0, blocked: d.reason };
+    // The agent's cost class (plan M13.3): as its harness declared it, else its model's.
+    const declared = CostClass.safeParse((harness.capabilities as { cost_class?: unknown } | null)?.cost_class);
+    // An agent whose route blocks the task has no class for it: it cannot take it (review of M13).
+    if (d.blocked) return { fit: 0, cost: 0, cost_class: null, blocked: d.reason };
     const chosen = d.candidates.find((c) => c.model === d.model);
     const model = this.models.find((m) => m.id === d.model);
     const dearest = Math.max(0, ...this.models.map((m) => (m.price ? (m.price.input + m.price.output) / 2 : 0)));
     const cost = model?.price && dearest > 0 ? (model.price.input + model.price.output) / 2 / dearest : 0;
-    return { fit: chosen?.fit ?? (d.model ? 0.5 : 0), cost: Math.round(cost * 1000) / 1000 };
+    return {
+      fit: chosen?.fit ?? (d.model ? 0.5 : 0),
+      cost: Math.round(cost * 1000) / 1000,
+      cost_class: declared.success ? declared.data : d.model ? modelCostClass(model) : 'standard',
+    };
   }
 
   /** What routing would choose for a task now, on any harness (a dry run; nothing is recorded). */

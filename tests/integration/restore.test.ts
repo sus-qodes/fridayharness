@@ -131,6 +131,11 @@ describe('restore and restart (R08)', () => {
     });
     a.state.assignTask(pid, human, api1.task_id, 'be-1');
     await until(() => a.state.q.task(pid, api1.task_id).status === 'RUNNING', 'the backend task to run');
+    await be.client.update({
+      task_id: api1.task_id,
+      run_id: a.state.q.task(pid, api1.task_id).current_run_id as string,
+      note: 'schema drafted; the endpoints come next',
+    });
     const page = a.state.createTask(pid, human, {
       summary: 'page',
       scope: { write: ['frontend/**'], read: [] },
@@ -238,6 +243,26 @@ describe('restore and restart (R08)', () => {
     expect(b.state.q.modelCalls(pid).map((c) => c.status)).toContain('interrupted');
     const asked = await cli(['--project', cloneB, 'escalations']);
     expect(asked.stdout).toContain('friday brain allow-remote');
+
+    // The backend session is lost as well, and the same session comes back inside its reconnect
+    // window: its run resumes, and the resumed attempt is told what it had done (plan M12.3).
+    be2.client.stopHeartbeat();
+    clock.advance(b.state.config.leaseTtlMs + 1_000);
+    expect(b.tick().lost).toEqual([be2.harnessId]);
+    expect(b.state.q.task(pid, api1.task_id).status).toBe('HARNESS_LOST');
+    const be3 = await FakeHarness.connect(tdB, { agentKey: 'be-1', key: 'fake:be-1', role: 'backend' });
+    const resumed = await be3.waitFor('task.resume', 20_000);
+    expect(resumed.params).toMatchObject({ task_id: api1.task_id, attempt: 1 });
+    await until(() => b.state.q.task(pid, api1.task_id).status === 'RUNNING', 'the run to resume');
+    const packet = await be3.client.requestContext({ kind: 'task', task_id: api1.task_id });
+    const progress = packet.sections.find((s) => s.kind === 'task.progress')?.content ?? '';
+    expect(progress.startsWith(`Handoff: attempt 1 of ${api1.task_id}, resumed as attempt 1.`)).toBe(true);
+    for (const label of ['Goal:', 'Done so far:', 'Checked:', 'Decided:', 'Next:', 'Files:']) {
+      expect(progress).toContain(`\n${label}`);
+    }
+    expect(progress).toContain('(attempt 1): schema drafted; the endpoints come next');
+    expect(progress).toContain('Next: schema drafted; the endpoints come next');
+    await be3.close();
     await be2.close();
   });
 });

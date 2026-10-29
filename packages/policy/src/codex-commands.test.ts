@@ -44,6 +44,9 @@ const READS = [
   'Get-ChildItem -Recurse backend | Where-Object { -not $_.PSIsContainer } | Select-Object FullName',
   'foreach ($f in Get-ChildItem backend/src) { Write-Output "== $($f.Name)"; Get-Content $f.FullName -TotalCount 40 }',
   "try { Get-Content x -ErrorAction Stop } catch { Write-Output 'not found' }",
+  // The call operator runs the program it names; `&` is a separator only after a command (M11.1 review).
+  '& "C:\\Program Files\\nodejs\\node.exe" --version',
+  'Get-Content x; & "C:\\Program Files\\nodejs\\node.exe" --version',
 ];
 
 const TESTS = [
@@ -81,6 +84,12 @@ const NOT_ALLOWED: [string, string][] = [
   ['./deploy.sh $(cat version.txt)', 'unknown'],
   ["git -c alias.x='!rm -rf y' x", 'unknown'],
   ['git -C ../other push', 'git.push'],
+  // The call operator on a variable or an expression runs what no rule knows.
+  ['& $cmd -rf x', 'unknown'],
+  ['& (Get-Command rm) -rf x', 'unknown'],
+  // A command run in the background is judged as itself (M11.1 review).
+  ['Remove-Item -Recurse -Force backend/dist &', 'fs.destructive'],
+  ['(Remove-Item -Recurse -Force backend/dist) &', 'fs.destructive'],
 ];
 
 describe('commands as Codex sends them on Windows', () => {
@@ -101,6 +110,39 @@ describe('commands as Codex sends them on Windows', () => {
     expect(r.autonomy).not.toBe('auto');
     // The part that matters was recognised for what it is (the decision takes the strictest part).
     if (cls) expect(r.segments.map((s) => s.class)).toContain(cls);
+  });
+});
+
+/**
+ * On Linux and macOS Codex wraps each command in `bash -lc '…'` (ADR-0032 §4). What `xargs` runs and
+ * what every branch of a `case … esac` runs are judged inside that wrapper as they are for Claude
+ * Code's Bash tool (M11.1).
+ */
+const bash = (c: string) => `bash -lc '${c}'`;
+
+describe('commands as Codex sends them on Linux and macOS', () => {
+  it.each([
+    'find . -name "*.ts" | xargs grep -l discount',
+    'git ls-files | xargs -I {} git log --oneline -1 {}',
+    'case "$1" in start) node --version;; *) echo usage;; esac',
+  ])('a read passes: %s', (c) => {
+    expect(classifyCommand(bash(c)).autonomy).toBe('auto');
+  });
+
+  const notAllowed: [string, string][] = [
+    ['find . -name "*.ts" | xargs rm -rf', 'fs.destructive'],
+    ['case "$x" in a) rm -rf /tmp/x;; b) echo ok;; esac', 'fs.destructive'],
+    ['case "$1" in deploy) git push;; *) echo usage;; esac', 'git.push'],
+    // `xargs` whose command is its input, and a command run in the background (M11.1 review).
+    ['cat cmds.txt | xargs -I{} {}', 'unknown'],
+    ['cat cmds.txt | xargs sh -c', 'unknown'],
+    ['nohup sh -c "rm -rf y" &', 'fs.destructive'],
+    ['(rm -rf y) &', 'fs.destructive'],
+  ];
+  it.each(notAllowed)('is not allowed on its own: %s', (c, cls) => {
+    const r = classifyCommand(bash(c));
+    expect(r.autonomy).not.toBe('auto');
+    expect(r.segments.map((s) => s.class)).toContain(cls);
   });
 });
 

@@ -1,0 +1,44 @@
+{
+  "objective": "Checkout takes a gift card and a discount code: the frontend shows the gift card's amount, the backend applies the discount code, and both reach the backend through the shared contract",
+  "constraints": [
+    "money stays in integer minor units with an ISO-4217 currency (DECISIONS.md ADR-001); never a float",
+    "the frontend reaches the backend only through shared/src/api.ts (ADR-002); both tasks add a field to the contract and keep every field the other adds"
+  ],
+  "outcomes": [
+    "the checkout page shows the amount a gift card paid, and nothing when no card was used",
+    "a known discount code lowers the checkout total by its percentage, rounded down to a whole minor unit; any other code changes nothing",
+    "the project's own tests pass: node --test \"**/test/*.test.ts\""
+  ],
+  "summary": "Add the gift card to the shared contract and show it in the frontend; then add the discount code to the shared contract and apply it in the backend. Both tasks write shared/src/api.ts, so the backend task starts from the frontend task's integrated contract.",
+  "rationale": "Two tasks that change the same file at the same time would overwrite or block each other; ordering them on the shared contract keeps each change whole, and the backend task is small enough that the wait costs little.",
+  "needs_human": null,
+  "tasks": [
+    {
+      "key": "giftcard-frontend",
+      "kind": "implementation",
+      "summary": "A gift card in the shared contract, and the amount applied on the checkout page",
+      "description": "In shared/src/api.ts, add an optional `giftCard` field to CheckoutRequest, typed `{ code: string }`, and an optional `giftCardApplied` field of type Money to CheckoutResponse, each with a one-line doc comment; keep every existing export and field as it is, including fields that other work adds to the same interfaces. Add frontend/src/gift-card.ts exporting `giftCardLine(applied: Money | undefined): string | null`: it returns null when `applied` is undefined or its amount is 0, and otherwise the text 'Gift card: -' followed by formatPrice(applied) from frontend/src/format-price.ts (so { amount: 1250, currency: 'EUR' } gives 'Gift card: -12.50 EUR'). Add frontend/test/gift-card.test.ts with node:test and node:assert/strict tests for these cases. Import types from '../../shared/src/api.ts' with the .ts extension, as the existing files do. Run the project's tests with `node --test \"**/test/*.test.ts\"` and make them all pass. Do not change any file under backend/.",
+      "acceptance_criteria": [
+        "node --test passes",
+        "giftCardLine returns null for no gift card and for an amount of 0"
+      ],
+      "scope": { "write": ["shared/src/api.ts", "frontend/**"], "read": ["frontend/**", "shared/**"] },
+      "role": "frontend",
+      "risk_level": "medium"
+    },
+    {
+      "key": "discount-backend",
+      "kind": "implementation",
+      "summary": "A discount code in the shared contract, applied to the checkout total",
+      "description": "In shared/src/api.ts, add an optional `discountCode` field to CheckoutRequest, typed `string`, with a one-line doc comment; keep every existing export and field as it is, including fields that other work adds to the same interfaces. Add backend/src/discount.ts exporting `applyDiscount(total: Money, code: string | undefined): Money`. The known codes are SAVE10 (10% off) and HALF (50% off), matched without regard to case. The discount is that percentage of total.amount rounded down to a whole minor unit, and the result is total.amount minus the discount, in the same currency (so 999 with HALF gives 500). An unknown code, an empty one or undefined returns the total unchanged. Add backend/test/discount.test.ts with node:test and node:assert/strict tests for each code, for case, for the rounding and for an unknown code. Import types from '../../shared/src/api.ts' with the .ts extension, as the existing files do. Run the project's tests with `node --test \"**/test/*.test.ts\"` and make them all pass. Do not change any file under frontend/.",
+      "acceptance_criteria": [
+        "node --test passes",
+        "applyDiscount rounds the discount down to a whole minor unit"
+      ],
+      "scope": { "write": ["shared/src/api.ts", "backend/**"], "read": ["backend/**", "shared/**"] },
+      "role": "backend",
+      "risk_level": "medium",
+      "depends_on": ["giftcard-frontend"]
+    }
+  ]
+}

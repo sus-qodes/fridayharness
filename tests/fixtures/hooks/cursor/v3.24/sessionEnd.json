@@ -1,0 +1,25 @@
+{
+  "host": "cursor",
+  "host_version": "3.24",
+  "written_at": "2026-10-18",
+  "event": "sessionEnd",
+  "note": "the conversation was closed",
+  "input": {
+    "conversation_id": "conv_fixture_1",
+    "generation_id": "gen_fixture_1",
+    "model": "fixture-model",
+    "model_id": "fixture-model-id",
+    "cursor_version": "3.24.0",
+    "workspace_roots": [
+      "${PROJECT_DIR}"
+    ],
+    "user_email": "someone@example.invalid",
+    "transcript_path": "${HOME}/.cursor/projects/fixture/transcript.jsonl",
+    "hook_event_name": "sessionEnd",
+    "session_id": "conv_fixture_1",
+    "reason": "user_close",
+    "duration_ms": 45000,
+    "is_background_agent": false,
+    "final_status": "completed"
+  }
+}

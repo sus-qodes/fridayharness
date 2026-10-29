@@ -1,10 +1,6 @@
-#![windows_subsystem = "windows"]
+// No console window in release builds; `cargo run` (debug) keeps one for its output.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    std::panic::set_hook(Box::new(|info| {
-        let text = format!("{info}\n{:?}", std::backtrace::Backtrace::capture());
-        let _ = std::fs::write("desktop-panic.log", text);
-    }));
     friday_desktop_lib::run();
 }
-

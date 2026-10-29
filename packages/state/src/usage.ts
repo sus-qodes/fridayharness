@@ -5,7 +5,8 @@
  * cost, turns), the context packets delivered to the attempt and their weight, the attempt's
  * context requests and tool calls by kind, and the verification verdict. Every later change to
  * context handling is judged against these rows, so the rules here are deterministic and say
- * where each number comes from. A value the host did not report is null, never 0.
+ * where each number comes from. A value the host did not report is null, never 0. Beside the cost
+ * stands the task's spending cap the attempt reached, when it did (`budget.exceeded`, plan M11.5).
  */
 import type { SqlDatabase, SqlValue } from '@friday/db';
 import type { RunView, UsageReport, UsageRowView, UsageToolKinds, VerificationView } from '@friday/protocol';
@@ -124,6 +125,7 @@ const unknownHost = (): UsageRowView['host'] => ({
   cache_read_input_tokens: null,
   cache_creation_input_tokens: null,
   cost_usd: null,
+  cap_usd: null,
   turns: null,
   model: null,
 });
@@ -221,6 +223,8 @@ function readEvents(
           cache_read_input_tokens: int(d.cache_read_input_tokens),
           cache_creation_input_tokens: int(d.cache_creation_input_tokens),
           cost_usd: num(d.cost_usd),
+          // Friday's figure, not the host's: kept across the host's reports.
+          cap_usd: u.host.cap_usd,
           turns: int(d.turns),
           model: text(d.model),
         };
@@ -235,6 +239,33 @@ function readEvents(
         if (Number(r.read_ranged) === 1) u.tools.reads.ranged += 1;
         else u.tools.reads.whole_file += 1;
       }
+    }
+  }
+}
+
+/**
+ * The attempts that reached the task's spending cap (`budget.exceeded`, plan M11.5), whether Friday
+ * then ended them or their claim still arrived: the cap stands beside the cost the host reported.
+ * Friday records it once per attempt, so the first record is the record; an attempt that reached no
+ * cap keeps null.
+ */
+function readCaps(db: SqlDatabase, projectId: string, runs: Map<string, RunView>, usage: Map<string, RunUsage>): void {
+  for (const ids of chunks([...runs.keys()])) {
+    const marks = ids.map(() => '?').join(',');
+    const rows = db
+      .prepare(
+        `SELECT json_extract(payload_json, '$.run_id') AS run_id,
+                json_extract(payload_json, '$.cap_usd') AS cap_usd
+           FROM events
+          WHERE project_id = ? AND type = 'budget.exceeded'
+            AND json_extract(payload_json, '$.run_id') IN (${marks})
+          ORDER BY sequence`,
+      )
+      .all<{ run_id: string; cap_usd: number | null }>(projectId, ...(ids as SqlValue[]));
+    for (const r of rows) {
+      const u = usage.get(r.run_id);
+      const cap = num(r.cap_usd);
+      if (u && cap !== null && u.host.cap_usd === null) u.host.cap_usd = cap;
     }
   }
 }
@@ -403,6 +434,7 @@ export function buildUsageReport(
   const byRun = new Map(runs.map((r) => [r.run_id, r]));
   if (runs.length) {
     readEvents(db, projectId, byRun, usage);
+    readCaps(db, projectId, byRun, usage);
     readRequests(db, projectId, byRun, usage);
     readPackets(db, projectId, runs, usage);
   }

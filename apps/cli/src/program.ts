@@ -1,7 +1,15 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AgentView, DomainEvent, HarnessView, RunView, TaskView, VerificationView } from '@friday/protocol';
+import type {
+  AgentView,
+  DomainEvent,
+  HarnessView,
+  RunView,
+  TaskView,
+  UiSnapshot,
+  VerificationView,
+} from '@friday/protocol';
 import { newId, TaskStatus } from '@friday/protocol';
 import { FRIDAY_DIR, FRIDAY_VERSION, readToken, renderInitialConfig, stateDir, writePrivateFile } from '@friday/sdk';
 import { Command, CommanderError, Option } from 'commander';
@@ -23,6 +31,7 @@ import { restoreProject } from './restore.js';
 import { registerLayaCommands, registerRoutingCommands } from './routing.js';
 import { runDaemon } from './run.js';
 import { createShortcut } from './shortcut.js';
+import { registerStartCommand } from './start.js';
 import { FRIDAY_DIR_GITIGNORE } from './templates.js';
 import { registerUsageCommands } from './usage.js';
 import { registerWorktreeCommands } from './worktrees.js';
@@ -31,6 +40,22 @@ const collect = (v: string, prev: string[] = []) => [...prev, v];
 
 /** Extra commands contributed by adapters (M1c: `harness config`, `harness doctor`, `fixture init`). */
 export const commandPlugins: ((program: Command) => void)[] = [];
+
+/**
+ * One line on config.yaml for `friday status` (plan M11.2): the changed keys that still need a
+ * restart, named exactly; what applied while Friday ran; or why the file could not be read.
+ */
+export function describeConfig(config: UiSnapshot['config']): string {
+  const c = config.changes;
+  if (!c) return 'read when Friday started';
+  if (c.error !== null) return `could not be read; the settings in force are unchanged: ${c.error}`;
+  const applied = c.applied.length ? `applied while running: ${c.applied.join(', ')}` : '';
+  if (c.restart_needed.length) {
+    const need = `${c.restart_needed.join(', ')} ${c.restart_needed.length === 1 ? 'needs' : 'need'} a restart to apply`;
+    return applied ? `${need}; ${applied}` : need;
+  }
+  return applied || 'unchanged since Friday started';
+}
 
 /** `90`, `90s`, `30m`, `2h` or `1d` in seconds. */
 function parseDuration(text: string): number {
@@ -107,7 +132,7 @@ export function buildProgram(): Command {
           `  ${path.relative(process.cwd(), configPath) || configPath}  (commit this)`,
           '  .friday/.gitignore  (commit this; it keeps runtime files out of git)',
           ...shortcuts.map((f) => `  shortcut: ${f}`),
-          shortcuts.length ? 'Next: double-click the shortcut' : 'Next: friday ui --start (or friday shortcut)',
+          shortcuts.length ? 'Next: double-click the shortcut' : 'Next: friday start (or friday shortcut)',
         ].join('\n'),
       );
     });
@@ -133,12 +158,15 @@ export function buildProgram(): Command {
         agents: AgentView[];
         approvals: Record<string, unknown>[];
         escalations: Record<string, unknown>[];
+        /** What the daemon did with a changed config.yaml (plan M11.2); null from a daemon without the board. */
+        config: UiSnapshot['config'] | null;
       }>(client.projectPath('/status'));
       out(g(), s, () =>
         [
           kv([
             ['project', `${ref.name} (${ref.project_id})`],
             ['daemon', client.baseUrl],
+            ['config', s.config ? describeConfig(s.config) : 'not reported by this daemon'],
             ['events', s.head],
             [
               'tasks',
@@ -334,7 +362,8 @@ export function buildProgram(): Command {
     ready: 'make a PROPOSED task READY',
     release: 'give an assigned or running task back (it becomes READY)',
     cancel: 'cancel a task',
-    rework: 'send a FAILED task back for rework (READY, offered first to the agent that did it)',
+    rework:
+      'send a FAILED task back for rework (READY, offered first to a stronger agent of its role, else to the agent that did it)',
     unreserve: 'let any agent take a READY task that is reserved for one agent',
   } as const;
   for (const action of ['ready', 'release', 'cancel', 'rework', 'unreserve'] as const) {
@@ -808,6 +837,7 @@ export function buildProgram(): Command {
   registerLayaCommands(program, g);
   registerUsageCommands(program, g);
   registerMemoryCommands(program, g);
+  registerStartCommand(program, g);
   for (const plugin of commandPlugins) plugin(program);
   return program;
 }

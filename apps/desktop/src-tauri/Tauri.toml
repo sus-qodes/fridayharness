@@ -3,7 +3,11 @@
 # IPC host (LESSONS UI-16, UI-28). The windows are created in src/lib.rs (both need the same
 # WebView2 arguments), so none is declared here.
 
-productName = "Friday"
+# The installed app's name. A per-user installer puts the app in %LOCALAPPDATA%\<productName>, and
+# %LOCALAPPDATA%\Friday is Friday's private state folder (tokens, credentials), so the app has a name
+# of its own. The executable keeps the crate's name, as in a plain `cargo build`.
+productName = "Friday Desktop"
+mainBinaryName = "friday-desktop"
 version = "0.1.0"
 identifier = "dev.friday.desktop"
 

@@ -90,6 +90,7 @@ describe('the first screen', () => {
     const name = (e: Element) =>
       e.classList.contains('sh-brand') ? 'mark' : text(e.querySelector('.sh-btn-label, .sh-metric-label')) || text(e);
     expect(headerFixed.map(name)).toEqual([
+      'mark',
       'shop',
       'Connected',
       'Running',
@@ -113,11 +114,11 @@ describe('the first screen', () => {
     expect((root.querySelector('.cv-minimap') as HTMLElement | null)?.hidden ?? true).toBe(true);
     const railHeadings = [...root.querySelectorAll('.sh-rail h2')].filter(visible);
     expect(railHeadings.map(text)).toEqual(['Waiting for you', 'Getting started']);
-    // 8 (header: project, state dot, Running, Waiting for you, Search, Messages, More, gear)
-    // + 4 (dock) + 5 (toolbar: Fit, −, 100 %, +, Finished goals) + 2 (rail headings) = 19. Not
+    // 9 (header: mark, project, state dot, Running, Waiting for you, Search, Messages, More, gear)
+    // + 4 (dock) + 5 (toolbar: Fit, −, 100 %, +, Finished goals) + 2 (rail headings) = 20. Not
     // counted: the browser's Notch pill (one more, not mounted here), Tidy (only after a drag) and
     // the minimap (only while a card lies outside the view). The review counted 27 before M9k.
-    expect(headerFixed.length + dock.length + toolbar.length + railHeadings.length).toBe(19);
+    expect(headerFixed.length + dock.length + toolbar.length + railHeadings.length).toBe(20);
     // Nothing on the first screen repeats something visible beside it.
     expect(root.querySelectorAll('[aria-label="Settings"]')).toHaveLength(1);
     expect(root.querySelectorAll('.sh-search, .dk-search')).toHaveLength(1);
@@ -177,8 +178,7 @@ describe('every door that left the first screen still opens (review §6)', () =>
     more.click();
     item('about').click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'about' });
-    expect(ctx.store.select('ui').activeView).toBe('settings');
-    expect(root.querySelector('.sh-settings-hub')).not.toBeNull();
+    expect(root.querySelector('.sh-drawer[data-kind="settings"]')).not.toBeNull();
   });
 
   it('the header’s Messages opens the drawer under its one name', () => {

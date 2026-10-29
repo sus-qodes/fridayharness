@@ -12,7 +12,16 @@ import { type Actor, FridayError, HarnessRegisterParams } from '@friday/protocol
 import { FridayState } from '@friday/state';
 import { deterministicGit, FakeClock, useTestWorkspace } from '@friday/test-support';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ContextCache, type ContextDeps, type ContextPolicy, compileContext, packetStaleness } from './index.js';
+import { HANDOFF_MAX_CHARS } from './compile.js';
+import {
+  boundRecord,
+  ContextCache,
+  type ContextDeps,
+  type ContextPolicy,
+  compileContext,
+  packetStaleness,
+  RECORD_LIMIT_BYTES,
+} from './index.js';
 
 const ws = useTestWorkspace();
 const REPO = fileURLToPath(new URL('../../../', import.meta.url));
@@ -427,6 +436,56 @@ describe('cost', () => {
   });
 });
 
+describe('the record of a packet (plan M12.6)', () => {
+  it('cuts the explanation lists until the record fits one event, the cut-by-budget list first, and says so', async () => {
+    const { packet, explanation } = await compile(backendTask());
+    // A large repository: two hundred candidates cut and two hundred included, each with a reason.
+    const entry = (i: number) => ({
+      section: 'code.related',
+      source_id: `packages/some-package/src/deeply/nested/folder/file-${i}.ts`,
+      priority: 5,
+      reason: `imports packages/other/src/index.ts, which the write scope imports (graph certain, distance 2) ${'x'.repeat(120)}`,
+      tokens: 40,
+    });
+    const size = (e: typeof explanation) => Buffer.byteLength(JSON.stringify({ packet, explanation: e }), 'utf8');
+    const cutOnly = { ...explanation, cut_by_budget: Array.from({ length: 200 }, (_, i) => entry(1000 + i)) };
+    expect(size(cutOnly)).toBeGreaterThan(RECORD_LIMIT_BYTES);
+    const bounded = boundRecord(packet, cutOnly);
+    expect(size(bounded)).toBeLessThanOrEqual(RECORD_LIMIT_BYTES);
+    // The included list is kept whole while cutting the other list suffices; the note counts both.
+    expect(bounded.included).toEqual(explanation.included);
+    expect(bounded.cut_by_budget.length).toBeLessThan(200);
+    expect(bounded.cut_by_budget.length).toBeGreaterThan(0);
+    expect(bounded.notes.at(-1)).toBe(
+      `the record lists ${bounded.cut_by_budget.length} of 200 sources cut by the budget and ${explanation.included.length} of ${explanation.included.length} included, so it fits one event`,
+    );
+    expect(bounded.budget).toEqual(explanation.budget);
+    // Both lists too large: the included list is cut only once nothing cut by the budget is left.
+    const both = {
+      ...cutOnly,
+      included: Array.from({ length: 200 }, (_, i) => ({
+        ...entry(i),
+        relevance: 0.5,
+        protected: false,
+        rule: 'graph',
+      })),
+    };
+    expect(size(both)).toBeGreaterThan(64 * 1024);
+    const twice = boundRecord(packet, both);
+    expect(size(twice)).toBeLessThanOrEqual(RECORD_LIMIT_BYTES);
+    expect(twice.cut_by_budget).toHaveLength(0);
+    expect(twice.included.length).toBeLessThan(200);
+    expect(twice.notes.at(-1)).toBe(
+      `the record lists 0 of 200 sources cut by the budget and ${twice.included.length} of 200 included, so it fits one event`,
+    );
+    // A record that fits is returned as it is, and the bounded one is recorded without an error.
+    expect(boundRecord(packet, explanation)).toBe(explanation);
+    expect(() =>
+      state.recordContextPacket(PROJECT, human, { ...packet, context_id: 'ctx_bounded' }, twice),
+    ).not.toThrow();
+  });
+});
+
 describe('authority at delivery (review M7.1 R02, R06)', () => {
   const ask = (taskId: string, request: { kind: string; paths?: string[] }) =>
     compileContext(
@@ -535,5 +594,180 @@ describe('authority at delivery (review M7.1 R02, R06)', () => {
       expect(section(asked.packet, 'repo.history'), policy.version).toContain('MIXED_HISTORY_MARKER');
       expect(section(recent.packet, 'repo.recent_commits'), policy.version).toContain('READABLE_HISTORY_MARKER');
     }
+  });
+});
+
+describe('the handoff summary (plan M12.3)', () => {
+  const LABELS = ['Goal:', 'Done so far:', 'Checked:', 'Decided:', 'Next:', 'Files:'];
+  const caller = () => ({ harness_id: agent.harness_id, agent_id: agent.agent_id });
+  /** The spawn harness accepts what Friday sent it, as a FakeHarness does. */
+  const accept = () => {
+    const msgs = state.pollOutbox(PROJECT, agent.harness_id, 10);
+    state.ackOutbox(
+      PROJECT,
+      agent.harness_id,
+      msgs.map((m) => ({ message_id: m.message_id, accepted: true, session_ref: 'sess-be-1' })),
+    );
+  };
+  /** An attempt of be-1 on the task: assigned, accepted, RUNNING. */
+  const startAttempt = (taskId: string): string => {
+    state.assignTask(PROJECT, human, taskId, 'be-1');
+    accept();
+    const t = state.q.task(PROJECT, taskId);
+    expect(t.status).toBe('RUNNING');
+    return t.current_run_id as string;
+  };
+  /** The labels appear once each, in the fixed order. */
+  const expectLabelled = (text: string) => {
+    const at = LABELS.map((l) => text.indexOf(`\n${l}`));
+    for (const [i, l] of LABELS.entries()) expect(at[i], l).toBeGreaterThan(0);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+  };
+
+  it("replaces a second attempt's progress notes with the summary of what the first did, decided and left", async () => {
+    const taskId = backendTask();
+    const run1 = startAttempt(taskId);
+    state.updateTask(PROJECT, caller(), {
+      task_id: taskId,
+      run_id: run1,
+      note: 'the discount service is written; the webhook is next',
+      changed_paths: ['backend/src/discount.ts'],
+    });
+    // A first attempt sees its notes as before: no handoff.
+    const first = await compile(taskId, { purpose: 'first' });
+    expect(section(first.packet, 'task.progress')).toContain('the discount service is written');
+    expect(section(first.packet, 'task.progress')).not.toContain('Handoff:');
+
+    const asked = state.requestPermission(PROJECT, caller(), {
+      task_id: taskId,
+      run_id: run1,
+      action_class: 'file.write',
+      resource: 'shared/src/api.ts',
+      justification: 'the contract gains a field',
+      ttl_s: 600,
+    });
+    state.decideApproval(PROJECT, human, asked.approval_id as string, true);
+    const refused = state.requestPermission(PROJECT, caller(), {
+      task_id: taskId,
+      run_id: run1,
+      action_class: 'shell.git.push',
+      command: 'git push',
+      justification: 'ship it',
+      ttl_s: 600,
+    });
+    state.decideApproval(PROJECT, human, refused.approval_id as string, false);
+    const q = state.requestEscalation(PROJECT, caller(), {
+      task_id: taskId,
+      run_id: run1,
+      question: 'Which currency is the default?',
+    });
+    state.answerEscalation(PROJECT, human, q.escalation_id, 'EUR, minor units');
+    state.submitResult(PROJECT, caller(), {
+      idempotency_key: 'claim-1',
+      task_id: taskId,
+      run_id: run1,
+      status: 'completed_claim',
+      summary: 'discount codes apply at checkout',
+      changed_paths: ['backend/src/discount.ts', 'backend/src/checkout.service.ts'],
+      checks: [],
+      notes: ['the webhook handler still has to be wired'],
+      risks: [],
+    });
+    const { verification_id } = state.startVerification(PROJECT, human, taskId);
+    state.recordVerificationCheck(PROJECT, human, verification_id, {
+      name: 'node --test',
+      kind: 'test',
+      status: 'FAILED',
+      exit_code: 1,
+      artifact_ref: null,
+      summary: '2 failing',
+    });
+    state.finishVerification(PROJECT, human, verification_id, false, 'tests failed');
+    state.reworkTask(PROJECT, human, taskId, 'fix the failing tests');
+    startAttempt(taskId);
+
+    const { packet, explanation } = await compile(taskId, { purpose: 'second' });
+    const text = section(packet, 'task.progress');
+    expect(text.startsWith(`Handoff: attempt 1 of ${taskId}, for attempt 2.`)).toBe(true);
+    expectLabelled(text);
+    expect(text).toContain('Goal: Add discount codes to checkout Constraints: none from the human');
+    expect(text).toContain('(attempt 1): the discount service is written; the webhook is next');
+    expect(text).toContain('(attempt 1) claimed done: discount codes apply at checkout');
+    expect(text).toContain('- verification FAILED: tests failed; node --test FAILED (exit 1)');
+    expect(text).toContain('- approved file.write shared/src/api.ts');
+    expect(text).toContain('- refused shell.git.push git push');
+    expect(text).toContain('- asked "Which currency is the default?" -> EUR, minor units');
+    expect(text).toContain('Next: the webhook handler still has to be wired');
+    expect(text).toContain('Files: backend/src/checkout.service.ts, backend/src/discount.ts');
+    expect(text.length).toBeLessThanOrEqual(HANDOFF_MAX_CHARS);
+    // The note is in the summary, not repeated as a loose line, and the summary is protected.
+    expect(packet.sections.filter((s) => s.kind === 'task.progress')).toHaveLength(1);
+    expect(explanation.included.find((i) => i.section === 'task.progress')).toMatchObject({
+      protected: true,
+      rule: 'protected: handoff summary (plan M12.3)',
+    });
+    // A tight budget keeps it, like the contract.
+    const tight = await compile(taskId, { purpose: 'tight', max_chars: 3000 });
+    expect(section(tight.packet, 'task.progress')).toContain('Handoff: attempt 1');
+  });
+
+  it('cuts the oldest "Done so far" lines first and never exceeds 1,500 characters', async () => {
+    const taskId = backendTask();
+    const run1 = startAttempt(taskId);
+    for (let i = 1; i <= 30; i += 1) {
+      state.updateTask(PROJECT, caller(), {
+        task_id: taskId,
+        run_id: run1,
+        note: `step ${i}: ${'checked the pricing rules and adjusted the rounding '.repeat(2)}`,
+        changed_paths: [`backend/src/step-${i}.ts`],
+      });
+    }
+    state.recoverTask(PROJECT, human, taskId, 'reassign', { reason: 'the session was lost' });
+    expect(state.q.task(PROJECT, taskId).status).toBe('READY');
+    startAttempt(taskId);
+
+    const { packet } = await compile(taskId, { purpose: 'cut' });
+    const text = section(packet, 'task.progress');
+    expect(text.length).toBeLessThanOrEqual(HANDOFF_MAX_CHARS);
+    expectLabelled(text);
+    expect(text).toMatch(/- \(\d+ earlier lines cut\)/);
+    // The newest note stays and is what remains; the oldest went first.
+    expect(text).toContain('step 30:');
+    expect(text).not.toContain('step 1:');
+    expect(text).toMatch(/Next: step 30:/);
+    // The file list is whole: the notes went first.
+    expect(text).toContain('Files: backend/src/step-1.ts, backend/src/step-10.ts');
+    expect(text).toContain('backend/src/step-9.ts');
+    // A new record is a new packet: the summary is part of the key.
+    const again = await compile(taskId, { purpose: 'cut' });
+    expect(again.cached).toBe(true);
+    const run2 = state.q.task(PROJECT, taskId).current_run_id as string;
+    state.updateTask(PROJECT, caller(), { task_id: taskId, run_id: run2, note: 'attempt 2 picked it up' });
+    const fresh = await compile(taskId, { purpose: 'cut' });
+    expect(fresh.cached).toBe(false);
+    expect(section(fresh.packet, 'task.progress')).toContain('(attempt 2): attempt 2 picked it up');
+  });
+
+  it('shortens the file list, from its end, once the notes are gone and the files alone exceed the bound', async () => {
+    const taskId = backendTask();
+    const run1 = startAttempt(taskId);
+    for (const batch of [0, 1]) {
+      state.updateTask(PROJECT, caller(), {
+        task_id: taskId,
+        run_id: run1,
+        note: `batch ${batch} of the pricing tables rewritten`,
+        changed_paths: Array.from({ length: 45 }, (_, i) => `backend/src/pricing/table-${batch * 45 + i}.ts`),
+      });
+    }
+    state.recoverTask(PROJECT, human, taskId, 'restart', { reason: 'start from the last commit' });
+    startAttempt(taskId);
+    const { packet } = await compile(taskId, { purpose: 'files' });
+    const text = section(packet, 'task.progress');
+    expect(text.length).toBeLessThanOrEqual(HANDOFF_MAX_CHARS);
+    expectLabelled(text);
+    expect(text).toMatch(/Files: backend\/src\/pricing\/table-0\.ts, .* and \d+ more$/);
+    expect(text).toContain('- (2 earlier lines cut)');
+    // What remains is still said, from the newest note, although its line was cut.
+    expect(text).toContain('Next: batch 1 of the pricing tables rewritten');
   });
 });

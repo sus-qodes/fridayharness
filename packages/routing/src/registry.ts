@@ -40,6 +40,11 @@ export const ModelRecordInput = z
       .nullable()
       .default(null),
     latency_ms: z.number().int().positive().nullable().default(null),
+    /**
+     * What an agent running it costs (plan M13.3): `free`, `cheap` or `standard`. Unset: `free` for a
+     * local model, `standard` otherwise (`modelCostClass`).
+     */
+    cost_class: z.enum(['free', 'cheap', 'standard']).nullable().default(null),
     capabilities: Capabilities.default({}),
     notes: z.string().max(500).nullable().default(null),
   })
@@ -49,6 +54,13 @@ export type ModelRecord = z.output<typeof ModelRecordInput> & {
   /** Where its numbers come from: Friday's priors, or the project's own record. */
   source: 'seed' | 'project';
 };
+
+/** A model's cost class: as recorded, else `free` for a local model, else `standard`; `standard` when unknown. */
+export function modelCostClass(
+  m: Pick<ModelRecord, 'cost_class' | 'local'> | null | undefined,
+): 'free' | 'cheap' | 'standard' {
+  return m?.cost_class ?? (m?.local ? 'free' : 'standard');
+}
 
 const GuideClass = z
   .object({
@@ -89,9 +101,32 @@ export function loadGuide(): ModelGuide {
   return cached;
 }
 
-/** Friday's models with the project's own records added; a project record replaces one with its id. */
-export function mergeModels(seed: readonly ModelRecord[], project: readonly ModelRecordInput[]): ModelRecord[] {
+/**
+ * Friday's models with the project's own records added; a project record replaces one with its id.
+ * The Master Brain's model on this machine (`master_brain.provider: local`, plan M12.1) is listed
+ * too, as a local model with no harness vendor, so `friday models`, `must_use_local` and the
+ * sensitive-work rule know it runs here; a project record of the same id wins.
+ */
+export function mergeModels(
+  seed: readonly ModelRecord[],
+  project: readonly ModelRecordInput[],
+  planner?: { provider: string; model: string } | null,
+): ModelRecord[] {
   const out = new Map(seed.map((m) => [m.id, m]));
+  const local = plannerLocalModel(planner);
+  if (local && !out.has(local.id)) out.set(local.id, { ...ModelRecordInput.parse(local), source: 'project' });
   for (const p of project) out.set(p.id, { ...ModelRecordInput.parse(p), source: 'project' });
   return [...out.values()];
+}
+
+/** The registry record for the Master Brain's local model, or null when the planner is not a local model. */
+export function plannerLocalModel(planner?: { provider: string; model: string } | null): ModelRecordInput | null {
+  if (planner?.provider !== 'local' || planner.model === 'auto') return null;
+  return {
+    id: planner.model,
+    provider: 'local',
+    vendors: [],
+    local: true,
+    notes: "the Master Brain's model on this machine (master_brain.model)",
+  };
 }

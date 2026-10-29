@@ -77,41 +77,16 @@ function senderOf(m: SnapshotInboxItem): string {
   return m.from.kind;
 }
 
-export interface DecisionsTrayOptions {
-  onCollapse?: () => void;
-}
-
-export function mountDecisionsTray(
-  ctx: AppContext,
-  container: HTMLElement,
-  opts: DecisionsTrayOptions = {},
-): Component {
+export function mountDecisionsTray(ctx: AppContext, container: HTMLElement): Component {
   const titleId = nextId('tray-title');
   const count = h('span', { class: 'badge badge-warn gv-tray-count' }, '0');
   const list = h('ul', { class: 'gv-tray-list', aria: { labelledby: titleId } });
   const empty = h('p', { class: 'empty gv-tray-empty' }, 'Nothing waits for you.');
-  const collapseBtn = opts.onCollapse
-    ? button(
-        icon('chevronRight', 16),
-        opts.onCollapse,
-        {
-          class: 'sh-rail-collapse-btn',
-          ariaLabel: 'Collapse panel',
-          title: 'Collapse panel (Ctrl+\\)',
-        },
-      )
-    : null;
   // Focusable, so the Notch's waiting chip and the header's count can hand it the keyboard.
   const el = h(
     'section',
     { class: 'gv-tray', tabIndex: -1, aria: { labelledby: titleId } },
-    h(
-      'header',
-      { class: 'gv-tray-head' },
-      h('h2', { class: 'gv-tray-title', id: titleId }, 'Waiting for you'),
-      count,
-      collapseBtn,
-    ),
+    h('header', { class: 'gv-tray-head' }, h('h2', { class: 'gv-tray-title', id: titleId }, 'Waiting for you'), count),
     list,
     empty,
   );

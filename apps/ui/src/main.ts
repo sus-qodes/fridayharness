@@ -14,7 +14,6 @@ import './styles/dock.css';
 import './styles/panels.css';
 import './styles/notch.css';
 import './styles/mascot.css';
-import './styles/hub.css';
 import { studioAreas } from './areas.js';
 import { initAudio } from './audio/index.js';
 import { bootBrowser } from './shell/app.js';

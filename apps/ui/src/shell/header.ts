@@ -18,6 +18,7 @@ import { cleanText, plural, truncate } from '../ui/format.js';
 import { icon } from '../ui/svg.js';
 import { connectionView } from './connection.js';
 import { type AppContext, type Component, openDrawer } from './context.js';
+import { productMark } from './mark.js';
 import { mountMenu } from './menu.js';
 
 export interface HeaderCounts {
@@ -120,76 +121,27 @@ export function mountHeader(ctx: AppContext, opts: HeaderOptions = {}): Componen
       },
     ],
   });
-  const settings = button(
-    icon('gear', 16),
-    () => {
-      const isSettings = ctx.store.select('ui').activeView === 'settings';
-      if (isSettings) {
-        ctx.store.patch('ui', { activeView: 'canvas', drawer: null });
-      } else {
-        openDrawer(ctx, { kind: 'settings' });
-      }
-    },
-    {
-      class: 'btn btn-ghost btn-icon sh-btn sh-settings',
-      ariaLabel: 'Settings',
-      title: 'Settings',
-    },
-  );
-
-  const canvasBtn = button([icon('grid', 14), h('span', null, 'Canvas')], () => {
-    ctx.store.patch('ui', { activeView: 'canvas', drawer: null });
-  }, {
-    class: 'sh-view-btn sh-view-canvas',
-    ariaLabel: 'Spatial Canvas',
-    title: 'Switch to Spatial Canvas',
+  const settings = button(icon('gear', 16), () => openDrawer(ctx, { kind: 'settings' }), {
+    class: 'btn btn-ghost btn-icon sh-btn sh-settings',
+    ariaLabel: 'Settings',
+    title: 'Settings',
   });
-
-  const settingsBtn = button([icon('gear', 14), h('span', null, 'Settings')], () => {
-    openDrawer(ctx, { kind: 'settings' });
-  }, {
-    class: 'sh-view-btn sh-view-settings',
-    ariaLabel: 'Settings Hub',
-    title: 'Switch to Settings Hub',
-  });
-
-  const viewSwitcher = h(
-    'div',
-    { class: 'sh-views', role: 'tablist', aria: { label: 'Studio Views' } },
-    canvasBtn,
-    settingsBtn,
-  );
-
-  const leftZone = h(
-    'div',
-    { class: 'sh-left-zone' },
-    h(
-      'div',
-      { class: 'sh-project-pill' },
-      h('div', { class: 'sh-project' }, name),
-      daemon,
-    ),
-  );
-
-  const centerZone = h(
-    'div',
-    { class: 'sh-center-zone' },
-    viewSwitcher,
-  );
-
-  const rightZone = h(
-    'div',
-    { class: 'sh-right-zone' },
-    metrics,
-    h('nav', { class: 'sh-actions', aria: { label: 'Studio' } }, search, messages, more.el, settings),
-  );
 
   const bar = h(
     'div',
     { class: 'sh-bar' },
-    leftZone,
-    centerZone,
-    rightZone,
+    h(
+      'div',
+      { class: 'sh-brand' },
+      productMark(22),
+      h('span', { class: 'sh-brand-name' }, 'Friday'),
+      h('span', { class: 'sh-brand-sub' }, 'Studio'),
+    ),
+    h('div', { class: 'sh-project' }, name),
+    daemon,
+    h('span', { class: 'spacer' }),
+    metrics,
+    h('nav', { class: 'sh-actions', aria: { label: 'Studio' } }, search, messages, more.el, settings),
   );
 
   const pauseText = h('span', { class: 'sh-pause-text' });
@@ -277,21 +229,9 @@ export function mountHeader(ctx: AppContext, opts: HeaderOptions = {}): Componen
     if (next !== null) expiryTimer = setTimeout(renderBoard, Math.min(next + 50, 2_147_000_000));
   }
 
-  function renderView(): void {
-    const active = ctx.store.select('ui').activeView;
-    canvasBtn.classList.toggle('active', active === 'canvas');
-    settingsBtn.classList.toggle('active', active === 'settings');
-    settings.classList.toggle('btn-active', active === 'settings');
-  }
-
-  const unsubscribers = [
-    ctx.store.subscribe('system', renderSystem),
-    ctx.store.subscribe('board', renderBoard),
-    ctx.store.subscribe('ui', renderView),
-  ];
+  const unsubscribers = [ctx.store.subscribe('system', renderSystem), ctx.store.subscribe('board', renderBoard)];
   renderSystem();
   renderBoard();
-  renderView();
 
   return {
     el,

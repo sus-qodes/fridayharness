@@ -2,7 +2,7 @@
  * `friday harness doctor claude-code` (plan M1.10, B21): each check and the enforcement level it
  * concludes. Claude Code detection is injected, so results do not depend on this machine.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -70,6 +70,28 @@ describe('friday harness doctor claude-code', () => {
     });
   });
 
+  it('warns when Cursor would run these hooks with no Friday hook of its own (plan M8b.2)', async () => {
+    initTestProject(ws());
+    attach();
+    const cursorDir = path.join(ws().projectDir, '.cursor');
+    mkdirSync(cursorDir, { recursive: true });
+    const warned = await doctor(claude('2.1.296'));
+    expect(warned.checks.find((c) => c.id === 'cc.cursor')).toMatchObject({
+      status: 'warn',
+      fix: expect.stringContaining('friday harness config cursor'),
+    });
+    writeFileSync(
+      path.join(cursorDir, 'hooks.json'),
+      JSON.stringify({
+        version: 1,
+        hooks: {
+          preToolUse: [{ type: 'command', command: 'node .friday/harness/cursor/hook.mjs cursor preToolUse' }],
+        },
+      }),
+    );
+    expect((await doctor(claude('2.1.296'))).checks.find((c) => c.id === 'cc.cursor')).toBeUndefined();
+  });
+
   it('maps the Claude Code version to the level Friday achieves', async () => {
     initTestProject(ws());
     attach();
@@ -135,7 +157,7 @@ describe('friday harness doctor claude-code', () => {
     const r = await doctor(claude('2.1.296'), {});
     expect(r.checks.find((c) => c.id === 'cc.mcp')).toMatchObject({
       status: 'ok',
-      message: expect.stringContaining('17 friday tools'),
+      message: expect.stringContaining('19 friday tools'),
     });
   });
 });

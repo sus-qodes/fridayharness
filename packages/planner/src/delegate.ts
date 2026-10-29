@@ -1,4 +1,5 @@
 import { globsOverlap, matchesAny } from '@friday/policy';
+import { COST_ORDER, type CostClass } from '@friday/protocol';
 
 /**
  * Delegation policy (spec Part 03 §10): a deterministic score, not a model call.
@@ -6,7 +7,8 @@ import { globsOverlap, matchesAny } from '@friday/policy';
  * `model_fit` is how well the best model the agent's harness can run fits the task (ADR-0031 §9).
  * Only available agents are eligible. A task that names a role goes to a free agent of that role
  * when there is one, the score deciding among them; ties go to the lower agent key, so the same
- * state always gives the same assignment.
+ * state always gives the same assignment. A small, low-risk task goes to the cheapest capable agent
+ * first (plan M13.3): of its role, the lowest cost class whose model fits, then the score.
  */
 
 export interface DelegationTask {
@@ -14,6 +16,9 @@ export interface DelegationTask {
   goal_id: string | null;
   role: string;
   write: string[];
+  /** The task's kind and risk: with its write scope, they say whether it is small (plan M13.3). */
+  kind?: string;
+  risk_level?: string;
 }
 
 export interface DelegationCandidate {
@@ -35,6 +40,22 @@ export interface DelegationCandidate {
   cost: number;
   /** How well that model fits the task, 0 to 1; 0 when routing chose none for this harness. */
   model_fit?: number;
+  /** What the agent's work costs (plan M13.3); `standard` when unknown. */
+  cost_class?: CostClass;
+}
+
+/** The kinds of task a cheaper agent may take when small and low-risk. */
+const SMALL_KINDS = new Set(['implementation', 'docs', 'chore', 'verification']);
+
+/** At least this model fit makes a cheaper agent capable of a task; a fit routing does not know (0) does not rule it out. */
+export const CAPABLE_FIT = 0.6;
+
+/**
+ * A small, low-risk task (plan M13.3): risk `low`, a kind a smaller model does well, and at most
+ * three write globs. Such a task goes to the cheapest capable agent.
+ */
+export function isSmallTask(t: DelegationTask): boolean {
+  return t.risk_level === 'low' && SMALL_KINDS.has(t.kind ?? 'implementation') && t.write.length <= 3;
 }
 
 export interface ScoreParts {
@@ -138,12 +159,22 @@ export function delegate(
   // must not outweigh the role the plan chose (LESSONS D-48).
   const named = task.role !== 'developer';
   const ofRole = (s: CandidateScore) => (named && s.parts.capability_fit === 1 ? 1 : 0);
+  // A small, low-risk task: the cheapest capable agent first (plan M13.3). An agent whose model
+  // routing knows to fit poorly is not capable of it, and ranks as the dearest.
+  const small = isSmallTask(task);
+  const classOf = new Map(candidates.map((c) => [c.agent_id, c.cost_class ?? 'standard']));
+  const cheapness = (s: CandidateScore) => {
+    if (!small) return 0;
+    const fit = s.parts.model_fit;
+    return fit > 0 && fit < CAPABLE_FIT ? COST_ORDER.length : COST_ORDER.indexOf(classOf.get(s.agent_id) ?? 'standard');
+  };
   const scores = candidates
     .map((c) => scoreCandidate(task, c))
     .sort(
       (a, b) =>
         Number(b.eligible) - Number(a.eligible) ||
         ofRole(b) - ofRole(a) ||
+        cheapness(a) - cheapness(b) ||
         b.total - a.total ||
         a.agent_key.localeCompare(b.agent_key),
     );
@@ -151,11 +182,15 @@ export function delegate(
   if (!best)
     return { task_id: task.task_id, agent_key: null, reason: 'no available agent; the task stays claimable', scores };
   const top = Math.max(...scores.filter((s) => s.eligible).map((s) => s.total));
+  const cls = classOf.get(best.agent_id) ?? 'standard';
+  const cheaper =
+    small && scores.some((s) => s.eligible && ofRole(s) === ofRole(best) && cheapness(s) > cheapness(best));
   return {
     task_id: task.task_id,
     agent_key: best.agent_key,
-    reason:
-      best.total < top
+    reason: cheaper
+      ? `a small, low-risk task: the cheapest capable agent (${cls}), ${best.agent_key}, score ${best.total}`
+      : best.total < top
         ? `the role it names (${task.role}): the highest score among its agents ${best.total} (${best.agent_key})`
         : `highest score ${best.total} (${best.agent_key})`,
     scores,

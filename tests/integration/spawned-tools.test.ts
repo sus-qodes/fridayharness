@@ -229,7 +229,9 @@ describe("Friday's tools in spawned sessions (review M8-R06)", () => {
     // Each session read the other's message with its id, and how to answer it.
     const claudeRead = claude
       .entries()
-      .find((e) => typeof e.received_message === 'string' && e.received_message.includes('Price units'));
+      .find(
+        (e) => typeof e.received_message === 'string' && e.received_message.includes('Are prices integer minor units?'),
+      );
     expect(String(claudeRead?.received_message)).toContain(`message ${codexAsks?.message_id}`);
     expect(String(claudeRead?.received_message)).toContain('response_to');
 

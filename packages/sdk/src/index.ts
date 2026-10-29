@@ -19,9 +19,14 @@ export { DaemonClient, type DaemonClientOptions, DaemonUnreachableError, type Re
 export {
   ApprovalSettings,
   type CheckConfig,
+  type ConfigKeyEffect,
+  changedConfigKeys,
+  configKeyEffect,
   EnvName,
   ExecutionSettings,
   FridayConfig,
+  LIVE_CONFIG_KEYS,
+  liveConfig,
   loadConfig,
   type MasterBrainConfig,
   McpSettings,
@@ -30,6 +35,7 @@ export {
   type ProviderConfig,
   parseConfig,
   policyVersion,
+  RESTART_CONFIG_KEYS,
   RoutingSettings,
   renderInitialConfig,
 } from './config.js';
@@ -69,7 +75,7 @@ export {
   revokeProvider,
   setProviderEndpoint,
 } from './provider-trust.js';
-export { renderContextMarkdown } from './render.js';
+export { firstTaskMessage, holdsContract, renderContextMarkdown } from './render.js';
 export {
   credentialsDir,
   hasSecret,

@@ -1,0 +1,20 @@
+{
+  "host": "antigravity",
+  "host_version": "1.4",
+  "written_at": "2026-10-18",
+  "event": "Stop",
+  "note": "the execution loop ended: the model finished its turn (the documented model_stop)",
+  "input": {
+    "conversationId": "conv-fixture-1",
+    "workspacePaths": [
+      "${PROJECT_DIR}"
+    ],
+    "transcriptPath": "${HOME}/.gemini/antigravity-cli/brain/conv-fixture-1/.system_generated/logs/transcript.jsonl",
+    "artifactDirectoryPath": "${HOME}/.gemini/antigravity-cli/brain/conv-fixture-1",
+    "modelName": "fixture-model",
+    "executionNum": 1,
+    "terminationReason": "model_stop",
+    "error": "",
+    "fullyIdle": true
+  }
+}

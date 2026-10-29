@@ -6,7 +6,7 @@
  * the repository's and no MCP server; what a human decides is declined until one has; the turn's
  * structured result becomes a claim, a blocked result or an error.
  */
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -19,7 +19,7 @@ import {
 } from '@friday/adapter-claude';
 import { SPAWNED_AGENT_TOOLS } from '@friday/mcp-server';
 import type { TaskStartParams, TaskView, UsageReport } from '@friday/protocol';
-import type { DaemonClient } from '@friday/sdk';
+import { type DaemonClient, firstTaskMessage } from '@friday/sdk';
 import { FakeClock, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli } from '../helpers/cli.js';
@@ -47,6 +47,8 @@ interface Script {
   plugins?: string[];
   skills?: string[];
   omitInit?: string[];
+  refuseResume?: boolean;
+  refuseReuse?: boolean;
   initAfterResult?: boolean;
   turns: Step[][];
   resume?: Step[];
@@ -176,9 +178,8 @@ describe('Claude Code in spawn mode', () => {
       '--max-budget-usd': '0.5',
     });
     expect(flags['--session-id']).toBe(run?.session_ref);
-    expect(JSON.parse(String(flags['--json-schema'])).required).toEqual(
-      expect.arrayContaining(['status', 'summary', 'changed_paths', 'blocked_reason']),
-    );
+    // Only the status is required, so no missing field makes Claude Code refuse the answer (plan M13.4).
+    expect(JSON.parse(String(flags['--json-schema'])).required).toEqual(['status']);
     // The routed model is applied, and the one the session reports is recorded.
     const started = c.adapter.received.find((m) => m.method === 'task.start')?.params as TaskStartParams;
     if (started.model) expect(flags['--model']).toBe(started.model);
@@ -237,7 +238,12 @@ describe('Claude Code in spawn mode', () => {
     )?.payload as { data?: Record<string, unknown> } | undefined;
     expect(settings?.data).toMatchObject({
       // Friday's own server, which the adapter serves, adds Friday's tools and nothing else.
-      tools: [...SPAWN_TOOLS, 'StructuredOutput', ...SPAWNED_AGENT_TOOLS.map((t) => `mcp__friday__${t}`)],
+      // The project declares no operation, so the session is not given friday_run_operation (plan M13.5).
+      tools: [
+        ...SPAWN_TOOLS,
+        'StructuredOutput',
+        ...SPAWNED_AGENT_TOOLS.filter((t) => t !== 'friday_run_operation').map((t) => `mcp__friday__${t}`),
+      ],
       mcp_servers: ['friday'],
       // Claude Code's own plugins are recorded and accepted; they add no tool.
       plugins: ['cc-plugin-agents-md', 'cc-plugin-telemetry', 'cc-plugin-plugin-authoring'],
@@ -270,6 +276,12 @@ describe('Claude Code in spawn mode', () => {
     const rules = readFileSync(path.join(attempt, 'instructions.md'), 'utf8');
     expect(rules.startsWith(CLAUDE_SPAWN_RULES.split('\n')[0] as string)).toBe(true);
     expect(rules).toContain(id);
+    // The instructions hold the task's contract, so the first message points at it instead of
+    // repeating it (plan M10b.2).
+    expect(rules).toContain('[task.contract');
+    const first = () => c.entries().find((e) => typeof e.received_message === 'string')?.received_message;
+    await eventually(first, (m) => typeof m === 'string', 'the first message');
+    expect(first()).toBe(firstTaskMessage({ task_id: id, instruction: '', acceptance_criteria: [] }, true));
     // Its instructions name only the Friday tools the session has (review M8-R06).
     const named = new Set(rules.match(/friday_[a-z_]+/g) ?? []);
     expect(
@@ -277,6 +289,8 @@ describe('Claude Code in spawn mode', () => {
       [...named].join(),
     ).toBe(true);
     expect(rules).not.toMatch(/friday:\/\//);
+    // ...and only those it has: no operation is declared, so no friday_run_operation (plan M13.5).
+    expect(rules).not.toContain('friday_run_operation');
     // Its only MCP server is Friday's own, served by the adapter on this machine, for this attempt.
     const mcp = JSON.parse(readFileSync(path.join(attempt, 'mcp.json'), 'utf8')) as {
       mcpServers: Record<string, { type: string; url: string; headers: Record<string, string> }>;
@@ -359,6 +373,168 @@ describe('Claude Code in spawn mode', () => {
     expect(String((error?.payload as { message?: string } | undefined)?.message)).toMatch(
       /tools Friday did not give it \(WebFetch\), MCP servers \(someone\), plugins \(helper\) and skills \(deploy\), which Friday cannot judge/,
     );
+  });
+
+  it('takes an answer with only its status as a claim of what the worktree changed (plan M13.4)', async () => {
+    const td = await daemon();
+    const c = claude(td, 'cl-1', {
+      turns: [
+        [
+          { op: 'write', path: 'src/a.ts', text: 'export const a = 1;\n' },
+          { op: 'message', text: 'I added src/a.ts.' },
+          // No summary, no changed paths, and a field the schema does not name: none of it is refused.
+          { op: 'final', status: 'completed', omit: ['summary'], extra: { notes: 'x' } },
+        ],
+      ],
+    });
+    await c.adapter.start();
+    const id = await assigned(td, 'cl-1', ['src/**']);
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the claim',
+    );
+    expect(c.entries().some((e) => e.refusedFinal)).toBe(false);
+    const run = td.daemon.state.q.findRun(status(td, id).current_run_id as string);
+    const claim = run?.claim as { changed_paths: string[]; summary: string };
+    // The session's last text stands in for the summary; the paths are the worktree's.
+    expect(claim.summary).toBe('I added src/a.ts.');
+    expect(claim.changed_paths).toEqual(['src/a.ts']);
+  });
+
+  it('continues the session that did the work when a refused claim is reworked by the same agent (plan M13.2)', async () => {
+    const td = await daemon();
+    const c = claude(td, 'cl-1', {
+      turns: [
+        [
+          { op: 'write', path: 'src/a.ts', text: 'export const a = 1;\n' },
+          { op: 'final', status: 'completed', summary: 'added a' },
+        ],
+        [
+          { op: 'write', path: 'src/a.test.ts', text: 'test\n' },
+          { op: 'final', status: 'completed', summary: 'added the test' },
+        ],
+      ],
+    });
+    await c.adapter.start();
+    expect(c.adapter.descriptor().capabilities).toMatchObject({ resume_session: true });
+    const id = await assigned(td, 'cl-1', ['src/**']);
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the first claim',
+    );
+    const first = td.daemon.state.q.findRun(status(td, id).current_run_id as string);
+    await td.operator.post(td.operator.projectPath(`/tasks/${id}/verify`), {
+      result: 'failed',
+      note: 'a has no test',
+    });
+    await td.operator.post(td.operator.projectPath(`/tasks/${id}/rework`), { reason: 'add a test for a' });
+    await td.operator.post(td.operator.projectPath(`/tasks/${id}/assign`), { agent_key: 'cl-1' });
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the second claim',
+    );
+    const second = td.daemon.state.q.findRun(status(td, id).current_run_id as string);
+    expect(second?.attempt).toBe(2);
+    // Friday told the adapter which session to continue, and why.
+    const start = c.adapter.received.filter((m) => m.method === 'task.start').at(-1)?.params as TaskStartParams;
+    expect(start.continue_session).toBe(first?.session_ref);
+    expect(start.note).toMatch(/refused your completion claim[\s\S]*Why: add a test for a[\s\S]*manual: a has no test/);
+    // The second attempt resumed the first session, with the same instructions, and its first
+    // message is the reason, not the task again.
+    const starts = c.entries().filter((e) => e.flags) as { flags: Record<string, string> }[];
+    expect(starts[1]?.flags['--resume']).toBe(first?.session_ref);
+    expect(second?.session_ref).toBe(first?.session_ref);
+    const told = c.entries().filter((e) => typeof e.instructions === 'string') as { instructions: string }[];
+    expect(told).toHaveLength(2);
+    expect(told[1]?.instructions).toBe(told[0]?.instructions);
+    const messages = c.entries().filter((e) => typeof e.received_message === 'string') as {
+      received_message: string;
+    }[];
+    expect(messages[1]?.received_message).toBe(start.note);
+    expect((second?.claim as { summary: string } | undefined)?.summary).toBe('added the test');
+  });
+
+  it('starts a rework in a new session when the host cannot continue the old one (plan M13.2)', async () => {
+    const td = await daemon();
+    const c = claude(td, 'cl-1', {
+      turns: [
+        [{ op: 'final', status: 'completed', summary: 'first' }],
+        [{ op: 'final', status: 'completed', summary: 'again' }],
+      ],
+    });
+    await c.adapter.start();
+    const id = await assigned(td, 'cl-1', ['src/**']);
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the first claim',
+    );
+    const first = td.daemon.state.q.findRun(status(td, id).current_run_id as string);
+    await td.operator.post(td.operator.projectPath(`/tasks/${id}/verify`), { result: 'failed', note: 'wrong' });
+    await td.operator.post(td.operator.projectPath(`/tasks/${id}/rework`), { reason: 'do it right' });
+    // The host lost the session: `--resume` finds nothing.
+    rmSync(path.join(c.dir, 'work', `session-${first?.session_ref}.json`));
+    await td.operator.post(td.operator.projectPath(`/tasks/${id}/assign`), { agent_key: 'cl-1' });
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the claim of the new session',
+    );
+    const starts = c.entries().filter((e) => e.flags) as { flags: Record<string, string> }[];
+    expect(starts.map((s) => (s.flags['--resume'] ? 'resume' : 'new'))).toEqual(['new', 'resume', 'new']);
+    // The new session keeps the id Friday knows, and is given the task as any new attempt is.
+    expect(starts[2]?.flags['--session-id']).toBe(first?.session_ref);
+    const messages = c.entries().filter((e) => typeof e.received_message === 'string') as {
+      received_message: string;
+    }[];
+    expect(messages.at(-1)?.received_message).toBe(
+      firstTaskMessage({ task_id: id, instruction: '', acceptance_criteria: [] }, true),
+    );
+  });
+
+  it('starts a rework under a new session id when the host refuses both the old session and its id (review of M13)', async () => {
+    const td = await daemon();
+    const c = claude(td, 'cl-1', {
+      refuseResume: true,
+      refuseReuse: true,
+      turns: [
+        [{ op: 'final', status: 'completed', summary: 'first' }],
+        [{ op: 'final', status: 'completed', summary: 'again' }],
+      ],
+    });
+    await c.adapter.start();
+    const id = await assigned(td, 'cl-1', ['src/**']);
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the first claim',
+    );
+    const first = td.daemon.state.q.findRun(status(td, id).current_run_id as string);
+    await td.operator.post(td.operator.projectPath(`/tasks/${id}/verify`), { result: 'failed', note: 'wrong' });
+    await td.operator.post(td.operator.projectPath(`/tasks/${id}/rework`), { reason: 'do it right' });
+    await td.operator.post(td.operator.projectPath(`/tasks/${id}/assign`), { agent_key: 'cl-1' });
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the claim of the session under a new id',
+    );
+    const starts = c.entries().filter((e) => e.flags) as { flags: Record<string, string> }[];
+    expect(starts.map((s) => (s.flags['--resume'] ? 'resume' : 'new'))).toEqual(['new', 'resume', 'new', 'new']);
+    expect(starts[2]?.flags['--session-id']).toBe(first?.session_ref);
+    const fresh = starts[3]?.flags['--session-id'];
+    expect(fresh).toBeTruthy();
+    expect(fresh).not.toBe(first?.session_ref);
+    // The new session's tool calls reach Friday's hooks: its id is bound to this harness.
+    expect(
+      c.entries().some((e) => e.hook === 'PreToolUse' && e.tool === 'StructuredOutput' && e.decision === 'allow'),
+    ).toBe(true);
+    // The claim is the second attempt's (a new session plays the scripted host's first turn).
+    const second = td.daemon.state.q.findRun(status(td, id).current_run_id as string);
+    expect(second?.attempt).toBe(2);
+    expect(second?.claim).toBeTruthy();
   });
 
   it('passes a message for its agent into the running session, and acknowledges it once taken', async () => {

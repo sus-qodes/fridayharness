@@ -29,6 +29,9 @@ export type HostName = AgentLaunchRequest['host'];
 export const HOSTS: readonly { host: HostName; label: string; prefix: string }[] = [
   { host: 'claude-code', label: 'Claude Code', prefix: 'claude' },
   { host: 'codex', label: 'Codex', prefix: 'codex' },
+  // Experimental until the owner's live check with their own login (plan M8b).
+  { host: 'cursor', label: 'Cursor CLI (experimental)', prefix: 'cursor' },
+  { host: 'gemini', label: 'Gemini CLI (experimental)', prefix: 'gemini' },
 ];
 
 export const AGENT_KEY_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -107,7 +110,7 @@ export function launchBody(form: AgentForm): AgentLaunchRequest {
   if (form.host === 'claude-code') {
     if (form.claude.effort) options.effort = form.claude.effort;
     options.max_budget_usd = Number(form.claude.max_budget_usd);
-  } else {
+  } else if (form.host === 'codex') {
     options.sandbox = form.codex.sandbox;
     if (form.codex.windows_sandbox) options.windows_sandbox = form.codex.windows_sandbox;
     if (form.codex.effort) options.effort = form.codex.effort;
@@ -203,6 +206,11 @@ export function startAgentModal(
         hint: `${BUDGET.min} to ${BUDGET.max}; Claude Code stops an attempt that would spend more`,
       });
       optionsBox.replaceChildren(h('div', { class: 'pn-grid2' }, field('Effort', effort).el, budgetField.el));
+    } else if (form.host !== 'codex') {
+      // The Cursor CLI and Gemini CLI take no options here: their models come from routing too.
+      optionsBox.replaceChildren(
+        h('div', { class: 'field-hint' }, 'This host takes no options here; Friday routes its model.'),
+      );
     } else {
       let previous = form.codex.sandbox;
       const sandbox = select<CodexSandbox>(
