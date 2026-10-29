@@ -15,6 +15,7 @@ import {
   geminiRunCommand,
   compareVersions as geminiVersionCompare,
 } from '@friday/adapter-gemini';
+import { opencodeRunCli } from '@friday/adapter-opencode';
 import { DaemonClient, type ProjectRef, privateDirFor } from '@friday/sdk';
 import { type Command, Option } from 'commander';
 import { type GlobalOptions, out, project, UsageError } from './context.js';
@@ -52,7 +53,7 @@ function routingOptions(o: SpawnRunOptions): { costClass?: 'free' | 'cheap' | 's
 }
 
 /** The hosts `harness run` starts (ADR-0032 §1). */
-export const SPAWN_HOSTS = ['codex', 'claude-code', 'cursor', 'gemini'] as const;
+export const SPAWN_HOSTS = ['codex', 'claude-code', 'cursor', 'gemini', 'opencode'] as const;
 
 /**
  * Runs until a signal, or, with `--parent-stdin`, until standard input closes (plan M9 §5.12);
@@ -100,10 +101,12 @@ function budgetOf(text: string): number {
 export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void {
   harness
     .command('run <host>')
-    .description(`work for Friday as a spawn-mode harness, in the foreground (${SPAWN_HOSTS.join(', ')})`)
+    .description(
+      `work for Friday as a spawn-mode harness, in the foreground (${SPAWN_HOSTS.join(', ')}; opencode: no-model preflight)`,
+    )
     .option(
       '--agent <key>',
-      'the agent this host works as (default: FRIDAY_AGENT, else codex-1, claude-1, cursor-1 or gemini-1)',
+      'the agent this host works as (default: FRIDAY_AGENT, else codex-1, claude-1, cursor-1, gemini-1 or opencode-1)',
     )
     .option('--role <role>', 'its role, which delegation matches tasks against', 'developer')
     .addOption(
@@ -139,6 +142,7 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
       if ((o.costClass || o.models) && host !== 'claude-code' && host !== 'codex')
         throw new UsageError('--cost-class and --models are for claude-code and codex');
       if (host === 'claude-code') return runClaudeSpawn(g, o);
+      if (host === 'opencode') return opencodeRunCli(project(g()), o, { out: (v, text) => out(g(), v, text) });
       if (host === 'cursor') return cursorRunCli(project(g()), o);
       if (host === 'gemini') {
         for (const [given, name] of [

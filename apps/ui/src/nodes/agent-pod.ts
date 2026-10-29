@@ -63,6 +63,7 @@ const VENDOR: Record<string, string> = {
   cursor: 'Cursor',
   antigravity: 'Antigravity',
   gemini: 'Gemini CLI',
+  opencode: 'OpenCode',
   october: 'October',
   generic: 'Agent',
 };

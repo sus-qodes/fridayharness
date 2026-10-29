@@ -95,7 +95,16 @@ export type CostClass = z.infer<typeof CostClass>;
 export const COST_ORDER: readonly CostClass[] = CostClass.options;
 
 /** The hosts Friday knows; `antigravity` and `gemini` (Gemini CLI) from M8b, with Cursor's hooks. */
-export const Vendor = z.enum(['claude-code', 'codex', 'cursor', 'antigravity', 'gemini', 'october', 'generic']);
+export const Vendor = z.enum([
+  'claude-code',
+  'codex',
+  'cursor',
+  'antigravity',
+  'gemini',
+  'opencode',
+  'october',
+  'generic',
+]);
 export type Vendor = z.infer<typeof Vendor>;
 
 export const AttachMode = z.enum(['attach', 'spawn']);

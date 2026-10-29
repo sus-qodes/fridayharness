@@ -2,6 +2,10 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — OpenCode A/B (experimental)
+
+- Added experimental OpenCode checkpoints A/B: a pinned 1.19.3 no-model server/session preflight with private configuration, plugin readiness and effective-config checks; a fail-closed before-tool plugin and fixture-tested translator using the existing tool.check policy; harness config/doctor/run dispatch, scripted-host conformance and an optional native no-model check. OpenCode remains L1 unverified. Model prompt submission, task polling and autonomous-worker discovery are disabled; no live model enforcement, coding-quality or busy-lifecycle claim is made.
+
 ## Unreleased — M13, fewer sessions and fewer tokens per goal
 
 - **A small goal is one task:** the Master Brain's plan prompt (`plan-3`) keeps work one agent can finish as one task, and Friday merges a first plan of two or three tasks that would only run one after another into one, saying so in the plan's rationale. Plans you write, or ask for with feedback, are never merged. On the benefit comparison's goal: 38% less input than as two tasks, and as fast as one plain session.

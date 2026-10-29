@@ -327,6 +327,12 @@ export function achievedEnforcement(h: {
   host_version: string | null;
   capabilities?: Record<string, unknown> | null;
 }): { level: EnforcementLevel; status: EnforcementStatus; basis: string } {
+  if (h.vendor === 'opencode')
+    return {
+      level: h.claimed === 'L1' ? 'L1' : 'L0',
+      status: h.claimed === 'L1' ? 'unverified' : 'observed',
+      basis: 'OpenCode is experimental; live hook enforcement has not been verified',
+    };
   const hooked = HOOKED_HOSTS[h.vendor];
   if (hooked && h.attach_mode === 'attach') {
     if (!h.hooks_seen) {
