@@ -87,12 +87,19 @@ export interface IslandFsmOptions {
   initial?: IslandState;
   timings?: Partial<IslandTimings>;
   timers?: TimerApi;
+  /**
+   * Whether the island has a card to open (default true). False in a browser page, where the rail
+   * beside the pill shows every waiting item in full (review §4, owner decision 1): nothing then
+   * reaches `expanded`; hover, click and a new item leave the pill as it is.
+   */
+  card?: boolean;
 }
 
 export class IslandFsm {
   #s: IslandSnapshot;
   #timings: IslandTimings;
   readonly #timers: TimerApi;
+  readonly #card: boolean;
   readonly #running = new Map<TimerName, { handle: unknown; ms: number }>();
   readonly #listeners = new Set<IslandListener>();
   #destroyed = false;
@@ -100,7 +107,8 @@ export class IslandFsm {
   constructor(opts: IslandFsmOptions = {}) {
     this.#timers = opts.timers ?? realTimers;
     this.#timings = sanitizeTimings(opts.timings);
-    const initial = opts.initial ?? 'compact';
+    this.#card = opts.card ?? true;
+    const initial = opts.initial === 'expanded' && !this.#card ? 'compact' : (opts.initial ?? 'compact');
     this.#s = Object.freeze({
       state: initial,
       pinned: false,
@@ -123,6 +131,11 @@ export class IslandFsm {
 
   get timings(): Readonly<IslandTimings> {
     return this.#timings;
+  }
+
+  /** Whether a card can open at all (false in a browser page). */
+  get hasCard(): boolean {
+    return this.#card;
   }
 
   /** The pointer or the keyboard is on the island: no timer runs. */
@@ -262,6 +275,8 @@ export class IslandFsm {
     if (this.#destroyed) return;
     const prev = this.#s;
     const next: Mutable<IslandSnapshot> = { ...prev, ...changes };
+    // Without a card the pill is as far as the island opens.
+    if (!this.#card && next.state === 'expanded') next.state = 'compact';
     if (next.state !== 'greeting') next.greeting = null;
     if (next.state === 'greeting' && next.greeting === null) next.greeting = 'welcome';
     if (next.state !== 'expanded') next.openedBy = null;

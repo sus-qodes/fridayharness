@@ -45,6 +45,7 @@ import {
   errorBox,
   errorOf,
   field,
+  fold,
   group,
   input,
   note,
@@ -479,8 +480,10 @@ function jsonTools(
     });
   });
 
-  return h(
-    'div',
+  // Behind a fold (review §4): the editor opens on its fields, and a drafted plan to paste is one
+  // click away.
+  return fold(
+    'More',
     { class: 'pn-json-tools' },
     h(
       'div',
@@ -664,12 +667,12 @@ function firstPlanEditor(
     main,
     notes.length ? note(notes.join(' ')) : null,
     h('div', { class: 'pn-goal-line' }, h('span', { class: 'muted' }, 'Goal: '), plain(data.goal.request, 300)),
-    tools,
     objectiveField.el,
     summaryField.el,
     h('h3', { class: 'section-title' }, 'Tasks'),
     list,
     h('div', { class: 'pn-actions pn-actions-start' }, addBtn),
+    tools,
   );
   side.prepend(note('Friday checks the plan here before sending it; its own checks have the final word.'));
   host.append(
@@ -972,7 +975,6 @@ function revisionEditor(
       plain(data.goal.request, 300),
       h('span', { class: 'muted' }, ` · active plan version ${active.version}`),
     ),
-    tools,
     summaryField.el,
     h('h3', { class: 'section-title' }, 'Tasks of the active plan'),
     existing.length ? existingList : h('div', { class: 'empty' }, 'The active plan has no tasks.'),
@@ -982,6 +984,7 @@ function revisionEditor(
     h('h3', { class: 'section-title' }, 'New tasks'),
     newList,
     h('div', { class: 'pn-actions pn-actions-start' }, addBtn),
+    tools,
   );
   side.prepend(changesBox);
   host.append(

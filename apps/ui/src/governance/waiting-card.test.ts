@@ -71,6 +71,9 @@ describe('waiting card (plan §7.5, FD-22)', () => {
     expect(card.el.querySelector('.gv-waiting-note .hidden-warning')).not.toBeNull();
     expect(card.el.textContent).toContain('codex-1');
     expect(card.el.textContent).toContain('An agent waits for you');
+    // Every box an answer is typed into says who reads it (review §4).
+    const box = card.el.querySelector('textarea') as HTMLTextAreaElement;
+    expect(card.el.querySelector(`label[for="${box.id}"]`)?.textContent).toBe('Reply to codex-1');
     card.destroy();
   });
 

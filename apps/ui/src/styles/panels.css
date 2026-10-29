@@ -625,6 +625,29 @@
   font-size: var(--text-sm);
 }
 
+/* A fold for what a person seldom needs (Advanced, Options, More; review §4): a quiet summary line. */
+.pn-fold {
+  margin: 8px 0;
+}
+
+.pn-fold > summary {
+  cursor: pointer;
+  color: var(--color-slate-400);
+  font-size: var(--text-sm);
+}
+
+.pn-fold > summary:hover {
+  color: var(--color-slate-200);
+}
+
+/* One-line rows that moved into Settings and the dialogs with M9k read at the panels' small size. */
+.pn-routing-mode-line,
+.pn-worktrees,
+.pn-host-check,
+.pn-agent-origin {
+  font-size: var(--text-sm);
+}
+
 .pn-log {
   max-height: 180px;
   margin: 4px 0 0;

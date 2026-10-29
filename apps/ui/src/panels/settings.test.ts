@@ -2,10 +2,20 @@ import type { BrainStatusView } from '@friday/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { desktopPlatform, TEST_BODY, TEST_TITLE } from '../platform/desktop-platform.js';
 import type { TauriCore } from '../platform/tauri-transport.js';
+import { UI_VERSION } from '../shell/version.js';
 import { makeContext } from '../test/context.js';
-import { makeSnapshot } from '../test/fixtures.js';
-import { clampNumber, pageActions, plannerSteps, readLoosening, settingsDrawer } from './settings.js';
-import { buttonBy, check, choose, controlBy, flush, HOSTILE, type } from './test-support.js';
+import { makeRun, makeSnapshot, makeTask } from '../test/fixtures.js';
+import { routingModeOf } from './routing-pins.js';
+import {
+  clampNumber,
+  pageActions,
+  plannerSteps,
+  readLoosening,
+  SETTINGS_SECTIONS,
+  settingsDrawer,
+  worktreesInUse,
+} from './settings.js';
+import { BIDI, buttonBy, check, choose, controlBy, flush, HOSTILE, type } from './test-support.js';
 
 const brain = (over: Partial<BrainStatusView> = {}): BrainStatusView => ({
   provider: 'anthropic',
@@ -37,9 +47,39 @@ const POLICY = {
   },
 };
 
+const MODELS = { models: [{ id: 'claude-sonnet-5' }, { id: 'gpt-5.6' }], evidence: [], settings: { mode: 'hybrid' } };
+
+const PIN = {
+  pin_id: 'pin1',
+  scope: 'kind',
+  target: 'docs',
+  model: 'gpt-5.6',
+  mode: null,
+  sensitive: false,
+  needs_vision: false,
+  until: null,
+  source: 'human',
+  note: null,
+  created_at: 'x',
+  revoked_at: null,
+};
+
 function findCheckbox(root: HTMLElement, text: string): HTMLInputElement {
   const label = Array.from(root.querySelectorAll('label.check')).find((l) => l.textContent?.includes(text));
   return label?.querySelector('input') as HTMLInputElement;
+}
+
+/** The section titled `title` (its `<section>`), or null. */
+function section(root: HTMLElement, title: string): HTMLElement | null {
+  return (
+    (Array.from(root.querySelectorAll('section.pn-section')).find(
+      (s) => s.querySelector('.section-title')?.textContent === title,
+    ) as HTMLElement | undefined) ?? null
+  );
+}
+
+function titles(root: HTMLElement): string[] {
+  return Array.from(root.querySelectorAll('section.pn-section > .section-title')).map((t) => t.textContent ?? '');
 }
 
 /** How the shell refuses a native dialog the human cancelled (apps/desktop README, Errors). */
@@ -121,6 +161,30 @@ describe('settings helpers', () => {
       expect.stringContaining('Restart'),
     ]);
   });
+
+  it('counts the worktrees in use once per folder, for live runs with a ready workspace outside the checkout', () => {
+    const board = makeSnapshot({
+      runs: {
+        a: makeRun({ run_id: 'a', execution_root: 'C:/wt/a' }),
+        a2: makeRun({ run_id: 'a2', status: 'SUSPENDED', execution_root: 'C:\\wt\\A\\' }),
+        b: makeRun({ run_id: 'b', status: 'STARTING', execution_root: 'C:/wt/b' }),
+        ended: makeRun({ run_id: 'ended', status: 'ENDED', execution_root: 'C:/wt/c' }),
+        pending: makeRun({ run_id: 'pending', workspace: 'pending' as never, execution_root: 'C:/wt/d' }),
+        main: makeRun({ run_id: 'main', execution_root: 'C:/demo/shop' }),
+      },
+    });
+    expect(worktreesInUse(board)).toBe(2);
+    expect(worktreesInUse(null)).toBe(0);
+    expect(worktreesInUse(makeSnapshot())).toBe(0);
+  });
+
+  it('reads the routing mode word the daemon reports, and nothing else', () => {
+    expect(routingModeOf({ mode: 'hybrid' })).toBe('hybrid');
+    expect(routingModeOf({ mode: '' })).toBeNull();
+    expect(routingModeOf({})).toBeNull();
+    expect(routingModeOf(undefined)).toBeNull();
+    expect(routingModeOf({ mode: 42 })).toBeNull();
+  });
 });
 
 describe('settings drawer', () => {
@@ -137,11 +201,16 @@ describe('settings drawer', () => {
     expect(ctx.store.select('prefs').motion).toBe('full');
     choose(controlBy<HTMLSelectElement>(d.el, 'Mascot outfit'), 'witch');
     expect(ctx.store.select('prefs').outfit).toBe('witch');
-    const collapse = controlBy(d.el, 'Fold the Notch after (seconds)');
+    // The Notch timings sit under an Advanced fold in Look and Notch, closed until opened.
+    const advanced = section(d.el, 'Look and Notch')?.querySelector('details.pn-fold') as HTMLDetailsElement;
+    expect(advanced.open).toBe(false);
+    expect(advanced.querySelector('summary')?.textContent).toBe('Advanced');
+    advanced.open = true;
+    const collapse = controlBy(advanced, 'Fold the Notch after (seconds)');
     collapse.value = '500';
     collapse.dispatchEvent(new Event('change'));
     expect(ctx.store.select('prefs').notchAutoCollapseS).toBe(120);
-    const hide = controlBy(d.el, 'Hide the Notch after (seconds)');
+    const hide = controlBy(advanced, 'Hide the Notch after (seconds)');
     hide.value = 'x';
     hide.dispatchEvent(new Event('change'));
     expect(ctx.store.select('prefs').notchHideS).toBe(60);
@@ -149,6 +218,55 @@ describe('settings drawer', () => {
     check(findCheckbox(d.el, 'Show finished goals'), false);
     expect(ctx.store.select('prefs').showFinished).toBe(false);
     d.destroy();
+  });
+
+  it('puts the sections in the review’s order, Notifications first, and opens at each by name', async () => {
+    const browser = settingsDrawer(makeContext(), { kind: 'settings' });
+    expect(titles(browser.el)).toEqual([
+      'Notifications',
+      'Sound',
+      'Look and Notch',
+      'Planner',
+      'Routing',
+      'Policy',
+      'Friday',
+      'About',
+    ]);
+    browser.destroy();
+    const { ctx } = desktopContext();
+    const desktop = settingsDrawer(ctx, { kind: 'settings' });
+    expect(titles(desktop.el)).toEqual([
+      'Notifications',
+      'Sound',
+      'Look and Notch',
+      'Planner',
+      'Routing',
+      'Policy',
+      'Friday',
+      'Desktop app',
+      'About',
+    ]);
+    desktop.destroy();
+    // `tab` names a section: the drawer scrolls to it once mounted.
+    const scrolled: string[] = [];
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+      scrolled.push(this.id);
+    };
+    try {
+      for (const tab of SETTINGS_SECTIONS) {
+        const d = settingsDrawer(ctx, { kind: 'settings', tab });
+        await flush();
+        expect(scrolled.at(-1)).toBe(`pn-settings-${tab}`);
+        d.destroy();
+      }
+      const none = settingsDrawer(ctx, { kind: 'settings', tab: 'nowhere' });
+      await flush();
+      expect(scrolled).toHaveLength(SETTINGS_SECTIONS.length);
+      none.destroy();
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
   });
 
   it('offers the desktop app its shortcuts and a restart, and nothing of them in a browser', async () => {
@@ -193,6 +311,24 @@ describe('settings drawer', () => {
     await flush();
     expect(restart).toHaveBeenCalledOnce();
     expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Friday is restarting' });
+    d.destroy();
+  });
+
+  it('puts the test notification under Notifications and Restart under Friday, no longer under Desktop app', async () => {
+    const { ctx } = desktopContext();
+    const d = settingsDrawer(ctx, { kind: 'settings' });
+    await flush();
+    const notifications = section(d.el, 'Notifications') as HTMLElement;
+    const friday = section(d.el, 'Friday') as HTMLElement;
+    const desktop = section(d.el, 'Desktop app') as HTMLElement;
+    expect(buttonBy(notifications, 'Send a test notification')).toBeTruthy();
+    expect(buttonBy(friday, 'Restart Friday')).toBeTruthy();
+    expect(buttonBy(friday, 'Stop Friday')).toBeTruthy();
+    expect(() => buttonBy(desktop, 'Send a test notification')).toThrow();
+    expect(() => buttonBy(desktop, 'Restart Friday')).toThrow();
+    expect(desktop.textContent).toContain('Start Friday when I sign in');
+    // In the desktop app there is no session to log out of.
+    expect(() => buttonBy(d.el, 'Log out')).toThrow();
     d.destroy();
   });
 
@@ -294,6 +430,8 @@ describe('settings drawer', () => {
       expect(box.checked).toBe(true);
       expect(d.el.textContent).not.toContain('This browser has no notifications.');
       expect(d.el.textContent).not.toContain('The browser refused');
+      // The hint points at the test button in the same section, not at another one.
+      expect(d.el.textContent).toContain('Send a test notification (below)');
       if (api) expect(api.requestPermission).not.toHaveBeenCalled();
       check(box, false);
       expect(ctx.store.select('prefs').notifications).toBe(false);
@@ -355,6 +493,8 @@ describe('settings drawer', () => {
     const d = settingsDrawer(makeContext({ snapshot: makeSnapshot({ brain: brain() }) }), { kind: 'settings' });
     expect(() => buttonBy(d.el, 'Store the key…')).toThrow();
     expect(() => buttonBy(d.el, 'Allow spending')).toThrow();
+    expect(() => buttonBy(d.el, 'Restart Friday')).toThrow();
+    expect(() => buttonBy(d.el, 'Send a test notification')).toThrow();
     expect(d.el.textContent).not.toContain('Start Friday when I sign in');
     d.destroy();
   });
@@ -438,12 +578,132 @@ describe('settings drawer', () => {
     d.destroy();
   });
 
-  it('logs out and reloads the page', async () => {
+  // ---- Routing: the pins' home, as they worked from the Agents drawer before (review decision 2)
+
+  it('shows the routing mode word beside the pins, and "unknown" when the daemon did not say', async () => {
+    const ctx = makeContext({ answers: { 'GET /models': MODELS, 'GET /routing/pins': { pins: [] } } });
+    const d = settingsDrawer(ctx, { kind: 'settings', tab: 'routing' });
+    await flush();
+    const routing = section(d.el, 'Routing') as HTMLElement;
+    expect(routing.querySelector('.pn-routing-mode')?.textContent).toBe('hybrid');
+    expect(routing.textContent).toContain('Routing mode');
+    expect(routing.textContent).toContain('No pins');
+    expect(() => buttonBy(routing, 'Open routing pins')).toThrow();
+    d.destroy();
+    const bare = settingsDrawer(makeContext({ answers: { 'GET /models': { models: [] } } }), { kind: 'settings' });
+    await flush();
+    expect(bare.el.querySelector('.pn-routing-mode')?.textContent).toBe('unknown');
+    expect(bare.el.textContent).toContain('No models known');
+    bare.destroy();
+  });
+
+  it('pins a model to a role and unpins, from Settings', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ tasks: [makeTask()] }),
+      answers: {
+        'GET /models': MODELS,
+        'GET /routing/pins': { pins: [PIN] },
+        'POST /routing/pins': { pin: {} },
+        'POST /routing/pins/pin1/revoke': { pin: {} },
+      },
+    });
+    const d = settingsDrawer(ctx, { kind: 'settings', tab: 'routing' });
+    await flush();
+    const routing = section(d.el, 'Routing') as HTMLElement;
+    choose(controlBy<HTMLSelectElement>(routing, 'Model'), 'gpt-5.6');
+    buttonBy(routing, /^Pin$/).click();
+    await flush();
+    expect(ctx.transport.to('POST', '/routing/pins')[0]?.body).toEqual({
+      scope: 'role',
+      target: 'developer',
+      model: 'gpt-5.6',
+    });
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Pinned gpt-5.6' });
+    choose(controlBy<HTMLSelectElement>(routing, 'Pin for'), 'kind');
+    choose(controlBy<HTMLSelectElement>(routing, 'Which'), 'review');
+    buttonBy(routing, /^Pin$/).click();
+    await flush();
+    expect(ctx.transport.to('POST', '/routing/pins')[1]?.body).toMatchObject({ scope: 'kind', target: 'review' });
+    // A task pin offers the open tasks of the board.
+    choose(controlBy<HTMLSelectElement>(routing, 'Pin for'), 'task');
+    expect(controlBy<HTMLSelectElement>(routing, 'Which').value).toBe('task_0000000000000000000000aa01');
+    buttonBy(routing, 'Unpin the kind pin for docs').click();
+    await flush();
+    expect(ctx.transport.to('POST', '/routing/pins/pin1/revoke')).toHaveLength(1);
+    expect(ctx.transport.to('GET', '/routing/pins').length).toBeGreaterThanOrEqual(2);
+    d.destroy();
+  });
+
+  it('shows hostile pin text as text and says when the pins could not be read', async () => {
+    const ctx = makeContext({
+      answers: {
+        'GET /models': MODELS,
+        'GET /routing/pins': { pins: [{ ...PIN, scope: 'role', target: BIDI, model: HOSTILE, note: HOSTILE }] },
+      },
+    });
+    const d = settingsDrawer(ctx, { kind: 'settings', tab: 'routing' });
+    await flush();
+    expect(d.el.querySelector('img')).toBeNull();
+    const text = section(d.el, 'Routing')?.textContent ?? '';
+    expect(text).toContain(HOSTILE);
+    expect(text).toContain('⟨U+202E⟩');
+    expect(text).not.toContain('\u202E');
+    d.destroy();
+    const failing = settingsDrawer(
+      makeContext({
+        answers: {
+          'GET /models': MODELS,
+          'GET /routing/pins': () => {
+            throw new Error('offline');
+          },
+        },
+      }),
+      { kind: 'settings' },
+    );
+    await flush();
+    expect(failing.el.textContent).toContain('Could not read the pins: offline');
+    failing.destroy();
+  });
+
+  // ---- Friday: the worktrees in use and their clean-up, log out, stop
+
+  it('counts the worktrees in use and cleans up released ones with the palette’s prune', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({
+        runs: {
+          a: makeRun({ run_id: 'a', execution_root: 'C:/wt/a' }),
+          b: makeRun({ run_id: 'b', execution_root: 'C:/wt/b' }),
+        },
+      }),
+      answers: { 'POST /worktrees/prune': { removed: ['C:/wt/old'], kept: [{ path: 'C:/wt/b', reason: 'dirty' }] } },
+    });
+    const d = settingsDrawer(ctx, { kind: 'settings', tab: 'friday' });
+    const friday = section(d.el, 'Friday') as HTMLElement;
+    expect(friday.textContent).toContain('Worktrees in use: 2');
+    expect(section(d.el, 'About')?.textContent).toContain('Worktrees in use2');
+    ctx.board(makeSnapshot({ runs: { a: makeRun({ run_id: 'a', execution_root: 'C:/wt/a' }) } }));
+    expect(friday.textContent).toContain('Worktrees in use: 1');
+    const clean = buttonBy(friday, 'Clean up released worktrees');
+    clean.click();
+    await flush();
+    expect(ctx.transport.to('POST', '/worktrees/prune')).toHaveLength(1);
+    expect(ctx.toasts.at(-1)).toMatchObject({
+      kind: 'success',
+      text: 'Removed 1 clean worktree; kept 1',
+      detail: expect.stringContaining('Kept C:/wt/b: dirty'),
+    });
+    expect(clean.disabled).toBe(false);
+    d.destroy();
+  });
+
+  it('logs out from the Friday section and reloads the page', async () => {
     const reload = vi.spyOn(pageActions, 'reload').mockImplementation(() => undefined);
     sessionStorage.setItem('friday.ui.session', '{"token":"t","expires_at":"2999-01-01T00:00:00Z","project_id":"p"}');
     const ctx = makeContext({ answers: { 'POST /ui/logout': { ok: true } } });
     const d = settingsDrawer(ctx, { kind: 'settings' });
-    buttonBy(d.el, 'Log out').click();
+    const friday = section(d.el, 'Friday') as HTMLElement;
+    expect(friday.textContent).toContain('one-time link');
+    buttonBy(friday, 'Log out').click();
     await flush();
     expect(ctx.transport.to('POST', '/ui/logout')).toHaveLength(1);
     expect(sessionStorage.getItem('friday.ui.session')).toBeNull();
@@ -467,11 +727,20 @@ describe('settings drawer', () => {
     d.destroy();
   });
 
-  it('shows the about facts with 127.0.0.1', () => {
-    const ctx = makeContext();
-    const d = settingsDrawer(ctx, { kind: 'settings' });
-    expect(d.el.textContent).toContain('127.0.0.1:4310');
-    expect(d.el.textContent).toContain('shop');
+  // ---- About: what left the header (the address, the folder) and the versions (M9k.3)
+
+  it('shows the address, the folder and the versions in About, with 127.0.0.1', () => {
+    const ctx = makeContext({ snapshot: makeSnapshot({ project: { ...makeSnapshot().project, name: HOSTILE } }) });
+    const d = settingsDrawer(ctx, { kind: 'settings', tab: 'about' });
+    const about = section(d.el, 'About') as HTMLElement;
+    const text = about.textContent ?? '';
+    expect(text).toContain('127.0.0.1:4310');
+    expect(text).toContain('C:/demo/shop');
+    expect(text).toContain(HOSTILE);
+    expect(about.querySelector('img')).toBeNull();
+    expect(text).toContain('0.0.0');
+    expect(text).toContain(`${UI_VERSION} · API 1`);
+    expect(text).not.toContain('localhost');
     d.destroy();
   });
 });

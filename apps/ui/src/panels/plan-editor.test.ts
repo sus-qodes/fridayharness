@@ -23,6 +23,13 @@ function fillTask(t: HTMLElement, o: { key?: string; summary: string; criteria: 
   }
 }
 
+/** Opens the editor's More fold, where the JSON tools live (review §4), and answers it. */
+function more(el: HTMLElement): HTMLDetailsElement {
+  const fold = el.querySelector('details.pn-json-tools') as HTMLDetailsElement;
+  fold.open = true;
+  return fold;
+}
+
 function firstPlanContext(answers = {}) {
   return makeContext({
     snapshot: makeSnapshot({ goals: [makeGoal({ status: 'OPEN', plan_id: null })] }),
@@ -161,6 +168,7 @@ describe('plan editor, first plan', () => {
     check(second?.querySelector('.pn-deps input') as HTMLInputElement, true);
     type(controlBy(first as HTMLElement, 'Key'), 'api');
     expect(second?.querySelector('.pn-deps')?.textContent).toContain('api');
+    more(m.el);
     buttonBy(m.el, 'Export JSON').click();
     const json = JSON.parse((m.el.querySelector('.pn-json') as HTMLTextAreaElement).value);
     expect(json.tasks[1].depends_on).toEqual(['api']);
@@ -171,9 +179,24 @@ describe('plan editor, first plan', () => {
     m.destroy();
   });
 
+  it('keeps the JSON tools behind a More fold after the tasks, closed until opened', () => {
+    const ctx = firstPlanContext();
+    const m = planEditorModal(ctx, { kind: 'plan-editor', id: GID }, () => undefined);
+    const fold = m.el.querySelector('details.pn-json-tools') as HTMLDetailsElement;
+    expect(fold.open).toBe(false);
+    expect(fold.querySelector('summary')?.textContent).toBe('More');
+    expect(fold.contains(buttonBy(m.el, 'Export JSON'))).toBe(true);
+    expect(fold.contains(buttonBy(m.el, 'Import JSON'))).toBe(true);
+    // The editor opens on its fields: the fold comes after the tasks, not above the Objective.
+    const objective = controlBy(m.el, 'Objective');
+    expect(objective.compareDocumentPosition(fold) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    m.destroy();
+  });
+
   it('imports a plan from JSON and reports what it could not read', () => {
     const ctx = firstPlanContext();
     const m = planEditorModal(ctx, { kind: 'plan-editor', id: GID }, () => undefined);
+    more(m.el);
     buttonBy(m.el, 'Import JSON').click();
     const area = m.el.querySelector('.pn-json') as HTMLTextAreaElement;
     area.value = '{broken';

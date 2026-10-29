@@ -121,6 +121,8 @@ describe.skipIf(!E2E)('a day in the life', () => {
       await page.locator('.dk-dock').getByRole('button', { name: 'New goal' }).click();
       await page.getByLabel('Request').fill('Document the checkout');
       await page.getByRole('button', { name: 'Write the plan myself' }).click();
+      // The JSON tools sit behind the editor's More fold (review §4); a closed fold's buttons are not visible.
+      await page.locator('details.pn-json-tools > summary').click();
       await page.getByRole('button', { name: 'Import JSON' }).click();
       await page.locator('.pn-json-box textarea').fill(PLAN);
       await page.getByRole('button', { name: 'Load this JSON' }).click();
@@ -142,9 +144,12 @@ describe.skipIf(!E2E)('a day in the life', () => {
 
       // The agent takes the task, writes the page, and asks for a commit: one click allows it.
       const rail = page.locator('.sh-rail');
-      await rail.getByText('Approval', { exact: false }).first().waitFor({ timeout: 30_000 });
+      // The row itself, not the word: Getting started's notification item names "approvals" too,
+      // so a text match could catch the checklist before the request arrives.
+      const approvalRow = rail.locator('.gv-tray-approval .gv-tray-row').first();
+      await approvalRow.waitFor({ timeout: 30_000 });
       await shot('approval-waiting');
-      await rail.getByText('Approval', { exact: false }).first().click();
+      await approvalRow.click();
       const allow = rail.getByRole('button', { name: /Allow once/ });
       await allow.waitFor({ timeout: 5000 });
       await page.waitForTimeout(900);

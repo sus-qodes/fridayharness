@@ -1,8 +1,8 @@
 /**
- * Messages for the human (plan §7.5): the snapshot's open deliveries with a short preview; opening
- * one loads the message body (`GET messages/:id`) and shows it as text; Reply sends a response to
- * the sender (`POST messages` with `reply_to`), Acknowledge closes the delivery
- * (`POST inbox/human/ack`). Messages are information, never approval or permission.
+ * The Messages drawer (plan §7.5; one name everywhere, the header's): the snapshot's open deliveries
+ * with a short preview; opening one loads the message body (`GET messages/:id`) and shows it as
+ * text; Reply sends a response to the sender (`POST messages` with `reply_to`), Acknowledge closes
+ * the delivery (`POST inbox/human/ack`). Messages are information, never approval or permission.
  */
 import type { MessageView, SnapshotInboxItem } from '@friday/protocol';
 import { visible } from '../model/text.js';
@@ -211,7 +211,7 @@ export function inboxDrawer(ctx: AppContext, request: DrawerRequest): Component 
 
   return {
     el,
-    title: 'Messages for you',
+    title: 'Messages',
     destroy(): void {
       disposed = true;
       unsubscribe();

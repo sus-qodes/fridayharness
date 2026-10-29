@@ -231,8 +231,7 @@
   color: var(--color-slate-400);
 }
 
-.nd-agent,
-.nd-branch {
+.nd-agent {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -343,9 +342,12 @@
  * Duration, tool calls, files and +N −M fit at ordinary values; at extreme ones (12h 05m,
  * 128 tools, 12 files, +1402 −220) the tool count gives way and ends in an ellipsis, and the row
  * clips anything beyond, so it never runs past the card. The card's height is fixed, so the row
- * does not wrap. Block items, not flex: only a block's own text takes an ellipsis.
+ * does not wrap. Block items, not flex: only a block's own text takes an ellipsis. The +N −M figure
+ * is a button when the task has an attempt (the card's door to its changes, review M9k): it sits in
+ * the row like the spans.
  */
-.nd-stats span {
+.nd-stats > span,
+.nd-stats > button {
   flex: none;
   line-height: 20px;
   white-space: nowrap;
@@ -366,6 +368,22 @@
 .nd-lines {
   color: var(--color-slate-200);
   font-variant-numeric: tabular-nums;
+}
+
+/* The door looks like the figure it is, not like a button: the browser's chrome goes. */
+.nd-lines-door {
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-slate-200);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nd-lines-door:hover {
+  color: var(--color-white);
+  text-decoration: underline;
 }
 
 .nd-status {

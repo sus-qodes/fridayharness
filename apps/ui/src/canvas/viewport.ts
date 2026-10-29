@@ -126,6 +126,17 @@ export function fullyVisible(cam: Camera, r: Rect, size: Size, margin = 0): bool
   return a.x >= margin && a.y >= margin && b.x <= size.width - margin && b.y <= size.height - margin;
 }
 
+/**
+ * True when some rectangle is not wholly on the screen: the minimap's reason to appear (review
+ * M9k: on a board that fits, it would show three rectangles in a box). A screen without a size has
+ * nothing outside it.
+ */
+export function anyOutside(rects: Iterable<Rect>, cam: Camera, size: Size): boolean {
+  if (size.width <= 0 || size.height <= 0) return false;
+  for (const r of rects) if (!fullyVisible(cam, r, size)) return true;
+  return false;
+}
+
 export function easeOutCubic(t: number): number {
   const u = 1 - clamp(t, 0, 1);
   return 1 - u * u * u;

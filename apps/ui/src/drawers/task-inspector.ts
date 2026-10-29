@@ -1,9 +1,9 @@
 /**
- * The task inspector drawer (plan §7.4, handoff Part 05 §2): Overview (the contract, verification,
- * scopes, dependencies, integration, actions), Context (the packet the agent was given and why),
- * Git (the attempt's branch, worktree and changed files) and History (the task's events, newest
- * first). It reads the board snapshot and follows it; the Context, Git and History tabs load when
- * first shown.
+ * The task inspector drawer (plan §7.4, handoff Part 05 §2, review M9k): Overview (the contract,
+ * verification, scopes, dependencies, integration, actions), Changes (the attempt's branch,
+ * worktree and changed files), History (the task's events, newest first) and, last, What the agent
+ * was given (the packet the agent received and why: it explains Friday, not the task). It reads the
+ * board snapshot and follows it; the three tabs after Overview load when first shown.
  */
 import type {
   ContextExplanation,
@@ -40,8 +40,17 @@ import {
 } from './common.js';
 import { describeEvent, HISTORY_PAGE, mayHaveOlder, mergeEvents, olderBefore } from './events.js';
 
-export type InspectorTab = 'overview' | 'context' | 'git' | 'history';
+export type InspectorTab = 'overview' | 'changes' | 'history' | 'context';
 export type InspectorAction = 'verify' | 'continue' | 'rework' | 'recover' | 'cancel';
+
+/** The tabs in their order on the screen. */
+export const INSPECTOR_TABS: readonly InspectorTab[] = ['overview', 'changes', 'history', 'context'];
+
+/** The tab a request asks for; "git", the Changes tab's older name, still opens it. */
+export function inspectorTabOf(requested: string | undefined): InspectorTab {
+  if (requested === 'git') return 'changes';
+  return INSPECTOR_TABS.includes(requested as InspectorTab) ? (requested as InspectorTab) : 'overview';
+}
 
 const TERMINAL = new Set(['COMPLETED', 'CANCELLED', 'ABANDONED']);
 
@@ -97,33 +106,35 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
   let fallback: View | null = null;
   const unsubscribe: (() => void)[] = [];
 
-  const initial = (['overview', 'context', 'git', 'history'] as const).includes(request.tab as InspectorTab)
-    ? (request.tab as InspectorTab)
-    : 'overview';
+  const initial = inspectorTabOf(request.tab);
   const loaded = new Set<InspectorTab>();
   const header = h('div', { class: 'dr-insp-head' });
   const tabBar = tabs<InspectorTab>(
     [
       { id: 'overview', label: 'Overview' },
-      { id: 'context', label: 'Context' },
-      { id: 'git', label: 'Git' },
+      { id: 'changes', label: 'Changes' },
       { id: 'history', label: 'History' },
+      { id: 'context', label: 'What the agent was given' },
     ],
     initial,
     (tab) => show(tab),
   );
   const panels: Record<InspectorTab, HTMLElement> = {
     overview: tabPanel(tabBar, 'overview'),
-    context: tabPanel(tabBar, 'context'),
-    git: tabPanel(tabBar, 'git'),
+    changes: tabPanel(tabBar, 'changes'),
     history: tabPanel(tabBar, 'history'),
+    context: tabPanel(tabBar, 'context'),
   };
   const el = h(
     'div',
     { class: 'dr-inspector' },
     header,
     tabBar.el,
-    h('div', { class: 'dr-panels' }, Object.values(panels)),
+    h(
+      'div',
+      { class: 'dr-panels' },
+      INSPECTOR_TABS.map((t) => panels[t]),
+    ),
   );
 
   const boardTask = ctx.store.select('board')?.tasks.find((t) => t.task_id === id);
@@ -418,7 +429,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
     );
   }
 
-  // ---- Context ---------------------------------------------------------------------------------
+  // ---- What the agent was given ----------------------------------------------------------------
 
   function renderPacket(packet: ContextPacket, explanation: ContextExplanation | null, label: Child): HTMLElement {
     const box = h('div', { class: 'dr-packet' });
@@ -640,20 +651,21 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
     }
   }
 
-  // ---- Git -------------------------------------------------------------------------------------
+  // ---- Changes ---------------------------------------------------------------------------------
+  // The stylesheet still names these parts `dr-git-*`; the screen says Changes.
 
-  const gitInfo = h('div', { class: 'dr-git-info' });
-  const gitFiles = h('div', { class: 'dr-git-files' });
+  const changesInfo = h('div', { class: 'dr-git-info' });
+  const changedFiles = h('div', { class: 'dr-git-files' });
 
-  function renderGitInfo(v: View): void {
+  function renderChangesInfo(v: View): void {
     const run = v.run;
     if (!run) {
-      replace(gitInfo, empty('No attempt yet: the task has no worktree.'));
+      replace(changesInfo, empty('No attempt yet: the task has no worktree.'));
       return;
     }
     const root = run.execution_root;
     replace(
-      gitInfo,
+      changesInfo,
       facts([
         [
           'Attempt',
@@ -691,8 +703,8 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
     );
   }
 
-  async function loadGitFiles(): Promise<void> {
-    replace(gitFiles, loading('Reading the changed files…'));
+  async function loadChangedFiles(): Promise<void> {
+    replace(changedFiles, loading('Reading the changed files…'));
     let diff: TaskDiff;
     try {
       const d = await ctx.api.taskDiff(id, true);
@@ -700,9 +712,9 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
     } catch (e) {
       if (!destroyed)
         replace(
-          gitFiles,
+          changedFiles,
           errorNote('Could not read the changed files', e),
-          button('Try again', () => void loadGitFiles(), { class: 'btn' }),
+          button('Try again', () => void loadChangedFiles(), { class: 'btn' }),
         );
       return;
     }
@@ -710,7 +722,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
     const dirty = diff.files.some((f) => f.uncommitted);
     const root = diff.root ?? ctx.store.select('board')?.project.root ?? '';
     replace(
-      gitFiles,
+      changedFiles,
       h(
         'div',
         { class: 'row-wrap' },
@@ -721,7 +733,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
           : badge(`From the ${diff.source === 'none' ? "agent's report" : `${diff.source} work`}`, 'info'),
         h('span', null, plural(diff.files.length, 'changed file')),
         h('span', { class: 'spacer' }),
-        button([icon('rework', 14), 'Refresh'], () => void loadGitFiles(), { class: 'btn btn-ghost' }),
+        button([icon('rework', 14), 'Refresh'], () => void loadChangedFiles(), { class: 'btn btn-ghost' }),
         diff.files.length
           ? button([icon('file', 14), 'Open the diff'], () => openDrawer(ctx, { kind: 'diff', id }), { class: 'btn' })
           : null,
@@ -841,7 +853,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
     if (!v) return;
     renderHeader(v);
     renderOverview(v);
-    renderGitInfo(v);
+    renderChangesInfo(v);
   }
 
   function show(tab: InspectorTab): void {
@@ -849,9 +861,9 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
     if (loaded.has(tab)) return;
     loaded.add(tab);
     if (tab === 'context') void loadContext();
-    else if (tab === 'git') {
-      replace(panels.git, gitInfo, section('Changed files', gitFiles));
-      void loadGitFiles();
+    else if (tab === 'changes') {
+      replace(panels.changes, changesInfo, section('Changed files', changedFiles));
+      void loadChangedFiles();
     } else if (tab === 'history') void loadHistory();
   }
 

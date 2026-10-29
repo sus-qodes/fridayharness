@@ -364,6 +364,8 @@ export function makeSnapshot(overrides: Partial<UiSnapshot> = {}): UiSnapshot {
     reservations: [],
     brain: null,
     brain_jobs: [],
+    memories_to_review: 0,
+    policy_untrusted: false,
     truncated: {},
     ...overrides,
   };

@@ -13,6 +13,7 @@ import {
   MIN_HEIGHT,
   processClearPoint,
   processLines,
+  startTab,
   visibleLines,
 } from './terminal-model.js';
 
@@ -193,6 +194,26 @@ describe('terminal model', () => {
       'new',
     ]);
     expect(clearPoint([], 7)).toBe(7);
+  });
+
+  it('opens on Errors after a failure, on Combined otherwise, and on the tab asked for', () => {
+    const error = { at: 1, sequence: 20, stream: 'error' as const, text: 'tool failed' };
+    const tool = { at: 2, sequence: 21, stream: 'tool' as const, text: 'Edit a.ts' };
+    // The newest line is a failure: Errors.
+    expect(startTab({ log: [tool, error] })).toBe('errors');
+    // The agent went on working after it: Combined.
+    expect(startTab({ log: [error, tool] })).toBe('combined');
+    // Its last tool failed, or its task did, and there is an error line to show: Errors.
+    expect(startTab({ log: [error, tool], lastDecision: 'failed' })).toBe('errors');
+    expect(startTab({ log: [error, tool], taskFailed: true })).toBe('errors');
+    // A failed task without one error line recorded here has nothing to open on: Combined.
+    expect(startTab({ log: [tool], taskFailed: true })).toBe('combined');
+    expect(startTab({ log: [] })).toBe('combined');
+    // A request names the tab; the process tab is never the start.
+    expect(startTab({ requested: 'tools', log: [tool, error] })).toBe('tools');
+    expect(startTab({ requested: 'errors', log: [] })).toBe('errors');
+    expect(startTab({ requested: 'process', log: [tool, error] })).toBe('errors');
+    expect(startTab({ requested: 'nonsense', log: [tool] })).toBe('combined');
   });
 
   it('removes escape sequences from process output and clears by the last line seen', () => {

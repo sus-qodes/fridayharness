@@ -397,7 +397,9 @@ fn set_tray_state(
     muted: Option<bool>,
 ) -> Result<(), CmdError> {
     let status = tray::Status::parse(&state).ok_or_else(|| CmdError::bad_request("unknown tray state"))?;
-    let line = notify::clean(&counts_line, 80);
+    // The line is the page's status sentence (what runs, what waits and why, who is connected). A
+    // tray tooltip holds 127 characters on Windows, and "Friday: " takes eight of them.
+    let line = notify::clean(&counts_line, 119);
     let st = crate::state(&app);
     if let Some(p) = paused {
         st.paused.store(p, Ordering::SeqCst);

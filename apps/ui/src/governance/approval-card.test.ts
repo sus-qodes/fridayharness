@@ -138,11 +138,12 @@ describe('approval card', () => {
     card.destroy();
   });
 
-  it('Allow for this task always opens the modal with the task reach', async () => {
+  it('Allow for this task… (the dots: it always opens the full view) opens the modal with the task reach', async () => {
     const a = makeApproval({ risk: 'low' });
     const card = mount(a);
     arm(card.el);
-    buttonNamed(card.el, 'Allow for this task').click();
+    expect(buttonNamed(card.el, 'Allow for this task').textContent).toContain('Allow for this task…');
+    buttonNamed(card.el, 'Allow for this task…').click();
     await flush();
     expect(ctx.transport.calls).toHaveLength(0);
     expect(ctx.store.select('ui').modal?.kind).toBe('approval');

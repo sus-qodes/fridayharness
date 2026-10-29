@@ -84,6 +84,26 @@ describe.skipIf(!E2E)('the Studio with work on it', () => {
       await page.getByText('Code field on the checkout form').first().waitFor({ timeout: 15_000 });
       await page.waitForTimeout(1500);
       await rig.shot('studio-board');
+      // What the first screen does not show before anything was done (review M9k; the stylesheet,
+      // not the unit tests, decides what a hidden button looks like): Tidy waits for a drag, and the
+      // card's +N −M door is drawn as the figure, not as a browser button.
+      expect(await page.locator('.cv-tidy').isVisible()).toBe(false);
+      const door = page.locator('.nd-lines-door').first();
+      if ((await door.count()) > 0) {
+        expect(await door.evaluate((el) => getComputedStyle(el).borderStyle)).toBe('none');
+      }
+      // The More (…) menu drops under its trigger, inside the header's row.
+      const more = page.getByRole('button', { name: 'More' });
+      await more.click();
+      const menu = page.getByRole('menu');
+      await menu.waitFor({ timeout: 5000 });
+      const [trigger, list] = await Promise.all([more.boundingBox(), menu.boundingBox()]);
+      if (!trigger || !list) throw new Error('the More menu has no box');
+      expect(list.y).toBeGreaterThanOrEqual(trigger.y + trigger.height);
+      expect(list.x + list.width).toBeLessThanOrEqual(trigger.x + trigger.width + 1);
+      await rig.shot('studio-more-menu');
+      await page.keyboard.press('Escape');
+      await menu.waitFor({ state: 'hidden', timeout: 5000 });
       await page.setViewportSize({ width: 1100, height: 720 });
       await page.waitForTimeout(800);
       await rig.shot('studio-board-small');
@@ -198,6 +218,9 @@ describe.skipIf(!E2E)('the Studio with work on it', () => {
       const bar = page.locator('.nd-planbar');
       await bar.waitFor({ timeout: 15_000 });
       await page.waitForTimeout(900);
+      // One list: the header counts the proposed plan the rail lists (plan §7.5).
+      expect(await page.locator('.sh-metric-waiting .sh-metric-value').textContent()).toBe('1');
+      expect(await page.locator('.gv-tray-plan').count()).toBe(1);
       await rig.shot('studio-plan-proposed');
       // The plan is approved in its review, where every task's instructions are shown in full.
       await bar.getByRole('button', { name: 'Review and approve' }).click();
@@ -222,7 +245,7 @@ describe.skipIf(!E2E)('the Studio with work on it', () => {
       await card.hover();
       await card.getByRole('button', { name: 'Inspect' }).click();
       const drawer = page.locator('.sh-drawer').first();
-      await drawer.getByRole('tab', { name: 'Git' }).click();
+      await drawer.getByRole('tab', { name: 'Changes' }).click();
       await drawer.getByRole('button', { name: 'Open the diff' }).click();
       await page.getByText('discount codes', { exact: false }).first().waitFor({ timeout: 10_000 });
       await page.waitForTimeout(400);

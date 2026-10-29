@@ -1,24 +1,27 @@
 /**
- * Settings (plan §7.10): sound, notifications, motion, the mascot's outfit, Notch timings and
- * finished goals (written to `prefs`, which the shell persists); the planner's state with the exact
- * terminal steps, and in the desktop app its native dialogs (a key and spending consent never pass
- * through the page, FD-26); the policy's loosening and Trust (sending exactly the hash shown);
- * logging out; stopping Friday; the desktop app's shortcuts, start at sign-in, a test notification
- * and restart; about.
+ * Settings (plan §7.10, review §4 to §6), grouped so that what a person touches most comes first:
+ * Notifications (with the desktop app's test notification); Sound; Look and Notch (the Notch
+ * timings under an Advanced fold); the Planner's state with the exact terminal steps, and in the
+ * desktop app its native dialogs (a key and spending consent never pass through the page, FD-26);
+ * Routing, the home of the pins and the mode word; the Policy's loosening and Trust (sending
+ * exactly the hash shown); Friday itself (the worktrees in use and their clean-up, a restart in the
+ * desktop app, logging out in a browser, stopping Friday); the Desktop app's shortcuts and start at
+ * sign-in; About (the address, the folder, the versions). `request.tab` names a section to open at.
  */
-import type { BrainStatusView } from '@friday/protocol';
+import type { BrainStatusView, UiSnapshot } from '@friday/protocol';
 import type { PolicyView } from '../api/client.js';
+import { pruneWorktrees } from '../dock/commands.js';
 import { visible } from '../model/text.js';
 import { clearSession } from '../platform/session.js';
-import {
-  type AppContext,
-  type Component,
-  type DesktopCommands,
-  type DesktopShortcut,
-  type DrawerRequest,
-  type NotificationAnswer,
-  openDrawer,
+import type {
+  AppContext,
+  Component,
+  DesktopCommands,
+  DesktopShortcut,
+  DrawerRequest,
+  NotificationAnswer,
 } from '../shell/context.js';
+import { UI_API, UI_VERSION } from '../shell/version.js';
 import type { Prefs } from '../store/state.js';
 import { button, h, replace } from '../ui/dom.js';
 import { usd } from '../ui/format.js';
@@ -29,8 +32,8 @@ import {
   copyLine,
   errorOf,
   field,
+  fold,
   input,
-  linkButton,
   note,
   panel,
   plain,
@@ -40,6 +43,7 @@ import {
   select,
   Teardown,
 } from './common.js';
+import { routingPins } from './routing-pins.js';
 
 /** Page actions a test replaces (a reload would end the test page). */
 export const pageActions = {
@@ -58,6 +62,20 @@ export const OUTFITS: readonly { value: Prefs['outfit']; label: string }[] = [
 ];
 
 export const NOTCH_LIMITS = { collapse: { min: 1, max: 120 }, hide: { min: 5, max: 600 } } as const;
+
+/** The sections, in the order shown; `request.tab` names one. "desktop" exists in the desktop app only. */
+export const SETTINGS_SECTIONS = [
+  'notifications',
+  'sound',
+  'look',
+  'planner',
+  'routing',
+  'policy',
+  'friday',
+  'desktop',
+  'about',
+] as const;
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 /** A number from a field, clamped; null when it is not a number. */
 export function clampNumber(text: string, min: number, max: number): number | null {
@@ -128,6 +146,30 @@ export function plannerSteps(
   return steps;
 }
 
+const LIVE_RUN = new Set(['STARTING', 'ACTIVE', 'SUSPENDED']);
+
+function normalizePath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+/**
+ * Worktrees in use by running attempts: live runs whose workspace is ready and lies outside the main
+ * checkout, counted once per folder (plan §7.3 header metrics, ERRATA F37). The one rule for the
+ * number: the header showed it before M9k and no longer counts it; Settings → Friday and About do,
+ * beside the one action on worktrees.
+ */
+export function worktreesInUse(board: UiSnapshot | null | undefined): number {
+  if (!board) return 0;
+  const root = normalizePath(board.project.root ?? '');
+  const roots = new Set<string>();
+  for (const run of Object.values(board.runs ?? {})) {
+    if (!run || !LIVE_RUN.has(run.status) || run.workspace !== 'ready' || !run.execution_root) continue;
+    const r = normalizePath(run.execution_root);
+    if (r && r !== root) roots.add(r);
+  }
+  return roots.size;
+}
+
 /** What each desktop shortcut does (the shell's ids, FD-16). */
 const SHORTCUT_LABELS: Record<string, string> = {
   notch: 'Open the Notch and give it the keyboard',
@@ -135,11 +177,18 @@ const SHORTCUT_LABELS: Record<string, string> = {
   halt: 'Open the halt dialog',
 };
 
-/**
- * The desktop app's section: its global shortcuts, each changeable, starting at sign-in, a test
- * notification and a restart of Friday.
- */
-function desktopSection(ctx: AppContext, desktop: DesktopCommands, td: Teardown): HTMLElement {
+/** What only the desktop app offers, placed in the sections where each belongs. */
+interface DesktopBits {
+  /** Restart Friday (Settings → Friday). */
+  restartBtn: HTMLButtonElement;
+  /** Send a test notification and what it said (Settings → Notifications). */
+  testBtn: HTMLButtonElement;
+  testState: HTMLElement;
+  /** The Desktop app section: the global shortcuts, each changeable, and starting at sign-in. */
+  section: HTMLElement;
+}
+
+function desktopBits(ctx: AppContext, desktop: DesktopCommands, td: Teardown): DesktopBits {
   const list = h('div', { class: 'pn-shortcuts' }, note('Reading the shortcuts…'));
   const render = (items: DesktopShortcut[]) => {
     if (td.done) return;
@@ -228,44 +277,23 @@ function desktopSection(ctx: AppContext, desktop: DesktopCommands, td: Teardown)
     startInput.disabled = false;
     startInput.checked = r ?? !on;
   }
-  return h(
+  const section = h(
     'section',
-    { class: 'pn-section' },
+    { class: 'pn-section', id: 'pn-settings-desktop' },
     h('h3', { class: 'section-title' }, 'Desktop app'),
     note('Shortcuts work anywhere in Windows while the app runs, for example Ctrl+Alt+Shift+F.'),
     list,
     startBox,
     startState,
-    h('div', { class: 'pn-actions pn-actions-start' }, testBtn, restartBtn),
-    testState,
   );
+  return { restartBtn, testBtn, testState, section };
 }
 
 export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Component & { title: string } {
   const td = new Teardown();
   const prefs = () => ctx.store.select('prefs');
   const set = (changes: Partial<Prefs>) => ctx.store.patch('prefs', changes);
-
-  // ---- sound
-  const volume = input({
-    type: 'range',
-    min: '0',
-    max: '1',
-    step: '0.01',
-    value: String(prefs().volume),
-    aria: { label: 'Volume' },
-  });
-  volume.addEventListener('input', () => {
-    const v = clampNumber(volume.value, 0, 1);
-    if (v !== null) set({ volume: v });
-  });
-  const sound = h(
-    'section',
-    { class: 'pn-section' },
-    h('h3', { class: 'section-title' }, 'Sound'),
-    checkbox('Play sounds', !prefs().muted, (on) => set({ muted: !on })),
-    field('Volume', volume).el,
-  );
+  const desktop = ctx.platform.desktop ? desktopBits(ctx, ctx.platform.desktop, td) : null;
 
   // ---- notifications: the platform asks (a browser its Notification API; the desktop app sends its own)
   const nativeNotify = ctx.platform.kind === 'tauri';
@@ -290,7 +318,7 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
       set({ notifications: true });
       // The desktop app cannot see whether Windows shows them: the test below says what it can.
       notifyState.textContent = nativeNotify
-        ? `Friday asks Windows to notify you of approvals, questions, plans, blocked agents and failures ${notifyWhen}. Send a test notification (Desktop app, below) to see whether Windows shows them.`
+        ? `Friday asks Windows to notify you of approvals, questions, plans, blocked agents and failures ${notifyWhen}. Send a test notification (below) to see whether Windows shows them.`
         : `Friday notifies you of approvals, questions, plans, blocked agents and failures ${notifyWhen}.`;
     } else {
       notifyInput.checked = false;
@@ -305,10 +333,33 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
   }
   const notifications = h(
     'section',
-    { class: 'pn-section' },
+    { class: 'pn-section', id: 'pn-settings-notifications' },
     h('h3', { class: 'section-title' }, 'Notifications'),
     notifyBox,
     notifyState,
+    desktop ? h('div', { class: 'pn-actions pn-actions-start' }, desktop.testBtn) : null,
+    desktop?.testState ?? null,
+  );
+
+  // ---- sound
+  const volume = input({
+    type: 'range',
+    min: '0',
+    max: '1',
+    step: '0.01',
+    value: String(prefs().volume),
+    aria: { label: 'Volume' },
+  });
+  volume.addEventListener('input', () => {
+    const v = clampNumber(volume.value, 0, 1);
+    if (v !== null) set({ volume: v });
+  });
+  const sound = h(
+    'section',
+    { class: 'pn-section', id: 'pn-settings-sound' },
+    h('h3', { class: 'section-title' }, 'Sound'),
+    checkbox('Play sounds', !prefs().muted, (on) => set({ muted: !on })),
+    field('Volume', volume).el,
   );
 
   // ---- look and Notch
@@ -353,19 +404,25 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
       set({ notchHideS: Math.round(v) });
     }
   });
-  const look = h(
-    'section',
-    { class: 'pn-section' },
-    h('h3', { class: 'section-title' }, 'Look and Notch'),
-    h('div', { class: 'field' }, h('div', { class: 'field-label' }, 'Reduced motion'), motion),
-    field('Mascot outfit', outfit).el,
+  // The timings are numbers only a tinkerer wants (review §5): under a fold, still in the page.
+  const advanced = fold(
+    'Advanced',
+    { class: 'pn-notch-advanced' },
     h(
       'div',
       { class: 'pn-grid2' },
       field('Fold the Notch after (seconds)', collapse, { hint: 'once the pointer leaves an open card' }).el,
       field('Hide the Notch after (seconds)', hide, { hint: 'idle time before the pill becomes a strip' }).el,
     ),
+  );
+  const look = h(
+    'section',
+    { class: 'pn-section', id: 'pn-settings-look' },
+    h('h3', { class: 'section-title' }, 'Look and Notch'),
+    h('div', { class: 'field' }, h('div', { class: 'field-label' }, 'Reduced motion'), motion),
+    field('Mascot outfit', outfit).el,
     checkbox('Show finished goals on the board', prefs().showFinished, (on) => set({ showFinished: on })),
+    advanced,
   );
 
   // ---- planner
@@ -491,6 +548,18 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
     fixBox,
   );
 
+  // ---- routing: the pins' home (review decision 2), with the mode word the daemon reports
+  const pins = routingPins(ctx, td);
+  const routing = h(
+    'section',
+    { class: 'pn-section', id: 'pn-settings-routing' },
+    h('h3', { class: 'section-title' }, 'Routing'),
+    note(
+      'Friday picks each task’s model from routing. A pin makes it route a role, a task or a kind of task to one model; the routing question card and the Start an agent dialog lead here.',
+    ),
+    pins.el,
+  );
+
   // ---- policy
   const policyBox = h('div', { class: 'pn-policy' }, h('div', { class: 'muted' }, 'Reading the policy…'));
   async function loadPolicy() {
@@ -576,9 +645,29 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
       ctx.refresh();
     }
   }
-  const policy = h('section', { class: 'pn-section' }, h('h3', { class: 'section-title' }, 'Policy'), policyBox);
+  const policy = h(
+    'section',
+    { class: 'pn-section', id: 'pn-settings-policy' },
+    h('h3', { class: 'section-title' }, 'Policy'),
+    policyBox,
+  );
 
-  // ---- session and Friday
+  // ---- Friday: the worktrees in use and their clean-up, restart, log out, stop
+  const worktreesCount = h('strong', { class: 'pn-worktrees-count' }, '0');
+  const cleanBtn = button([icon('branch', 14), 'Clean up released worktrees'], () => void cleanUp(), {
+    class: 'btn',
+    title:
+      'Removes the worktrees of finished tasks that hold no uncommitted work (the same as Prune clean worktrees in the palette)',
+  });
+  async function cleanUp() {
+    cleanBtn.disabled = true;
+    // The palette's prune: the same call, the same toast listing what was removed and what was kept.
+    await pruneWorktrees(ctx);
+    if (!td.done) cleanBtn.disabled = false;
+  }
+  function renderWorktrees() {
+    worktreesCount.textContent = String(worktreesInUse(ctx.store.select('board')));
+  }
   const logoutBtn = button([icon('logout', 14), 'Log out'], () => void logout(), { class: 'btn' });
   async function logout() {
     logoutBtn.disabled = true;
@@ -589,19 +678,7 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
     clearSession();
     pageActions.reload();
   }
-  const session =
-    ctx.platform.kind === 'browser'
-      ? h(
-          'section',
-          { class: 'pn-section' },
-          h('h3', { class: 'section-title' }, 'Session'),
-          note(
-            'This page signed in with a one-time link; the session ends after 12 hours, when Friday restarts, or when you log out.',
-          ),
-          logoutBtn,
-        )
-      : null;
-
+  const inBrowser = ctx.platform.kind === 'browser';
   const stopBtn = button([icon('stop', 14), 'Stop Friday'], () => void stop(), { class: 'btn btn-danger' });
   async function stop() {
     const ok = await ctx.confirm({
@@ -618,66 +695,93 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
     const r = await ctx.act('Stop Friday', () => ctx.api.stopDaemon(), 'Friday is stopping');
     if (!td.done && !r) stopBtn.disabled = false;
   }
-  const friday = h('section', { class: 'pn-section' }, h('h3', { class: 'section-title' }, 'Friday'), stopBtn);
+  const friday = h(
+    'section',
+    { class: 'pn-section', id: 'pn-settings-friday' },
+    h('h3', { class: 'section-title' }, 'Friday'),
+    h(
+      'div',
+      { class: 'row pn-worktrees' },
+      h('span', null, 'Worktrees in use: ', worktreesCount),
+      h('span', { class: 'spacer' }),
+      cleanBtn,
+    ),
+    note('Each running attempt works in its own worktree; a released one is kept until it is cleaned up.'),
+    inBrowser
+      ? note(
+          'This page signed in with a one-time link; the session ends after 12 hours, when Friday restarts, or when you log out.',
+        )
+      : null,
+    h(
+      'div',
+      { class: 'pn-actions pn-actions-start' },
+      desktop?.restartBtn ?? null,
+      inBrowser ? logoutBtn : null,
+      stopBtn,
+    ),
+  );
 
-  // ---- the desktop app: its global shortcuts, start at sign-in, a test notification and a restart (plan §8.3, §8.6)
-  const desktop = ctx.platform.desktop ? desktopSection(ctx, ctx.platform.desktop, td) : null;
-
-  // ---- about
+  // ---- about: the address and the folder that left the header (review §6), and the versions
   const aboutBox = h('dl', { class: 'pn-kv' });
   function renderAbout() {
-    const p = ctx.store.select('board')?.project;
     const b = ctx.store.select('board');
+    const p = b?.project;
     replace(
       aboutBox,
       h('dt', null, 'Friday'),
       h('dd', null, p ? plain(p.daemon_version, 40) : '—'),
+      h('dt', null, 'Interface'),
+      h(
+        'dd',
+        null,
+        `${UI_VERSION} · API ${UI_API}${b && b.ui_api !== UI_API ? ` (Friday speaks ${String(b.ui_api)})` : ''}`,
+      ),
       h('dt', null, 'Project'),
-      h('dd', null, p ? plain(p.name, 120) : '—'),
+      h('dd', null, p ? visible(plain(p.name, 120)) : '—'),
       h('dt', null, 'Folder'),
       h('dd', { class: 'mono' }, p ? visible(p.root) : '—'),
       h('dt', null, 'Address'),
       h('dd', { class: 'mono' }, p ? `127.0.0.1:${p.port}` : '—'),
-      h('dt', null, 'Interface API'),
-      h('dd', null, b ? String(b.ui_api) : '—'),
+      h('dt', null, 'Worktrees in use'),
+      h('dd', null, String(worktreesInUse(b))),
     );
   }
-  const about = h('section', { class: 'pn-section' }, h('h3', { class: 'section-title' }, 'About'), aboutBox);
-
-  const routing = h(
+  const about = h(
     'section',
-    { class: 'pn-section' },
-    h('h3', { class: 'section-title' }, 'Routing'),
-    note('Friday picks each task’s model from routing; a pin steers a role, a task or a kind of task to one model.'),
-    linkButton('Open routing pins', () => openDrawer(ctx, { kind: 'agents', tab: 'pins' })),
+    { class: 'pn-section', id: 'pn-settings-about' },
+    h('h3', { class: 'section-title' }, 'About'),
+    aboutBox,
   );
 
-  const el = panel(
-    'pn-settings',
-    sound,
+  const sections: Record<SettingsSection, HTMLElement | null> = {
     notifications,
+    sound,
     look,
     planner,
     routing,
     policy,
-    session,
     friday,
-    desktop,
+    desktop: desktop?.section ?? null,
     about,
-  );
+  };
+  const el = panel('pn-settings', ...SETTINGS_SECTIONS.map((s) => sections[s]));
 
   renderPlanner();
+  renderWorktrees();
   renderAbout();
   void loadPolicy();
+  pins.load();
   td.add(
     ctx.store.subscribe('board', () => {
       renderPlanner();
+      renderWorktrees();
       renderAbout();
     }),
   );
-  if (request.tab === 'planner') {
+  const target = request.tab ? (sections[request.tab as SettingsSection] ?? null) : null;
+  if (target) {
     queueMicrotask(() => {
-      if (!td.done && typeof planner.scrollIntoView === 'function') planner.scrollIntoView({ block: 'start' });
+      if (!td.done && typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'start' });
     });
   }
 

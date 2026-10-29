@@ -138,6 +138,62 @@ describe('palette', () => {
     expect(ctx.transport.to('POST', '/control/pause')).toHaveLength(1);
   });
 
+  it('lists the daily commands in the empty list and the housekeeping ones only when typed (review §4)', () => {
+    const { items, type } = setup();
+    // The canvas's commands as stage.ts registers them: each declares where the palette offers it.
+    ctx.registry.command({ id: 'reset-layout', label: 'Reset moved cards', show: 'typed', run: vi.fn() });
+    ctx.registry.command({ id: 'zoom-in', label: 'Zoom in', show: 'never', run: vi.fn() });
+    ctx.registry.command({ id: 'zoom-out', label: 'Zoom out', show: 'never', run: vi.fn() });
+    ctx.store.patch('ui', { paletteOpen: true });
+    const listed = () => items().map((i) => i.dataset.entry);
+    for (const id of ['cmd:prune-worktrees', 'cmd:reindex-graph', 'cmd:stop-friday', 'cmd:reset-layout'])
+      expect(listed()).not.toContain(id);
+    for (const id of [
+      'cmd:pause',
+      'cmd:new-goal',
+      'cmd:agents',
+      'cmd:memory',
+      'cmd:graph',
+      'cmd:settings',
+      'cmd:inbox',
+    ])
+      expect(listed()).toContain(id);
+    type('prune');
+    expect(listed()).toContain('cmd:prune-worktrees');
+    type('reindex');
+    expect(listed()).toContain('cmd:reindex-graph');
+    type('stop friday');
+    expect(listed()).toContain('cmd:stop-friday');
+    type('reset moved');
+    expect(listed()).toContain('cmd:reset-layout');
+    // Zooming is the toolbar's, the wheel's and the keys' job: the palette never offers it.
+    type('zoom');
+    expect(listed()).not.toContain('cmd:zoom-in');
+    expect(listed()).not.toContain('cmd:zoom-out');
+  });
+
+  it('names the drawers as the drawers do, and mutes from the keyboard now that the dock has no Mute', async () => {
+    const { items, type } = setup();
+    ctx.store.patch('ui', { paletteOpen: true });
+    const label = (id: string) =>
+      items()
+        .find((i) => i.dataset.entry === id)
+        ?.querySelector('.dk-pal-label')?.textContent;
+    expect(label('cmd:memory')).toBe('Project memory');
+    expect(label('cmd:inbox')).toBe('Messages');
+    type('mute');
+    expect(items()[0]?.dataset.entry).toBe('cmd:mute');
+    ctx.keys.handle(key('Enter'));
+    await flush();
+    expect(ctx.store.select('prefs').muted).toBe(true);
+    ctx.store.patch('ui', { paletteOpen: true });
+    type('unmute');
+    expect(items()[0]?.dataset.entry).toBe('cmd:unmute');
+    ctx.keys.handle(key('Enter'));
+    await flush();
+    expect(ctx.store.select('prefs').muted).toBe(false);
+  });
+
   it('runs an entry on click and highlights on pointer move', async () => {
     const { items, active } = setup();
     ctx.store.patch('ui', { paletteOpen: true });

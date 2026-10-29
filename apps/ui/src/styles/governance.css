@@ -113,6 +113,14 @@
   color: var(--color-violet);
 }
 
+.gv-tone-memory {
+  color: var(--color-violet);
+}
+
+.gv-tone-policy {
+  color: var(--color-crimson);
+}
+
 .gv-card-title {
   margin: 0;
   font-size: var(--text-title-sm);
@@ -880,6 +888,19 @@
 
 .gv-tray-plan .gv-tray-row {
   border-left: 2px dashed var(--color-violet);
+}
+
+/* The rows that open another place (review §4, decision 6) carry their kind's tone like the rest. */
+.gv-tray-message .gv-tray-row {
+  border-left: 2px solid var(--color-cyan-glow);
+}
+
+.gv-tray-memory .gv-tray-row {
+  border-left: 2px dashed var(--color-violet);
+}
+
+.gv-tray-policy .gv-tray-row {
+  border-left: 2px solid var(--color-crimson);
 }
 
 /* The full-view button sits over the row's right edge (a button cannot hold another). */

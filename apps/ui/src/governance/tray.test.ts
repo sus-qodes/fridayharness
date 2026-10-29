@@ -4,6 +4,7 @@ import {
   makeApproval,
   makeEscalation,
   makeGoal,
+  makeInboxItem,
   makePlan,
   makeScenario,
   makeSnapshot,
@@ -54,6 +55,30 @@ describe('decisionItems', () => {
     expect(decisionItems(board, NOW)).toEqual([]);
     expect(decisionItems(null, NOW)).toEqual([]);
   });
+
+  it('adds a message that waits for a reply, the memories to review and an untrusted policy (review §4, decision 6)', () => {
+    const board = makeSnapshot({
+      approvals: [makeApproval()],
+      inbox: [
+        makeInboxItem({ delivery_id: 'dlv_note', mode: 'notification' }),
+        makeInboxItem({ delivery_id: 'dlv_req', mode: 'request', subject: 'Which plan names?' }),
+        makeInboxItem({ delivery_id: 'dlv_blk', mode: 'notification', blocking: true, subject: null }),
+      ],
+      memories_to_review: 2,
+      policy_untrusted: true,
+    });
+    const items = decisionItems(board, NOW);
+    expect(items.map((i) => [i.kind, i.key])).toEqual([
+      ['approval', 'approval:apr_000000000000000000000ap01'],
+      ['message', 'message:dlv_req'],
+      ['message', 'message:dlv_blk'],
+      ['memory', 'memory:review'],
+      ['policy', 'policy:untrusted'],
+    ]);
+    expect(items[3]).toMatchObject({ kind: 'memory', count: 2 });
+    // The same rule the header, the title and the Notch chip read: nothing when nothing applies.
+    expect(decisionItems(makeSnapshot({ inbox: [makeInboxItem()] }), NOW)).toEqual([]);
+  });
 });
 
 describe('the "Waiting for you" tray', () => {
@@ -75,6 +100,8 @@ describe('the "Waiting for you" tray', () => {
     const tray = mountDecisionsTray(ctx, host);
     expect(host.textContent).toContain('Nothing waits for you.');
     expect(host.querySelector('.gv-tray-count')?.hasAttribute('hidden')).toBe(true);
+    // Focusable: the header's count and the Notch's chip hand it the keyboard.
+    expect(host.querySelector<HTMLElement>('.gv-tray')?.tabIndex).toBe(-1);
     tray.destroy();
     expect(host.children).toHaveLength(0);
   });
@@ -116,6 +143,65 @@ describe('the "Waiting for you" tray', () => {
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'plan-review', id: goal.goal_id });
     (host.querySelector('.gv-tray-full') as HTMLButtonElement).click();
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'approval', id: 'apr_000000000000000000000ap01' });
+    tray.destroy();
+  });
+
+  it('shows a message that waits for a reply and opens the Messages drawer on it', () => {
+    ctx = makeContext({
+      snapshot: makeSnapshot({
+        inbox: [
+          makeInboxItem({
+            delivery_id: 'dlv_req',
+            mode: 'request',
+            subject: `Which plan names? ${HOSTILE}‮`,
+            from: { kind: 'agent', id: 'agent_x', agent_key: `claude-1${HOSTILE}`, role: 'developer' },
+          }),
+        ],
+      }),
+    });
+    const tray = mountDecisionsTray(ctx, host);
+    expect(host.querySelector('.gv-tray-count')?.textContent).toBe('1');
+    const row = host.querySelector('.gv-tray-message') as HTMLElement;
+    expect(row.querySelector('.gv-tray-label')?.textContent).toBe('A message waits for your reply');
+    expect(row.querySelector('.gv-tray-sub')?.textContent).toContain('claude-1');
+    expect(row.querySelector('.gv-tray-sub')?.textContent).toContain('Which plan names?');
+    expect(row.textContent).not.toContain('‮');
+    expect(host.querySelector('img')).toBeNull();
+    const toggle = row.querySelector('.gv-tray-row') as HTMLButtonElement;
+    expect(toggle.hasAttribute('aria-expanded')).toBe(false);
+    toggle.click();
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'inbox', id: 'dlv_req' });
+    // Replied (the delivery left the inbox): the row leaves and the count follows.
+    ctx.board(makeSnapshot());
+    expect(host.querySelector('.gv-tray-message')).toBeNull();
+    expect(host.textContent).toContain('Nothing waits for you.');
+    tray.destroy();
+  });
+
+  it('shows the memories that need review and opens Project memory at Needs review', () => {
+    ctx = makeContext({ snapshot: makeSnapshot({ memories_to_review: 1 }) });
+    const tray = mountDecisionsTray(ctx, host);
+    const row = host.querySelector('.gv-tray-memory') as HTMLElement;
+    expect(row.querySelector('.gv-tray-label')?.textContent).toBe('1 memory needs review');
+    (row.querySelector('.gv-tray-row') as HTMLButtonElement).click();
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'memory', tab: 'review' });
+    ctx.board(makeSnapshot({ memories_to_review: 3 }));
+    expect(host.querySelector('.gv-tray-memory .gv-tray-label')?.textContent).toBe('3 memories need review');
+    expect(host.querySelector('.gv-tray-count')?.textContent).toBe('1');
+    ctx.board(makeSnapshot({ memories_to_review: 0 }));
+    expect(host.querySelector('.gv-tray-memory')).toBeNull();
+    tray.destroy();
+  });
+
+  it('shows an untrusted policy loosening and opens Settings → Policy', () => {
+    ctx = makeContext({ snapshot: makeSnapshot({ policy_untrusted: true }) });
+    const tray = mountDecisionsTray(ctx, host);
+    const row = host.querySelector('.gv-tray-policy') as HTMLElement;
+    expect(row.querySelector('.gv-tray-label')?.textContent).toBe('Policy change not yet trusted');
+    (row.querySelector('.gv-tray-row') as HTMLButtonElement).click();
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'policy' });
+    ctx.board(makeSnapshot({ policy_untrusted: false }));
+    expect(host.querySelector('.gv-tray-policy')).toBeNull();
     tray.destroy();
   });
 

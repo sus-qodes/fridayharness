@@ -4,6 +4,8 @@ import {
   makeApproval,
   makeEscalation,
   makeGoal,
+  makeInboxItem,
+  makePlan,
   makeRun,
   makeScenario,
   makeSnapshot,
@@ -12,16 +14,20 @@ import {
 } from '../test/fixtures.js';
 import {
   activeTask,
+  awaitsReply,
   buildModel,
   checksLine,
   completedGoal,
   connectionLook,
   isLiveApproval,
   itemSignature,
+  MEMORY_REVIEW_KEY,
   nextExpiryIn,
+  POLICY_UNTRUSTED_KEY,
   projectName,
-  routingLabel,
+  runningCount,
   statsText,
+  statusSentence,
   studioTarget,
   taskTag,
   waitingCount,
@@ -131,6 +137,148 @@ describe('waiting items (the pin source)', () => {
   });
 });
 
+describe('waiting items: messages, memories to review and an untrusted policy (review §4, decision 6)', () => {
+  it('counts a message that waits for a reply (a request, or one the sender blocks on), not a notification', () => {
+    const request = makeInboxItem({ delivery_id: 'dlv_req', mode: 'request', subject: 'Which plan names?' });
+    const blocking = makeInboxItem({ delivery_id: 'dlv_blk', mode: 'notification', blocking: true });
+    const note = makeInboxItem({ delivery_id: 'dlv_note', mode: 'notification' });
+    const reply = makeInboxItem({ delivery_id: 'dlv_resp', mode: 'response' });
+    expect(awaitsReply(request)).toBe(true);
+    expect(awaitsReply(blocking)).toBe(true);
+    expect(awaitsReply(note)).toBe(false);
+    expect(awaitsReply(reply)).toBe(false);
+    const items = waitingItems(makeSnapshot({ inbox: [note, request, blocking, reply] }), NOW);
+    expect(items.map((i) => i.key)).toEqual(['message:dlv_req', 'message:dlv_blk']);
+    expect(items[0]).toMatchObject({ kind: 'message', id: 'dlv_req', taskId: 'task_0000000000000000000000aa01' });
+    expect(waitingCount(makeSnapshot({ inbox: [note] }), NOW)).toBe(0);
+  });
+
+  it('adds one row for the memories that need review, and one for an untrusted policy, after the rest', () => {
+    const board = makeSnapshot({
+      approvals: [makeApproval()],
+      inbox: [makeInboxItem({ mode: 'request' })],
+      memories_to_review: 3,
+      policy_untrusted: true,
+    });
+    const items = waitingItems(board, NOW);
+    expect(items.map((i) => i.kind)).toEqual(['approval', 'message', 'memory', 'policy']);
+    expect(items[2]).toEqual({ kind: 'memory', key: MEMORY_REVIEW_KEY, id: 'review', taskId: null, count: 3 });
+    expect(items[3]).toEqual({ kind: 'policy', key: POLICY_UNTRUSTED_KEY, id: 'untrusted', taskId: null });
+    // Every kind lights the one count the header, the title, the tray and the chip read.
+    expect(waitingCount(board, NOW)).toBe(4);
+    expect(waitingCount(makeSnapshot({ memories_to_review: 0, policy_untrusted: false }), NOW)).toBe(0);
+    // A snapshot from an older daemon without the fields counts nothing for them.
+    const older = makeSnapshot() as unknown as Record<string, unknown>;
+    delete older.memories_to_review;
+    delete older.policy_untrusted;
+    expect(waitingCount(older as never, NOW)).toBe(0);
+  });
+
+  it('signs the new rows by what they show, and sends each to its place in the Studio', () => {
+    const [m1] = waitingItems(makeSnapshot({ inbox: [makeInboxItem({ mode: 'request', subject: 'a' })] }), NOW);
+    const [m2] = waitingItems(makeSnapshot({ inbox: [makeInboxItem({ mode: 'request', subject: 'b' })] }), NOW);
+    const [r1] = waitingItems(makeSnapshot({ memories_to_review: 1 }), NOW);
+    const [r2] = waitingItems(makeSnapshot({ memories_to_review: 2 }), NOW);
+    const [p] = waitingItems(makeSnapshot({ policy_untrusted: true }), NOW);
+    if (!m1 || !m2 || !r1 || !r2 || !p) throw new Error('missing');
+    expect(itemSignature(m1)).not.toBe(itemSignature(m2));
+    expect(itemSignature(r1)).not.toBe(itemSignature(r2));
+    expect(itemSignature(p)).toBe(POLICY_UNTRUSTED_KEY);
+    // The delivery goes along: the drawer opens on this message, as the rail's row opens it.
+    expect(studioTarget(m1, 'task_x')).toEqual({ panel: 'inbox', id: 'dlv_000000000000000000000dl01' });
+    expect(studioTarget(r1, 'task_x')).toEqual({ panel: 'memory', tab: 'review' });
+    expect(studioTarget(p, 'task_x')).toEqual({ panel: 'settings', tab: 'policy' });
+  });
+});
+
+describe('waiting items: a proposed plan (the one list the header, the rail, the title and the chip read)', () => {
+  it('lists a plan proposed for an open goal after the waiting agents, not one of a finished goal', () => {
+    const open = makeGoal({ goal_id: 'goal_open', request: 'Add discount codes' });
+    const done = makeGoal({ goal_id: 'goal_done', status: 'COMPLETED' });
+    const board = makeSnapshot({
+      goals: [open, done],
+      plans: {
+        goal_open: { active: makePlan(), proposed: makePlan({ plan_id: 'plan_2', version: 2, status: 'PROPOSED' }) },
+        goal_done: { active: null, proposed: makePlan({ status: 'PROPOSED' }) },
+      },
+      tasks: [makeTask({ task_id: 't1', status: 'WAITING', waiting_reason: 'blocked' })],
+      inbox: [makeInboxItem({ mode: 'request' })],
+    });
+    const items = waitingItems(board, NOW);
+    expect(items.map((i) => i.kind)).toEqual(['waiting', 'plan', 'message']);
+    expect(items[1]).toEqual({
+      kind: 'plan',
+      key: 'plan:goal_open',
+      id: 'goal_open',
+      taskId: null,
+      goalId: 'goal_open',
+      planId: 'plan_2',
+      version: 2,
+      request: 'Add discount codes',
+    });
+    // It lights the shared count, and signs by the version proposed.
+    expect(waitingCount(board, NOW)).toBe(3);
+    const [plan] = waitingItems(makeSnapshot({ goals: [open], plans: board.plans }), NOW);
+    const [next] = waitingItems(
+      makeSnapshot({ goals: [open], plans: { goal_open: { active: null, proposed: makePlan({ version: 3 }) } } }),
+      NOW,
+    );
+    if (!plan || !next) throw new Error('missing');
+    expect(itemSignature(plan)).not.toBe(itemSignature(next));
+    // Its door is the plan review of the goal.
+    expect(studioTarget(plan, 'task_x')).toEqual({ panel: 'plan-review', id: 'goal_open' });
+  });
+});
+
+describe('the status sentence (the Running count’s tooltip and the tray’s line)', () => {
+  it('counts what runs and what waits for you, then what is ready and who is connected', () => {
+    expect(statusSentence(makeScenario(), NOW)).toBe(
+      '1 running, 3 waiting for you: 1 approval, 1 question, 1 blocked agent; 1 ready; 2 agents connected',
+    );
+    expect(runningCount(makeScenario())).toBe(1);
+    expect(runningCount(null)).toBe(0);
+  });
+
+  it('says when Friday is paused and counts failures and checks to run', () => {
+    const board = makeSnapshot({
+      control: { paused: true, reason: null, changed_at: null, changed_by: null, halted_at: null },
+      counts: { READY_FOR_VERIFICATION: 2, VERIFYING: 1, FAILED: 1, HARNESS_LOST: 1 },
+      tasks: [makeTask({ status: 'FAILED' })],
+      escalations: [makeEscalation({ status: 'answered' })],
+    });
+    expect(statusSentence(board, NOW)).toBe(
+      'Paused. 0 running, 0 waiting for you: 3 to verify; 2 failed or lost; 0 agents connected',
+    );
+    expect(statusSentence(null, NOW)).toBe('Friday is not connected');
+  });
+
+  it('names every kind the shared rule counts, one decision once, and never an empty clause (review §4, decision 6)', () => {
+    const t = makeTask({ task_id: 't1', status: 'WAITING', waiting_reason: 'blocked' });
+    const goal = makeGoal({ goal_id: 'goal_1' });
+    const board = makeSnapshot({
+      tasks: [t, makeTask({ task_id: 't2', status: 'RUNNING' }), makeTask({ task_id: 't3', status: 'RUNNING' })],
+      goals: [goal],
+      plans: { goal_1: { active: null, proposed: makePlan({ status: 'PROPOSED' }) } },
+      approvals: [makeApproval({ task_id: 't1' })],
+      inbox: [
+        makeInboxItem({ delivery_id: 'd1', mode: 'request' }),
+        makeInboxItem({ delivery_id: 'd2', mode: 'request' }),
+        makeInboxItem({ delivery_id: 'd3', mode: 'notification' }),
+      ],
+      memories_to_review: 2,
+      policy_untrusted: true,
+    });
+    // The approval covers the blocked agent; the memory row counts once in the total.
+    expect(statusSentence(board, NOW)).toBe(
+      '2 running, 6 waiting for you: 1 approval, 1 proposed plan, 2 messages to reply to, 2 memories to review, 1 policy change to trust; 0 agents connected',
+    );
+    // Only a kind the old sentence left unnamed: no "waiting for you: ;" any more.
+    expect(statusSentence(makeSnapshot({ memories_to_review: 1 }), NOW)).toBe(
+      '0 running, 1 waiting for you: 1 memory to review; 0 agents connected',
+    );
+  });
+});
+
 describe('the active task', () => {
   it('follows the latest tool activity on a live task', () => {
     const board = makeScenario();
@@ -203,7 +351,7 @@ describe('labels', () => {
     expect(checksLine(makeVerification({ checks: [] })).text).toBe('No checks run yet');
   });
 
-  it('formats line counts, connection, routing and names', () => {
+  it('formats line counts, connection and names', () => {
     expect(statsText(null)).toBe('—');
     expect(statsText({ added: 14, removed: 2 })).toBe('+14 −2');
     expect(connectionLook('live')).toEqual({ label: 'Connected', tone: 'good' });
@@ -212,12 +360,6 @@ describe('labels', () => {
     expect(connectionLook('starting').tone).toBe('warn');
     expect(connectionLook('stopped').tone).toBe('danger');
     expect(connectionLook('signed-out').tone).toBe('muted');
-    expect(routingLabel({ mode: 'hybrid' })).toBe('Hybrid routing');
-    expect(routingLabel({ mode: 'auto' })).toBe('Auto routing');
-    expect(routingLabel({ mode: 'manual' })).toBe('Manual routing');
-    expect(routingLabel({ mode: 'policy' })).toBe('Policy routing');
-    expect(routingLabel({ mode: HOSTILE })).toBe('Routing');
-    expect(routingLabel(undefined)).toBe('Routing');
     expect(projectName(null)).toBe('Friday');
     expect(taskTag(makeTask({ plan_key: null }))).toBe('task_00000000');
     expect(taskTag(makeTask({ plan_key: 'api‮exe' }))).toBe('api⟨U+202E⟩exe');
@@ -255,7 +397,7 @@ describe('the notch model', () => {
     });
     store.patch('activity', { files: { t1: [{ path: 'src/​evil.ts', at: 1 }] } });
     store.patch('ui', { stats: { t1: { added: 3, removed: 1, at: 2 } } });
-    const m = buildModel(store.getState(), new IslandFsm({ timers: NO_TIMERS }).snapshot, NOW, 'Hybrid routing');
+    const m = buildModel(store.getState(), new IslandFsm({ timers: NO_TIMERS }).snapshot, NOW);
     expect(m.active?.tag).toBe('k⟨U+200B⟩');
     expect(m.active?.branch).toBe('friday/⟨U+202E⟩task');
     expect(m.active?.file).toEqual({ name: '⟨U+200B⟩evil.ts', path: 'src/​evil.ts' });
@@ -263,12 +405,11 @@ describe('the notch model', () => {
     expect(m.active?.summary.length).toBeLessThanOrEqual(140);
     expect(m.project).not.toContain('‮');
     expect(m.running).toBe(1);
-    expect(m.routing).toBe('Hybrid routing');
     expect(m.celebration).toBeNull();
   });
 
   it('has no active view without a board', () => {
     const m = buildModel(createStore().getState(), new IslandFsm({ timers: NO_TIMERS }).snapshot, NOW);
-    expect(m).toMatchObject({ active: null, items: [], project: 'Friday', running: 0, routing: 'Routing' });
+    expect(m).toMatchObject({ active: null, items: [], project: 'Friday', running: 0 });
   });
 });

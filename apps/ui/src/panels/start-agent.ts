@@ -1,13 +1,29 @@
 /**
  * Start an agent (plan §7.7, FD-10, FD-24): a coding host Friday runs as a child
- * (`friday harness run <host>`), with its agent key, role and the host's own options, remembered
- * as a profile that can start with Friday. There is no model field: models come from routing.
+ * (`friday harness run <host>`), with its agent key, role and the host's own options (under an
+ * Options fold, review §4), remembered as a profile that can start with Friday. The Host field says
+ * what is installed, with "Check again" (the drawer's Installed hosts list folded in here). There is
+ * no model field: models come from routing, whose pins live in Settings → Routing.
  */
 import type { AgentHost, AgentLaunchRequest, AgentOptions, AgentProcessesView, UiSnapshot } from '@friday/protocol';
+import { visible } from '../model/text.js';
 import { type AppContext, type Component, closeModal, type ModalRequest, openDrawer } from '../shell/context.js';
 import { button, h } from '../ui/dom.js';
+import { truncate } from '../ui/format.js';
 import { icon } from '../ui/svg.js';
-import { actWithError, checkbox, field, input, linkButton, note, panel, plain, select, Teardown } from './common.js';
+import {
+  actWithError,
+  checkbox,
+  field,
+  fold,
+  input,
+  linkButton,
+  note,
+  panel,
+  plain,
+  select,
+  Teardown,
+} from './common.js';
 
 export type HostName = AgentLaunchRequest['host'];
 export const HOSTS: readonly { host: HostName; label: string; prefix: string }[] = [
@@ -133,8 +149,12 @@ export function startAgentModal(
     },
   );
   const hostNote = h('div', { class: 'field-hint', aria: { live: 'polite' } }, 'Checking which hosts are installed…');
+  const checkHosts = button([icon('rework', 14), 'Check again'], () => void loadHosts(true), {
+    class: 'btn btn-ghost',
+    title: 'Look for the installed hosts again',
+  });
   const hostField = field('Host', hostSelect);
-  hostField.el.append(hostNote);
+  hostField.el.append(h('div', { class: 'row pn-host-check' }, hostNote, h('span', { class: 'spacer' }), checkHosts));
 
   const key = input({ class: 'input mono', value: form.agent_key, maxLength: 64 });
   const keyField = field('Agent key', key, { hint: 'how Friday names this agent; a new key for each agent' });
@@ -268,6 +288,9 @@ export function startAgentModal(
     }
   }
 
+  // The host's own options are for the few who tune them (review §4): under a fold, opened by
+  // itself when one of them is wrong, so the reason the agent cannot start is never out of sight.
+  const options = fold('Options', { class: 'pn-host-options-fold' }, optionsBox);
   const autostart = checkbox('Start with Friday', form.autostart, (on) => {
     form.autostart = on;
   });
@@ -290,6 +313,7 @@ export function startAgentModal(
     keyField.setError(errors.agent_key ?? null);
     roleField.setError(errors.role ?? null);
     budgetField?.setError(errors.max_budget_usd ?? null);
+    if (errors.max_budget_usd) options.open = true;
     const info = hostInfo();
     if (hostsFailed)
       hostNote.textContent = 'Friday could not check the installed hosts; it checks again when the agent starts.';
@@ -297,9 +321,46 @@ export function startAgentModal(
     else if (!info) hostNote.textContent = 'Friday did not report this host.';
     else if (!info.found) hostNote.textContent = `Not found: ${plain(info.reason ?? 'it is not installed', 300)}`;
     else
-      hostNote.textContent = `Found${info.version ? ` ${plain(info.version, 40)}` : ''}${info.supported ? '' : ` (not supported: ${plain(info.reason ?? 'unknown version', 200)})`}`;
+      hostNote.textContent = `Found${info.version ? ` ${plain(info.version, 40)}` : ''}${info.path ? ` at ${visible(truncate(info.path, 120))}` : ''}${info.supported ? '' : ` (not supported: ${plain(info.reason ?? 'unknown version', 200)})`}`;
     const unavailable = !!info && !info.found;
     submitBtn.disabled = busy || Object.keys(errors).length > 0 || unavailable;
+  }
+
+  /** Asks Friday which hosts are installed; `refresh` makes it look again instead of answering from memory. */
+  async function loadHosts(refresh = false) {
+    checkHosts.disabled = true;
+    if (refresh) {
+      hosts = null;
+      hostsFailed = false;
+      update();
+    }
+    try {
+      const r = await ctx.api.agentHosts(refresh);
+      if (td.done) return;
+      hosts = Array.isArray(r?.hosts) ? r.hosts : [];
+      for (const opt of Array.from(hostSelect.options)) {
+        const info = hosts.find((x) => x.host === opt.value);
+        opt.disabled = !!info && !info.found;
+        opt.textContent = `${HOSTS.find((x) => x.host === opt.value)?.label ?? opt.value}${info && !info.found ? ' (not found)' : ''}`;
+      }
+      // Choose an installed host when the chosen one is missing (unless the opener named it).
+      const current = hostInfo();
+      const found = hosts.find((x) => x.found);
+      if (!preset && current && !current.found && found && (found.host === 'claude-code' || found.host === 'codex')) {
+        form.host = found.host;
+        hostSelect.value = found.host;
+        refreshKey();
+        renderOptions();
+      }
+    } catch {
+      if (td.done) return;
+      hostsFailed = true;
+    } finally {
+      if (!td.done) {
+        checkHosts.disabled = false;
+        update();
+      }
+    }
   }
 
   async function submit() {
@@ -337,18 +398,19 @@ export function startAgentModal(
     'pn-start-agent',
     hostField.el,
     h('div', { class: 'pn-grid2' }, keyField.el, roleField.el),
-    optionsBox,
     autostart,
     note('Friday remembers this agent; with "Start with Friday" it starts whenever Friday does.'),
+    options,
     h(
       'div',
       { class: 'pn-models-note' },
       note(
-        'There is no model to choose here: Friday picks the model for each task from routing. To steer it, pin a model to a role, a task or a kind.',
+        'There is no model to choose here: Friday picks the model for each task from routing. To steer it, pin a model to a role, a task or a kind in Settings → Routing.',
       ),
+      // A drawer under a dialog takes no input: the dialog closes first (plan §7.4).
       linkButton('Open routing pins', () => {
         closeModal(ctx);
-        openDrawer(ctx, { kind: 'agents', tab: 'pins' });
+        openDrawer(ctx, { kind: 'settings', tab: 'routing' });
       }),
     ),
     serverError,
@@ -362,33 +424,7 @@ export function startAgentModal(
 
   renderOptions();
   update();
-
-  void ctx.api
-    .agentHosts()
-    .then((r) => {
-      if (td.done) return;
-      hosts = Array.isArray(r?.hosts) ? r.hosts : [];
-      for (const opt of Array.from(hostSelect.options)) {
-        const info = hosts.find((x) => x.host === opt.value);
-        opt.disabled = !!info && !info.found;
-        opt.textContent = `${HOSTS.find((x) => x.host === opt.value)?.label ?? opt.value}${info && !info.found ? ' (not found)' : ''}`;
-      }
-      // Choose an installed host when the default one is missing.
-      const current = hostInfo();
-      const found = hosts.find((x) => x.found);
-      if (!preset && current && !current.found && found && (found.host === 'claude-code' || found.host === 'codex')) {
-        form.host = found.host;
-        hostSelect.value = found.host;
-        refreshKey();
-        renderOptions();
-      }
-      update();
-    })
-    .catch(() => {
-      if (td.done) return;
-      hostsFailed = true;
-      update();
-    });
+  void loadHosts();
 
   void ctx.api
     .agentProcesses()

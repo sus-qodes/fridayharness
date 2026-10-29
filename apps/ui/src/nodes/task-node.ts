@@ -1,9 +1,10 @@
 /**
- * The task card (handoff Part 04 §3, plan §7.3): kind, id, priority and risk; summary; agent,
- * write scope and worktree branch; acceptance criteria as a plain list; checks "passed of run";
- * reservations and a conflict badge; duration, tool calls, changed files and `+N −M`; a status bar
+ * The task card (handoff Part 04 §3, plan §7.3, review M9k): kind, id, priority and risk; summary;
+ * agent and write scope (the branch name lives in the inspector's Changes tab); acceptance criteria
+ * as a plain list; checks "passed of run"; reservations and a conflict badge; duration, tool calls,
+ * changed files and `+N −M`, which opens the diff once the task has an attempt; a status bar
  * coloured by status with the waiting reason, and the agent's note while it is blocked. Hover (or
- * focus) reveals the actions that apply to the task's state.
+ * focus) reveals the actions that apply to the task's state, *Changes* among them.
  */
 import type {
   FileReservationView,
@@ -56,6 +57,7 @@ export interface TaskCardModel {
 
 export type TaskActionId =
   | 'inspect'
+  | 'changes'
   | 'verify'
   | 'continue'
   | 'rework'
@@ -70,6 +72,8 @@ export function taskActions(
 ): TaskActionId[] {
   const t = m.task;
   const out: TaskActionId[] = ['inspect'];
+  // What the agent changed is one click away once there is an attempt to have changed anything.
+  if (m.run) out.push('changes');
   if (t.status === 'READY_FOR_VERIFICATION') out.push('verify');
   if (t.status === 'WAITING' && m.run?.status === 'ACTIVE' && m.harness?.attach_mode === 'spawn') out.push('continue');
   if (t.status === 'FAILED') out.push('rework');
@@ -170,6 +174,7 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
 
   const id = () => model.task.task_id;
   const inspect = () => openDrawer(ctx, { kind: 'inspector', id: id() });
+  const openChanges = () => openDrawer(ctx, { kind: 'diff', id: id() });
 
   function closeMenu(): void {
     offOutside?.();
@@ -271,6 +276,14 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
       switch (a) {
         case 'inspect':
           buttons.push(actionButton('Inspect', 'eye', inspect, { action: a, title: 'Open the task inspector' }));
+          break;
+        case 'changes':
+          buttons.push(
+            actionButton('Changes', 'file', openChanges, {
+              action: a,
+              title: 'Open the diff of what the agent changed',
+            }),
+          );
           break;
         case 'verify':
           buttons.push(
@@ -416,15 +429,7 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
             h('span', { class: 'mono' }, visible(t.reserved_for_agent_key)),
           )
         : h('span', { class: 'nd-agent muted' }, 'unassigned');
-    const branch = m.run?.branch_ref
-      ? h(
-          'span',
-          { class: 'nd-branch mono', title: visible(m.run.branch_ref) },
-          nodeIcon('branch', 12),
-          visible(m.run.branch_ref),
-        )
-      : null;
-    const meta = h('div', { class: 'nd-meta' }, agent, branch);
+    const meta = h('div', { class: 'nd-meta' }, agent);
 
     const write = t.scope?.write ?? [];
     const scope = write.length
@@ -503,7 +508,14 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
         typeof t.tool_calls === 'number' ? plural(t.tool_calls, 'tool') : '—',
       ),
       h('span', { title: 'Changed files' }, nodeIcon('file', 11), m.files === null ? '—' : plural(m.files, 'file')),
-      h('span', { class: 'nd-lines mono', title: 'Lines added and removed' }, statText(m.stats)),
+      // The figure is the card's door to the diff (review M9k); without an attempt there is none.
+      m.run
+        ? button(statText(m.stats), openChanges, {
+            class: 'nd-lines nd-lines-door mono',
+            title: 'Lines added and removed; press to see the changes',
+            dataset: { action: 'changes-figure' },
+          })
+        : h('span', { class: 'nd-lines mono', title: 'Lines added and removed' }, statText(m.stats)),
     );
     const reason =
       t.status === 'WAITING' && t.waiting_reason ? (WAITING_REASON[t.waiting_reason] ?? t.waiting_reason) : null;
@@ -528,7 +540,6 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
       m.task,
       m.run?.run_id,
       m.run?.status,
-      m.run?.branch_ref,
       m.harness?.attach_mode,
       m.verification?.verification_id,
       m.verification?.status,

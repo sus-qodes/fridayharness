@@ -54,6 +54,8 @@ describe.skipIf(!E2E)('paths off the happy path', () => {
       await rig.shot('paths-goal-without-plan');
       await write.click();
       await editor.waitFor({ timeout: 5000 });
+      // The JSON tools sit behind the editor's More fold (review §4); a closed fold's buttons are not visible.
+      await page.locator('details.pn-json-tools > summary').click();
       await page.getByRole('button', { name: 'Import JSON' }).click();
       await page.locator('.pn-json-box textarea').fill(PLAN);
       await page.getByRole('button', { name: 'Load this JSON' }).click();

@@ -44,18 +44,32 @@ function proc(o: Partial<AgentProcess> = {}): AgentProcess {
   };
 }
 
-function setup(opts: { answers?: Record<string, unknown>; height?: number } = {}) {
+function setup(
+  opts: {
+    answers?: Record<string, unknown>;
+    height?: number;
+    log?: LogLine[];
+    activity?: AgentActivity;
+    taskStatus?: string;
+    tab?: string;
+  } = {},
+) {
   const ctx = makeContext({
     snapshot: makeSnapshot({
       agents: [makeAgent({ status: 'BUSY', current_task_id: TID })],
       harnesses: [makeHarness()],
-      tasks: [makeTask({ status: 'RUNNING', summary: `Pricing ${IMG}` })],
+      tasks: [makeTask({ status: (opts.taskStatus ?? 'RUNNING') as never, summary: `Pricing ${IMG}` })],
     }),
     answers: { 'GET /agent-processes': { processes: [], profiles: [] }, ...opts.answers },
   });
-  ctx.store.setState({ activity: { ...ctx.store.select('activity'), agents: { 'claude-1': activity(LOG) } } });
+  ctx.store.setState({
+    activity: {
+      ...ctx.store.select('activity'),
+      agents: { 'claude-1': opts.activity ?? activity(opts.log ?? LOG) },
+    },
+  });
   if (opts.height !== undefined) ctx.store.patch('prefs', { terminalHeight: opts.height });
-  const drawer = createTerminal(ctx, { kind: 'terminal', id: 'claude-1' });
+  const drawer = createTerminal(ctx, { kind: 'terminal', id: 'claude-1', ...(opts.tab ? { tab: opts.tab } : {}) });
   document.body.append(drawer.el);
   return { ctx, drawer };
 }
@@ -80,7 +94,7 @@ describe('the terminal drawer', () => {
   it("shows Friday's record of the agent, hostile lines as text", () => {
     vi.useFakeTimers();
     const { drawer } = setup();
-    expect(drawer.title).toBe('Agent claude-1');
+    expect(drawer.title).toBe('Live stream: claude-1');
     expect(drawer.el.querySelector('img')).toBeNull();
     const all = lines(drawer.el);
     expect(all).toHaveLength(4);
@@ -91,6 +105,51 @@ describe('the terminal drawer', () => {
     expect(drawer.el.querySelector('.dr-term-head')?.textContent).toContain(`Pricing ${IMG}`);
     expect(drawer.el.querySelector('.dr-term-head')?.textContent).toContain('Claude Code · spawn');
     expect(drawer.el.querySelector('[role="log"]')).not.toBeNull();
+    drawer.destroy();
+  });
+
+  it('opens on Combined while the agent works, and on Errors after a failure (review M9k)', () => {
+    vi.useFakeTimers();
+    // The record ends with an ordinary line: the whole stream.
+    const working = setup();
+    expect(tab(working.drawer.el, 'combined').getAttribute('aria-selected')).toBe('true');
+    expect(working.drawer.el.querySelector('[role="tabpanel"]')?.getAttribute('aria-labelledby')).toBe(
+      tab(working.drawer.el, 'combined').id,
+    );
+    working.drawer.destroy();
+    // The newest thing recorded is a failure: the Errors view, with the failure in it.
+    const failedLast = setup({
+      log: [...LOG, { at: Date.parse(T0), sequence: 14, stream: 'error', text: `Edit failed: ${IMG}` }],
+    });
+    expect(tab(failedLast.drawer.el, 'errors').getAttribute('aria-selected')).toBe('true');
+    expect(lines(failedLast.drawer.el)).toHaveLength(2);
+    expect(lines(failedLast.drawer.el).at(-1)).toContain('Edit failed');
+    expect(failedLast.drawer.el.querySelector('[role="tabpanel"]')?.getAttribute('aria-labelledby')).toBe(
+      tab(failedLast.drawer.el, 'errors').id,
+    );
+    failedLast.drawer.destroy();
+    // The last tool failed, with an error line to show: Errors too.
+    const base = activity(LOG);
+    const toolFailed = setup({
+      activity: { ...base, current: base.current ? { ...base.current, decision: 'failed' } : null },
+    });
+    expect(tab(toolFailed.drawer.el, 'errors').getAttribute('aria-selected')).toBe('true');
+    toolFailed.drawer.destroy();
+    // The task failed: Errors.
+    const taskFailed = setup({ taskStatus: 'FAILED' });
+    expect(tab(taskFailed.drawer.el, 'errors').getAttribute('aria-selected')).toBe('true');
+    taskFailed.drawer.destroy();
+    // Nothing failed and nothing was denied: Combined, however the task stands.
+    const quiet = setup({ log: LOG.filter((l) => l.stream !== 'error'), taskStatus: 'FAILED' });
+    expect(tab(quiet.drawer.el, 'combined').getAttribute('aria-selected')).toBe('true');
+    quiet.drawer.destroy();
+  });
+
+  it('opens on the tab the request names', () => {
+    vi.useFakeTimers();
+    const { drawer } = setup({ tab: 'tools' });
+    expect(tab(drawer.el, 'tools').getAttribute('aria-selected')).toBe('true');
+    expect(lines(drawer.el)).toHaveLength(1);
     drawer.destroy();
   });
 

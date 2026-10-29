@@ -1,79 +1,39 @@
 /**
- * The Studio's "Waiting for you" list (plan §7.5): pending approvals that have not expired,
- * pending questions, agents waiting for a human (WAITING blocked or human_approval), and proposed
- * plans. Each row opens its card in place, or the plan review. Rows and their cards are kept by
- * key across snapshot re-reads, so a card that did not change keeps its armed state and its focus.
+ * The Studio's "Waiting for you" list (plan §7.5; review §4, owner decision 6): pending approvals
+ * that have not expired, pending questions, agents waiting for a human (WAITING blocked or
+ * human_approval), proposed plans, messages that wait for the human's reply, memories that need
+ * review, and a policy loosening this clone has not trusted. The first three open their card in
+ * place; a plan opens its review; the last three open the place where they are decided (the
+ * Messages drawer, Project memory at Needs review, Settings → Policy). Rows and their cards are
+ * kept by key across snapshot re-reads, so a card that did not change keeps its armed state and
+ * its focus.
+ *
+ * The rows are `waitingItems` of `notch/derive.ts`, the list the header's count, the title, the
+ * tray's line and the Notch's chip read too: the rail never lists what the header does not count.
+ * The one difference is an approval whose decision is in flight, which leaves the rail at once.
  */
-import type { ApprovalRow, EscalationView, SnapshotTask, UiSnapshot } from '@friday/protocol';
+import type { SnapshotInboxItem, UiSnapshot } from '@friday/protocol';
 import { classifyEscalation } from '../model/escalations.js';
-import { waitsForHuman } from '../model/status.js';
 import { visible } from '../model/text.js';
-import { type AppContext, type Component, openModal } from '../shell/context.js';
+import { itemSignature, type WaitingItem, waitingItems } from '../notch/derive.js';
+import { type AppContext, type Component, openDrawer, openModal } from '../shell/context.js';
 import { button, h, replace, setText } from '../ui/dom.js';
-import { cleanText, truncate } from '../ui/format.js';
+import { cleanText, plural, truncate } from '../ui/format.js';
 import { type IconName, icon } from '../ui/svg.js';
 import { type ApprovalCard, approvalCard } from './approval-card.js';
 import { agentKeyOf, isExpired, nextId } from './common.js';
-import { pendingApprovals } from './decisions.js';
+import { isDeciding } from './decisions.js';
 import { questionCard } from './question-card.js';
 import { waitingCard } from './waiting-card.js';
 
-export type TrayItem =
-  | { kind: 'approval'; key: string; sig: string; approval: ApprovalRow }
-  | { kind: 'question'; key: string; sig: string; escalation: EscalationView }
-  | { kind: 'waiting'; key: string; sig: string; task: SnapshotTask }
-  | { kind: 'plan'; key: string; sig: string; goalId: string; version: number; request: string };
+/** A waiting item with the signature of what its row and card show. */
+export type TrayItem = WaitingItem & { sig: string };
 
 /** Everything that waits for a human, in the order the tray shows it. */
 export function decisionItems(board: UiSnapshot | null, now: number): TrayItem[] {
-  if (!board) return [];
-  const approvals = pendingApprovals(board, now);
-  const out: TrayItem[] = approvals.map((a) => ({
-    kind: 'approval',
-    key: `approval:${a.approval_id}`,
-    sig: JSON.stringify([a.capability, a.target, a.purpose, a.risk, a.expires_at]),
-    approval: a,
-  }));
-  for (const e of board.escalations) {
-    if (e.status !== 'pending') continue;
-    out.push({
-      kind: 'question',
-      key: `question:${e.escalation_id}`,
-      sig: JSON.stringify([e.question, e.options, e.kind, e.details]),
-      escalation: e,
-    });
-  }
-  // A task whose approval or question is listed is decided through that item, whatever its
-  // waiting reason (a spawned agent waits as blocked): it is not listed twice (review M9i).
-  const covered = new Set(
-    [
-      ...approvals.map((a) => a.task_id),
-      ...out.flatMap((i) => (i.kind === 'question' ? [i.escalation.task_id] : [])),
-    ].filter(Boolean),
-  );
-  for (const t of board.tasks) {
-    if (!waitsForHuman(t)) continue;
-    if (covered.has(t.task_id)) continue;
-    out.push({
-      kind: 'waiting',
-      key: `waiting:${t.task_id}`,
-      sig: JSON.stringify([t.waiting_reason, t.waiting_note, t.current_run_id]),
-      task: t,
-    });
-  }
-  for (const g of board.goals) {
-    const proposed = board.plans[g.goal_id]?.proposed;
-    if (!proposed || g.status === 'CANCELLED' || g.status === 'COMPLETED') continue;
-    out.push({
-      kind: 'plan',
-      key: `plan:${g.goal_id}`,
-      sig: JSON.stringify([proposed.plan_id, proposed.version]),
-      goalId: g.goal_id,
-      version: proposed.version,
-      request: g.request,
-    });
-  }
-  return out;
+  return waitingItems(board, now)
+    .filter((item) => item.kind !== 'approval' || !isDeciding(item.id))
+    .map((item) => ({ ...item, sig: itemSignature(item) }));
 }
 
 /** The earliest moment a listed approval expires, to re-read the list then. */
@@ -102,16 +62,30 @@ const ICONS: Record<TrayItem['kind'], IconName> = {
   question: 'question',
   waiting: 'hourglass',
   plan: 'goal',
+  message: 'message',
+  memory: 'memory',
+  policy: 'shield',
 };
+
+/** Rows that open another place instead of a card under themselves. */
+const OPENS_PLACE = new Set<TrayItem['kind']>(['plan', 'message', 'memory', 'policy']);
+
+function senderOf(m: SnapshotInboxItem): string {
+  if (m.from.kind === 'agent') return m.from.agent_key ?? m.from.id;
+  if (m.from.kind === 'master_brain') return 'Master Brain';
+  if (m.from.kind === 'system') return 'Friday';
+  return m.from.kind;
+}
 
 export function mountDecisionsTray(ctx: AppContext, container: HTMLElement): Component {
   const titleId = nextId('tray-title');
   const count = h('span', { class: 'badge badge-warn gv-tray-count' }, '0');
   const list = h('ul', { class: 'gv-tray-list', aria: { labelledby: titleId } });
   const empty = h('p', { class: 'empty gv-tray-empty' }, 'Nothing waits for you.');
+  // Focusable, so the Notch's waiting chip and the header's count can hand it the keyboard.
   const el = h(
     'section',
-    { class: 'gv-tray', aria: { labelledby: titleId } },
+    { class: 'gv-tray', tabIndex: -1, aria: { labelledby: titleId } },
     h('header', { class: 'gv-tray-head' }, h('h2', { class: 'gv-tray-title', id: titleId }, 'Waiting for you'), count),
     list,
     empty,
@@ -144,6 +118,23 @@ export function mountDecisionsTray(ctx: AppContext, container: HTMLElement): Com
         };
       case 'plan':
         return { label: `Proposed plan v${item.version}`, sub: truncate(cleanText(item.request), 110) };
+      case 'message': {
+        const m = item.message;
+        return {
+          label: 'A message waits for your reply',
+          sub: `${visible(senderOf(m))} · ${truncate(cleanText(m.subject ?? m.preview), 110)}`,
+        };
+      }
+      case 'memory':
+        return {
+          label: `${plural(item.count, 'memory', 'memories')} ${item.count === 1 ? 'needs' : 'need'} review`,
+          sub: 'Agents recorded them; approve or retract each in Project memory.',
+        };
+      case 'policy':
+        return {
+          label: 'Policy change not yet trusted',
+          sub: "The project's files loosen Friday's defaults; nothing of it applies until you trust it.",
+        };
     }
   };
 
@@ -173,9 +164,17 @@ export function mountDecisionsTray(ctx: AppContext, container: HTMLElement): Com
     row.el.classList.add('gv-tray-open');
   };
 
+  /** Where a row without a card is decided. */
+  const openPlace = (item: TrayItem): void => {
+    if (item.kind === 'plan') openModal(ctx, { kind: 'plan-review', id: item.goalId });
+    else if (item.kind === 'message') openDrawer(ctx, { kind: 'inbox', id: item.message.delivery_id });
+    else if (item.kind === 'memory') openDrawer(ctx, { kind: 'memory', tab: 'review' });
+    else if (item.kind === 'policy') openDrawer(ctx, { kind: 'settings', tab: 'policy' });
+  };
+
   const activate = (row: Row): void => {
-    if (row.item.kind === 'plan') {
-      openModal(ctx, { kind: 'plan-review', id: row.item.goalId });
+    if (OPENS_PLACE.has(row.item.kind)) {
+      openPlace(row.item);
       return;
     }
     if (row.card) collapse(row);
@@ -194,7 +193,12 @@ export function mountDecisionsTray(ctx: AppContext, container: HTMLElement): Com
       () => activate(row),
       {
         class: 'gv-tray-row',
-        aria: item.kind === 'plan' ? { haspopup: 'dialog' } : { expanded: 'false', controls: slotId },
+        aria:
+          item.kind === 'plan'
+            ? { haspopup: 'dialog' }
+            : OPENS_PLACE.has(item.kind)
+              ? {}
+              : { expanded: 'false', controls: slotId },
       },
     );
     const extra =

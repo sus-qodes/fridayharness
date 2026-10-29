@@ -262,9 +262,11 @@
   color: var(--diff-del-text);
 }
 
+/* A button (it opens the card, or in a page shows the rail): no browser border. */
 .nt-chip {
   flex: none;
   padding: 0 6px;
+  border: 0;
   border-radius: var(--radius-pill);
   background: rgba(245, 158, 11, 0.16);
   color: var(--color-amber);
@@ -272,6 +274,20 @@
   font-weight: var(--weight-semibold);
   line-height: 18px;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.nt-chip:hover {
+  background: rgba(245, 158, 11, 0.26);
+}
+
+/* In a page the tag opens the task; with no task it names the project and is not a door. */
+.nt-island-page .nt-compact-open.nt-compact-idle {
+  cursor: default;
+}
+
+.nt-island-page .nt-compact-open.nt-compact-idle:hover {
+  background: transparent;
 }
 
 /* ---- expanded: the card ----------------------------------------------------------------------- */
@@ -339,26 +355,6 @@
 
 .nt-dot[data-tone="danger"] {
   background: var(--color-crimson);
-}
-
-.nt-routing {
-  flex: none;
-  max-width: 120px;
-  overflow: hidden;
-  padding: 1px 8px;
-  border: 1px solid var(--border-medium);
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--color-slate-200);
-  font-size: var(--text-caption);
-  line-height: 18px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.nt-routing:hover {
-  border-color: var(--border-strong);
-  background: rgba(255, 255, 255, 0.05);
 }
 
 .nt-body {
@@ -481,6 +477,34 @@
 
 .nt-arriving {
   color: var(--color-amber);
+}
+
+/* The card's own notice for an item no area builds a card for: one line, and the door to the Studio. */
+.nt-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+}
+
+.nt-notice-title {
+  margin: 0;
+  font-weight: var(--weight-semibold);
+  color: var(--color-white);
+  overflow-wrap: anywhere;
+}
+
+.nt-notice-line {
+  margin: 0;
+  font-size: var(--text-caption);
+  overflow-wrap: anywhere;
+}
+
+.nt-notice-door {
+  align-self: flex-start;
+  margin-top: 2px;
 }
 
 .nt-prompt {

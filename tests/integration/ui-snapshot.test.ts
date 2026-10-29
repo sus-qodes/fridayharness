@@ -95,6 +95,83 @@ describe('the board snapshot', () => {
     expect(typeof ready?.delegation_note === 'string' || ready?.delegation_note === null).toBe(true);
   });
 
+  it('lists a request to the human with its mode, so the rail can count it as waiting for a reply (M9k.8)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
+    const { client, task } = await attachedSession(td);
+    await client.communicate({
+      to: 'human',
+      mode: 'request',
+      subject: 'Which plan names?',
+      content: 'The spec names none.',
+      task_id: task.task_id,
+    });
+    await client.communicate({ to: 'human', mode: 'notification', subject: 'FYI', content: 'Contract changed.' });
+    const snap = await snapshotOf(td);
+    const modes = Object.fromEntries(snap.inbox.map((i) => [i.subject, i.mode]));
+    expect(modes).toEqual({ 'Which plan names?': 'request', FYI: 'notification' });
+    expect(snap.inbox.find((i) => i.mode === 'request')?.task_id).toBe(task.task_id);
+  });
+
+  it('counts the memories that wait for a human’s review (M9k.8)', async () => {
+    const td = await startTestDaemon(ws());
+    // A human's memory: approved by its author, nothing to review.
+    await td.operator.post(td.operator.projectPath('/memory'), {
+      scope_type: 'project',
+      kind: 'architecture',
+      subject: 'auth',
+      content: 'Auth uses JWT.',
+    });
+    expect((await snapshotOf(td)).memories_to_review).toBe(0);
+    // An agent records a task memory that contradicts it: it never replaces the human's, and waits
+    // for review until a human approves or retracts it.
+    const fe = await FakeHarness.connect(td, { agentKey: 'fe-1', role: 'frontend' });
+    const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Login page',
+      assign_agent_key: 'fe-1',
+    });
+    const recorded = td.daemon.state.memory.record(
+      td.project.project_id,
+      { kind: 'agent', caller: { harness_id: fe.harnessId, agent_id: fe.agentId } },
+      {
+        scope_type: 'task',
+        scope_id: task.task_id,
+        kind: 'architecture',
+        subject: 'auth',
+        content: 'Auth uses API keys.',
+      },
+    );
+    expect(recorded.memory.needs_review).toBe(true);
+    expect((await snapshotOf(td)).memories_to_review).toBe(1);
+    // The review route lists the same memory the count stands for.
+    const review = await td.operator.get<{ memories: { memory_id: string }[] }>(
+      td.operator.projectPath('/memory/review'),
+    );
+    expect(review.memories.map((m) => m.memory_id)).toEqual([recorded.memory.memory_id]);
+    await td.operator.post(td.operator.projectPath(`/memory/${recorded.memory.memory_id}/approve`), {});
+    expect((await snapshotOf(td)).memories_to_review).toBe(0);
+    await fe.close();
+  });
+
+  it('says whether the policy’s loosening is trusted on this clone (M9k.8)', async () => {
+    // config.yaml asks for pushes without review: loosening, not trusted until the human says so.
+    const td = await startTestDaemon(ws(), { git: true, extraConfig: 'autonomy:\n  git.push: auto\n' });
+    const policy = await td.operator.get<{ policy: { trusted: boolean; loosening_hash: string } }>(
+      td.operator.projectPath('/policy'),
+    );
+    expect(policy.policy.trusted).toBe(false);
+    expect(
+      (await snapshotOf(td)).policy_untrusted,
+      'the daemon passes its policy to the snapshot (uiInfo.policy_trusted = currentPolicy().trusted)',
+    ).toBe(true);
+    await td.operator.post(td.operator.projectPath('/policy/trust'), { loosening_hash: policy.policy.loosening_hash });
+    expect((await snapshotOf(td)).policy_untrusted).toBe(false);
+    // A project whose files loosen nothing has nothing to trust. The workspace is one per test and a
+    // daemon holds its project's lock, so the first daemon closes before the second starts.
+    await td.daemon.close('the loosening project is done');
+    const plain = await startTestDaemon(ws());
+    expect((await snapshotOf(plain)).policy_untrusted).toBe(false);
+  });
+
   it('counts goal progress over all the goal’s tasks, also those finished more than a day ago (review R4)', async () => {
     const clock = new FakeClock(new Date().toISOString());
     const td = await startTestDaemon(ws(), {

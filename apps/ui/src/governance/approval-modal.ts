@@ -33,16 +33,17 @@ export interface ApprovalModalOptions {
   clock?: Clock;
 }
 
+// The reach words are the card's and the Allow button's (`REACH_LABEL`): one vocabulary for a grant's reach.
 const REACHES: { reach: Reach; label: string; explain: string }[] = [
   { reach: 'once', label: 'Once', explain: 'This one call, then the agent asks again.' },
   {
     reach: 'run',
-    label: 'This attempt',
+    label: 'For this attempt',
     explain: 'The same call on this exact target for the rest of this attempt.',
   },
   {
     reach: 'task',
-    label: 'This task',
+    label: 'For this task',
     explain: 'The same call on this exact target for every attempt of this task.',
   },
 ];

@@ -172,6 +172,9 @@ describe('mountStudio', () => {
     ctx.board(makeSnapshot({ goals: [makeGoal({ status: 'COMPLETED' })] }));
     ctx.store.patch('prefs', { showFinished: false });
     expect(empty.textContent).toContain('hidden');
+    // The hint points at the toolbar's toggle, which is right there (review M9k).
+    expect(empty.textContent).toContain('"Finished goals"');
+    expect(empty.textContent).not.toContain('Settings');
   });
 });
 
@@ -272,6 +275,46 @@ describe('view controls', () => {
     expect(studio.layout().rects.get(API)).toEqual(r0);
   });
 
+  it('offers Tidy only after a card was dragged, and Tidy puts the cards back (review M9k)', async () => {
+    const { ctx, host, studio } = setup();
+    const tidy = host.querySelector('[data-action="tidy"]') as HTMLButtonElement;
+    expect(tidy.hidden).toBe(true);
+    const head = card(host, API)?.querySelector('.nd-head') as HTMLElement;
+    const r0 = studio.layout().rects.get(API);
+    pointer('pointerdown', head, { clientX: 10, clientY: 10 });
+    pointer('pointermove', head, { clientX: 110, clientY: 60 });
+    pointer('pointerup', head, { clientX: 110, clientY: 60 });
+    expect(studio.layout().rects.get(API)).not.toEqual(r0);
+    expect(tidy.hidden).toBe(false);
+    expect(tidy.textContent).toContain('Tidy');
+    // The click that ends the drag is swallowed; a later press is a real one.
+    await new Promise((r) => setTimeout(r, 0));
+    tidy.click();
+    expect(ctx.store.select('prefs').positions).toEqual({});
+    expect(studio.layout().rects.get(API)).toEqual(r0);
+    expect(tidy.hidden).toBe(true);
+  });
+
+  it('toggles finished goals from the toolbar, in step with the Settings row (review M9k)', () => {
+    const s = makeScenario();
+    const g = s.goals[0];
+    if (g) g.status = 'COMPLETED';
+    const { ctx, host } = setup({ snapshot: s });
+    const toggle = host.querySelector('[data-action="finished-goals"]') as HTMLButtonElement;
+    expect(toggle.textContent).toContain('Finished goals');
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(card(host, GOAL)).not.toBeNull();
+    toggle.click();
+    expect(ctx.store.select('prefs').showFinished).toBe(false);
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    expect(toggle.title).toContain('hidden');
+    expect(card(host, GOAL)).toBeNull();
+    // Settings writes the same preference: the toolbar follows.
+    ctx.store.patch('prefs', { showFinished: true });
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(card(host, GOAL)).not.toBeNull();
+  });
+
   it('follows a camera another part of the interface set', () => {
     const { ctx, studio } = setup();
     ctx.store.patch('ui', { camera: { x: 5, y: 6, zoom: 9 } });
@@ -299,6 +342,28 @@ describe('view controls', () => {
     (card(host, API)?.querySelector('[data-action="inspect"]') as HTMLElement | null)?.click();
     ctx.store.patch('ui', { selectedTaskId: LOOSE });
     expect(studio.camera().x).not.toBe(-50_000);
+  });
+});
+
+describe('the minimap', () => {
+  it('shows only while some card lies outside the view (review M9k)', () => {
+    withCanvas();
+    const { ctx, host, studio } = setup();
+    const minimap = host.querySelector('.cv-minimap') as HTMLElement;
+    const stage = host.querySelector('.cv-stage') as HTMLElement;
+    // Fitted: every card is on the screen, so there is nothing for a map to show.
+    studio.drawNow();
+    expect(minimap.hidden).toBe(true);
+    expect(stage.classList.contains('cv-minimap-off')).toBe(true);
+    // Panned away: a card crosses the edge, and the map appears.
+    ctx.store.patch('ui', { camera: { x: -600, y: 0, zoom: 1 } });
+    studio.drawNow();
+    expect(minimap.hidden).toBe(false);
+    expect(stage.classList.contains('cv-minimap-off')).toBe(false);
+    // Fit everything brings every card back, and the map goes.
+    ctx.keys.handle(new KeyboardEvent('keydown', { key: 'f' }));
+    studio.drawNow();
+    expect(minimap.hidden).toBe(true);
   });
 });
 

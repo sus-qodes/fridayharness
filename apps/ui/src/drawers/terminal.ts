@@ -1,11 +1,12 @@
 /**
- * The terminal drawer (plan §7.4, handoff Part 05 §6, ERRATA F23, F38): the bottom drawer for one
- * agent. Friday does not relay agents' raw output; it shows Friday's record of the agent (tool
- * decisions, completions, failures, unmediated writes, progress notes, usage, scope and ownership
- * conflicts) in the tabs Combined, Tools and Errors, and, for an agent started from the interface,
- * its launched process's redacted output with escape sequences removed (re-read every 3 s while
- * open). A text filter, a local clear, a scroll lock, and a resize handle (300–600 px) that keeps
- * the height in `prefs.terminalHeight`.
+ * The live stream drawer (plan §7.4, handoff Part 05 §6, ERRATA F23, F38, review M9k): the bottom
+ * drawer for one agent, titled "Live stream: <key>". Friday does not relay agents' raw output; it
+ * shows Friday's record of the agent (tool decisions, completions, failures, unmediated writes,
+ * progress notes, usage, scope and ownership conflicts) in the tabs Combined, Tools and Errors, and,
+ * for an agent started from the interface, its launched process's redacted output with escape
+ * sequences removed (re-read every 3 s while open). It opens on Errors after a failure. A text
+ * filter, a local clear, a scroll lock, and a resize handle (300–600 px) that keeps the height in
+ * `prefs.terminalHeight`.
  */
 import type { AgentProcess } from '@friday/protocol';
 import { visible } from '../model/text.js';
@@ -22,6 +23,7 @@ import {
   MIN_HEIGHT,
   processClearPoint,
   processLines,
+  startTab,
   type TerminalTab,
   visibleLines,
 } from './terminal-model.js';
@@ -51,6 +53,24 @@ export function createTerminal(ctx: AppContext, request: DrawerRequest): Compone
   let headSignature = '';
   const unsubscribe: (() => void)[] = [];
 
+  // After a failure the drawer opens where the failure is (review M9k): on Errors.
+  const agentAtOpen = ctx.store.select('activity').agents[key];
+  const boardAtOpen = ctx.store.select('board');
+  const agentView = boardAtOpen?.agents.find((a) => a.agent_key === key);
+  const taskAtOpen = agentView?.current_task_id
+    ? boardAtOpen?.tasks.find((t) => t.task_id === agentView.current_task_id)
+    : undefined;
+  const initialTab = startTab({
+    requested: request.tab,
+    log: agentAtOpen?.log ?? [],
+    lastDecision: agentAtOpen?.current?.decision ?? null,
+    taskFailed:
+      !!taskAtOpen &&
+      (taskAtOpen.status === 'FAILED' ||
+        taskAtOpen.status === 'HARNESS_LOST' ||
+        taskAtOpen.waiting_reason === 'agent_error'),
+  });
+
   const head = h('div', { class: 'dr-term-head' });
   const tabBar = tabs<TerminalTab>(
     [
@@ -59,7 +79,7 @@ export function createTerminal(ctx: AppContext, request: DrawerRequest): Compone
       { id: 'errors', label: 'Errors' },
       { id: 'process', label: 'Process output' },
     ],
-    'combined',
+    initialTab,
     () => render(),
   );
   tabBar.setHidden('process', true);
@@ -92,7 +112,7 @@ export function createTerminal(ctx: AppContext, request: DrawerRequest): Compone
     aria: { label: `Activity of ${key}` },
     tabIndex: 0,
   });
-  const panel = tabPanel(tabBar, 'combined', body);
+  const panel = tabPanel(tabBar, initialTab, body);
   const handle = h('div', {
     class: 'dr-term-handle',
     role: 'separator',
@@ -353,7 +373,8 @@ export function createTerminal(ctx: AppContext, request: DrawerRequest): Compone
 
   return {
     el,
-    title: `Agent ${visible(key)}`,
+    // The pod's button says "Open the live stream"; the drawer says what it is, then whose.
+    title: `Live stream: ${visible(key)}`,
     destroy() {
       destroyed = true;
       stopPolling();

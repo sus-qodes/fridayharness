@@ -269,6 +269,17 @@ export interface UiSnapshot {
   reservations: FileReservationView[];
   brain: BrainStatusView | null;
   brain_jobs: BrainJobView[];
+  /**
+   * How many memories agents recorded wait for a human's review (the Project memory drawer's
+   * "Needs review"). The rail counts them as waiting for you.
+   */
+  memories_to_review: number;
+  /**
+   * The project's tracked files loosen Friday's defaults in a way this clone has not trusted:
+   * nothing of it applies until the human trusts exactly that list (Settings → Policy). The rail
+   * counts it as waiting for you.
+   */
+  policy_untrusted: boolean;
   truncated: Partial<Record<SnapshotList, boolean>>;
 }
 

@@ -286,7 +286,9 @@ describe('mountShell', () => {
       }));
     });
     const { ctx, shell } = shellSetup(areas);
-    (shell.regions.top.querySelector('[title^="The project\'s memory"]') as HTMLButtonElement).click();
+    // Project memory sits behind the header's More menu (review §4).
+    (shell.regions.top.querySelector('[aria-label="More"]') as HTMLButtonElement).click();
+    (shell.regions.top.querySelector('[data-item="memory"]') as HTMLButtonElement).click();
     expect(ctx.store.select('ui').drawer?.kind).toBe('memory');
     expect(shell.regions.overlays.querySelector('.fake-memory')).not.toBeNull();
   });

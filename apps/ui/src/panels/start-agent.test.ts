@@ -170,12 +170,62 @@ describe('start agent modal', () => {
     m.destroy();
   });
 
-  it('links to the routing pins', () => {
+  it('links to the routing pins in Settings → Routing, closing the dialog first', () => {
     const ctx = makeContext();
     const m = startAgentModal(ctx, { kind: 'start-agent' }, () => undefined);
+    expect(m.el.textContent).toContain('Settings → Routing');
     buttonBy(m.el, 'Open routing pins').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents', tab: 'pins' });
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'routing' });
     expect(ctx.store.select('ui').modal).toBeNull();
+    m.destroy();
+  });
+
+  it('says what is installed under the Host field and checks again on request', async () => {
+    const ctx = makeContext({ answers: { 'GET /agent-hosts': HOSTS, 'GET /agent-processes': profiles([]) } });
+    const m = startAgentModal(ctx, { kind: 'start-agent' }, () => undefined);
+    const check = buttonBy(m.el, 'Check again');
+    expect(check.disabled).toBe(true);
+    expect(m.el.textContent).toContain('Checking which hosts are installed');
+    await flush();
+    expect(check.disabled).toBe(false);
+    expect(m.el.textContent).toContain('Found 2.1.301 at C:/bin/claude.exe');
+    check.click();
+    expect(check.disabled).toBe(true);
+    expect(m.el.textContent).toContain('Checking which hosts are installed');
+    await flush();
+    const calls = ctx.transport.calls.filter((c) => c.path.includes('/agent-hosts'));
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.path).not.toContain('refresh=true');
+    expect(calls[1]?.path).toContain('refresh=true');
+    expect(check.disabled).toBe(false);
+    expect(m.el.textContent).toContain('Found 2.1.301 at C:/bin/claude.exe');
+    m.destroy();
+  });
+
+  it('keeps the host options under an Options fold that opens when one of them is wrong', async () => {
+    const ctx = makeContext({ answers: { 'GET /agent-hosts': HOSTS, 'GET /agent-processes': profiles([]) } });
+    const m = startAgentModal(ctx, { kind: 'start-agent' }, () => undefined);
+    await flush();
+    const options = m.el.querySelector('details.pn-host-options-fold') as HTMLDetailsElement;
+    expect(options.open).toBe(false);
+    expect(options.querySelector('summary')?.textContent).toBe('Options');
+    // The options are in the page, folded: a wrong cap opens the fold and disables the start.
+    const cap = controlBy(options, 'Spending cap per attempt (USD)');
+    type(cap, '500');
+    expect(options.open).toBe(true);
+    expect(options.textContent).toContain('between 0.01 and 100 dollars');
+    expect(buttonBy(m.el, 'Start the agent').disabled).toBe(true);
+    type(cap, '2');
+    expect(buttonBy(m.el, 'Start the agent').disabled).toBe(false);
+    // "Start with Friday" is not a host option: it stays in view.
+    const autostart = Array.from(m.el.querySelectorAll('label.check')).find((l) =>
+      l.textContent?.includes('Start with Friday'),
+    );
+    expect(autostart).toBeTruthy();
+    expect(options.contains(autostart as Node)).toBe(false);
+    // Codex has its own options behind the same fold.
+    choose(controlBy<HTMLSelectElement>(m.el, 'Host'), 'codex');
+    expect(controlBy<HTMLSelectElement>(options, 'Sandbox').value).toBe('workspace-write');
     m.destroy();
   });
 });

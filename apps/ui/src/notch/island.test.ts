@@ -6,6 +6,7 @@ import {
   makeApproval,
   makeEscalation,
   makeGoal,
+  makeInboxItem,
   makeRun,
   makeScenario,
   makeSnapshot,
@@ -114,7 +115,7 @@ function mount(
   };
   const container = h('div', { class: 'host' });
   document.body.append(container);
-  // The window's behaviour by default: a new item opens the card there (the page pins it quietly, tested below).
+  // The window's behaviour by default: a new item opens the card there (the page has no card, tested below).
   const handle = mountNotchWith(ctx, container, s.slots, { mode: 'window', ...opts }, env);
   mounted.push({ handle, container });
   const q = <T extends Element = HTMLElement>(sel: string): T => {
@@ -143,6 +144,7 @@ afterEach(() => {
   mounted = [];
   vi.useRealTimers();
   document.documentElement.className = '';
+  document.body.replaceChildren();
 });
 
 function board(ctx: TestContext, s: UiSnapshot): void {
@@ -152,6 +154,14 @@ function board(ctx: TestContext, s: UiSnapshot): void {
 const flushPromises = async (): Promise<void> => {
   for (let i = 0; i < 5; i++) await Promise.resolve();
 };
+
+/** A board with one running task that touched a file. */
+function running(): UiSnapshot {
+  return makeSnapshot({
+    tasks: [makeTask({ task_id: 't1', status: 'RUNNING', plan_key: 'api', summary: 'Add the API' })],
+    runs: { t1: makeRun({ task_id: 't1' }) },
+  });
+}
 
 // ---- the island element -------------------------------------------------------------------------
 
@@ -300,8 +310,8 @@ describe('mounted Notch: greeting, idle and the strip', () => {
   });
 });
 
-describe('mounted Notch in a page: the Decisions tray shows what waits (ERRATA F40)', () => {
-  it('pins the pill with its count on launch instead of opening the card', () => {
+describe('mounted Notch in a page: the pill alone (review §4, owner decision 1)', () => {
+  it('pins the pill with its count on launch instead of opening a card', () => {
     const ctx = makeContext({ snapshot: makeScenario() });
     const { handle, calls, q } = mount(ctx, { mode: 'in-page' });
     expect(handle.el.dataset.state).toBe('compact');
@@ -313,9 +323,12 @@ describe('mounted Notch in a page: the Decisions tray shows what waits (ERRATA F
     expect(handle.el.dataset.state).toBe('compact');
   });
 
-  it('a new item or an approval reaction pins without opening; hover opens and leaving folds it again', () => {
+  it('builds no card: no goal line, and hover, click and new items leave the pill as it is', () => {
     const ctx = makeContext();
-    const { handle } = mount(ctx, { mode: 'in-page' });
+    const { handle, calls, q } = mount(ctx, { mode: 'in-page' });
+    expect(calls.prompt).toHaveLength(0);
+    expect(handle.el.querySelector('.nt-expanded')).toBeNull();
+    expect(handle.el.querySelector('.nt-view-absent')).not.toBeNull();
     vi.advanceTimersByTime(2400);
     ctx.store.patch('activity', { reactions: [{ id: 1, kind: 'approval', at: 0 }] });
     expect(handle.el.dataset.state).toBe('compact');
@@ -323,23 +336,97 @@ describe('mounted Notch in a page: the Decisions tray shows what waits (ERRATA F
     expect(handle.el.dataset.state).toBe('compact');
     expect(handle.state().pinned).toBe(true);
     handle.el.dispatchEvent(new Event('pointerenter'));
-    expect(handle.el.dataset.state).toBe('expanded');
+    expect(handle.el.dataset.state).toBe('compact');
     handle.el.dispatchEvent(new Event('pointerleave'));
-    vi.advanceTimersByTime(600);
+    handle.open(true);
+    expect(handle.el.dataset.state).toBe('compact');
+    // The shortcut's focus lands on the pill, since there is no card to take it.
+    expect(document.activeElement).toBe(q('.nt-chip'));
+    expect(calls.prompt).toHaveLength(0);
+    // Nothing of the pill is a chevron into a card.
+    expect(handle.el.querySelector('.nt-chev')).toBeNull();
+  });
+
+  it('the tag opens the task’s inspector; without an active task it names the project and opens nothing', () => {
+    const ctx = makeContext({ snapshot: running() });
+    const { q } = mount(ctx, { mode: 'in-page' });
+    vi.advanceTimersByTime(2400);
+    const tag = q<HTMLButtonElement>('.nt-compact-open');
+    expect(tag.getAttribute('aria-disabled')).toBe('false');
+    expect(tag.tabIndex).toBe(0);
+    expect(tag.getAttribute('aria-label')).toBe('Inspect api: Running');
+    expect(q('.nt-tag').textContent).toBe('api');
+    tag.click();
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'inspector', id: 't1' });
+    expect(ctx.store.select('ui').selectedTaskId).toBe('t1');
+    ctx.store.patch('ui', { drawer: null });
+    board(ctx, makeSnapshot());
+    // Said with aria-disabled, never `disabled`: an idle board is not drawn as a fault.
+    expect(tag.disabled).toBe(false);
+    expect(tag.getAttribute('aria-disabled')).toBe('true');
+    expect(tag.tabIndex).toBe(-1);
+    expect(tag.classList.contains('nt-compact-idle')).toBe(true);
+    expect(tag.getAttribute('aria-label')).toBe('Friday: shop');
+    expect(q('.nt-tag').textContent).toBe('shop');
+    tag.click();
+    expect(ctx.store.select('ui').drawer).toBeNull();
+  });
+
+  it('the ticker opens the diff at the file', async () => {
+    const ctx = makeContext({
+      snapshot: running(),
+      answers: { 'GET /tasks/t1/diff': { files: [{ path: 'a', added: 4, removed: 1 }] } },
+    });
+    ctx.store.patch('activity', { files: { t1: [{ path: 'backend/src/checkout.ts', at: 100 }] } });
+    const { handle, q } = mount(ctx, { mode: 'in-page' });
+    vi.advanceTimersByTime(2400);
+    await flushPromises();
+    expect(q('.nt-ticker').hidden).toBe(false);
+    expect(q('.nt-ticker-file').textContent).toBe('checkout.ts');
+    expect(q('.nt-add').textContent).toBe('+4');
+    q<HTMLButtonElement>('.nt-ticker').click();
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: 't1', path: 'backend/src/checkout.ts' });
     expect(handle.el.dataset.state).toBe('compact');
   });
 
-  it('the card fits the Studio above the dock', () => {
-    const ctx = makeContext({ snapshot: makeScenario() });
-    const stage = h('div');
-    document.body.append(stage);
-    Object.defineProperty(stage, 'clientHeight', { value: 400 });
-    const { handle, container } = mount(ctx, { mode: 'in-page' });
-    stage.append(container);
-    handle.open();
-    const card = handle.el.querySelector<HTMLElement>('.nt-expanded');
-    expect(card?.style.getPropertyValue('--nt-max-h')).toBe(`${400 - 96}px`);
-    stage.remove();
+  it('the waiting chip hands the keyboard to the rail: the shell’s callback, or the list found in the page', () => {
+    const ctx = makeContext({ snapshot: makeSnapshot({ approvals: [makeApproval()] }) });
+    const onShowWaiting = vi.fn();
+    const { q } = mount(ctx, { mode: 'in-page', onShowWaiting });
+    const chip = q<HTMLButtonElement>('.nt-chip');
+    expect(chip.hidden).toBe(false);
+    expect(chip.textContent).toBe('1 waiting');
+    expect(chip.getAttribute('aria-label')).toBe('1 waiting for you: show the list');
+    chip.click();
+    expect(onShowWaiting).toHaveBeenCalledTimes(1);
+    // Without the callback: the Studio's list, its first row focused.
+    const row = h('button', { type: 'button', class: 'gv-tray-row' }, 'Approval');
+    const tray = h('section', { class: 'gv-tray', tabIndex: -1 }, row);
+    document.body.append(tray);
+    const second = mount(ctx, { mode: 'in-page' });
+    second.q<HTMLButtonElement>('.nt-chip').click();
+    expect(document.activeElement).toBe(row);
+    row.remove();
+    second.q<HTMLButtonElement>('.nt-chip').click();
+    expect(document.activeElement).toBe(tray);
+    expect(ctx.store.select('ui').drawer).toBeNull();
+  });
+
+  it('keeps the greeting and the goal celebration', () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ goals: [makeGoal({ status: 'COMPLETED', request: 'Ship it', completed_at: T0 })] }),
+    });
+    const { handle, q } = mount(ctx, { mode: 'in-page' });
+    expect(handle.el.dataset.state).toBe('greeting');
+    expect(q('.nt-greet-title').textContent).toBe('Welcome to Friday');
+    vi.advanceTimersByTime(2400);
+    expect(handle.el.dataset.state).toBe('compact');
+    ctx.store.patch('activity', { reactions: [{ id: 1, kind: 'goal-completed', at: 0 }] });
+    expect(handle.el.dataset.state).toBe('greeting');
+    expect(q('.nt-greet-title').textContent).toBe('Goal completed');
+    expect(q('.nt-greet-sub').textContent).toBe('Ship it');
+    vi.advanceTimersByTime(2400);
+    expect(handle.el.dataset.state).toBe('compact');
   });
 });
 
@@ -386,6 +473,15 @@ describe('mounted Notch: waiting items and the pin', () => {
     vi.advanceTimersByTime(3600_000);
     expect(handle.el.dataset.state).toBe('compact');
     handle.el.dispatchEvent(new Event('pointerenter'));
+    expect(handle.el.dataset.state).toBe('expanded');
+  });
+
+  it('the chip on the folded pill opens the card at its items', () => {
+    const ctx = makeContext({ snapshot: makeSnapshot({ escalations: [makeEscalation()] }) });
+    const { handle, calls, q } = mount(ctx);
+    calls.question[0]?.onLater();
+    expect(handle.el.dataset.state).toBe('compact');
+    q<HTMLButtonElement>('.nt-chip').click();
     expect(handle.el.dataset.state).toBe('expanded');
   });
 
@@ -468,7 +564,7 @@ describe('mounted Notch: waiting items and the pin', () => {
     expect(handle.state()).toMatchObject({ pinned: false, state: 'compact' });
   });
 
-  it('the quick prompt is mounted once; finishing a command collapses when nothing waits', () => {
+  it('the goal line is mounted once; creating a goal collapses the card when nothing waits', () => {
     const ctx = makeContext();
     const { handle, calls } = mount(ctx);
     handle.open();
@@ -487,14 +583,81 @@ describe('mounted Notch: waiting items and the pin', () => {
   });
 });
 
-describe('mounted Notch: the compact pill', () => {
-  function running(): UiSnapshot {
-    return makeSnapshot({
-      tasks: [makeTask({ task_id: 't1', status: 'RUNNING', plan_key: 'api', summary: 'Add the API' })],
-      runs: { t1: makeRun({ task_id: 't1' }) },
-    });
-  }
+describe('mounted Notch: messages, memories to review and an untrusted policy (review §4, decision 6)', () => {
+  it('a message that waits for a reply opens the card with its notice; the door opens Messages in the Studio', () => {
+    const ctx = makeContext();
+    const onOpenStudio = vi.fn();
+    const { handle, q } = mount(ctx, { mode: 'window', onOpenStudio });
+    vi.advanceTimersByTime(2400);
+    board(
+      ctx,
+      makeSnapshot({
+        inbox: [
+          makeInboxItem({
+            delivery_id: 'dlv_req',
+            mode: 'request',
+            subject: `Which plan names? ${HOSTILE}${BIDI}`,
+            from: { kind: 'agent', id: 'agent_x', agent_key: `claude-1${BIDI}`, role: 'developer' },
+          }),
+        ],
+      }),
+    );
+    expect(handle.el.dataset.state).toBe('expanded');
+    expect(handle.state()).toMatchObject({ pinned: true, folded: false });
+    const notice = q('.nt-notice-message');
+    expect(notice.querySelector('.nt-notice-title')?.textContent).toBe('A message waits for your reply');
+    expect(notice.querySelector('.nt-notice-line')?.textContent).toContain('claude-1⟨U+202E⟩');
+    expect(notice.textContent).toContain('Which plan names?');
+    expect(notice.textContent).not.toContain(BIDI);
+    expect(handle.el.querySelector('img')).toBeNull();
+    q<HTMLButtonElement>('.nt-notice-door').click();
+    // With the delivery: the drawer opens on this message, as the rail's row opens it.
+    expect(onOpenStudio).toHaveBeenLastCalledWith({ panel: 'inbox', id: 'dlv_req' });
+    expect(handle.state()).toMatchObject({ state: 'compact', folded: true, pinned: true });
+    expect(q('.nt-chip').textContent).toBe('1 waiting');
+    // Replied: the pin drops.
+    board(ctx, makeSnapshot());
+    expect(handle.state().pinned).toBe(false);
+  });
 
+  it('memories to review and an untrusted policy pin the pill without opening the card', () => {
+    const ctx = makeContext({ snapshot: makeSnapshot({ memories_to_review: 2, policy_untrusted: true }) });
+    const onOpenStudio = vi.fn();
+    const { handle, q } = mount(ctx, { mode: 'window', onOpenStudio });
+    expect(handle.el.dataset.state).toBe('compact');
+    expect(handle.state()).toMatchObject({ pinned: true, folded: true });
+    expect(q('.nt-chip').textContent).toBe('2 waiting');
+    vi.advanceTimersByTime(3 * 3600_000);
+    expect(handle.el.dataset.state).toBe('compact');
+    // Opened by hand, the card shows both notices with their doors.
+    handle.open();
+    expect(q('.nt-pager-label').textContent).toBe('Waiting for you · 1 of 2');
+    expect(q('.nt-notice-memory .nt-notice-title').textContent).toBe('2 memories need review');
+    q<HTMLButtonElement>('.nt-notice-memory .nt-notice-door').click();
+    expect(onOpenStudio).toHaveBeenLastCalledWith({ panel: 'memory', tab: 'review' });
+    handle.open();
+    q<HTMLButtonElement>('[aria-label="Next waiting item"]').click();
+    expect(q('.nt-notice-policy .nt-notice-title').textContent).toBe('Policy change not yet trusted');
+    q<HTMLButtonElement>('.nt-studio').click();
+    expect(onOpenStudio).toHaveBeenLastCalledWith({ panel: 'settings', tab: 'policy' });
+    // A later arrival of the same quiet kinds keeps the card closed too.
+    board(ctx, makeSnapshot({ memories_to_review: 3, policy_untrusted: true }));
+    expect(handle.el.dataset.state).toBe('compact');
+    board(ctx, makeSnapshot({ memories_to_review: 0, policy_untrusted: false }));
+    expect(handle.state().pinned).toBe(false);
+  });
+
+  it('without a shell, a notice’s door opens the drawer in this page', () => {
+    const ctx = makeContext({ snapshot: makeSnapshot({ memories_to_review: 1 }) });
+    const { handle, q } = mount(ctx);
+    handle.open();
+    expect(q('.nt-notice-memory .nt-notice-title').textContent).toBe('1 memory needs review');
+    q<HTMLButtonElement>('.nt-notice-door').click();
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'memory', tab: 'review' });
+  });
+});
+
+describe('mounted Notch: the compact pill', () => {
   it('shows the active task coloured by status and the live file with its line counts', async () => {
     const ctx = makeContext({
       snapshot: running(),
@@ -590,15 +753,17 @@ describe('mounted Notch: the compact pill', () => {
 });
 
 describe('mounted Notch: the expanded card', () => {
-  it('shows the header, the active task banner with checks, and the footer', async () => {
-    const ctx = makeContext({ snapshot: makeScenario(), answers: { 'GET /models': { settings: { mode: 'hybrid' } } } });
+  it('shows the header, the active task banner with checks, and the footer; no routing badge', async () => {
+    const ctx = makeContext({ snapshot: makeScenario() });
     ctx.store.patch('system', { connection: 'live' });
-    const { q } = mount(ctx);
+    const { q, handle } = mount(ctx);
     await flushPromises();
     expect(q('.nt-project').textContent).toBe('shop');
     expect(q('.nt-conn').textContent).toBe('Connected');
     expect(q('.nt-dot').dataset.tone).toBe('good');
-    expect(q('.nt-routing').textContent).toBe('Hybrid routing');
+    expect(handle.el.querySelector('.nt-routing')).toBeNull();
+    expect(ctx.transport.to('GET', '/models')).toHaveLength(0);
+    expect(q('.nt-studio').getAttribute('aria-label')).toBe('Open this in Studio (Space)');
     expect(q('.nt-banner').hidden).toBe(false);
     expect(q('.nt-banner-status').textContent).toBe('Running');
     expect(q('.nt-banner-tag').textContent).toBe('api');
@@ -610,7 +775,7 @@ describe('mounted Notch: the expanded card', () => {
     expect(q('.nt-dot').dataset.tone).toBe('warn');
   });
 
-  it('"Open in Studio" in the page selects the task and opens the approval, then folds', () => {
+  it('"Open this in Studio" in the page selects the task and opens the approval, then folds', () => {
     const ctx = makeContext({ snapshot: makeScenario() });
     const { handle, q } = mount(ctx);
     q<HTMLButtonElement>('.nt-studio').click();
@@ -619,7 +784,7 @@ describe('mounted Notch: the expanded card', () => {
     expect(handle.state()).toMatchObject({ state: 'compact', folded: true, pinned: true });
   });
 
-  it('"Open in Studio" calls the shell when it is given one', () => {
+  it('"Open this in Studio" calls the shell when it is given one', () => {
     const ctx = makeContext({ snapshot: makeScenario() });
     const onOpenStudio = vi.fn();
     const { q } = mount(ctx, { mode: 'window', onOpenStudio });
@@ -660,7 +825,7 @@ describe('mounted Notch: the expanded card', () => {
     expect(handle.el.dataset.state).toBe('expanded');
   });
 
-  it('the footer mutes, opens settings and the Studio; the badge opens routing pins', () => {
+  it('the footer mutes, opens settings and the Studio', () => {
     const ctx = makeContext();
     const { handle, q } = mount(ctx);
     handle.open();
@@ -670,25 +835,23 @@ describe('mounted Notch: the expanded card', () => {
     expect(mute.getAttribute('aria-pressed')).toBe('true');
     expect(mute.textContent).toBe('Muted');
     const [settings, , studio] = [...handle.el.querySelectorAll<HTMLButtonElement>('.nt-foot-btn')];
+    expect(settings?.textContent).toBe('Settings');
+    expect(studio?.textContent).toBe('Open Studio');
     settings?.click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
-    q<HTMLButtonElement>('.nt-routing').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents', tab: 'routing' });
     handle.open();
     studio?.click();
     expect(handle.el.dataset.state).toBe('compact');
   });
 
-  it('in the notch window Settings and Routing name their drawer for the Studio (deep review R7)', () => {
+  it('in the notch window Settings names its drawer for the Studio (deep review R7)', () => {
     const ctx = makeContext();
     const onOpenStudio = vi.fn();
-    const { handle, q } = mount(ctx, { mode: 'window', onOpenStudio });
+    const { handle } = mount(ctx, { mode: 'window', onOpenStudio });
     handle.open();
     const [settings] = [...handle.el.querySelectorAll<HTMLButtonElement>('.nt-foot-btn')];
     settings?.click();
     expect(onOpenStudio).toHaveBeenLastCalledWith({ panel: 'settings' });
-    q<HTMLButtonElement>('.nt-routing').click();
-    expect(onOpenStudio).toHaveBeenLastCalledWith({ panel: 'agents', tab: 'routing' });
     expect(ctx.store.select('ui').drawer).toBeNull();
   });
 
@@ -803,6 +966,16 @@ describe('mounted Notch: cleanup', () => {
     ctx.store.patch('prefs', { muted: true });
     expect(JSON.stringify(calls)).toBe(before);
     handle.destroy();
+  });
+
+  it('a page’s pill cleans up the same way, without a card to destroy', () => {
+    const ctx = makeContext({ snapshot: makeScenario() });
+    const { handle, container, calls } = mount(ctx, { mode: 'in-page' });
+    handle.destroy();
+    expect(handle.el.isConnected).toBe(false);
+    expect(container.children).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(calls.destroyed).not.toContain('prompt');
   });
 });
 

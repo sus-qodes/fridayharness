@@ -142,8 +142,33 @@ export function note(...children: Child[]): HTMLElement {
   return h('p', { class: 'pn-note muted' }, ...children);
 }
 
-export function badge(text: string, tone: 'good' | 'info' | 'warn' | 'danger' | 'muted' | 'strong'): HTMLElement {
-  return h('span', { class: `badge badge-${tone}` }, text);
+/**
+ * A fold (`<details>`), closed unless `open` says otherwise, for what a person seldom needs: the
+ * Notch timings under "Advanced", a dialog's host options under "Options", the plan editor's JSON
+ * tools under "More" (review §4). What is inside stays in the page, so a test or a screen reader
+ * finds it; a browser shows it once the summary is clicked.
+ */
+export function fold(
+  summary: string,
+  opts: { open?: boolean; class?: string } = {},
+  ...children: Child[]
+): HTMLDetailsElement {
+  const el = h(
+    'details',
+    { class: ['pn-fold', opts.class] },
+    h('summary', { class: 'pn-fold-summary' }, summary),
+    ...children,
+  );
+  if (opts.open) el.open = true;
+  return el;
+}
+
+export function badge(
+  text: string,
+  tone: 'good' | 'info' | 'warn' | 'danger' | 'muted' | 'strong',
+  title?: string,
+): HTMLElement {
+  return h('span', { class: `badge badge-${tone}`, ...(title ? { title } : {}) }, text);
 }
 
 /**

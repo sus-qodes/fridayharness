@@ -1,8 +1,11 @@
 /**
- * The agents drawer (plan §7.7): the installed hosts, the agents Friday started (processes and
- * remembered profiles, read again every 3 s while the drawer is open) with Stop, Start again and
- * Forget, the agents connected now (with their enforcement level, model and shadow state), the
- * "Claude Code in VS Code" card, and the routing pins that steer which model a task gets.
+ * The agents drawer (plan §7.7, review §4 "one click away"): Start agent; one list of agents, each
+ * row saying whether Friday started it or it attached in VS Code, whether it is connected now, its
+ * process state, enforcement and model, with Stop, Start again, Forget and Output as they apply
+ * (processes and remembered profiles read again every 3 s while the drawer is open; the connected
+ * sessions from the board); the "Claude Code in VS Code" card; and the installed hosts, shown only
+ * while none is found (the Start dialog's Host field shows them otherwise). The routing pins live in
+ * Settings → Routing: a request for them opens Settings there.
  */
 import type {
   AgentHost,
@@ -10,59 +13,93 @@ import type {
   AgentProcessesView,
   AgentProfile,
   HarnessEntry,
-  RoutingPinView,
+  UiSnapshot,
 } from '@friday/protocol';
-import { enforcementBadge, TASK_KIND } from '../model/status.js';
+import { enforcementWords } from '../model/status.js';
 import { visible } from '../model/text.js';
-import { type AppContext, type Component, type DrawerRequest, openModal } from '../shell/context.js';
+import { type AppContext, type Component, type DrawerRequest, openDrawer, openModal } from '../shell/context.js';
 import { button, h, replace } from '../ui/dom.js';
-import { humanize, timeAgo, truncate } from '../ui/format.js';
+import { humanize, timeAgo } from '../ui/format.js';
 import { icon } from '../ui/svg.js';
-import {
-  actWithError,
-  badge,
-  errorOf,
-  field,
-  input,
-  note,
-  panel,
-  pathText,
-  plain,
-  select,
-  Teardown,
-} from './common.js';
+import { actWithError, badge, errorOf, note, panel, pathText, plain, Teardown } from './common.js';
 
 export const PROCESS_POLL_MS = 3000;
 
-/** One agent Friday started or remembers: its process (if any) and its profile (if any). */
+/**
+ * One agent, from whatever Friday knows of it: a process it started, a profile it remembers, and
+ * the session connected now (from the board). A session that holds a Friday-started key joins that
+ * row; a session attached in VS Code with its own key is a row of its own.
+ */
 export interface AgentRow {
+  /** The agent key, or `harness:<id>` for a session that named none. */
+  id: string;
+  /** Empty when the session named no key. */
   agent_key: string;
   host: string;
   role: string;
   process: AgentProcess | null;
   profile: AgentProfile | null;
-}
-
-/** Joins processes and profiles by agent key, sorted by key. */
-export function agentRows(view: Partial<AgentProcessesView> | null | undefined): AgentRow[] {
-  const rows = new Map<string, AgentRow>();
-  for (const p of view?.profiles ?? []) {
-    rows.set(p.agent_key, { agent_key: p.agent_key, host: p.host, role: p.role, process: null, profile: p });
-  }
-  for (const p of view?.processes ?? []) {
-    const row = rows.get(p.agent_key);
-    if (row) row.process = p;
-    else rows.set(p.agent_key, { agent_key: p.agent_key, host: p.host, role: p.role, process: p, profile: null });
-  }
-  return [...rows.values()].sort((a, b) => a.agent_key.localeCompare(b.agent_key));
+  harness: HarnessEntry | null;
+  /** Who started it: Friday (a process, a profile or a spawned session) or the person, in VS Code. */
+  origin: 'friday' | 'attached';
 }
 
 export function isLive(p: AgentProcess | null): boolean {
   return !!p && (p.status === 'starting' || p.status === 'running' || p.status === 'stopping');
 }
 
-/** The status badge of a row. */
-export function rowStatus(row: AgentRow): { label: string; tone: 'good' | 'info' | 'warn' | 'danger' | 'muted' } {
+/** A session Friday can talk to now. */
+export function isConnected(x: HarnessEntry | null | undefined): boolean {
+  return !!x && x.status !== 'DISCONNECTED' && x.status !== 'TERMINATED';
+}
+
+/** Joins processes, profiles and the board's sessions by agent key, sorted by key. */
+export function agentRows(
+  view: Partial<AgentProcessesView> | null | undefined,
+  board?: Pick<UiSnapshot, 'agents' | 'harnesses'> | null,
+): AgentRow[] {
+  const rows = new Map<string, AgentRow>();
+  const fresh = (id: string, agent_key: string, host: string, role: string): AgentRow => ({
+    id,
+    agent_key,
+    host,
+    role,
+    process: null,
+    profile: null,
+    harness: null,
+    origin: 'friday',
+  });
+  for (const p of view?.profiles ?? []) {
+    const row = fresh(p.agent_key, p.agent_key, p.host, p.role);
+    row.profile = p;
+    rows.set(p.agent_key, row);
+  }
+  for (const p of view?.processes ?? []) {
+    const row = rows.get(p.agent_key) ?? fresh(p.agent_key, p.agent_key, p.host, p.role);
+    row.process = p;
+    rows.set(p.agent_key, row);
+  }
+  const agents = board?.agents ?? [];
+  for (const x of board?.harnesses ?? []) {
+    const agent = agents.find((a) => a.harness_id === x.harness_id);
+    const key = agent?.agent_key ?? x.requested_agent_key ?? '';
+    const id = key || `harness:${x.harness_id}`;
+    const row = rows.get(id) ?? fresh(id, key, x.vendor, agent?.role ?? '');
+    // Two sessions with one key (a shadow): the connected one speaks for the row.
+    if (!row.harness || (isConnected(x) && !isConnected(row.harness))) row.harness = x;
+    rows.set(id, row);
+  }
+  for (const row of rows.values()) {
+    row.origin = row.harness?.attach_mode === 'attach' && !isLive(row.process) ? 'attached' : 'friday';
+  }
+  return [...rows.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** The process state of a row Friday started. */
+export function rowStatus(row: Pick<AgentRow, 'process'>): {
+  label: string;
+  tone: 'good' | 'info' | 'warn' | 'danger' | 'muted';
+} {
   const p = row.process;
   if (!p) return { label: 'not running', tone: 'muted' };
   if (p.status === 'running') return { label: 'running', tone: 'good' };
@@ -110,14 +147,33 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
   const td = new Teardown();
   let polling = false;
   const rowViews = new Map<string, RowView>();
+  /** The last answer of `GET agent-processes`; null until it arrives. */
+  let view: AgentProcessesView | null = null;
 
-  // ---- installed hosts
+  // The pins moved to Settings → Routing (review decision 2); an old door to them lands there.
+  if (request.tab === 'pins' || request.tab === 'routing') openDrawer(ctx, { kind: 'settings', tab: 'routing' });
+
+  // ---- installed hosts: shown only while no host is found (the Start dialog's Host field has them otherwise)
   const hostsBox = h('div', { class: 'pn-hosts' }, h('div', { class: 'muted' }, 'Checking which hosts are installed…'));
   const refreshHosts = button([icon('rework', 14), 'Check again'], () => void loadHosts(true), {
     class: 'btn btn-ghost',
   });
+  const hostsSection = h(
+    'section',
+    { class: 'pn-section', id: 'pn-hosts', hidden: true },
+    h(
+      'div',
+      { class: 'row' },
+      h('h3', { class: 'section-title' }, 'Installed hosts'),
+      h('span', { class: 'spacer' }),
+      refreshHosts,
+    ),
+    note('Friday starts agents in a coding host installed on this machine; none was found.'),
+    hostsBox,
+  );
 
   function renderHosts(hosts: AgentHost[]) {
+    hostsSection.hidden = hosts.some((x) => x.found);
     replace(
       hostsBox,
       hosts.length === 0 ? h('div', { class: 'muted' }, 'Friday reported no hosts.') : null,
@@ -149,6 +205,8 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
       renderHosts(Array.isArray(r?.hosts) ? r.hosts : []);
     } catch (e) {
       if (td.done) return;
+      // Unknown is not found: the row stays, with what went wrong.
+      hostsSection.hidden = false;
       const err = errorOf(e);
       replace(
         hostsBox,
@@ -163,16 +221,21 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
     }
   }
 
-  // ---- processes and profiles
-  const processesList = h('ul', { class: 'pn-list pn-agents' });
-  const processesState = h('div', { class: 'muted' }, 'Reading the agents Friday started…');
+  // ---- the one list
+  const list = h('ul', { class: 'pn-list pn-agents' });
+  const listState = h('div', { class: 'muted' }, 'Reading the agents…');
 
   function rowView(initial: AgentRow): RowView {
     let row = initial;
-    const keyEl = h('span', { class: 'mono pn-agent-key' }, visible(row.agent_key));
+    const keyEl = h('span', { class: 'mono pn-agent-key' });
+    const originEl = h('span', { class: 'muted pn-agent-origin' });
+    const connEl = h('span', { class: 'badge' });
     const statusEl = h('span', { class: 'badge' });
+    const enfEl = h('span', { class: 'badge' });
+    const shadowEl = badge('shadow', 'warn');
     const meta = h('div', { class: 'pn-agent-meta muted' });
     const opts = h('div', { class: 'pn-agent-meta muted' });
+    const basis = h('div', { class: 'muted pn-host-reason' });
     const error = h('div', { class: 'field-error', hidden: true, role: 'alert' });
     const log = h('pre', { class: 'pn-log' });
     const output = h('details', { class: 'pn-output' }, h('summary', null, 'Output'), log);
@@ -182,9 +245,23 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
     const el = h(
       'li',
       { class: 'pn-item pn-agent-row' },
-      h('div', { class: 'row' }, keyEl, statusEl, h('span', { class: 'spacer' }), stop, again, forget),
+      h(
+        'div',
+        { class: 'row' },
+        keyEl,
+        originEl,
+        connEl,
+        statusEl,
+        enfEl,
+        shadowEl,
+        h('span', { class: 'spacer' }),
+        stop,
+        again,
+        forget,
+      ),
       meta,
       opts,
+      basis,
       error,
       output,
     );
@@ -241,26 +318,55 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
 
     function update(next: AgentRow) {
       row = next;
+      const p = row.process;
+      const x = row.harness;
+      const fridayRow = !!p || !!row.profile;
+      keyEl.textContent = visible(row.agent_key || '—');
+      originEl.textContent = row.origin === 'attached' ? 'attached in VS Code' : 'started by Friday';
+      const connected = isConnected(x);
+      connEl.className = `badge badge-${connected ? 'good' : 'muted'}`;
+      connEl.textContent = connected ? 'connected' : 'not connected';
+      // The process state belongs to what Friday started; a session attached in VS Code has none.
       const st = rowStatus(row);
+      statusEl.hidden = !fridayRow;
       statusEl.className = `badge badge-${st.tone}`;
       statusEl.textContent = st.label;
-      const p = row.process;
+      // The pod's words (Enforced, Reported, Watched, Unverified), the level in the tooltip: one
+      // vocabulary on the canvas and in this drawer.
+      const enf = x ? enforcementWords(x.enforcement_level, x.enforcement_status, x.enforcement_basis) : null;
+      enfEl.hidden = !enf;
+      enfEl.className = `badge badge-${enf?.tone ?? 'muted'}`;
+      enfEl.textContent = enf?.label ?? '';
+      enfEl.title = enf?.title ?? '';
+      shadowEl.hidden = !(p?.shadow || x?.shadow);
       const parts = [
-        HOST_LABEL[row.host] ?? row.host,
-        `role ${row.role}`,
+        HOST_LABEL[row.host] ?? plain(row.host, 40),
+        x?.name && x.name !== (HOST_LABEL[row.host] ?? row.host) ? plain(x.name, 60) : '',
+        x?.version ? plain(x.version, 40) : '',
+        row.role ? `role ${plain(row.role, 32)}` : '',
+        x ? (x.observed_model ? `model ${plain(x.observed_model, 80)}` : 'model not reported') : '',
+        x && connected ? humanize(x.status).toLowerCase() : '',
         p?.pid ? `pid ${p.pid}` : '',
         p?.started_at ? `started ${timeAgo(p.started_at, ctx.now())}` : '',
         p?.ended_at ? `ended ${timeAgo(p.ended_at, ctx.now())}` : '',
         p && p.exit_code !== null ? `exit code ${p.exit_code}` : '',
-        row.profile ? (row.profile.autostart ? 'starts with Friday' : 'started by hand') : 'not remembered',
-        p?.shadow ? 'shadow: another session holds this key' : '',
+        fridayRow
+          ? row.profile
+            ? row.profile.autostart
+              ? 'starts with Friday'
+              : 'started by hand'
+            : 'not remembered'
+          : '',
+        p?.shadow || x?.shadow ? 'shadow: another session holds this key' : '',
       ].filter(Boolean);
-      meta.textContent = plain(parts.join(' · '), 400);
+      meta.textContent = plain(parts.join(' · '), 600);
       opts.textContent = plain(
         optionsText((p?.options ?? row.profile?.options) as Record<string, unknown> | undefined),
         300,
       );
       opts.hidden = !opts.textContent;
+      basis.textContent = x?.enforcement_basis ? plain(x.enforcement_basis, 300) : '';
+      basis.hidden = !basis.textContent;
       const live = isLive(p);
       stop.hidden = !live;
       stop.disabled = p?.status === 'stopping';
@@ -276,16 +382,20 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
     return { el, update };
   }
 
-  function renderProcesses(view: AgentProcessesView) {
-    const rows = agentRows(view);
-    processesState.hidden = rows.length > 0;
-    processesState.textContent = rows.length ? '' : 'No agent was started from here yet.';
+  function renderRows() {
+    const rows = agentRows(view, ctx.store.select('board'));
+    if (rows.length > 0 || view) {
+      listState.hidden = rows.length > 0;
+      listState.textContent = rows.length
+        ? ''
+        : 'No agent yet. Start one above, or set up Claude Code in VS Code below.';
+    }
     const seen = new Set<string>();
     for (const row of rows) {
-      seen.add(row.agent_key);
-      const existing = rowViews.get(row.agent_key);
+      seen.add(row.id);
+      const existing = rowViews.get(row.id);
       if (existing) existing.update(row);
-      else rowViews.set(row.agent_key, rowView(row));
+      else rowViews.set(row.id, rowView(row));
     }
     for (const [k, v] of rowViews) {
       if (!seen.has(k)) {
@@ -295,8 +405,8 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
     }
     // Keep the order without re-creating rows (focus stays where it is).
     rows.forEach((row, i) => {
-      const v = rowViews.get(row.agent_key) as RowView;
-      if (processesList.children[i] !== v.el) processesList.insertBefore(v.el, processesList.children[i] ?? null);
+      const v = rowViews.get(row.id) as RowView;
+      if (list.children[i] !== v.el) list.insertBefore(v.el, list.children[i] ?? null);
     });
   }
 
@@ -306,68 +416,30 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
     try {
       const r = await ctx.api.agentProcesses();
       if (td.done) return;
-      renderProcesses({
+      view = {
         processes: Array.isArray(r?.processes) ? r.processes : [],
         profiles: Array.isArray(r?.profiles) ? r.profiles : [],
-      });
+      };
+      renderRows();
     } catch (e) {
       if (td.done) return;
+      // The sessions from the board still show; the error says what Friday could not read.
       const err = errorOf(e);
-      processesState.hidden = false;
-      processesState.textContent = `Could not read the agents: ${err.code ? `${err.code} ` : ''}${plain(err.message, 300)}`;
+      renderRows();
+      listState.hidden = false;
+      listState.textContent = `Could not read the agents Friday started: ${err.code ? `${err.code} ` : ''}${plain(err.message, 300)}`;
     } finally {
       polling = false;
     }
-  }
-
-  // ---- connected harnesses (from the board)
-  const harnessBox = h('div', { class: 'pn-harnesses' });
-  function renderHarnesses() {
-    const board = ctx.store.select('board');
-    const harnesses = board?.harnesses ?? [];
-    const agents = board?.agents ?? [];
-    replace(
-      harnessBox,
-      harnesses.length === 0
-        ? h(
-            'div',
-            { class: 'muted' },
-            'No agent is connected. Start one above, or set up Claude Code in VS Code below.',
-          )
-        : h(
-            'ul',
-            { class: 'pn-list' },
-            harnesses.map((x) => {
-              const b = enforcementBadge(x.enforcement_level, x.enforcement_status);
-              const agent = agents.find((a) => a.harness_id === x.harness_id);
-              return h(
-                'li',
-                { class: 'pn-item pn-harness' },
-                h('span', { class: 'pn-host-name' }, plain(x.name || x.vendor, 60)),
-                h('span', { class: 'mono pn-agent-key' }, visible(agent?.agent_key ?? x.requested_agent_key ?? '—')),
-                badge(b.label, b.tone),
-                badge(x.attach_mode === 'attach' ? 'attached' : 'spawned', 'muted'),
-                x.shadow ? badge('shadow', 'warn') : null,
-                h('span', { class: 'muted' }, humanize(x.status)),
-                h(
-                  'span',
-                  { class: 'muted pn-grow' },
-                  x.observed_model ? `model ${plain(x.observed_model, 80)}` : 'model not reported',
-                ),
-                x.enforcement_basis
-                  ? h('div', { class: 'muted pn-host-reason' }, plain(x.enforcement_basis, 300))
-                  : null,
-              );
-            }),
-          ),
-    );
   }
 
   // ---- Claude Code in VS Code
   const claudeBox = h('div', { class: 'pn-claude' });
   function renderClaude() {
     const st = claudeCodeStatus(ctx.store.select('board')?.harnesses ?? []);
-    const b = st.harness ? enforcementBadge(st.harness.enforcement_level, st.harness.enforcement_status) : null;
+    const b = st.harness
+      ? enforcementWords(st.harness.enforcement_level, st.harness.enforcement_status, st.harness.enforcement_basis)
+      : null;
     replace(
       claudeBox,
       h(
@@ -380,7 +452,7 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
         h('dt', null, 'Hooks seen'),
         h('dd', null, st.hooksSeen ? 'yes' : st.harness ? 'not yet: they show with its first tool call' : 'no'),
         h('dt', null, 'Enforcement'),
-        h('dd', null, b ? badge(b.label, b.tone) : '—'),
+        h('dd', null, b ? badge(b.label, b.tone, b.title) : '—'),
       ),
       h(
         'div',
@@ -392,171 +464,7 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
     );
   }
 
-  // ---- routing pins
-  const pinsList = h('div', { class: 'pn-pins' }, h('div', { class: 'muted' }, 'Reading the routing pins…'));
-  let models: string[] = [];
-  const pinForm = h('div', { class: 'pn-pin-form' });
-  const pinState: { scope: 'role' | 'task' | 'kind'; target: string; model: string } = {
-    scope: 'role',
-    target: 'developer',
-    model: '',
-  };
-
-  function renderPins(pins: RoutingPinView[]) {
-    const live = pins.filter((p) => !p.revoked_at);
-    replace(
-      pinsList,
-      live.length === 0
-        ? h('div', { class: 'muted' }, 'No pins: Friday routes by evidence and the project’s settings.')
-        : h(
-            'ul',
-            { class: 'pn-list' },
-            live.map((p) =>
-              h(
-                'li',
-                { class: 'pn-item' },
-                badge(p.scope, 'info'),
-                p.target ? h('span', { class: 'mono' }, visible(truncate(p.target, 80))) : null,
-                h('span', { class: 'pn-grow' }, p.model ? `→ ${plain(p.model, 80)}` : p.mode ? `mode ${p.mode}` : ''),
-                p.until ? h('span', { class: 'muted' }, `until ${timeAgo(p.until, ctx.now())}`) : null,
-                p.note ? h('span', { class: 'muted' }, plain(p.note, 200)) : null,
-                button('Unpin', () => void unpin(p), {
-                  class: 'btn btn-ghost',
-                  ariaLabel: `Unpin the ${p.scope} pin${p.target ? ` for ${visible(p.target)}` : ''}`,
-                }),
-              ),
-            ),
-          ),
-    );
-  }
-
-  async function loadPins() {
-    try {
-      const r = await ctx.api.pins();
-      if (td.done) return;
-      renderPins(Array.isArray(r?.pins) ? r.pins : []);
-    } catch (e) {
-      if (td.done) return;
-      const err = errorOf(e);
-      replace(
-        pinsList,
-        h(
-          'div',
-          { class: 'field-error' },
-          `Could not read the pins: ${err.code ? `${err.code} ` : ''}${plain(err.message, 300)}`,
-        ),
-      );
-    }
-  }
-
-  async function unpin(p: RoutingPinView) {
-    const r = await ctx.act('Unpin', () => ctx.api.unpin(p.pin_id), 'Unpinned');
-    if (r && !td.done) void loadPins();
-  }
-
-  function renderPinForm() {
-    const board = ctx.store.select('board');
-    const scope = select<'role' | 'task' | 'kind'>(
-      [
-        { value: 'role', label: 'A role' },
-        { value: 'task', label: 'A task' },
-        { value: 'kind', label: 'A kind of task' },
-      ],
-      pinState.scope,
-      (v) => {
-        pinState.scope = v;
-        pinState.target =
-          v === 'role'
-            ? 'developer'
-            : v === 'kind'
-              ? 'implementation'
-              : (board?.tasks.find((t) => !['COMPLETED', 'CANCELLED'].includes(t.status))?.task_id ?? '');
-        renderPinForm();
-      },
-    );
-    let target: HTMLElement;
-    if (pinState.scope === 'kind') {
-      target = select(
-        Object.keys(TASK_KIND).map((k) => ({ value: k, label: humanize(k) })),
-        pinState.target,
-        (v) => {
-          pinState.target = v;
-        },
-      );
-    } else if (pinState.scope === 'task') {
-      const tasks = (board?.tasks ?? []).filter((t) => !['COMPLETED', 'CANCELLED', 'ABANDONED'].includes(t.status));
-      target = select(
-        tasks.length
-          ? tasks.map((t) => ({ value: t.task_id, label: truncate(plain(t.summary, 80), 70) }))
-          : [{ value: '', label: 'No open task', disabled: true }],
-        pinState.target,
-        (v) => {
-          pinState.target = v;
-        },
-      );
-    } else {
-      const box = input({ class: 'input mono', value: pinState.target, maxLength: 32, placeholder: 'developer' });
-      box.addEventListener('input', () => {
-        pinState.target = box.value.trim();
-      });
-      target = box;
-    }
-    if (!pinState.model && models[0]) pinState.model = models[0];
-    const model = select(
-      models.length
-        ? models.map((m) => ({ value: m, label: m }))
-        : [{ value: '', label: 'No models known', disabled: true }],
-      pinState.model,
-      (v) => {
-        pinState.model = v;
-      },
-    );
-    const pinBtn = button([icon('plus', 14), 'Pin'], () => void addPin(), {
-      class: 'btn',
-      disabled: models.length === 0,
-    });
-    replace(
-      pinForm,
-      h('div', { class: 'pn-grid3' }, field('Pin for', scope).el, field('Which', target).el, field('Model', model).el),
-      h('div', { class: 'pn-actions pn-actions-start' }, pinBtn),
-    );
-  }
-
-  async function addPin() {
-    if (!pinState.target || !pinState.model) {
-      ctx.toast({ kind: 'warn', text: 'Choose what to pin and a model' });
-      return;
-    }
-    const r = await ctx.act(
-      'Pin a model',
-      () => ctx.api.pin({ scope: pinState.scope, target: pinState.target, model: pinState.model }),
-      `Pinned ${pinState.model}`,
-    );
-    if (r && !td.done) void loadPins();
-  }
-
-  async function loadModels() {
-    try {
-      const r = await ctx.api.models();
-      if (td.done) return;
-      models = (Array.isArray(r?.models) ? r.models : [])
-        .map((m) => m.id)
-        .filter((id): id is string => typeof id === 'string');
-    } catch {
-      models = [];
-    }
-    if (!td.done) renderPinForm();
-  }
-
   // ---- the drawer
-  const pinsSection = h(
-    'section',
-    { class: 'pn-section', id: 'pn-pins' },
-    h('h3', { class: 'section-title' }, 'Routing pins'),
-    note('A pin makes Friday route a role, a task or a kind of task to one model.'),
-    pinsList,
-    pinForm,
-  );
   const claudeSection = h(
     'section',
     { class: 'pn-section pn-card' },
@@ -574,51 +482,28 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
         class: 'btn btn-primary',
       }),
     ),
-    h(
-      'section',
-      { class: 'pn-section' },
-      h(
-        'div',
-        { class: 'row' },
-        h('h3', { class: 'section-title' }, 'Installed hosts'),
-        h('span', { class: 'spacer' }),
-        refreshHosts,
-      ),
-      hostsBox,
-    ),
-    h(
-      'section',
-      { class: 'pn-section' },
-      h('h3', { class: 'section-title' }, 'Agents Friday started'),
-      processesState,
-      processesList,
-    ),
-    h('section', { class: 'pn-section' }, h('h3', { class: 'section-title' }, 'Connected now'), harnessBox),
+    hostsSection,
+    h('section', { class: 'pn-section' }, h('h3', { class: 'section-title' }, 'Agents'), listState, list),
     claudeSection,
-    pinsSection,
   );
 
-  renderHarnesses();
+  renderRows();
   renderClaude();
-  renderPinForm();
   td.add(
     ctx.store.subscribe('board', () => {
-      renderHarnesses();
+      renderRows();
       renderClaude();
     }),
   );
   void loadHosts();
   void loadProcesses();
-  void loadPins();
-  void loadModels();
   const timer = setInterval(() => void loadProcesses(), PROCESS_POLL_MS);
   td.add(() => clearInterval(timer));
 
-  // `routing` (the Notch's routing badge) opens on the pins, where the routing mode is shown.
-  if (request.tab === 'pins' || request.tab === 'routing' || request.tab === 'claude') {
-    const target = request.tab === 'claude' ? claudeSection : pinsSection;
+  if (request.tab === 'claude') {
     queueMicrotask(() => {
-      if (!td.done && typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'start' });
+      if (!td.done && typeof claudeSection.scrollIntoView === 'function')
+        claudeSection.scrollIntoView({ block: 'start' });
     });
   }
 

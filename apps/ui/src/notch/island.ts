@@ -22,11 +22,10 @@ export const EXPANDED_MIN_HEIGHT = 120;
 export const ISLAND_BORDER = 1;
 /**
  * The notch window is 460×300 logical pixels (ERRATA F32): a 272 px card, its spring overshoot
- * (about 4 %) and the shell's 14 px hit margin stay inside it.
+ * (about 4 %) and the shell's 14 px hit margin stay inside it. In a browser page the island has no
+ * card (review §4): the pill, the strip and the greeting are its only sizes there.
  */
 export const WINDOW_MAX_HEIGHT = 272;
-/** In the Studio page the card may grow further before its body scrolls. */
-export const PAGE_MAX_HEIGHT = 560;
 
 export interface IslandRect {
   x: number;

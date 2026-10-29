@@ -41,19 +41,32 @@ describe('dock', () => {
     }
   });
 
-  it('opens New goal, Agents, Settings, Halt and the palette', () => {
+  it('holds New goal, Agents, Pause and Halt, and opens each', () => {
     const { q } = setup();
+    const labels = [...(dock?.el.querySelectorAll('button') ?? [])].map(
+      (b) => b.getAttribute('aria-label') ?? b.querySelector('.dk-label')?.textContent,
+    );
+    expect(labels).toEqual(['New goal', 'Agents', 'Pause', 'Halt']);
     q('dk-new-goal').click();
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'new-goal' });
     q('dk-agents').click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents' });
-    q('dk-settings').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
     q('dk-halt-btn').click();
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'halt' });
     expect(ctx.transport.calls).toHaveLength(0);
-    q('dk-search').click();
-    expect(ctx.store.select('ui').paletteOpen).toBe(true);
+  });
+
+  it('shows no Search, gear or Mute: the header, the palette and Settings keep them (review §6)', () => {
+    setup();
+    expect(dock?.el.querySelector('.dk-search, .dk-settings, .dk-mute')).toBeNull();
+    expect(dock?.el.querySelector('[aria-label="Settings"], [aria-label="Mute sounds"]')).toBeNull();
+    expect(dock?.el.textContent).not.toContain('Search');
+  });
+
+  it('says what Pause does and that Halt is the other switch', () => {
+    const { q } = setup();
+    expect(q('dk-pause').title).toContain('running agents stop at their next step; Halt stops them now');
+    expect(q('dk-halt-btn').title).toContain('now');
   });
 
   it('labels Pause or Resume from the board and calls the matching route', async () => {
@@ -100,19 +113,6 @@ describe('dock', () => {
     expect(q('dk-agents').disabled).toBe(false);
   });
 
-  it('toggles mute in the preferences and shows its state', () => {
-    const { q } = setup();
-    const mute = q('dk-mute');
-    expect(mute.getAttribute('aria-pressed')).toBe('false');
-    expect(mute.getAttribute('aria-label')).toBe('Mute sounds');
-    mute.click();
-    expect(ctx.store.select('prefs').muted).toBe(true);
-    expect(mute.getAttribute('aria-pressed')).toBe('true');
-    expect(mute.getAttribute('aria-label')).toBe('Unmute sounds');
-    mute.click();
-    expect(ctx.store.select('prefs').muted).toBe(false);
-  });
-
   it('leaves Fit and Zoom to the canvas toolbar', () => {
     setup();
     ctx.registry.command({ id: 'fit', label: 'Fit', run: vi.fn() });
@@ -132,7 +132,7 @@ describe('dock', () => {
     arrow('ArrowLeft');
     expect(document.activeElement).toBe(buttons[buttons.length - 1]);
     arrow('Home');
-    expect(document.activeElement).toBe(q('dk-search'));
+    expect(document.activeElement).toBe(q('dk-new-goal'));
     arrow('End');
     expect(document.activeElement).toBe(q('dk-halt-btn'));
   });

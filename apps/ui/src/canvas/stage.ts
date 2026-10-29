@@ -4,7 +4,8 @@
  * 1. a bottom `<canvas>`: the dot grid, dependency splines and agent conduits with their pulses;
  * 2. a middle DOM layer of node cards, placed with `transform: translate` inside one world layer
  *    that carries the camera; cards off screen are culled (`content-visibility: hidden`);
- * 3. a top overlay: the zoom toolbar and the minimap.
+ * 3. a top overlay: the zoom toolbar (Fit, −, 100 %, +, a *Finished goals* toggle and, once a card
+ *    was dragged, *Tidy*) and the minimap, shown only while some card lies outside the view.
  *
  * Wheel and pinch zoom around the cursor, dragging empty space or the middle button pans, `F`, `+`
  * and `−` fit and zoom (not while typing). The draw loop runs only while the view moves, a fit
@@ -24,7 +25,7 @@ import {
 } from '../model/board.js';
 import { boundsOf, layout as computeLayout, type Layout, type Rect } from '../model/layout.js';
 import { createAgentPod, type PodCardModel, ToolDurations } from '../nodes/agent-pod.js';
-import { fromControl, type NodeView, place } from '../nodes/common.js';
+import { fromControl, type NodeView, nodeIcon, place } from '../nodes/common.js';
 import { createGoalNode } from '../nodes/goal-node.js';
 import { createPlanGhost, createPlanReviewBar } from '../nodes/plan-ghost.js';
 import { createTaskNode, type TaskCardModel } from '../nodes/task-node.js';
@@ -36,6 +37,7 @@ import { drawGrid } from './grid.js';
 import { Minimap, type MinimapNode } from './minimap.js';
 import { StatRefresher } from './stats.js';
 import {
+  anyOutside,
   type Camera,
   CameraTween,
   centreOn,
@@ -123,6 +125,16 @@ function lineStats(s: { added: number; removed: number } | undefined): { added: 
   return s ? { added: s.added, removed: s.removed } : null;
 }
 
+/** True once a card was dragged by hand: the toolbar's *Tidy* and the palette's reset apply. */
+export function hasMovedCards(ctx: Pick<AppContext, 'store'>): boolean {
+  return Object.keys(ctx.store.select('prefs').positions).length > 0;
+}
+
+/** Puts every moved card back where Friday lays it out (the toolbar's *Tidy*, the palette's reset). */
+export function resetMovedCards(ctx: Pick<AppContext, 'store'>): void {
+  ctx.store.patch('prefs', { positions: {} });
+}
+
 export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHandle {
   const store = ctx.store;
   const palette: Palette = readPalette();
@@ -165,6 +177,27 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
     title: 'Reset the zoom to 100 %',
     dataset: { action: 'zoom-reset' },
   });
+  // The board filter and the layout reset live beside the zoom, where the board is (review M9k);
+  // the Settings row for finished goals stays, and both read the same preference.
+  // The two toggles' words are spans: a narrow Studio keeps the icons and the names for assistive
+  // technology, so the toolbar does not cover the cards above the minimap (canvas.css).
+  const finishedToggle = button(
+    [icon('check'), h('span', { class: 'cv-btn-label' }, 'Finished goals')],
+    () => toggleFinished(),
+    {
+      class: 'btn btn-ghost cv-finished',
+      ariaLabel: 'Finished goals',
+      aria: { pressed: false },
+      dataset: { action: 'finished-goals' },
+    },
+  );
+  const tidy = button([nodeIcon('layers'), h('span', { class: 'cv-btn-label' }, 'Tidy')], () => resetMovedCards(ctx), {
+    class: 'btn btn-ghost cv-tidy',
+    ariaLabel: 'Tidy',
+    title: 'Put the cards you moved back where Friday lays them out',
+    dataset: { action: 'tidy' },
+    hidden: true,
+  });
   const toolbar = h(
     'div',
     { class: ['cv-toolbar', 'glass-panel'], role: 'toolbar', aria: { label: 'View' } },
@@ -187,6 +220,8 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
       title: 'Zoom in (+)',
       dataset: { action: 'zoom-in' },
     }),
+    finishedToggle,
+    tidy,
   );
   const minimap = new Minimap({
     onMove: (w) => {
@@ -205,6 +240,8 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
     },
     palette: () => palette,
   });
+  // Hidden until a frame finds a card outside the view (review M9k): a board that fits needs no map.
+  minimap.el.hidden = true;
   const overlay = h('div', { class: 'cv-overlay' }, toolbar, minimap.el);
   const root = h(
     'div',
@@ -219,6 +256,7 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
     empty,
     overlay,
   );
+  toggleClass(root, 'cv-minimap-off', true);
   container.append(root);
 
   // ---- helpers --------------------------------------------------------------------------------
@@ -312,6 +350,20 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
     measure();
     if (size.width <= 0 || fullyVisible(cam, r, size, 24)) return;
     moveTo(centreOn(cam, { x: r.x + r.w / 2, y: r.y + r.h / 2 }, size), true);
+  }
+
+  function toggleFinished(): void {
+    store.patch('prefs', { showFinished: !store.select('prefs').showFinished });
+  }
+
+  /** The toolbar's toggles follow the preferences, whoever changed them (this toolbar, Settings). */
+  function syncToolbar(): void {
+    const prefs = store.select('prefs');
+    finishedToggle.setAttribute('aria-pressed', String(prefs.showFinished));
+    finishedToggle.title = prefs.showFinished
+      ? 'Finished goals are shown; press to hide them'
+      : 'Finished goals are hidden; press to show them';
+    tidy.hidden = !hasMovedCards(ctx);
   }
 
   // ---- card models ----------------------------------------------------------------------------
@@ -445,7 +497,7 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
       const hiddenFinished = !store.select('prefs').showFinished && snap.goals.length > 0;
       text = hiddenFinished ? 'Only finished goals, and they are hidden' : 'Nothing on the board yet';
       hint = hiddenFinished
-        ? 'Turn on "Show finished goals" in Settings to see them.'
+        ? 'Turn on "Finished goals" in the toolbar at the bottom right to see them.'
         : 'Create a goal with New goal, or start an agent from Agents.';
     }
     empty.hidden = text === null;
@@ -545,7 +597,14 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
     return drawPulses(g, pulses, curves, palette, now, cam.zoom, reducedMotion());
   }
 
+  /** Draws the minimap while some card lies outside the view, and hides it otherwise. */
   function drawMini(): void {
+    const needed = anyOutside(rects.values(), cam, size);
+    if (minimap.el.hidden !== !needed) {
+      minimap.el.hidden = !needed;
+      toggleClass(root, 'cv-minimap-off', !needed);
+    }
+    if (!needed) return;
     const nodes: MinimapNode[] = [];
     for (const e of entries.values()) if (e.rect) nodes.push({ kind: e.kind, status: e.status, rect: e.rect });
     minimap.draw(nodes, boundsOf(rects.values()), visibleWorld(cam, size));
@@ -780,7 +839,10 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
     store.subscribe('prefs', (prefs) => {
       const prev = prevPrefs;
       prevPrefs = prefs;
-      if (prefs.positions !== prev.positions || prefs.showFinished !== prev.showFinished) rebuild();
+      if (prefs.positions !== prev.positions || prefs.showFinished !== prev.showFinished) {
+        syncToolbar();
+        rebuild();
+      }
     }),
   );
   unsubs.push(
@@ -812,6 +874,7 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
   );
 
   durations.observe(store.select('activity').agents);
+  syncToolbar();
   rebuild();
   applyCamera();
 
@@ -861,7 +924,12 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
   return handle;
 }
 
-/** Palette commands of the canvas (plan §7.6): fit, zoom in, zoom out, and resetting moved cards. */
+/**
+ * Palette commands of the canvas (plan §7.6): fit, zoom in, zoom out, and resetting moved cards
+ * (the toolbar's *Tidy*, by its older name). Where the palette offers each is declared here, with
+ * the command (review §4): zooming left the palette for the toolbar, the wheel and the keys, and
+ * the reset shows only when typed.
+ */
 export function registerCanvasCommands(ctx: AppContext): void {
   ctx.registry.command({
     id: 'fit',
@@ -875,6 +943,7 @@ export function registerCanvasCommands(ctx: AppContext): void {
     label: 'Zoom in',
     keywords: ['view', 'canvas', 'bigger', 'magnify'],
     available: () => current !== null,
+    show: 'never',
     run: () => current?.zoomIn(),
   });
   ctx.registry.command({
@@ -882,13 +951,15 @@ export function registerCanvasCommands(ctx: AppContext): void {
     label: 'Zoom out',
     keywords: ['view', 'canvas', 'smaller'],
     available: () => current !== null,
+    show: 'never',
     run: () => current?.zoomOut(),
   });
   ctx.registry.command({
     id: 'reset-layout',
     label: 'Reset moved cards',
-    keywords: ['layout', 'positions', 'arrange', 'canvas'],
-    available: (c) => Object.keys(c.store.select('prefs').positions).length > 0,
-    run: (c) => c.store.patch('prefs', { positions: {} }),
+    keywords: ['layout', 'positions', 'arrange', 'canvas', 'tidy'],
+    available: (c) => hasMovedCards(c),
+    show: 'typed',
+    run: (c) => resetMovedCards(c),
   });
 }

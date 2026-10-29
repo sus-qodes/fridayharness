@@ -184,15 +184,6 @@
   white-space: nowrap;
 }
 
-.sh-project-root {
-  max-width: 48ch;
-  overflow: hidden;
-  color: var(--color-slate-400);
-  font-size: var(--text-micro);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .sh-daemon {
   --sh-dot: var(--color-slate-400);
   display: inline-flex;
@@ -234,10 +225,6 @@
 
 .sh-daemon-label {
   color: var(--color-slate-200);
-}
-
-.sh-daemon-address {
-  color: var(--color-slate-400);
 }
 
 .sh-metrics {
@@ -288,6 +275,54 @@
   justify-content: center;
 }
 
+/* ---- The More (…) menu: a trigger in the header's row, its list dropped under it (review §4) */
+.sh-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.sh-more-dots {
+  font-size: var(--text-title-sm);
+  line-height: 1;
+}
+
+.sh-menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 200px;
+  padding: 4px;
+}
+
+.sh-menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-slate-200);
+  text-align: left;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.sh-menu-item:hover,
+.sh-menu-item:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--color-white);
+}
+
+.sh-banner-hint {
+  font-size: var(--text-caption);
+}
+
 /* Narrow windows keep the buttons' names for assistive technology, not on screen. */
 @media (max-width: 1360px) {
   .sh-btn-label,
@@ -306,8 +341,6 @@
 
 @media (max-width: 1040px) {
   .sh-brand-sub,
-  .sh-project-root,
-  .sh-daemon-address,
   .sh-metric-label {
     display: none;
   }

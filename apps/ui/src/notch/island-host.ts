@@ -1,27 +1,33 @@
 /**
  * Mounts the Notch (plan §7.8): the state machine, the island and its views, wired to the store.
  *
- * - **Pin:** pending unexpired approvals, pending questions and agents waiting for a human pin the
- *   card open; a new one opens it (`itemArrived`), one leaving it (decided here or elsewhere)
- *   collapses it unless another waits. `ui.notchPinned` and `ui.notchFolded` mirror the machine.
+ * - **Pin:** everything that waits for a human (`waitingItems`) pins the island; a new one opens
+ *   the card (`itemArrived`), one leaving it (decided here or elsewhere) collapses it unless
+ *   another waits. `ui.notchPinned` and `ui.notchFolded` mirror the machine. Memories to review and
+ *   an untrusted policy pin without opening the card: they wait, but not on this minute.
  * - **Reactions** are consumed by id: `approval` and `question` open the card in the same tick as
  *   their event, before the snapshot re-read; `goal-completed` celebrates.
- * - **In the page** the island sits at the top centre of its container; **in the notch window** it
- *   fills the window, makes the page transparent and reports its rectangle through `onRect`.
+ * - **In the page** the island is the pill alone (review §4, owner decision 1): no card is built,
+ *   hover and click open nothing, and the pill's parts are doors to the Studio beside it. **In the
+ *   notch window** it fills the window, makes the page transparent and reports its rectangle
+ *   through `onRect`.
  */
 import { type AppContext, type Component, openDrawer, openModal } from '../shell/context.js';
 import type { RootState } from '../store/state.js';
-import { buildModel, type NotchModel, nextExpiryIn, routingLabel, studioTarget, waitingItems } from './derive.js';
 import {
-  type AnimationEnv,
-  ISLAND_BORDER,
-  Island,
-  PAGE_MAX_HEIGHT,
-  stateGeometry,
-  WINDOW_MAX_HEIGHT,
-} from './island.js';
+  buildModel,
+  type NotchModel,
+  nextExpiryIn,
+  type StudioTarget,
+  studioTarget,
+  type WaitingItem,
+  type WaitingKind,
+  waitingItems,
+} from './derive.js';
+import { type AnimationEnv, ISLAND_BORDER, Island, stateGeometry, WINDOW_MAX_HEIGHT } from './island.js';
 import { IslandFsm, type IslandSnapshot, type IslandState, realTimers, type TimerApi } from './island-fsm.js';
 import {
+  absentView,
   compactView,
   type ExpandedView,
   expandedView,
@@ -37,19 +43,17 @@ export type { IslandRect } from './island.js';
 export type { NotchSlots } from './island-views.js';
 
 /** Where the Studio opens for the notch window: a task, an approval, or one of its drawers. */
-export interface NotchStudioTarget {
-  task_id?: string;
-  approval_id?: string;
-  /** A drawer: Settings, the agents drawer at `tab`, or the diff of `task_id` at `path`. */
-  panel?: 'settings' | 'agents' | 'diff';
-  tab?: string;
-  path?: string;
-}
+export type NotchStudioTarget = StudioTarget;
 
 export interface NotchOptions {
   mode: 'in-page' | 'window';
   onRect?: (r: { x: number; y: number; width: number; height: number }) => void;
   onOpenStudio?: (target: NotchStudioTarget) => void;
+  /**
+   * The pill's waiting chip was clicked in a page: show the rail (the shell scrolls it to the top
+   * and focuses it, as for the header's count). Without it the Notch finds the list in the page.
+   */
+  onShowWaiting?: () => void;
 }
 
 /** The mounted Notch. It is a `Component`; `open` serves the Notch shortcut. */
@@ -72,14 +76,20 @@ export interface NotchEnv {
 }
 
 /** Stats are read at most once a second per task, and not again for 30 s after a failure. */
-/** The height the dock keeps at the bottom of the Studio, below an in-page card. */
-const DOCK_ROOM = 96;
 const STATS_INTERVAL_MS = 1000;
 const STATS_BACKOFF_MS = 30_000;
 /** Re-derive the pin this long after the next approval expires. */
 const EXPIRY_SLACK_MS = 50;
 /** Never wait longer than this for an expiry (timers have a ceiling). */
 const EXPIRY_MAX_MS = 10 * 60_000;
+/**
+ * The kinds whose arrival opens the window's card: someone is waiting on the human now. A proposed
+ * plan, memories to review and an untrusted policy pin the pill with their count instead (the
+ * notifier announces the plan).
+ */
+const OPENS_CARD: ReadonlySet<WaitingKind> = new Set<WaitingKind>(['approval', 'question', 'waiting', 'message']);
+/** The Studio's "Waiting for you" list, found in the page when the shell gave no `onShowWaiting`. */
+const TRAY_SELECTOR = '.gv-tray';
 
 export function defaultNotchEnv(): NotchEnv {
   return {
@@ -119,11 +129,13 @@ export function mountNotchWith(
 ): NotchHandle {
   const store = ctx.store;
   let destroyed = false;
+  const inPage = opts.mode === 'in-page';
   const prefs0 = store.select('prefs');
   const fsm = new IslandFsm({
     initial: 'compact',
     timers: env.timers,
     timings: { collapseS: prefs0.notchAutoCollapseS, hideS: prefs0.notchHideS },
+    card: !inPage,
   });
 
   const reducedMotion = (): boolean => {
@@ -140,16 +152,46 @@ export function mountNotchWith(
   // ---- what the views ask for --------------------------------------------------------------
   let model: NotchModel | null = null;
   let currentKey: string | null = null;
-  let routing = 'Routing';
 
-  const inPage = opts.mode === 'in-page';
-
-  function goStudio(target: NotchStudioTarget): void {
-    if (opts.onOpenStudio) opts.onOpenStudio(target);
-    else {
-      if (target.task_id) store.patch('ui', { selectedTaskId: target.task_id });
-      if (target.approval_id) openModal(ctx, { kind: 'approval', id: target.approval_id });
+  /** Opens `target` in the Studio: through the shell when there is one, else in this page. */
+  function goStudio(target: StudioTarget): void {
+    if (opts.onOpenStudio) {
+      opts.onOpenStudio(target);
+      return;
     }
+    if (target.panel === 'plan-review') {
+      // The plan review is a dialog, not a drawer; it opens on the goal.
+      openModal(ctx, { kind: 'plan-review', ...(target.id ? { id: target.id } : {}) });
+      return;
+    }
+    if (target.panel) {
+      const id = target.id ?? target.task_id;
+      openDrawer(ctx, {
+        kind: target.panel,
+        ...(id ? { id } : {}),
+        ...(target.tab ? { tab: target.tab } : {}),
+        ...(target.path ? { path: target.path } : {}),
+      });
+      return;
+    }
+    if (target.task_id) store.patch('ui', { selectedTaskId: target.task_id });
+    if (target.approval_id) openModal(ctx, { kind: 'approval', id: target.approval_id });
+  }
+
+  function currentItem(): WaitingItem | null {
+    const items = model?.items ?? [];
+    return items.find((i) => i.key === currentKey) ?? items[0] ?? null;
+  }
+
+  function focusWaiting(): void {
+    if (opts.onShowWaiting) {
+      opts.onShowWaiting();
+      return;
+    }
+    const tray = container.ownerDocument.querySelector<HTMLElement>(TRAY_SELECTOR);
+    if (!tray) return;
+    if (typeof tray.scrollIntoView === 'function') tray.scrollIntoView({ block: 'start' });
+    (tray.querySelector<HTMLElement>('button') ?? tray).focus();
   }
 
   const handlers: ViewHandlers = {
@@ -159,13 +201,15 @@ export function mountNotchWith(
       else opts.onOpenStudio({ task_id: taskId, panel: 'diff', ...(path ? { path } : {}) });
     },
     openStudio: () => {
-      const items = model?.items ?? [];
-      const item = items.find((i) => i.key === currentKey) ?? items[0] ?? null;
-      goStudio(studioTarget(item, model?.active?.task.task_id ?? null));
+      goStudio(studioTarget(currentItem(), model?.active?.task.task_id ?? null));
       fsm.studioOpened();
     },
     openStudioGeneral: () => {
       goStudio(studioTarget(null, model?.active?.task.task_id ?? null));
+      fsm.studioOpened();
+    },
+    openItem: (item) => {
+      goStudio(studioTarget(item, model?.active?.task.task_id ?? null));
       fsm.studioOpened();
     },
     inspect: (taskId) => {
@@ -174,6 +218,7 @@ export function mountNotchWith(
         openDrawer(ctx, { kind: 'inspector', id: taskId });
       } else opts.onOpenStudio({ task_id: taskId });
     },
+    focusWaiting,
     later: () => fsm.later(),
     settings: () => {
       // The notch window is too small for the settings drawer: the Studio shows it.
@@ -181,10 +226,6 @@ export function mountNotchWith(
       else opts.onOpenStudio({ panel: 'settings' });
     },
     toggleMute: () => store.patch('prefs', { muted: !store.select('prefs').muted }),
-    routing: () => {
-      if (inPage || !opts.onOpenStudio) openDrawer(ctx, { kind: 'agents', tab: 'routing' });
-      else opts.onOpenStudio({ panel: 'agents', tab: 'routing' });
-    },
     page: (delta) => {
       const items = model?.items ?? [];
       if (!items.length) return;
@@ -204,30 +245,21 @@ export function mountNotchWith(
 
   // ---- views ---------------------------------------------------------------------------------
   const hidden = hiddenView(handlers);
-  const compact = compactView(handlers);
-  const expanded: ExpandedView = expandedView(ctx, slots, handlers);
+  const compact = compactView(handlers, { card: !inPage });
+  // A page has no card: nothing of it is built, the goal line included.
+  const expanded: ExpandedView | null = inPage ? null : expandedView(ctx, slots, handlers);
   const greeting = greetingView();
-  const views: Record<IslandState, NotchView> = { hidden, compact, expanded, greeting };
-  island.el.append(hidden.el, compact.el, expanded.el, greeting.el);
+  const views: Record<IslandState, NotchView> = { hidden, compact, expanded: expanded ?? absentView(), greeting };
+  island.el.append(hidden.el, compact.el, views.expanded.el, greeting.el);
   container.append(island.el);
   const root = document.documentElement;
   if (opts.mode === 'window') root.classList.add('nt-transparent');
 
-  const maxHeight = (): number => {
-    if (opts.mode === 'window') return WINDOW_MAX_HEIGHT;
-    // The layer itself takes no height; the Studio under it does, and the dock keeps its row.
-    const room = (container.parentElement?.clientHeight ?? 0) - DOCK_ROOM;
-    return room > 160 ? Math.min(PAGE_MAX_HEIGHT, room) : PAGE_MAX_HEIGHT;
-  };
-
-  /**
-   * Something new waits. The window opens its card over the editor; in a page the Decisions tray
-   * already shows it in full, so the pill pins with its count and opens on hover or click
-   * (ERRATA F40).
-   */
-  function arrived(): void {
-    if (inPage) fsm.pinQuietly();
-    else fsm.itemArrived();
+  /** Pins for new items: the card opens for someone waiting on the human; the rest pin the pill. */
+  function arrived(added: readonly WaitingItem[]): void {
+    const loud = !inPage && added.some((i) => OPENS_CARD.has(i.kind));
+    if (loud) fsm.itemArrived();
+    else fsm.pinQuietly();
   }
 
   let shown: IslandState | null = null;
@@ -259,7 +291,7 @@ export function mountNotchWith(
 
   function renderOnce(): void {
     const snap = fsm.snapshot;
-    const m = buildModel(store.getState(), snap, ctx.now(), routing);
+    const m = buildModel(store.getState(), snap, ctx.now());
     model = m;
     if (currentKey && !m.items.some((i) => i.key === currentKey)) currentKey = null;
     if (!currentKey) currentKey = m.items[0]?.key ?? null;
@@ -267,13 +299,13 @@ export function mountNotchWith(
       0,
       m.items.findIndex((i) => i.key === currentKey),
     );
-    expanded.setMaxHeight(maxHeight());
+    expanded?.setMaxHeight(WINDOW_MAX_HEIGHT);
     show(snap.state);
     views[snap.state].update(m, index);
     island.el.classList.toggle('nt-pinned', snap.pinned);
     island.el.classList.toggle('nt-folded', snap.folded);
-    const content = snap.state === 'expanded' ? env.measure(expanded.el) + ISLAND_BORDER : 0;
-    island.setTarget(stateGeometry(snap.state, content, maxHeight()));
+    const content = snap.state === 'expanded' && expanded ? env.measure(expanded.el) + ISLAND_BORDER : 0;
+    island.setTarget(stateGeometry(snap.state, content, WINDOW_MAX_HEIGHT));
     fetchStats(m.active?.task.task_id ?? null);
   }
 
@@ -310,13 +342,13 @@ export function mountNotchWith(
       if (!board) return;
       started = true;
       known = keys;
-      if (items.length) arrived();
+      if (items.length) arrived(items);
       else fsm.greet();
     } else {
-      const added = [...keys].some((k) => !known.has(k));
+      const added = items.filter((i) => !known.has(i.key));
       const removed = [...known].some((k) => !keys.has(k));
       known = keys;
-      if (added) arrived();
+      if (added.length) arrived(added);
       else if (removed) fsm.decided(items.length > 0);
       else fsm.setPinned(items.length > 0);
     }
@@ -383,21 +415,6 @@ export function mountNotchWith(
       .finally(() => statsInFlight.delete(taskId));
   }
 
-  // ---- the routing badge ---------------------------------------------------------------------
-  function readRouting(): void {
-    ctx.api.models().then(
-      (r) => {
-        if (destroyed) return;
-        const label = routingLabel(r?.settings);
-        if (label !== routing) {
-          routing = label;
-          render();
-        }
-      },
-      () => undefined,
-    );
-  }
-
   // ---- subscriptions -------------------------------------------------------------------------
   let lastReaction = maxReaction(store.getState());
   const unsubs: (() => void)[] = [];
@@ -424,8 +441,10 @@ export function mountNotchWith(
         if (r.id <= lastReaction) continue;
         lastReaction = r.id;
         // Opened in the same tick as the event; the card fills in when the snapshot lists the item.
-        if (r.kind === 'approval' || r.kind === 'question') arrived();
-        else if (r.kind === 'goal-completed') fsm.celebrate();
+        if (r.kind === 'approval' || r.kind === 'question') {
+          if (inPage) fsm.pinQuietly();
+          else fsm.itemArrived();
+        } else if (r.kind === 'goal-completed') fsm.celebrate();
       }
       if (next.lastActivityAt !== prev.lastActivityAt) fsm.activity();
       if (next.files !== prev.files || next.agents !== prev.agents || next.reactions !== prev.reactions) render();
@@ -448,9 +467,7 @@ export function mountNotchWith(
 
   unsubs.push(
     store.subscribe('system', (next, prev) => {
-      if (next.connection === prev.connection) return;
-      if (next.connection === 'live' && prev.connection !== 'live') readRouting();
-      render();
+      if (next.connection !== prev.connection) render();
     }),
   );
 
@@ -471,7 +488,7 @@ export function mountNotchWith(
   island.el.addEventListener('focusout', onFocusOut);
 
   const onCardKey = (e: KeyboardEvent): void => {
-    if (e.defaultPrevented) return;
+    if (e.defaultPrevented || !expanded) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
@@ -481,7 +498,7 @@ export function mountNotchWith(
       handlers.openStudio();
     }
   };
-  expanded.el.addEventListener('keydown', onCardKey);
+  expanded?.el.addEventListener('keydown', onCardKey);
 
   const onResize = (): void => {
     island.reportRect(true);
@@ -490,7 +507,7 @@ export function mountNotchWith(
   window.addEventListener('resize', onResize);
 
   let observer: ResizeObserver | null = null;
-  if (typeof ResizeObserver === 'function') {
+  if (expanded && typeof ResizeObserver === 'function') {
     observer = new ResizeObserver(() => {
       if (fsm.state === 'expanded') render();
     });
@@ -501,13 +518,14 @@ export function mountNotchWith(
   derivePin();
   render();
   island.reportRect(true);
-  if (store.select('system').connection === 'live') readRouting();
 
   return {
     el: island.el,
     open(focus = false) {
       fsm.open();
-      if (focus) expanded.el.focus();
+      if (!focus) return;
+      // A page has no card to focus: the pill takes the keyboard instead.
+      (expanded ? expanded.el : compact.focusTarget())?.focus();
     },
     state: () => fsm.snapshot,
     destroy() {
@@ -521,7 +539,7 @@ export function mountNotchWith(
       island.el.removeEventListener('pointerleave', onLeave);
       island.el.removeEventListener('focusin', onFocusIn);
       island.el.removeEventListener('focusout', onFocusOut);
-      expanded.el.removeEventListener('keydown', onCardKey);
+      expanded?.el.removeEventListener('keydown', onCardKey);
       window.removeEventListener('resize', onResize);
       observer?.disconnect();
       mascot?.destroy();

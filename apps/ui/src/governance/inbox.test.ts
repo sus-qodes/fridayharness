@@ -44,7 +44,8 @@ describe('inbox drawer', () => {
 
   it('lists previews as text, shortened', () => {
     const d = open();
-    expect(d.title).toBe('Messages for you');
+    // The header's word, one name for the drawer (review §4).
+    expect(d.title).toBe('Messages');
     expect(d.el.querySelector('img')).toBeNull();
     expect(d.el.textContent).toContain('claude-1');
     expect(d.el.textContent).toContain(`Contract ${HOSTILE}`);
@@ -78,6 +79,7 @@ describe('inbox drawer', () => {
     (d.el.querySelector('.gv-inbox-row') as HTMLButtonElement).click();
     await flush();
     const reply = d.el.querySelector('.gv-inbox-actions textarea') as HTMLTextAreaElement;
+    expect(d.el.querySelector(`label[for="${reply.id}"]`)?.textContent).toBe('Reply to claude-1');
     buttonNamed(d.el, 'Reply').click();
     await flush();
     expect(ctx.transport.to('POST', '/messages')).toHaveLength(0);

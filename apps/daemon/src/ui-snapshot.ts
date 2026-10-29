@@ -17,7 +17,7 @@ import type {
   VerificationView,
 } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
-import type { FridayState } from '@friday/state';
+import type { FridayState, MemoryActor } from '@friday/state';
 import type { BrainHandle } from './brain.js';
 import { escalationView, liveVersion } from './brain-routes.js';
 
@@ -41,6 +41,11 @@ export const SNAPSHOT_CAPS: Record<SnapshotList, number> = {
 };
 const PREVIEW_CHARS = 200;
 const USAGE_SCAN = 500;
+/** The memories the review route lists at most; the count follows the same read. */
+const MEMORY_REVIEW_SCAN = 200;
+
+/** The human at the interface reads memory as the memory routes do: every scope. */
+const HUMAN_MEMORY: MemoryActor = { kind: 'human', actor: { kind: 'human', id: 'local-operator' } };
 
 /** What the daemon knows about itself that the snapshot shows. */
 export interface UiSnapshotInfo {
@@ -50,6 +55,11 @@ export interface UiSnapshotInfo {
   config: { loaded_hash: string; current_hash: string | null };
   /** Claims are verified automatically (trusted, and project checks exist). */
   auto_verification: boolean;
+  /**
+   * Whether the effective policy's loosening applies on this clone (`EffectivePolicy.trusted`).
+   * Left out, the snapshot reports nothing untrusted: the daemon that knows its policy says so.
+   */
+  policy_trusted?: boolean;
 }
 
 /**
@@ -238,6 +248,11 @@ export function buildUiSnapshot(deps: {
     .brainJobs(pid)
     .map((j) => ({ job_id: j.job_id, kind: j.kind, status: j.status, goal_id: j.goal_id ?? null }));
 
+  // The same read as `GET memory/review`, so the rail's count and the drawer's list agree.
+  const memoriesToReview = state.memory
+    .search(pid, HUMAN_MEMORY, { limit: MEMORY_REVIEW_SCAN })
+    .filter((m) => m.needs_review).length;
+
   const info = deps.info ?? {
     has_commit: true,
     worktrees_mode: project.config.worktrees.mode,
@@ -284,6 +299,8 @@ export function buildUiSnapshot(deps: {
     reservations: cap(state.q.fileReservations(pid, ['active']), 'reservations'),
     brain: deps.brain ? (deps.brain.status() as BrainStatusView) : null,
     brain_jobs: brainJobs,
+    memories_to_review: memoriesToReview,
+    policy_untrusted: info.policy_trusted === false,
     truncated,
   };
 }

@@ -415,3 +415,50 @@ describe('island state machine: plumbing', () => {
     expect(g.state).toBe('compact');
   });
 });
+
+describe('island state machine without a card (a browser page, review §4)', () => {
+  function pill(): IslandFsm {
+    return new IslandFsm({ initial: 'compact', card: false });
+  }
+
+  it('never expands: hover, click and an arriving item leave the pill as it is', () => {
+    const m = pill();
+    expect(m.hasCard).toBe(false);
+    m.pointerEnter();
+    expect(m.snapshot).toMatchObject({ state: 'compact', pointerInside: true, openedBy: null });
+    m.pointerLeave();
+    m.open();
+    expect(m.state).toBe('compact');
+    m.itemArrived();
+    expect(m.snapshot).toMatchObject({ state: 'compact', pinned: true });
+    // The pin still holds the pill on the screen.
+    vi.advanceTimersByTime(3600 * S);
+    expect(m.state).toBe('compact');
+    m.decided(false);
+    vi.advanceTimersByTime(60 * S);
+    expect(m.state).toBe('hidden');
+  });
+
+  it('still wakes from the strip, greets and celebrates', () => {
+    const m = pill();
+    vi.advanceTimersByTime(60 * S);
+    expect(m.state).toBe('hidden');
+    m.pointerEnter();
+    expect(m.state).toBe('compact');
+    m.pointerLeave();
+    m.pointerEnter();
+    expect(m.state).toBe('compact');
+    m.pointerLeave();
+    m.celebrate();
+    expect(m.snapshot).toMatchObject({ state: 'greeting', greeting: 'celebrate' });
+    vi.advanceTimersByTime(2400);
+    expect(m.state).toBe('compact');
+    m.greet();
+    expect(m.snapshot.greeting).toBe('welcome');
+  });
+
+  it('cannot start expanded', () => {
+    expect(new IslandFsm({ initial: 'expanded', card: false }).state).toBe('compact');
+    expect(new IslandFsm({ initial: 'expanded' }).hasCard).toBe(true);
+  });
+});

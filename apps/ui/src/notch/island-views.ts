@@ -1,13 +1,19 @@
 /**
- * The island's four views (plan §7.8, handoff Part 01 §5): the hidden strip, the compact pill,
- * the expanded card and the greeting. Cards built by other areas (approvals, questions, waiting
- * agents, the quick prompt, the mascot) come in through `NotchSlots`, so the Notch imports none of
+ * The island's views (plan §7.8, handoff Part 01 §5): the hidden strip, the compact pill, the
+ * expanded card and the greeting. Cards built by other areas (approvals, questions, waiting
+ * agents, the goal line, the mascot) come in through `NotchSlots`, so the Notch imports none of
  * them. Every daemon string is a text node; file and branch names keep visible escapes.
+ *
+ * The card exists only in the desktop Notch window. In a browser page the pill is the whole Notch
+ * (review §4, owner decision 1): the rail beside it shows every waiting item in full, so the pill's
+ * parts are doors instead: the task's tag opens its inspector, the file ticker the diff, the
+ * waiting chip the rail.
  */
 import type { ApprovalRow, EscalationView, SnapshotTask } from '@friday/protocol';
 import { visible } from '../model/text.js';
 import type { AppContext, Component } from '../shell/context.js';
 import { button, h, replace, setText, setVar, toggleClass } from '../ui/dom.js';
+import { cleanText, plural, truncate } from '../ui/format.js';
 import { icon, s } from '../ui/svg.js';
 import { itemSignature, type NotchModel, statsText, type WaitingItem } from './derive.js';
 
@@ -16,31 +22,34 @@ export interface NotchSlots {
   approval(ctx: AppContext, a: ApprovalRow, opts: { compact: boolean }): Component;
   question(ctx: AppContext, e: EscalationView, opts: { compact: boolean; onLater: () => void }): Component;
   waiting(ctx: AppContext, t: SnapshotTask, opts: { compact: boolean }): Component;
+  /** The goal line of the desktop card ("Describe a goal…"). */
   quickPrompt(ctx: AppContext, opts: { onDone: () => void }): Component;
   mascot(ctx: AppContext, opts: { size: number }): Component;
 }
 
 /** What the views ask the host to do. */
 export interface ViewHandlers {
-  /** Open the card (a click on the pill or the strip). */
+  /** Open the card (a click on the pill or the strip, in the window). */
   open(): void;
   /** The ticker's file: the diff drawer. */
   openDiff(taskId: string, path: string): void;
-  /** "Open in Studio" (header) or `Space` on the card: the current item, else the active task. */
+  /** "Open this in Studio" (header) or `Space` on the card: the current item, else the active task. */
   openStudio(): void;
-  /** The footer's Studio button. */
+  /** The footer's "Open Studio" button. */
   openStudioGeneral(): void;
-  /** The active task's summary: its inspector. */
+  /** A notice's button: where this item is decided in the Studio. */
+  openItem(item: WaitingItem): void;
+  /** The active task's summary (card) or its tag (pill in a page): its inspector. */
   inspect(taskId: string): void;
+  /** The pill's waiting chip in a page: the rail, where every item is shown in full. */
+  focusWaiting(): void;
   /** "Later" and `Esc`: fold the card. */
   later(): void;
   settings(): void;
   toggleMute(): void;
-  /** The routing badge: the routing pins. */
-  routing(): void;
   /** The pager: the previous (−1) or next (+1) waiting item. */
   page(delta: number): void;
-  /** The quick prompt ran a command. */
+  /** The goal line created a goal. */
   promptDone(): void;
 }
 
@@ -100,13 +109,23 @@ export function hiddenView(handlers: ViewHandlers): NotchView {
 
 // ---- compact --------------------------------------------------------------------------------
 
-export function compactView(handlers: ViewHandlers): NotchView {
+export interface CompactOptions {
+  /** True in the window: the pill opens the card. False in a page: its parts are doors. */
+  card: boolean;
+}
+
+export function compactView(handlers: ViewHandlers, opts: CompactOptions = { card: true }): NotchView {
   const mascot = h('span', { class: 'nt-mascot nt-mascot-24', aria: { hidden: 'true' } });
   const tag = h('span', { class: 'nt-tag mono' });
-  const open = button([mascot, tag, h('span', { class: 'nt-chev' }, icon('chevronDown', 12))], () => handlers.open(), {
-    class: 'nt-compact-open',
-    ariaLabel: 'Open the Notch',
-  });
+  let activeTask: string | null = null;
+  const open = button(
+    [mascot, tag, opts.card ? h('span', { class: 'nt-chev' }, icon('chevronDown', 12)) : null],
+    () => {
+      if (opts.card) handlers.open();
+      else if (activeTask) handlers.inspect(activeTask);
+    },
+    { class: 'nt-compact-open', ariaLabel: opts.card ? 'Open the Notch' : 'Friday' },
+  );
   const file = h('span', { class: 'nt-ticker-file mono' });
   const add = h('span', { class: 'nt-add mono' });
   const del = h('span', { class: 'nt-del mono' });
@@ -118,7 +137,12 @@ export function compactView(handlers: ViewHandlers): NotchView {
     },
     { class: 'nt-ticker', hidden: true },
   );
-  const chip = h('span', { class: 'nt-chip', hidden: true });
+  // In the window the chip opens the card at its items; in a page it hands the keyboard to the rail.
+  const chip = button('', () => (opts.card ? handlers.open() : handlers.focusWaiting()), {
+    class: 'nt-chip',
+    hidden: true,
+    title: opts.card ? 'Open the Notch' : 'Show what waits for you',
+  });
   const el = h('div', { class: 'nt-view nt-compact', hidden: true }, open, ticker, chip);
 
   return {
@@ -127,15 +151,27 @@ export function compactView(handlers: ViewHandlers): NotchView {
     mascotSize: 24,
     update(m) {
       const a = m.active;
+      activeTask = a ? a.task.task_id : null;
       setText(tag, a ? a.tag : m.project);
       tag.dataset.status = a ? a.task.status : 'none';
       setVar(tag, '--nt-tag-color', a ? a.status.color : 'var(--color-slate-400)');
       tag.title = a ? `${a.status.label}: ${a.summary}` : m.project;
-      open.setAttribute('aria-label', a ? `Open the Notch: ${a.tag}, ${a.status.label}` : 'Open the Notch');
+      if (opts.card) {
+        open.setAttribute('aria-label', a ? `Open the Notch: ${a.tag}, ${a.status.label}` : 'Open the Notch');
+      } else {
+        // Without an active task the tag names the project and opens nothing. Said with
+        // `aria-disabled`, not `disabled`: a disabled button is drawn faded, and an idle board is
+        // not a fault.
+        open.setAttribute('aria-disabled', String(!a));
+        open.tabIndex = a ? 0 : -1;
+        toggleClass(open, 'nt-compact-idle', !a);
+        open.setAttribute('aria-label', a ? `Inspect ${a.tag}: ${a.status.label}` : `Friday: ${m.project}`);
+      }
 
       const waiting = m.items.length;
       chip.hidden = waiting === 0;
       setText(chip, `${waiting} waiting`);
+      chip.setAttribute('aria-label', `${waiting} waiting for you${opts.card ? '' : ': show the list'}`);
 
       const f = a?.file ?? null;
       const show = !!(a && f) && waiting === 0;
@@ -156,7 +192,7 @@ export function compactView(handlers: ViewHandlers): NotchView {
         target = null;
       }
     },
-    focusTarget: () => open,
+    focusTarget: () => (open.getAttribute('aria-disabled') === 'true' ? (chip.hidden ? null : chip) : open),
     destroy: () => el.remove(),
   };
 }
@@ -170,27 +206,59 @@ export interface ExpandedView extends NotchView {
   readonly currentItem: string | null;
 }
 
+/**
+ * The card's own notice for an item no area builds a card for: a proposed plan, a message that
+ * waits for a reply, memories to review, an untrusted policy. One line each, and the door to where
+ * it is decided.
+ */
+function noticeItem(item: WaitingItem, handlers: ViewHandlers): HTMLElement | null {
+  let title: string;
+  let line: string;
+  let door: string;
+  if (item.kind === 'plan') {
+    title = `Proposed plan v${item.version}`;
+    line = truncate(cleanText(item.request), 120);
+    door = 'Open the plan review';
+  } else if (item.kind === 'message') {
+    const m = item.message;
+    const from = m.from.kind === 'agent' ? (m.from.agent_key ?? m.from.id) : m.from.kind;
+    title = 'A message waits for your reply';
+    line = `${visible(from)} · ${truncate(cleanText(m.subject ?? m.preview), 120)}`;
+    door = 'Open Messages';
+  } else if (item.kind === 'memory') {
+    title = `${plural(item.count, 'memory', 'memories')} ${item.count === 1 ? 'needs' : 'need'} review`;
+    line = 'Agents recorded them; approve or retract each.';
+    door = 'Open Project memory';
+  } else if (item.kind === 'policy') {
+    title = 'Policy change not yet trusted';
+    line = "The project's files loosen Friday's defaults; nothing of it applies until you trust it.";
+    door = 'Open Settings → Policy';
+  } else return null;
+  return h(
+    'div',
+    { class: ['nt-notice', `nt-notice-${item.kind}`] },
+    h('p', { class: 'nt-notice-title' }, title),
+    h('p', { class: 'nt-notice-line muted' }, line),
+    button(door, () => handlers.openItem(item), { class: 'btn btn-ghost nt-notice-door' }),
+  );
+}
+
 export function expandedView(ctx: AppContext, slots: NotchSlots, handlers: ViewHandlers): ExpandedView {
-  // Header: mascot, project and connection, routing badge, Open in Studio.
+  // Header: mascot, project and connection, Open this in Studio.
   const mascot = h('span', { class: 'nt-mascot nt-mascot-36', aria: { hidden: 'true' } });
   const project = h('span', { class: 'nt-project' });
   const dot = h('span', { class: 'nt-dot', aria: { hidden: 'true' } });
   const connLabel = h('span', { class: 'nt-conn' });
-  const routing = button('Routing', () => handlers.routing(), {
-    class: 'nt-routing',
-    title: 'Routing pins: pin a model to a role, task or kind',
-  });
   const studio = button(icon('expand', 16), () => handlers.openStudio(), {
     class: 'btn btn-icon btn-ghost nt-studio',
-    ariaLabel: 'Open in Studio (Space)',
-    title: 'Open in Studio (Space)',
+    ariaLabel: 'Open this in Studio (Space)',
+    title: 'Open this in Studio (Space)',
   });
   const header = h(
     'header',
     { class: 'nt-head' },
     mascot,
     h('div', { class: 'nt-head-text' }, project, h('span', { class: 'nt-conn-row' }, dot, connLabel)),
-    routing,
     studio,
   );
 
@@ -233,16 +301,16 @@ export function expandedView(ctx: AppContext, slots: NotchSlots, handlers: ViewH
   const empty = h('p', { class: 'nt-empty muted', hidden: true }, 'Nothing needs you right now.');
   const body = h('div', { class: 'nt-body scroll' }, banner, pager, itemHolder, arriving, empty);
 
-  // The quick prompt lives as long as the card, so typed text survives a fold.
+  // The goal line lives as long as the card, so typed text survives a fold.
   const prompt = slots.quickPrompt(ctx, { onDone: () => handlers.promptDone() });
   const promptHolder = h('div', { class: 'nt-prompt' }, prompt.el);
 
-  // Footer: settings, mute, Studio.
+  // Footer: settings, mute, Open Studio.
   const settings = button([icon('gear', 14), 'Settings'], () => handlers.settings(), {
     class: 'btn btn-ghost nt-foot-btn',
   });
   const mute = button('', () => handlers.toggleMute(), { class: 'btn btn-ghost nt-foot-btn nt-mute' });
-  const studioFoot = button([icon('expand', 14), 'Studio'], () => handlers.openStudioGeneral(), {
+  const studioFoot = button([icon('expand', 14), 'Open Studio'], () => handlers.openStudioGeneral(), {
     class: 'btn btn-ghost nt-foot-btn',
   });
   const footer = h('footer', { class: 'nt-foot' }, settings, mute, h('span', { class: 'spacer' }), studioFoot);
@@ -271,8 +339,12 @@ export function expandedView(ctx: AppContext, slots: NotchSlots, handlers: ViewH
       if (item.kind === 'approval') comp = slots.approval(ctx, item.approval, { compact: true });
       else if (item.kind === 'question')
         comp = slots.question(ctx, item.escalation, { compact: true, onLater: () => handlers.later() });
-      else comp = slots.waiting(ctx, item.task, { compact: true });
-      itemHolder.append(comp.el);
+      else if (item.kind === 'waiting') comp = slots.waiting(ctx, item.task, { compact: true });
+      if (comp) itemHolder.append(comp.el);
+      else {
+        const notice = noticeItem(item, handlers);
+        if (notice) itemHolder.append(notice);
+      }
     } catch {
       comp = null;
       itemHolder.append(
@@ -297,7 +369,6 @@ export function expandedView(ctx: AppContext, slots: NotchSlots, handlers: ViewH
       setText(project, m.project);
       dot.dataset.tone = m.connection.tone;
       setText(connLabel, m.connection.label);
-      setText(routing, m.routing);
 
       const a = m.active;
       banner.hidden = !a;
@@ -342,6 +413,22 @@ export function expandedView(ctx: AppContext, slots: NotchSlots, handlers: ViewH
       prompt.destroy();
       el.remove();
     },
+  };
+}
+
+/**
+ * Stands in for the card where there is none (a browser page): the state table stays complete,
+ * nothing is built, and nothing is shown.
+ */
+export function absentView(): NotchView {
+  const el = h('div', { class: 'nt-view nt-view-absent', hidden: true });
+  return {
+    el,
+    mascotHolder: null,
+    mascotSize: 0,
+    update: () => undefined,
+    focusTarget: () => null,
+    destroy: () => el.remove(),
   };
 }
 

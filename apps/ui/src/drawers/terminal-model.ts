@@ -1,11 +1,35 @@
 /**
- * The terminal drawer's pure parts (plan §7.4, ERRATA F23, F38): which lines each tab shows, the
- * text filter, the local clear, and the drawer's height (300–600 px, 320 by default).
+ * The terminal drawer's pure parts (plan §7.4, ERRATA F23, F38): which tab it opens on, which lines
+ * each tab shows, the text filter, the local clear, and the drawer's height (300–600 px, 320 by
+ * default).
  */
-import type { LogLine } from '../store/state.js';
+import type { LogLine, ToolActivity } from '../store/state.js';
 import { cleanText } from '../ui/format.js';
 
 export type TerminalTab = 'combined' | 'tools' | 'errors' | 'process';
+
+const ACTIVITY_TABS: readonly TerminalTab[] = ['combined', 'tools', 'errors'];
+
+/**
+ * The tab the drawer opens on (review M9k): the one asked for; else *Errors* after a failure, that
+ * is when the newest thing Friday recorded for the agent is an error line, its last tool failed, or
+ * its task failed, and there is an error line to show; else *Combined*. The process tab is never
+ * the start: it exists only once a launched process is found.
+ */
+export function startTab(opts: {
+  requested?: string | undefined;
+  log: readonly LogLine[];
+  lastDecision?: ToolActivity['decision'] | null;
+  taskFailed?: boolean;
+}): Exclude<TerminalTab, 'process'> {
+  const asked = opts.requested;
+  if (asked && asked !== 'process' && ACTIVITY_TABS.includes(asked as TerminalTab))
+    return asked as Exclude<TerminalTab, 'process'>;
+  if (!opts.log.some((l) => l.stream === 'error')) return 'combined';
+  const newest = opts.log[opts.log.length - 1];
+  const failed = newest?.stream === 'error' || opts.lastDecision === 'failed' || opts.taskFailed === true;
+  return failed ? 'errors' : 'combined';
+}
 
 export const MIN_HEIGHT = 300;
 export const MAX_HEIGHT = 600;

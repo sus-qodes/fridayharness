@@ -92,10 +92,11 @@ describe('approval modal (macro)', () => {
       b.textContent,
       b.getAttribute('aria-pressed'),
     ]);
+    // The card's words for a grant's reach (Allow once, Allow for this task…): one vocabulary.
     expect(reach).toEqual([
       ['Once', 'true'],
-      ['This attempt', 'false'],
-      ['This task', 'false'],
+      ['For this attempt', 'false'],
+      ['For this task', 'false'],
     ]);
     m.destroy();
   });
@@ -107,7 +108,7 @@ describe('approval modal (macro)', () => {
     await flush();
     expect(ctx.transport.calls).toHaveLength(0);
     arm(m.el);
-    buttonNamed(m.el, 'This attempt').click();
+    buttonNamed(m.el, 'For this attempt').click();
     buttonNamed(m.el, 'Allow for this attempt').click();
     await flush();
     expect(ctx.transport.to('POST', `/approvals/${APR}/approve`)[0]?.body).toEqual({ reuse: 'run', via: 'ui' });
@@ -118,7 +119,7 @@ describe('approval modal (macro)', () => {
   it('the task reach needs the hold, even at low risk', async () => {
     const m = open(makeApproval({ risk: 'low' }));
     arm(m.el);
-    buttonNamed(m.el, 'This task').click();
+    buttonNamed(m.el, 'For this task').click();
     const holdBtn = m.el.querySelector<HTMLButtonElement>('.gv-hold');
     expect(holdBtn).not.toBeNull();
     holdBtn?.click();
@@ -171,7 +172,7 @@ describe('approval modal (macro)', () => {
   it('opens with the reach the card asked for', () => {
     requestReach(APR, 'task');
     const m = open(makeApproval({ risk: 'low' }));
-    expect(buttonNamed(m.el, 'This task').getAttribute('aria-pressed')).toBe('true');
+    expect(buttonNamed(m.el, 'For this task').getAttribute('aria-pressed')).toBe('true');
     expect(m.el.querySelector('.gv-hold')).not.toBeNull();
     m.destroy();
   });

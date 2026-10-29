@@ -12,7 +12,7 @@ import {
   PID,
   T0,
 } from '../test/fixtures.js';
-import { createTaskInspector, inspectorActions } from './task-inspector.js';
+import { createTaskInspector, INSPECTOR_TABS, inspectorActions, inspectorTabOf } from './task-inspector.js';
 
 const IMG = '<img src=x onerror=alert(1)>';
 const BIDI = '\u202E';
@@ -113,6 +113,34 @@ describe('inspectorActions', () => {
     expect(
       inspectorActions({ status: status as never, waiting_reason: reason as never }, { recoveryQuestion }),
     ).toEqual(actions);
+  });
+});
+
+describe('the task inspector: tabs', () => {
+  it('names them Overview · Changes · History · What the agent was given, in that order (review M9k)', () => {
+    const ctx = makeContext({ snapshot: boardWith('READY') });
+    const drawer = createTaskInspector(ctx, { kind: 'inspector', id: TID });
+    const tabs = [...drawer.el.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    expect(tabs.map((t) => t.textContent)).toEqual(['Overview', 'Changes', 'History', 'What the agent was given']);
+    expect(tabs.map((t) => t.dataset.tab)).toEqual([...INSPECTOR_TABS]);
+    expect(drawer.el.textContent).not.toContain('Git');
+    expect(drawer.el.textContent).not.toContain('Context');
+    // The panels follow the tabs' order, so the arrow keys and the eye agree.
+    const panels = [...drawer.el.querySelectorAll<HTMLElement>('[role="tabpanel"]')];
+    expect(panels.map((p) => p.getAttribute('aria-labelledby'))).toEqual(tabs.map((t) => t.id));
+    drawer.destroy();
+  });
+
+  it('opens on the tab a request names; the older name "git" still opens Changes', () => {
+    expect(inspectorTabOf('changes')).toBe('changes');
+    expect(inspectorTabOf('git')).toBe('changes');
+    expect(inspectorTabOf('context')).toBe('context');
+    expect(inspectorTabOf(undefined)).toBe('overview');
+    expect(inspectorTabOf('nonsense')).toBe('overview');
+    const ctx = makeContext({ snapshot: boardWith('RUNNING') });
+    const drawer = createTaskInspector(ctx, { kind: 'inspector', id: TID, tab: 'git' });
+    expect(drawer.el.querySelector('[role="tab"][data-tab="changes"]')?.getAttribute('aria-selected')).toBe('true');
+    drawer.destroy();
   });
 });
 
@@ -384,7 +412,7 @@ const EXPLANATION: ContextExplanation = {
   timings_ms: {},
 };
 
-describe('the task inspector: Context', () => {
+describe('the task inspector: What the agent was given', () => {
   it('explains the delivered packet and links each file to the code graph', async () => {
     const ctx = makeContext({
       snapshot: boardWith('RUNNING'),
@@ -440,7 +468,7 @@ describe('the task inspector: Context', () => {
   });
 });
 
-describe('the task inspector: Git', () => {
+describe('the task inspector: Changes', () => {
   const diff: TaskDiff = {
     task_id: TID,
     source: 'worktree',
@@ -486,7 +514,7 @@ describe('the task inspector: Git', () => {
     const ctx = makeContext({ snapshot: boardWith('RUNNING'), answers: { [`GET /tasks/${TID}/diff`]: diff } });
     const open = vi.fn();
     (ctx.platform as { openInEditor: (p: string, l?: number) => void }).openInEditor = open;
-    const drawer = createTaskInspector(ctx, { kind: 'inspector', id: TID, tab: 'git' });
+    const drawer = createTaskInspector(ctx, { kind: 'inspector', id: TID, tab: 'changes' });
     await settle();
     const el = drawer.el;
     expect(ctx.transport.to('GET', `/tasks/${TID}/diff`)[0]?.path).toContain('stat=1');
@@ -520,6 +548,13 @@ describe('the task inspector: Git', () => {
     const overview = drawer.el.querySelector<HTMLButtonElement>('[role="tab"][data-tab="overview"]');
     expect(overview?.getAttribute('aria-selected')).toBe('true');
     overview?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    // Changes comes right after Overview; what the agent was given is last.
+    const changes = drawer.el.querySelector<HTMLButtonElement>('[role="tab"][data-tab="changes"]');
+    expect(changes?.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(changes);
+    await settle();
+    expect(ctx.transport.to('GET', `/tasks/${TID}/diff`)).toHaveLength(1);
+    changes?.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
     const context = drawer.el.querySelector<HTMLButtonElement>('[role="tab"][data-tab="context"]');
     expect(context?.getAttribute('aria-selected')).toBe('true');
     expect(document.activeElement).toBe(context);

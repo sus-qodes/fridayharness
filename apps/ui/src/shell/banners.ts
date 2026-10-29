@@ -1,17 +1,24 @@
 /**
  * Banners under the header (plan §7.1): "config.yaml changed; restart Friday to apply" while the
- * snapshot's config hashes differ, "This page is older than Friday; reload it" while the snapshot's
- * `ui_api` is not this bundle's, and the slot of the getting-started checklist, shown until it is
- * dismissed (and again if the setting brings it back).
+ * snapshot's config hashes differ, with how to restart from where the person is (the desktop app
+ * restarts from the banner or the tray; a browser tab stops Friday in Settings and opens it again
+ * from its shortcut); "This page is older than Friday; reload it" while the snapshot's `ui_api` is
+ * not this bundle's; and the slot of the getting-started checklist, shown until it is dismissed
+ * (and again if the setting brings it back).
  */
 import type { UiSnapshot } from '@friday/protocol';
 import { STALE_PAGE_MESSAGE } from '../sync/sync-engine.js';
 import { button, h } from '../ui/dom.js';
 import { icon } from '../ui/svg.js';
-import type { AppContext, Component } from './context.js';
+import { type AppContext, type Component, openDrawer } from './context.js';
 import { UI_API } from './version.js';
 
 export const CONFIG_CHANGED_MESSAGE = 'config.yaml changed; restart Friday to apply.';
+/** How to restart from the desktop app: the button beside this, or the tray. */
+export const RESTART_HINT_DESKTOP = 'Restart Friday here, or from the tray.';
+/** How to restart from a browser tab, which cannot start Friday itself. */
+export const RESTART_HINT_BROWSER =
+  'From a browser: stop Friday in Settings → Friday, then open it again from its shortcut or the desktop app.';
 
 /** The project's `config.yaml` was edited after Friday read it (it is read only at start). */
 export function configChanged(board: UiSnapshot | null): boolean {
@@ -51,12 +58,43 @@ export function mountBanners(ctx: AppContext, opts: BannerOptions = {}): Compone
     },
     { class: 'btn btn-ghost sh-banner-action' },
   );
+  // The way to restart depends on where the page runs: the desktop app can do it; a browser tab
+  // can only stop Friday and say where to start it again.
+  const desktop = ctx.platform.desktop;
+  let restarting = false;
+  const restart = desktop
+    ? button(
+        [icon('rework', 14), 'Restart Friday'],
+        async () => {
+          if (restarting) return;
+          restarting = true;
+          restart.disabled = true;
+          try {
+            // The shell asks natively first; false means the person cancelled, and nothing is said.
+            await ctx.act('Restart Friday', () => desktop.restart());
+          } finally {
+            restarting = false;
+            restart.disabled = false;
+          }
+        },
+        { class: 'btn btn-primary sh-banner-action sh-banner-restart' },
+      )
+    : button('Open Settings', () => openDrawer(ctx, { kind: 'settings', tab: 'friday' }), {
+        class: 'btn btn-ghost sh-banner-action sh-banner-settings',
+      });
   const config = h(
     'div',
     { class: 'sh-banner sh-banner-warn', role: 'status', hidden: true },
     h('span', { class: 'sh-banner-icon' }, icon('gear', 15)),
-    h('span', { class: 'sh-banner-text' }, CONFIG_CHANGED_MESSAGE),
+    h(
+      'span',
+      { class: 'sh-banner-text' },
+      CONFIG_CHANGED_MESSAGE,
+      ' ',
+      h('span', { class: 'sh-banner-hint muted' }, desktop ? RESTART_HINT_DESKTOP : RESTART_HINT_BROWSER),
+    ),
     openConfig,
+    restart,
   );
   const stale = h(
     'div',

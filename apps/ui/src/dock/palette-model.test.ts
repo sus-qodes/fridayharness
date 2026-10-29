@@ -5,6 +5,7 @@ import { registerCommands } from './commands.js';
 import {
   boardEntries,
   collectEntries,
+  commandShow,
   forgetRecent,
   LABEL_MAX,
   type PaletteEntry,
@@ -17,6 +18,17 @@ import {
 function entry(id: string, label: string, group: PaletteEntry['group'] = 'command', keywords: string[] = []) {
   return { id, label, group, keywords, icon: 'bolt', run: () => undefined } as PaletteEntry;
 }
+
+describe('commandShow', () => {
+  it('reads the command’s own word, else always: no table apart from the registrations', () => {
+    expect(commandShow({ id: 'pause' })).toBe('always');
+    expect(commandShow({ id: 'prune-worktrees', show: 'typed' })).toBe('typed');
+    expect(commandShow({ id: 'zoom-in', show: 'never' })).toBe('never');
+    // A command that declares nothing is listed: the canvas declares its own (stage.ts), and the
+    // first-screen test checks them through the palette.
+    expect(commandShow({ id: 'zoom-in' })).toBe('always');
+  });
+});
 
 describe('collectEntries', () => {
   it('lists available commands, agents, tasks, goals and files seen in the activity', () => {
@@ -75,6 +87,24 @@ describe('collectEntries', () => {
     expect(rankEntries(entries, 'write plan')[0]?.entry.id).toBe('goal-plan:goal_open');
     await plans[0]?.run(ctx);
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'plan-editor', id: 'goal_open', mode: 'first' });
+  });
+
+  it('leaves out commands the palette never lists, and marks the typed-only ones', () => {
+    const ctx = makeContext({ snapshot: makeScenario() });
+    registerCommands(ctx);
+    // The canvas's commands as stage.ts registers them: each declares where the palette offers it.
+    ctx.registry.command({ id: 'zoom-in', label: 'Zoom in', show: 'never', run: () => undefined });
+    ctx.registry.command({ id: 'zoom-out', label: 'Zoom out', show: 'never', run: () => undefined });
+    ctx.registry.command({ id: 'reset-layout', label: 'Reset moved cards', show: 'typed', run: () => undefined });
+    ctx.registry.command({ id: 'fit', label: 'Fit everything', run: () => undefined });
+    const entries = collectEntries(ctx);
+    const ids = entries.map((e) => e.id);
+    expect(ids).not.toContain('cmd:zoom-in');
+    expect(ids).not.toContain('cmd:zoom-out');
+    expect(ids).toContain('cmd:fit');
+    const typedOnly = entries.filter((e) => e.typedOnly).map((e) => e.id);
+    expect(typedOnly).toEqual(['cmd:reindex-graph', 'cmd:prune-worktrees', 'cmd:stop-friday', 'cmd:reset-layout']);
+    expect(entries.find((e) => e.id === 'cmd:pause')?.typedOnly).toBeUndefined();
   });
 
   it('skips a command whose availability check throws', () => {
@@ -144,6 +174,14 @@ describe('rankEntries', () => {
     // "Code graph" and "Subscriptions" hold a p and an r, but not in that order.
     expect(r.map((x) => x.entry.id)).not.toContain('cmd:graph');
     expect(r.map((x) => x.entry.id)).not.toContain('goal:1');
+  });
+
+  it('without a query: typed-only entries stay out, unless recently run; typed, they match', () => {
+    const typed = { ...entry('cmd:stop', 'Stop Friday…'), typedOnly: true };
+    const all = [...entries, typed];
+    expect(rankEntries(all, '').map((x) => x.entry.id)).not.toContain('cmd:stop');
+    expect(rankEntries(all, '', ['cmd:stop']).map((x) => x.entry.id)[0]).toBe('cmd:stop');
+    expect(rankEntries(all, 'stop fri')[0]?.entry.id).toBe('cmd:stop');
   });
 
   it('with a query: recent matches first', () => {

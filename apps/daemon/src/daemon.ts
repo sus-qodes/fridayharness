@@ -483,6 +483,9 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       worktrees_mode: worktreeMode,
       config: { loaded_hash: configHash.loaded, current_hash: configHash.current() },
       auto_verification: autoVerifies(),
+      // Whether the project's loosening applies on this clone: the rail's "Policy change not yet
+      // trusted" row and the checklist's item rest on it (M9k.8).
+      policy_trusted: currentPolicy().trusted,
     }),
     instanceId,
     daemonVersion: FRIDAY_VERSION,

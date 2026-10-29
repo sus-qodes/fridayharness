@@ -10,6 +10,7 @@ import {
 } from './edges.js';
 import { gridOffset } from './grid.js';
 import {
+  anyOutside,
   type Camera,
   CameraTween,
   centreOn,
@@ -198,6 +199,38 @@ describe('minimap projection', () => {
     close(back.x, 420, 1e-6);
     close(back.y, 17, 1e-6);
     expect(miniProjection(null).scale).toBeGreaterThan(0);
+  });
+});
+
+describe('a card outside the view (the minimap rule)', () => {
+  const size = { width: 1000, height: 600 };
+  const cam = { x: 0, y: 0, zoom: 1 };
+
+  it('is false while every card is wholly on the screen, and on a screen without a size', () => {
+    const inside = [
+      { x: 10, y: 10, w: 300, h: 150 },
+      { x: 600, y: 400, w: 300, h: 150 },
+    ];
+    expect(anyOutside(inside, cam, size)).toBe(false);
+    expect(anyOutside([], cam, size)).toBe(false);
+    expect(anyOutside([{ x: -5000, y: 0, w: 10, h: 10 }], cam, { width: 0, height: 0 })).toBe(false);
+  });
+
+  it('is true as soon as one card crosses an edge, at any zoom', () => {
+    expect(
+      anyOutside(
+        [
+          { x: 10, y: 10, w: 300, h: 150 },
+          { x: 900, y: 10, w: 300, h: 150 },
+        ],
+        cam,
+        size,
+      ),
+    ).toBe(true);
+    // At half zoom the same card fits; a camera moved away pushes it out again.
+    const half = { x: 0, y: 0, zoom: 0.5 };
+    expect(anyOutside([{ x: 900, y: 10, w: 300, h: 150 }], half, size)).toBe(false);
+    expect(anyOutside([{ x: 900, y: 10, w: 300, h: 150 }], { ...half, x: -800 }, size)).toBe(true);
   });
 });
 

@@ -1,11 +1,12 @@
 /**
  * Question cards act by kind (plan FD-21, §7.5). An agent's question and `ambiguous_intent` get
- * option chips (keys 1–4 and arrows while the card has focus), a write-in (typing selects it) and
+ * option chips (keys 1–4 and arrows while the card has focus), a reply box (typing selects it) and
  * Send (`Ctrl+Enter`), which composes `Selected: …` and `Note: …`; Later folds the card; Let the
  * agent decide answers "No preference; use your judgement". Every other kind gets the buttons that
  * do the work — recover, explain and pin routing, integrate again, revise the plan, rework, cancel —
  * and Friday settles the question when its cause is resolved (plan §5.7). The option strings of
- * Friday's own kinds are CLI instructions: never choices, at most small print.
+ * Friday's own kinds are CLI instructions: never choices, at most small print. Every box a person
+ * types an answer into is labelled "Reply to <agent>": one wording for one act.
  */
 import type { EscalationView } from '@friday/protocol';
 import { classifyEscalation, composeAnswer, LET_AGENT_DECIDE, type QuestionSpec } from '../model/escalations.js';
@@ -50,6 +51,11 @@ function askerText(ctx: AppContext, e: EscalationView, spec: QuestionSpec): stri
   if (spec.asker === 'agent') return agentKeyOf(ctx.store.select('board'), e.requested_by_id) ?? 'an agent';
   if (spec.asker === 'master_brain') return 'the Master Brain';
   return 'Friday';
+}
+
+/** The label of a reply box: who reads what is typed there, with visible escapes. */
+export function replyLabel(to: string): string {
+  return `Reply to ${visible(to)}`;
 }
 
 export function questionCard(ctx: AppContext, escalation: EscalationView, opts: QuestionCardOptions = {}): Component {
@@ -318,7 +324,7 @@ function freeBody(kit: Kit): Built {
       h(
         'div',
         { class: 'field gv-write-in-field' },
-        h('label', { class: 'field-label', for: noteId }, 'Write-in'),
+        h('label', { class: 'field-label', for: noteId }, replyLabel(askerText(kit.ctx, kit.e, spec))),
         note,
       ),
       h('div', { class: 'gv-actions' }, send, letDecide),
@@ -444,7 +450,12 @@ function routingBody(kit: Kit): Built {
       replace(
         pinBox,
         r.models.length
-          ? [h('label', { class: 'field-label', for: selectId }, 'Model'), h('div', { class: 'row' }, select, pin)]
+          ? [
+              h('label', { class: 'field-label', for: selectId }, 'Model'),
+              h('div', { class: 'row' }, select, pin),
+              // The card keeps its own Pin (review §5); the pins' home is Settings → Routing (M9k.4).
+              h('p', { class: 'muted gv-pin-home' }, 'Pins are kept in Settings → Routing.'),
+            ]
           : h('p', { class: 'muted' }, 'Friday knows no models to pin.'),
       );
     },
@@ -684,10 +695,16 @@ function unansweredBody(kit: Kit): Built {
             h('blockquote', { class: 'gv-quote' }, cleanText(original)),
           )
         : null,
-      typeof d.requested_by === 'string'
-        ? h('p', { class: 'field-hint' }, `Your reply goes to ${cleanText(d.requested_by)}.`)
-        : null,
-      h('div', { class: 'field' }, h('label', { class: 'field-label', for: replyId }, 'Reply'), reply),
+      h(
+        'div',
+        { class: 'field' },
+        h(
+          'label',
+          { class: 'field-label', for: replyId },
+          replyLabel(typeof d.requested_by === 'string' ? cleanText(d.requested_by) : 'the waiting agent'),
+        ),
+        reply,
+      ),
       h('div', { class: 'gv-actions' }, send),
     ]),
     decisions: [send],
@@ -794,7 +811,14 @@ function brainBody(kit: Kit): Built {
       },
       'btn btn-primary',
     );
-    body.push(h('div', { class: 'field' }, h('label', { class: 'field-label', for: replyId }, 'Answer'), reply));
+    body.push(
+      h(
+        'div',
+        { class: 'field' },
+        h('label', { class: 'field-label', for: replyId }, replyLabel('the Master Brain')),
+        reply,
+      ),
+    );
     row.append(send);
     decisions.push(send);
   }

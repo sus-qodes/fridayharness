@@ -2,12 +2,14 @@
  * What the palette offers and in which order (plan §7.6): tasks, goals, agents and files from the
  * board (an open goal without a plan also offers its plan editor), and the registered commands;
  * recent actions first. The entries carry their own `run`, so the overlay only shows and runs
- * them. Collecting and ranking need no DOM.
+ * them. A command may ask to be offered only when typed (housekeeping) or never (what a button or
+ * a key already does); the empty list shows the daily commands alone. Collecting and ranking need
+ * no DOM.
  */
 import type { UiSnapshot } from '@friday/protocol';
 import { statusLook } from '../model/status.js';
 import { visible } from '../model/text.js';
-import { type AppContext, type Command, openDrawer, openModal } from '../shell/context.js';
+import { type AppContext, type Command, type CommandShow, openDrawer, openModal } from '../shell/context.js';
 import type { ActivityState } from '../store/state.js';
 import { basename, cleanText, humanize, shortId, truncate } from '../ui/format.js';
 import type { IconName } from '../ui/svg.js';
@@ -28,6 +30,8 @@ export interface PaletteEntry {
   /** Other words the search matches (ids, keys, roles, full paths). */
   keywords: string[];
   icon: IconName;
+  /** Offered only once something is typed (housekeeping commands); never in the empty list. */
+  typedOnly?: boolean;
   run: (ctx: AppContext) => void | Promise<void>;
 }
 
@@ -73,7 +77,16 @@ const COMMAND_ICON: Record<string, IconName> = {
   fit: 'fit',
   'zoom-in': 'zoomIn',
   'zoom-out': 'zoomOut',
+  'reset-layout': 'fit',
 };
+
+/**
+ * Where the palette offers a command: what the command declares (`show`, beside its registration,
+ * so the rule for a command lives with the command), else always.
+ */
+export function commandShow(c: Pick<Command, 'id' | 'show'>): CommandShow {
+  return c.show ?? 'always';
+}
 
 // ---- recent actions (kept in memory, per interface instance)
 
@@ -112,6 +125,7 @@ export function commandEntry(c: Command): PaletteEntry {
     label: c.label,
     keywords: [...(c.keywords ?? []), c.id],
     icon: COMMAND_ICON[c.id] ?? 'bolt',
+    ...(commandShow(c) === 'typed' ? { typedOnly: true } : {}),
     run: (ctx) => c.run(ctx),
   };
 }
@@ -212,9 +226,14 @@ export function boardEntries(board: UiSnapshot | null, activity: ActivityState |
   return out;
 }
 
-/** Every entry the palette offers now: available commands first, then the board. */
+/**
+ * Every entry the palette offers now: available commands first (never the ones the palette does
+ * not list), then the board.
+ */
 export function collectEntries(ctx: AppContext): PaletteEntry[] {
-  const commands = [...ctx.registry.commands.values()].filter((c) => commandAvailable(ctx, c)).map(commandEntry);
+  const commands = [...ctx.registry.commands.values()]
+    .filter((c) => commandShow(c) !== 'never' && commandAvailable(ctx, c))
+    .map(commandEntry);
   return [...commands, ...boardEntries(ctx.store.select('board'), ctx.store.select('activity'))];
 }
 
@@ -233,8 +252,9 @@ function bestMatch(query: string, entry: PaletteEntry): FuzzyMatch | null {
 
 /**
  * Orders the entries for `query`. With no query: recent entries (newest first), then by group
- * (commands, agents, tasks, goals, files) in their own order. With a query: only matches, recent
- * matches first, then by score, then by a shorter label.
+ * (commands, agents, tasks, goals, files) in their own order, leaving out the entries offered only
+ * when typed (a recently run one still shows under Recent: the person chose it). With a query:
+ * only matches, recent matches first, then by score, then by a shorter label.
  */
 export function rankEntries(
   entries: readonly PaletteEntry[],
@@ -250,7 +270,7 @@ export function rankEntries(
       .filter((e): e is PaletteEntry => !!e)
       .map((entry) => ({ entry, score: 0, indices: [], recent: true }));
     const rest = entries
-      .filter((e) => !recentRank.has(e.id))
+      .filter((e) => !recentRank.has(e.id) && !e.typedOnly)
       .map((entry, i) => ({ entry, i }))
       .sort((a, b) => GROUP_ORDER.indexOf(a.entry.group) - GROUP_ORDER.indexOf(b.entry.group) || a.i - b.i)
       .map(({ entry }) => ({ entry, score: 0, indices: [], recent: false }));

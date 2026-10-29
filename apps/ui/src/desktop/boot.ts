@@ -14,7 +14,7 @@ import { notchSlots, studioAreas } from '../areas.js';
 import { initAudio, startSound } from '../audio/index.js';
 import { requestReach, takeRequestedReach } from '../governance/decisions.js';
 import { setCursor } from '../mascot/index.js';
-import { waitingCount } from '../notch/derive.js';
+import { runningCount, statusSentence, waitingCount } from '../notch/derive.js';
 import { mountNotch, type NotchHandle } from '../notch/index.js';
 import { realTimers } from '../notch/island-fsm.js';
 import type { NotchStudioTarget } from '../notch/island-host.js';
@@ -23,7 +23,6 @@ import { desktopPlatform } from '../platform/desktop-platform.js';
 import { type TauriCore, TauriTransport } from '../platform/tauri-transport.js';
 import { createAppContext, createShellServices, mountShell } from '../shell/app.js';
 import { type AppContext, type DrawerKind, type ModalKind, openDrawer, openModal } from '../shell/context.js';
-import { headerCounts } from '../shell/header.js';
 import { productMark } from '../shell/mark.js';
 import { loadPrefs, startPrefsSync, watchPrefs } from '../store/prefs.js';
 import { createStore, type FridayStore } from '../store/state.js';
@@ -63,9 +62,9 @@ export interface StudioTarget {
   focus_task?: string;
   approval_id?: string;
   panel?: string;
-  /** The id the panel opens on (a task for Recover or a diff, a goal for a revision). */
+  /** The id the panel opens on (a task for Recover or a diff, a goal for a plan review or a revision, a message's delivery). */
   id?: string;
-  /** The drawer's tab (the agents drawer's `routing`). */
+  /** The drawer's tab (Settings' `routing`, `about` or `policy`; Project memory's `review`). */
   tab?: string;
   /** The file a diff drawer selects. */
   path?: string;
@@ -73,12 +72,16 @@ export interface StudioTarget {
   reach?: 'once' | 'run' | 'task';
 }
 
-/** The shell's deep link for where the Notch window sends the human: a drawer opens on the task's id. */
+/**
+ * The shell's deep link for where the Notch window sends the human: a panel opens on its own id (a
+ * goal, a delivery) or, failing that, on the task's.
+ */
 export function studioLink(t: NotchStudioTarget): StudioTarget {
   if (t.panel) {
+    const id = t.id ?? t.task_id;
     return {
       panel: t.panel,
-      ...(t.task_id ? { id: t.task_id } : {}),
+      ...(id ? { id } : {}),
       ...(t.tab ? { tab: t.tab } : {}),
       ...(t.path ? { path: t.path } : {}),
     };
@@ -316,7 +319,11 @@ export async function bootDesktopStudio(root: HTMLElement, injected?: DesktopEnv
 // ---------------------------------------------------------------------------------------------
 // The Notch window
 
-/** The tray's state and line from the board (`set_tray_state`). */
+/**
+ * The tray's state and line from the board (`set_tray_state`). The line is the status sentence the
+ * Studio's Running count carries in its tooltip (review §4, M9k.1): the shell shows it as the
+ * tray's tooltip and its first menu item, so a hover says what waits, not only how much.
+ */
 export function trayState(
   board: UiSnapshot | null,
   connection: string,
@@ -326,14 +333,11 @@ export function trayState(
     return { state: 'error', countsLine: 'Friday is not reachable', paused: false };
   }
   const waiting = waitingCount(board, now);
-  const { running } = headerCounts(board, now);
-  const paused = !!board.control?.paused;
-  const parts = [`${running} running`, `${waiting} waiting for you`];
-  if (paused) parts.push('paused');
+  const running = runningCount(board);
   return {
     state: waiting > 0 ? 'waiting' : running > 0 ? 'working' : 'idle',
-    countsLine: parts.join(' · '),
-    paused,
+    countsLine: statusSentence(board, now),
+    paused: !!board.control?.paused,
   };
 }
 

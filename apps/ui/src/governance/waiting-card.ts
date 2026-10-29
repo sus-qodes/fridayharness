@@ -139,7 +139,13 @@ export function waitingCard(ctx: AppContext, task: SnapshotTask, opts: WaitingCa
     pendingApproval
       ? h('p', { class: 'field-hint' }, 'Its approval request waits in the list: deciding it lets the agent continue.')
       : null,
-    h('div', { class: 'field' }, h('label', { class: 'field-label', for: noteId }, 'Answer'), note),
+    // "Reply to <agent>", as every box an answer is typed into (one wording for one act).
+    h(
+      'div',
+      { class: 'field' },
+      h('label', { class: 'field-label', for: noteId }, `Reply to ${visible(task.agent_key ?? 'the agent')}`),
+      note,
+    ),
     h('div', { class: 'gv-actions' }, answerBtn, continueBtn, releaseBtn, cancelBtn),
     reasonBox,
     hint,

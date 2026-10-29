@@ -1,6 +1,7 @@
 import type { SnapshotTask, UiSnapshot } from '@friday/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deriveBoard, type GoalGroup, type PodModel } from '../model/board.js';
+import { enforcementWords } from '../model/status.js';
 import type { AgentActivity } from '../store/state.js';
 import { makeContext } from '../test/context.js';
 import {
@@ -104,7 +105,9 @@ describe('task card', () => {
     const scope = el.querySelector('.nd-scope') as HTMLElement;
     expect(scope.textContent).toContain('⟨U+202E⟩');
     expect(scope.textContent).toContain('⟨U+200B⟩');
-    expect(el.querySelector('.nd-branch')?.textContent).toContain('⟨U+202E⟩');
+    // The branch name left the card (review M9k): the inspector's Changes tab shows it.
+    expect(el.querySelector('.nd-branch')).toBeNull();
+    expect(el.textContent).not.toContain('friday/');
     expect(el.querySelector('.nd-agent')?.textContent).toContain('⟨U+200B⟩');
     expect(el.querySelector('.nd-reservation')?.textContent).toContain('⟨U+200B⟩');
     const criteria = el.querySelectorAll('.nd-criteria li');
@@ -215,12 +218,54 @@ describe('task card', () => {
       'inspect',
       'integrate',
     ]);
+    // Once there is an attempt, Changes is one click away (review M9k), whatever the state.
     const spawned = { run: makeRun(), harness: makeHarness({ attach_mode: 'spawn' }) } as never;
     const attached = { run: makeRun(), harness: makeHarness({ attach_mode: 'attach' }) } as never;
-    expect(acts({ status: 'WAITING', waiting_reason: 'blocked' }, spawned)).toEqual(['inspect', 'continue', 'cancel']);
-    expect(acts({ status: 'WAITING', waiting_reason: 'blocked' }, attached)).toEqual(['inspect', 'cancel']);
+    expect(acts({ status: 'WAITING', waiting_reason: 'blocked' }, spawned)).toEqual([
+      'inspect',
+      'changes',
+      'continue',
+      'cancel',
+    ]);
+    expect(acts({ status: 'WAITING', waiting_reason: 'blocked' }, attached)).toEqual(['inspect', 'changes', 'cancel']);
     const ended = { run: makeRun({ status: 'ENDED' }), harness: makeHarness() } as never;
-    expect(acts({ status: 'WAITING' }, ended)).toEqual(['inspect', 'cancel']);
+    expect(acts({ status: 'WAITING' }, ended)).toEqual(['inspect', 'changes', 'cancel']);
+    expect(acts({ status: 'COMPLETED' }, { run: makeRun({ status: 'ENDED' }) } as never)).toEqual([
+      'inspect',
+      'changes',
+    ]);
+  });
+
+  it('opens the diff from the +N −M figure and from the Changes action, once there is an attempt', () => {
+    const ctx = makeContext();
+    const id = 'task_0000000000000000000000aa01';
+    const none = createTaskNode(ctx, taskModel({ status: 'READY' }));
+    // No attempt: the figure is a plain "—" and there is no door to nothing.
+    expect(none.el.querySelector('.nd-lines')?.tagName).toBe('SPAN');
+    expect(none.el.querySelector('.nd-lines')?.textContent).toBe('—');
+    expect(actionOf(none.el, 'changes')).toBeNull();
+    expect(actionOf(none.el, 'changes-figure')).toBeNull();
+    const node = createTaskNode(
+      ctx,
+      taskModel({ status: 'RUNNING' }, { run: makeRun(), stats: { added: 14, removed: 2 } }),
+    );
+    document.body.append(node.el);
+    const figure = node.el.querySelector<HTMLButtonElement>('.nd-lines');
+    expect(figure?.tagName).toBe('BUTTON');
+    expect(figure?.textContent).toBe('+14 −2');
+    expect(figure?.title).toContain('changes');
+    click(figure);
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id });
+    // The figure is a control: pressing it does not select the card.
+    expect(ctx.store.select('ui').selectedTaskId).toBeNull();
+    ctx.store.patch('ui', { drawer: null });
+    click(actionOf(node.el, 'changes'));
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id });
+    expect(actionOf(node.el, 'changes')?.textContent).toContain('Changes');
+    // The figure still updates in place.
+    node.update(taskModel({ status: 'RUNNING' }, { run: makeRun(), stats: { added: 15, removed: 2 } }));
+    expect(node.el.querySelector('.nd-lines')?.textContent).toBe('+15 −2');
+    node.destroy();
   });
 
   it('opens the inspector, the verification panel and the recovery dialog', () => {
@@ -490,7 +535,9 @@ describe('agent pod', () => {
     const t = node.el.textContent ?? '';
     expect(t).toContain('Claude Code');
     expect(t).toContain('claude-1');
-    expect(t).toContain('L1 reported');
+    expect(t).toContain('Reported');
+    expect(t).not.toContain('L1 reported');
+    expect(node.el.querySelector('.badge-info')?.getAttribute('title')).toBe('Enforcement level L1 (reported)');
     expect(t).toContain('claude-haiku-5-5');
     expect(t).toContain('$0.18');
     expect(t).toContain('18k tokens');
@@ -537,11 +584,53 @@ describe('agent pod', () => {
     expect(t).toContain('shadow');
     expect(t).toContain('big-model');
     expect(t).toContain('(requested)');
-    expect(t).toContain('L0 observed');
+    expect(t).toContain('Watched');
+    expect(t).not.toContain('L0');
     expect(t).toContain('attached');
     expect(podUsage({ pod: p, activity: null })).toEqual({ cost: '—', tokens: '—' });
     expect(podModelName({ pod: { ...p, run: null }, activity: null })).toBeNull();
     expect(vendorLabel({ harness: null })).toBe('Agent');
+  });
+
+  it('says Enforced, Reported, Watched or Unverified, with the level in the tooltip (review M9k)', () => {
+    const basis = `Friday hooks from this session ${HOSTILE}`;
+    expect(enforcementWords('L1', 'enforcing', basis)).toEqual({
+      label: 'Enforced',
+      tone: 'good',
+      title: `Enforcement level L1 (enforcing): ${basis}`,
+    });
+    expect(enforcementWords('L2', null)).toEqual({
+      label: 'Enforced',
+      tone: 'strong',
+      title: 'Enforcement level L2 (isolated)',
+    });
+    expect(enforcementWords('L1', 'reported')).toMatchObject({ label: 'Reported', tone: 'info' });
+    expect(enforcementWords('L1', 'degraded')).toEqual({
+      label: 'Unverified',
+      tone: 'warn',
+      title: 'Enforcement level L1 (degraded)',
+    });
+    expect(enforcementWords('L1', null)).toMatchObject({
+      label: 'Unverified',
+      title: 'Enforcement level L1 (unverified)',
+    });
+    expect(enforcementWords('L0', 'observed')).toMatchObject({ label: 'Watched', tone: 'muted' });
+    expect(enforcementWords(null, null)).toEqual({
+      label: 'Watched',
+      tone: 'muted',
+      title: 'Enforcement level L0 (observed)',
+    });
+    // On the pod: the word on the badge, the level only in its tooltip; the basis is text.
+    const ctx = makeContext();
+    const p = pod({
+      harness: makeHarness({ enforcement_level: 'L1', enforcement_status: 'enforcing', enforcement_basis: basis }),
+    });
+    const node = createAgentPod(ctx, model({ pod: p }));
+    const badge = node.el.querySelector('.badge-good') as HTMLElement;
+    expect(badge.textContent).toBe('Enforced');
+    expect(badge.title).toContain('L1');
+    expect(badge.title).toContain(HOSTILE);
+    expectNoMarkup(node.el);
   });
 
   it('measures the last tool from its decision to its completion', () => {

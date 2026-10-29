@@ -1,8 +1,8 @@
 /**
  * The approval card (micro; plan §7.5, handoff Part 06 §3, Part 01 §5.2): who asks, for which
  * task, the capability, and the target and purpose in full with visible escapes; a risk badge and
- * the expiry. Allow once (1), Allow for this task (2, always the modal), Deny (3, an optional
- * reason sent as the decision note). The keys act only while focus is inside the card and no text
+ * the expiry. Allow once (1), Allow for this task… (2, always the full view: the dots say so), Deny
+ * (3, an optional reason sent as the decision note). The keys act only while focus is inside the card and no text
  * field has focus; `Enter` only activates the focused button; `Esc` never denies (FD-28).
  */
 import type { ApprovalRow } from '@friday/protocol';
@@ -64,7 +64,7 @@ export function approvalCard(ctx: AppContext, approval: ApprovalRow, opts: Appro
     { class: 'btn btn-primary gv-decide', aria: { keyshortcuts: '1' } },
   );
   const allowTask = button(
-    [h('span', null, 'Allow for this task'), h('span', { class: 'kbd', aria: { hidden: 'true' } }, '2')],
+    [h('span', null, 'Allow for this task…'), h('span', { class: 'kbd', aria: { hidden: 'true' } }, '2')],
     () => undefined,
     { class: 'btn gv-decide', aria: { keyshortcuts: '2' } },
   );
@@ -200,7 +200,7 @@ export function approvalCard(ctx: AppContext, approval: ApprovalRow, opts: Appro
       name: 'approval-card',
       bindings: [
         { key: '1', run: keyed(() => void doAllowOnce()), description: 'Allow once' },
-        { key: '2', run: keyed(doAllowTask), description: 'Allow for this task' },
+        { key: '2', run: keyed(doAllowTask), description: 'Allow for this task…' },
         { key: '3', run: keyed(openDeny), description: 'Deny' },
       ],
     });

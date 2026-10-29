@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { takeRequestedReach } from '../governance/decisions.js';
+import { statusSentence } from '../notch/derive.js';
 import { SAVE_DEBOUNCE_MS } from '../store/prefs.js';
 import { makeContext } from '../test/context.js';
 import { makeApproval, makeEvent, makeRun, makeSnapshot, makeTask, T0 } from '../test/fixtures.js';
@@ -155,10 +156,13 @@ describe('deep links from the Notch window (deep review R7)', () => {
     const ctx = studio();
     applyDeepLink(ctx, across(studioLink({ panel: 'settings' })));
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
-    applyDeepLink(ctx, across(studioLink({ panel: 'agents', tab: 'routing' })));
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents', tab: 'routing' });
+    applyDeepLink(ctx, across(studioLink({ panel: 'settings', tab: 'routing' })));
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'routing' });
     applyDeepLink(ctx, across(studioLink({ task_id: 't1', panel: 'diff', path: 'backend/src/checkout.ts' })));
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: 't1', path: 'backend/src/checkout.ts' });
+    // A panel's own id goes before the task's: the Messages drawer opens on the delivery.
+    expect(studioLink({ panel: 'inbox', id: 'dlv_1', task_id: 't1' })).toEqual({ panel: 'inbox', id: 'dlv_1' });
+    expect(studioLink({ panel: 'plan-review', id: 'goal_1' })).toEqual({ panel: 'plan-review', id: 'goal_1' });
     applyDeepLink(ctx, across(studioLink({ task_id: 't1' })));
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'inspector', id: 't1' });
     expect(studioLink({ task_id: 't1', approval_id: 'apr_1' })).toEqual({ focus_task: 't1', approval_id: 'apr_1' });
@@ -166,15 +170,15 @@ describe('deep links from the Notch window (deep review R7)', () => {
 
   it('drops a tab or a file path of an unexpected form', () => {
     const ctx = studio();
-    applyDeepLink(ctx, { panel: 'agents', tab: '<b>routing</b>' });
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents' });
+    applyDeepLink(ctx, { panel: 'settings', tab: '<b>routing</b>' });
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
     applyDeepLink(ctx, { panel: 'diff', id: 't1', path: `a${String.fromCharCode(7)}b.ts` });
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: 't1' });
     applyDeepLink(ctx, { panel: 'diff', id: 't1', path: 'x'.repeat(2000) });
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: 't1' });
   });
 
-  it('the Notch window sends Settings, Routing and the ticker’s file, and the Studio opens that drawer', async () => {
+  it('the Notch window sends Settings and the ticker’s file, and the Studio opens that drawer', async () => {
     const snapshot = makeSnapshot({
       tasks: [makeTask({ task_id: 't1', status: 'RUNNING', plan_key: 'api' })],
       runs: { t1: makeRun({ task_id: 't1' }) },
@@ -199,9 +203,8 @@ describe('deep links from the Notch window (deep review R7)', () => {
       q<HTMLButtonElement>('.nt-foot-btn').click();
       deliver();
       expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
-      q<HTMLButtonElement>('.nt-routing').click();
-      deliver();
-      expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents', tab: 'routing' });
+      // The card's Routing badge left with M9k.2: the pins live in Settings → Routing.
+      expect(root.querySelector('.nt-routing')).toBeNull();
 
       // An agent writes a file; on the folded pill the ticker names it.
       shell.send({
@@ -258,10 +261,10 @@ describe('deep links from the Notch window (deep review R7)', () => {
   });
 
   it('sends a tab and a path only of the forms both sides take', () => {
-    expect(sendableLink({ panel: 'agents', tab: 'routing' })).toEqual({ panel: 'agents', tab: 'routing' });
+    expect(sendableLink({ panel: 'settings', tab: 'routing' })).toEqual({ panel: 'settings', tab: 'routing' });
     expect(sendableLink({ panel: 'settings', tab: 'step-2' })).toEqual({ panel: 'settings', tab: 'step-2' });
     for (const tab of ['Routing', 'pins_1', '-pins', 'a'.repeat(33)])
-      expect(sendableLink({ panel: 'agents', tab })).toEqual({ panel: 'agents' });
+      expect(sendableLink({ panel: 'settings', tab })).toEqual({ panel: 'settings' });
     expect(sendableLink({ panel: 'diff', id: 't1', path: 'a\tb.ts', tab: 'goal' })).toEqual({
       panel: 'diff',
       id: 't1',
@@ -322,8 +325,17 @@ describe('the tray line', () => {
     const now = Date.parse(T0);
     const t = trayState(board, 'live', now);
     expect(t.state).toBe('waiting');
-    expect(t.countsLine).toContain('1 waiting for you');
+    // The line is the status sentence (M9k.1): what waits, by kind, not only how much.
+    expect(t.countsLine).toBe(statusSentence(board, now));
+    expect(t.countsLine).toContain('1 waiting for you: 1 approval');
     expect(trayState(makeSnapshot(), 'live', now).state).toBe('idle');
     expect(trayState(null, 'stopped', now)).toMatchObject({ state: 'error' });
+    const paused = makeSnapshot({
+      control: { paused: true, reason: null, changed_at: null, changed_by: null, halted_at: null },
+    });
+    expect(trayState(paused, 'live', now)).toMatchObject({
+      paused: true,
+      countsLine: expect.stringMatching(/^Paused\./),
+    });
   });
 });

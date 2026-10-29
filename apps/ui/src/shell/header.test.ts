@@ -1,13 +1,29 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { statusSentence } from '../notch/derive.js';
 import type { SystemState } from '../store/state.js';
 import { STALE_PAGE_MESSAGE, STOPPING_MESSAGE, UNREACHABLE_MESSAGE } from '../sync/sync-engine.js';
 import { makeContext } from '../test/context.js';
-import { makeApproval, makeRun, makeSnapshot, makeTask } from '../test/fixtures.js';
+import {
+  makeAgent,
+  makeApproval,
+  makeEscalation,
+  makeInboxItem,
+  makeRun,
+  makeSnapshot,
+  makeTask,
+} from '../test/fixtures.js';
 import { h } from '../ui/dom.js';
-import { CONFIG_CHANGED_MESSAGE, configChanged, mountBanners, pageIsStale } from './banners.js';
+import {
+  CONFIG_CHANGED_MESSAGE,
+  configChanged,
+  mountBanners,
+  pageIsStale,
+  RESTART_HINT_BROWSER,
+  RESTART_HINT_DESKTOP,
+} from './banners.js';
 import { connectionView, mountConnectionStrip, OFFLINE_AFTER_ATTEMPTS, SIGNED_OUT_MESSAGE } from './connection.js';
-import type { Component } from './context.js';
-import { headerCounts, mountHeader } from './header.js';
+import type { AppContext, Component, DesktopCommands } from './context.js';
+import { daemonAddress, headerCounts, mountHeader } from './header.js';
 
 const HOSTILE = '<img src=x onerror=alert(1)>';
 const BIDI = '\u202E';
@@ -26,7 +42,7 @@ function sys(over: Partial<SystemState> = {}): SystemState {
 }
 
 describe('header', () => {
-  it('shows a hostile project name and root as text with hidden characters made visible', () => {
+  it('shows a hostile project name as text, with the folder path in its tooltip, hidden characters made visible', () => {
     const ctx = makeContext({
       snapshot: makeSnapshot({
         project: {
@@ -39,19 +55,80 @@ describe('header', () => {
     const header = mountHeader(ctx);
     mounted.push(header);
     expect(header.el.querySelector('img')).toBeNull();
-    const name = header.el.querySelector('.sh-project-name')?.textContent ?? '';
-    expect(name.startsWith(HOSTILE)).toBe(true);
-    expect(name).toContain('⟨U+202E⟩');
-    expect(name).toContain('⟨U+200B⟩');
-    expect(name).not.toContain(BIDI);
-    expect(name.length).toBeLessThan(200);
-    const root = header.el.querySelector('.sh-project-root') as HTMLElement;
-    expect(root.textContent).toContain('⟨U+202E⟩');
-    expect(root.title).toContain('⟨U+200B⟩');
-    expect(header.el.querySelector('.sh-daemon-address')?.textContent).toBe('127.0.0.1:4310');
+    const name = header.el.querySelector('.sh-project-name') as HTMLElement;
+    expect(name.textContent?.startsWith(HOSTILE)).toBe(true);
+    expect(name.textContent).toContain('⟨U+202E⟩');
+    expect(name.textContent).toContain('⟨U+200B⟩');
+    expect(name.textContent).not.toContain(BIDI);
+    expect((name.textContent ?? '').length).toBeLessThan(200);
+    // The folder path left the header for the name's tooltip (review §6).
+    expect(header.el.querySelector('.sh-project-root')).toBeNull();
+    expect(name.title.startsWith('C:/p/')).toBe(true);
+    expect(name.title).toContain('⟨U+200B⟩');
+    expect(name.title).not.toContain(BIDI);
   });
 
-  it('counts running tasks, worktrees in use and what waits for you', () => {
+  it('keeps the address in the state dot’s tooltip, not on the screen', () => {
+    const ctx = makeContext();
+    const header = mountHeader(ctx);
+    mounted.push(header);
+    expect(header.el.querySelector('.sh-daemon-address')).toBeNull();
+    expect(header.el.textContent).not.toContain('127.0.0.1');
+    const daemon = header.el.querySelector('.sh-daemon') as HTMLElement;
+    ctx.store.patch('system', { connection: 'live' });
+    expect(daemon.title).toBe('Friday is connected · 127.0.0.1:4310');
+    ctx.store.patch('system', { connection: 'reconnecting', attempts: 2 });
+    expect(daemon.title).toBe('Reconnecting to Friday (attempt 2)… · 127.0.0.1:4310');
+    expect(daemonAddress(makeSnapshot())).toBe('127.0.0.1:4310');
+    expect(daemonAddress(null)).toBe('');
+  });
+
+  it('shows Running and Waiting for you only: the worktrees count moved to Settings', () => {
+    const ctx = makeContext();
+    const header = mountHeader(ctx);
+    mounted.push(header);
+    const labels = [...header.el.querySelectorAll('.sh-metric-label')].map((x) => x.textContent);
+    expect(labels).toEqual(['Running', 'Waiting for you']);
+  });
+
+  it('puts the status sentence in the Running count’s tooltip', () => {
+    const board = makeSnapshot({
+      tasks: [
+        makeTask({ task_id: 't1', status: 'RUNNING' }),
+        makeTask({ task_id: 't2', status: 'RUNNING' }),
+        makeTask({ task_id: 't3', status: 'WAITING', waiting_reason: 'blocked' }),
+      ],
+      counts: { RUNNING: 2, READY: 1, READY_FOR_VERIFICATION: 1, VERIFYING: 1, FAILED: 1 },
+      approvals: [makeApproval({ approval_id: 'a1', task_id: 't1' })],
+      escalations: [makeEscalation({ escalation_id: 'e1', task_id: null })],
+      agents: [makeAgent({ agent_key: 'claude-1' }), makeAgent({ agent_key: 'codex-1', status: 'DISCONNECTED' })],
+    });
+    expect(statusSentence(board, NOW)).toBe(
+      '2 running, 3 waiting for you: 1 approval, 1 question, 1 blocked agent; 1 ready; 2 to verify; 1 failed or lost; 1 agent connected',
+    );
+    expect(statusSentence(makeSnapshot(), NOW)).toBe('0 running, 0 waiting for you: 0 agents connected');
+    // A kind the old sentence did not name (a message awaiting a reply) is named, never an empty clause.
+    const message = makeSnapshot({ inbox: [makeInboxItem({ mode: 'request' })] });
+    expect(statusSentence(message, NOW)).toBe(
+      '0 running, 1 waiting for you: 1 message to reply to; 0 agents connected',
+    );
+    expect(
+      statusSentence(
+        makeSnapshot({ control: { paused: true, reason: null, changed_at: null, changed_by: null, halted_at: null } }),
+        NOW,
+      ),
+    ).toMatch(/^Paused\. 0 running/);
+    expect(statusSentence(null, NOW)).toBe('Friday is not connected');
+    const ctx = makeContext({ snapshot: board });
+    const header = mountHeader(ctx);
+    mounted.push(header);
+    const running = header.el.querySelector('.sh-metric-running') as HTMLElement;
+    expect(running.title).toBe(statusSentence(board, NOW));
+    // The sentence's waiting number is the header's own: the same rule, never two counts.
+    expect(header.el.querySelector('.sh-metric-waiting .sh-metric-value')?.textContent).toBe('3');
+  });
+
+  it('counts running tasks and what waits for you', () => {
     const board = makeSnapshot({
       tasks: [
         makeTask({ task_id: 't1', status: 'RUNNING' }),
@@ -65,8 +142,9 @@ describe('header', () => {
       },
       approvals: [makeApproval({ approval_id: 'a1' }), makeApproval({ approval_id: 'a2', expired: true })],
     });
-    expect(headerCounts(board, NOW)).toEqual({ running: 2, worktrees: 1, waiting: 1, messages: 0 });
-    expect(headerCounts(null, NOW)).toEqual({ running: 0, worktrees: 0, waiting: 0, messages: 0 });
+    // The worktrees in use are not the header's any more: Settings counts them (`worktreesInUse`).
+    expect(headerCounts(board, NOW)).toEqual({ running: 2, waiting: 1, messages: 0 });
+    expect(headerCounts(null, NOW)).toEqual({ running: 0, waiting: 0, messages: 0 });
     const ctx = makeContext({ snapshot: board });
     const onShowWaiting = vi.fn();
     const header = mountHeader(ctx, { onShowWaiting });
@@ -97,26 +175,56 @@ describe('header', () => {
     expect(dot.querySelector('.sh-daemon-label')?.textContent).toBe('Stopped');
   });
 
-  it('opens the palette, the drawers and the routing pins', () => {
+  it('offers Search, Messages, More and the gear; Memory, Code graph and Routing left the bar', () => {
     const ctx = makeContext();
     const header = mountHeader(ctx);
     mounted.push(header);
-    const buttons = [...header.el.querySelectorAll('button')];
-    for (const b of buttons) expect(b.type).toBe('button');
-    const byText = (t: string) => buttons.find((b) => b.textContent?.includes(t)) as HTMLButtonElement;
+    const actions = [
+      ...header.el.querySelectorAll<HTMLButtonElement>('.sh-actions > button, .sh-actions > * > button'),
+    ];
+    for (const b of actions) expect(b.type).toBe('button');
+    const names = actions.map((b) => b.getAttribute('aria-label') ?? b.querySelector('.sh-btn-label')?.textContent);
+    expect(names).toEqual(['Search', 'Messages', 'More', 'Settings']);
+    expect(header.el.querySelector('.sh-routing')).toBeNull();
+    expect(header.el.textContent).not.toContain('Routing');
+    expect(header.el.textContent).not.toContain('Worktrees');
+    const byText = (t: string) => actions.find((b) => b.textContent?.includes(t)) as HTMLButtonElement;
     byText('Search').click();
     expect(ctx.store.select('ui').paletteOpen).toBe(true);
-    byText('Memory').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'memory' });
-    byText('Code graph').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'graph' });
-    byText('Routing').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents', tab: 'pins' });
     byText('Messages').click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'inbox' });
     const settings = header.el.querySelector('[aria-label="Settings"]') as HTMLButtonElement;
     settings.click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
+  });
+
+  it('the More menu opens Project memory, the Code graph and About (Settings at its About section)', () => {
+    const ctx = makeContext();
+    const header = mountHeader(ctx);
+    mounted.push(header);
+    document.body.append(header.el);
+    const more = header.el.querySelector('[aria-label="More"]') as HTMLButtonElement;
+    const menu = header.el.querySelector('[role="menu"]') as HTMLElement;
+    expect(menu.hidden).toBe(true);
+    expect(more.getAttribute('aria-haspopup')).toBe('menu');
+    const item = (id: string) => menu.querySelector(`[data-item="${id}"]`) as HTMLButtonElement;
+    more.click();
+    expect(menu.hidden).toBe(false);
+    expect(more.getAttribute('aria-expanded')).toBe('true');
+    expect([...menu.querySelectorAll('[role="menuitem"]')].map((b) => b.textContent)).toEqual([
+      'Project memory',
+      'Code graph',
+      'About',
+    ]);
+    item('memory').click();
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'memory' });
+    expect(menu.hidden).toBe(true);
+    more.click();
+    item('graph').click();
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'graph' });
+    more.click();
+    item('about').click();
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'about' });
   });
 
   it('shows the pause banner with its reason, and Resume resumes', async () => {
@@ -177,7 +285,7 @@ describe('header', () => {
 });
 
 describe('banners', () => {
-  it('says config.yaml changed while the hashes differ', () => {
+  it('says config.yaml changed while the hashes differ, and how to restart from a browser', () => {
     expect(configChanged(makeSnapshot({ config: { loaded_hash: 'a', current_hash: 'b' } }))).toBe(true);
     expect(configChanged(makeSnapshot({ config: { loaded_hash: 'a', current_hash: null } }))).toBe(false);
     expect(configChanged(makeSnapshot())).toBe(false);
@@ -189,10 +297,32 @@ describe('banners', () => {
     const banner = banners.el.querySelector('.sh-banner-warn') as HTMLElement;
     expect(banner.hidden).toBe(false);
     expect(banner.textContent).toContain(CONFIG_CHANGED_MESSAGE);
+    expect(banner.textContent).toContain(RESTART_HINT_BROWSER);
+    expect(banner.querySelector('.sh-banner-restart')).toBeNull();
     (banner.querySelector('button') as HTMLButtonElement).click();
     expect(open).toHaveBeenCalledWith('C:/demo/shop/.friday/config.yaml');
+    (banner.querySelector('.sh-banner-settings') as HTMLButtonElement).click();
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'friday' });
     ctx.board(makeSnapshot());
     expect(banner.hidden).toBe(true);
+  });
+
+  it('on the desktop, the config banner restarts Friday from where you are', async () => {
+    const base = makeContext({ snapshot: makeSnapshot({ config: { loaded_hash: 'a', current_hash: 'b' } }) });
+    const restart = vi.fn(async () => true);
+    const desktop = { restart } as unknown as DesktopCommands;
+    const ctx: AppContext = { ...base, platform: { ...base.platform, desktop } };
+    const banners = mountBanners(ctx);
+    mounted.push(banners);
+    const banner = banners.el.querySelector('.sh-banner-warn') as HTMLElement;
+    expect(banner.textContent).toContain(RESTART_HINT_DESKTOP);
+    expect(banner.querySelector('.sh-banner-settings')).toBeNull();
+    const button = banner.querySelector('.sh-banner-restart') as HTMLButtonElement;
+    expect(button.textContent).toContain('Restart Friday');
+    button.click();
+    button.click();
+    await vi.waitFor(() => expect(button.disabled).toBe(false));
+    expect(restart).toHaveBeenCalledOnce();
   });
 
   it('asks for a reload when the page is older than Friday', () => {

@@ -4,8 +4,10 @@
  *
  * Modals: `new-goal`; `plan-editor` (`id` = goal id, `mode` 'first' | 'revision'); `verify`
  * (`id` = task id); `land` (`id` = goal id); `claude-setup`; `start-agent` (an `id` of
- * `claude-code` or `codex` preselects the host). Drawers: `agents` (`tab` 'pins' or 'claude'
- * scrolls there) and `settings` (`tab` 'planner' scrolls there).
+ * `claude-code` or `codex` preselects the host). Drawers: `agents` (`tab` 'claude' scrolls to the
+ * Claude Code card; 'pins' or 'routing', the pins' old door, opens Settings → Routing instead) and
+ * `settings` (`tab` names a section: notifications, sound, look, planner, routing, policy, friday,
+ * desktop, about).
  */
 import type { AppContext } from '../shell/context.js';
 import { agentsDrawer } from './agents-panel.js';

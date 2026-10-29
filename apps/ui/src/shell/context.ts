@@ -168,6 +168,14 @@ export type ModalFactory = (
   close: () => void,
 ) => Component & { title: string; size?: 'sm' | 'md' | 'lg' };
 
+/**
+ * Where the palette offers a command: in the empty list and when typed (`always`, the default);
+ * only when typed, so housekeeping does not sit beside New goal (`typed`); or never, when a button
+ * or a key already does it and the palette would only repeat it (`never`: the command stays
+ * registered and runnable).
+ */
+export type CommandShow = 'always' | 'typed' | 'never';
+
 /** A palette command (plan §7.6). */
 export interface Command {
   id: string;
@@ -176,6 +184,8 @@ export interface Command {
   keywords?: string[];
   /** Hidden while it would do nothing (`resume` while not paused). */
   available?: (ctx: AppContext) => boolean;
+  /** Where the palette lists it (default `always`). */
+  show?: CommandShow;
   run: (ctx: AppContext) => void | Promise<void>;
 }
 

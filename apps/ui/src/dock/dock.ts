@@ -1,23 +1,25 @@
 /**
- * The dock at the bottom centre of the Studio (handoff Part 06 §6, plan §7.6): search, New goal,
- * Agents, Pause/Resume, Mute, Settings and Halt. Semi-transparent until hovered or focused. Fit
- * and Zoom are the canvas's own toolbar, beside the minimap (handoff Part 03 §3).
+ * The dock at the bottom centre of the Studio (handoff Part 06 §6, plan §7.6, the product review
+ * of 2026-10-17 §4): New goal, Agents, Pause/Resume, and Halt behind a separator. Semi-transparent
+ * until hovered or focused. Search and the gear are the header's (the dock showed them a second
+ * time on the same screen); Mute lives in the palette, Settings → Sound, the desktop Notch's footer
+ * and the tray. Fit and Zoom are the canvas's own toolbar, beside the minimap (handoff Part 03 §3).
  * `registerDock` registers the halt dialog.
  */
 import { type AppContext, type Component, openDrawer, openModal } from '../shell/context.js';
 import { button, h, replace, setText } from '../ui/dom.js';
 import { icon } from '../ui/svg.js';
-import { isConnected, isPaused, openHalt, pauseFriday, resumeFriday, toggleMute } from './actions.js';
+import { isConnected, isPaused, openHalt, pauseFriday, resumeFriday } from './actions.js';
 import { haltDialog } from './halt-dialog.js';
+
+/** What the Pause button says it does; Halt is the other switch, named so the two are not confused. */
+export const PAUSE_TITLE =
+  'Pause Friday: nothing new starts and running agents stop at their next step; Halt stops them now';
+export const RESUME_TITLE = 'Resume Friday: agents continue';
 
 export function mountDock(ctx: AppContext, container: HTMLElement): Component {
   let busy = false;
 
-  const search = button(
-    [icon('search', 15), h('span', { class: 'dk-label' }, 'Search'), h('span', { class: 'kbd dk-kbd' }, 'Ctrl K')],
-    () => ctx.store.patch('ui', { paletteOpen: true }),
-    { class: 'btn btn-ghost dk-btn dk-search', title: 'Search tasks, goals, agents, files and commands (Ctrl+K)' },
-  );
   const newGoal = button(
     [icon('plus', 15), h('span', { class: 'dk-label' }, 'New goal')],
     () => openModal(ctx, { kind: 'new-goal' }),
@@ -31,30 +33,17 @@ export function mountDock(ctx: AppContext, container: HTMLElement): Component {
   const pauseLabel = h('span', { class: 'dk-label' }, 'Pause');
   const pauseIcon = h('span', { class: 'dk-icon' }, icon('pause', 15));
   const pause = button([pauseIcon, pauseLabel], () => void togglePause(), { class: 'btn btn-ghost dk-btn dk-pause' });
-  const mute = button(icon('sound', 15), () => toggleMute(ctx), {
-    class: 'btn btn-ghost btn-icon dk-btn dk-mute',
-    ariaLabel: 'Mute sounds',
-  });
-  const settings = button(icon('gear', 15), () => openDrawer(ctx, { kind: 'settings' }), {
-    class: 'btn btn-ghost btn-icon dk-btn dk-settings',
-    ariaLabel: 'Settings',
-    title: 'Settings',
-  });
   const halt = button([icon('halt', 15), h('span', { class: 'dk-label' }, 'Halt')], () => openHalt(ctx), {
     class: 'btn btn-danger dk-btn dk-halt-btn',
-    title: 'Halt: stop the work in progress and pause Friday',
+    title: 'Halt: stop the work in progress now and pause Friday',
   });
 
   const el = h(
     'div',
     { class: 'dk-dock glass-panel', role: 'toolbar', aria: { label: 'Dock', orientation: 'horizontal' } },
-    search,
-    h('span', { class: 'dk-sep', aria: { hidden: 'true' } }),
     newGoal,
     agents,
     pause,
-    mute,
-    settings,
     h('span', { class: 'dk-sep', aria: { hidden: 'true' } }),
     halt,
   );
@@ -78,18 +67,12 @@ export function mountDock(ctx: AppContext, container: HTMLElement): Component {
     setText(pauseLabel, paused ? 'Resume' : 'Pause');
     replace(pauseIcon, icon(paused ? 'play' : 'pause', 15));
     pause.disabled = busy || !connected;
-    pause.title = paused ? 'Resume Friday: agents continue' : 'Pause Friday: nothing new starts, changes are refused';
+    pause.title = paused ? RESUME_TITLE : PAUSE_TITLE;
     pause.classList.toggle('dk-paused', paused);
     pause.setAttribute('aria-busy', String(busy));
     newGoal.disabled = !connected;
     halt.disabled = !connected;
     el.classList.toggle('dk-dock-paused', paused);
-
-    const muted = ctx.store.select('prefs').muted;
-    replace(mute, icon(muted ? 'mute' : 'sound', 15));
-    mute.setAttribute('aria-pressed', String(muted));
-    mute.setAttribute('aria-label', muted ? 'Unmute sounds' : 'Mute sounds');
-    mute.title = muted ? 'Sounds are off: turn them on' : 'Turn sounds off';
   }
 
   /** Arrow keys move between the dock's buttons (toolbar pattern); Tab still reaches each one. */
@@ -109,7 +92,8 @@ export function mountDock(ctx: AppContext, container: HTMLElement): Component {
 
   el.addEventListener('keydown', onKey);
 
-  const unsubscribe = [ctx.store.subscribe('board', () => render()), ctx.store.subscribe('prefs', () => render())];
+  // The board decides Pause or Resume and whether the daemon actions are live.
+  const unsubscribe = ctx.store.subscribe('board', () => render());
 
   render();
   container.appendChild(el);
@@ -117,7 +101,7 @@ export function mountDock(ctx: AppContext, container: HTMLElement): Component {
   return {
     el,
     destroy() {
-      for (const u of unsubscribe) u();
+      unsubscribe();
       el.removeEventListener('keydown', onKey);
       el.remove();
     },

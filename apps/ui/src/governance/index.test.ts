@@ -27,7 +27,7 @@ describe('registerGovernance', () => {
     const gone = question?.(ctx, { kind: 'question', id: 'esc_gone' }, () => undefined);
     expect(gone?.el.textContent).toContain('no longer pending');
     const inbox = ctx.registry.drawers.get('inbox')?.(ctx, { kind: 'inbox' });
-    expect(inbox?.title).toBe('Messages for you');
+    expect(inbox?.title).toBe('Messages');
     inbox?.destroy();
   });
 });

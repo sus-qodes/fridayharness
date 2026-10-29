@@ -133,6 +133,8 @@ describe('question cards by kind (plan FD-21)', () => {
       chips[0]?.click();
       expect(chips[0]?.getAttribute('aria-checked')).toBe('true');
       const note = card.el.querySelector('.gv-write-in') as HTMLTextAreaElement;
+      // The box says who reads it: the asking agent (review §4, one wording for one act).
+      expect(card.el.querySelector(`label[for="${note.id}"]`)?.textContent).toBe('Reply to claude-1');
       userFocus(note);
       press(note, '2');
       expect(chips[1]?.getAttribute('aria-checked')).toBe('false');
@@ -398,6 +400,7 @@ describe('question cards by kind (plan FD-21)', () => {
     expect(card.el.querySelector('.gv-quote')?.textContent).toBe(`Which currency? ${HOSTILE}`);
     expect(card.el.querySelectorAll('.gv-chip')).toHaveLength(0);
     const reply = card.el.querySelector('textarea') as HTMLTextAreaElement;
+    expect(card.el.querySelector(`label[for="${reply.id}"]`)?.textContent).toBe('Reply to claude-1');
     reply.value = 'EUR';
     arm(card.el);
     buttonNamed(card.el, 'Send reply').click();

@@ -1,12 +1,13 @@
 /**
- * The agent pod (handoff Part 04 §4, plan §7.3): vendor, agent key and enforcement badge; the
+ * The agent pod (handoff Part 04 §4, plan §7.3, review M9k): vendor, agent key and the enforcement
+ * badge in plain words (Enforced, Reported, Watched, Unverified; the level in its tooltip); the
  * model (observed, else requested); spend and tokens as the host reports them; the live ribbon
  * with the current tool, its target, the task's `+N −M` and the last tool's duration; attached or
  * spawned, its status and the shadow marker. Clicking the pod opens its live stream; the file in
  * the ribbon opens the task's diff.
  */
 import type { PodModel } from '../model/board.js';
-import { enforcementBadge } from '../model/status.js';
+import { enforcementWords } from '../model/status.js';
 import { visible } from '../model/text.js';
 import { type AppContext, openDrawer } from '../shell/context.js';
 import type { AgentActivity, ToolActivity } from '../store/state.js';
@@ -85,8 +86,6 @@ export function podUsage(m: Pick<PodCardModel, 'pod' | 'activity'>): { cost: str
   return { cost: usd(u?.cost_usd ?? null), tokens: tokens === null ? '—' : compact(tokens) };
 }
 
-const TONE_CLASS = { good: 'good', info: 'info', warn: 'warn', muted: 'muted', strong: 'strong' } as const;
-
 export function createAgentPod(ctx: AppContext, initial: PodCardModel): NodeView<PodCardModel> {
   let model = initial;
   let printed = '';
@@ -146,7 +145,11 @@ export function createAgentPod(ctx: AppContext, initial: PodCardModel): NodeView
     if (!force && print === printed) return;
     printed = print;
 
-    const enforcement = enforcementBadge(pod.harness?.enforcement_level, pod.harness?.enforcement_status);
+    const enforcement = enforcementWords(
+      pod.harness?.enforcement_level,
+      pod.harness?.enforcement_status,
+      pod.harness?.enforcement_basis,
+    );
     const shadow = pod.agent.shadow || !!pod.harness?.shadow;
     replace(
       body,
@@ -157,7 +160,7 @@ export function createAgentPod(ctx: AppContext, initial: PodCardModel): NodeView
         h('span', { class: 'nd-vendor' }, vendorLabel(pod)),
         h('span', { class: 'nd-key mono', title: visible(pod.agentKey) }, truncate(visible(pod.agentKey), 28)),
         h('span', { class: 'spacer' }),
-        badge(enforcement.label, TONE_CLASS[enforcement.tone], pod.harness?.enforcement_basis ?? undefined),
+        badge(enforcement.label, enforcement.tone, enforcement.title),
         button(nodeIcon('terminal', 13), openTerminal, {
           class: 'btn btn-ghost btn-icon nd-open',
           ariaLabel: `Open the live stream of ${pod.agentKey}`,

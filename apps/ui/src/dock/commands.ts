@@ -1,6 +1,8 @@
 /**
  * The core palette commands (plan §7.6, ERRATA F22). Areas add their own (`fit`, `zoom-in`, …)
- * through the same registry. Each command is hidden while it would do nothing (`available`).
+ * through the same registry. Each command is hidden while it would do nothing (`available`), and
+ * the housekeeping ones (reindex, prune, stop) are offered only when typed, so the empty list holds
+ * the daily commands alone (the product review of 2026-10-17, §4 "Advanced").
  */
 import { visible } from '../model/text.js';
 import { type AppContext, type Command, openDrawer, openModal, type Toast } from '../shell/context.js';
@@ -125,8 +127,9 @@ export function coreCommands(): Command[] {
     },
     {
       id: 'memory',
-      label: 'Memory bank',
-      keywords: ['memories', 'decisions', 'knowledge'],
+      // One drawer, one name: the drawer's own title (the review's rename; "memory bank" stays a keyword).
+      label: 'Project memory',
+      keywords: ['memories', 'decisions', 'knowledge', 'memory bank'],
       run: (c) => openDrawer(c, { kind: 'memory' }),
     },
     {
@@ -140,6 +143,7 @@ export function coreCommands(): Command[] {
       label: 'Reindex the code graph',
       keywords: ['rebuild graph', 'recompile', 'index'],
       available: (c) => isConnected(c) && !c.store.select('ui').indexing,
+      show: 'typed',
       run: (c) => reindexGraph(c),
     },
     {
@@ -147,6 +151,7 @@ export function coreCommands(): Command[] {
       label: 'Prune clean worktrees',
       keywords: ['clean worktrees', 'remove worktrees', 'tidy'],
       available: (c) => isConnected(c),
+      show: 'typed',
       run: (c) => pruneWorktrees(c),
     },
     {
@@ -174,12 +179,14 @@ export function coreCommands(): Command[] {
       label: 'Stop Friday…',
       keywords: ['shut down', 'quit', 'exit daemon'],
       available: (c) => isConnected(c),
+      show: 'typed',
       run: (c) => stopFriday(c),
     },
     {
       id: 'inbox',
-      label: 'Inbox',
-      keywords: ['messages', 'notifications', 'replies'],
+      // The header's word (the review's rename; "inbox" stays a keyword).
+      label: 'Messages',
+      keywords: ['inbox', 'notifications', 'replies'],
       run: (c) => openDrawer(c, { kind: 'inbox' }),
     },
   ];

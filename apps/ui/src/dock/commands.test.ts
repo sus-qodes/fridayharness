@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeContext, type TestContext } from '../test/context.js';
 import { makeHarness, makeSnapshot } from '../test/fixtures.js';
-import { CORE_COMMAND_IDS, pruneToast, registerCommands } from './commands.js';
+import { CORE_COMMAND_IDS, coreCommands, pruneToast, registerCommands } from './commands.js';
 
 async function flush(): Promise<void> {
   for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -31,6 +31,26 @@ describe('core commands', () => {
     const ctx = setup();
     expect([...ctx.registry.commands.keys()]).toEqual([...CORE_COMMAND_IDS]);
     for (const c of ctx.registry.commands.values()) expect(c.label.length).toBeGreaterThan(2);
+  });
+
+  it('names the drawers as the drawers name themselves: Project memory and Messages (review §4)', () => {
+    const byId = new Map(coreCommands().map((c) => [c.id, c]));
+    expect(byId.get('memory')?.label).toBe('Project memory');
+    expect(byId.get('inbox')?.label).toBe('Messages');
+    // The old words still find them when typed.
+    expect(byId.get('memory')?.keywords).toContain('memory bank');
+    expect(byId.get('inbox')?.keywords).toContain('inbox');
+    const labels = coreCommands().map((c) => c.label);
+    expect(labels).not.toContain('Memory bank');
+    expect(labels).not.toContain('Inbox');
+  });
+
+  it('offers housekeeping only when typed: reindex, prune and Stop Friday', () => {
+    const typed = coreCommands()
+      .filter((c) => c.show === 'typed')
+      .map((c) => c.id);
+    expect(typed).toEqual(['reindex-graph', 'prune-worktrees', 'stop-friday']);
+    for (const c of coreCommands()) expect(c.show === undefined || c.show === 'typed').toBe(true);
   });
 
   it('offers pause while running and resume only while paused', () => {

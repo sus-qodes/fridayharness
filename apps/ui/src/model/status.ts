@@ -91,18 +91,49 @@ export const RISK: Record<string, { label: string; color: `var(--${string})` }> 
   high: { label: 'High risk', color: 'var(--color-crimson)' },
 };
 
-/** Enforcement badge of an agent's session (plan §7.3). */
-export function enforcementBadge(
+export type EnforcementWord = 'Enforced' | 'Reported' | 'Watched' | 'Unverified';
+
+export type EnforcementTone = 'good' | 'info' | 'warn' | 'muted' | 'strong';
+
+/**
+ * The enforcement of an agent's session in plain words, one vocabulary for the pod on the canvas
+ * and the row in the Agents drawer (review M9k, the only code words that were on the first screen):
+ * *Enforced* when Friday's hooks decide what the host may do (L1 enforcing, or an isolated L2
+ * profile), *Reported* when the host reports and Friday records but cannot block (L1 reported),
+ * *Watched* when Friday only observes (L0), *Unverified* when an L1 session's hooks are degraded or
+ * unconfirmed. The level, the status word and what they rest on go in the tooltip.
+ */
+export function enforcementWords(
   level: string | null | undefined,
   status: string | null | undefined,
-): { label: string; tone: 'good' | 'info' | 'warn' | 'muted' | 'strong' } {
-  if (level === 'L2') return { label: 'L2', tone: 'strong' };
-  if (level === 'L1') {
-    if (status === 'enforcing') return { label: 'L1 enforcing', tone: 'good' };
-    if (status === 'reported') return { label: 'L1 reported', tone: 'info' };
-    return { label: `L1 ${status ?? 'unverified'}`, tone: 'warn' };
+  basis?: string | null,
+): { label: EnforcementWord; tone: EnforcementTone; title: string } {
+  let label: EnforcementWord;
+  let tone: EnforcementTone;
+  let detail: string;
+  if (level === 'L2') {
+    label = 'Enforced';
+    tone = 'strong';
+    detail = status ?? 'isolated';
+  } else if (level === 'L1' && status === 'enforcing') {
+    label = 'Enforced';
+    tone = 'good';
+    detail = status;
+  } else if (level === 'L1' && status === 'reported') {
+    label = 'Reported';
+    tone = 'info';
+    detail = status;
+  } else if (level === 'L1') {
+    label = 'Unverified';
+    tone = 'warn';
+    detail = status ?? 'unverified';
+  } else {
+    label = 'Watched';
+    tone = 'muted';
+    detail = status ?? 'observed';
   }
-  return { label: 'L0 observed', tone: 'muted' };
+  const shown = level === 'L1' || level === 'L2' ? level : 'L0';
+  return { label, tone, title: `Enforcement level ${shown} (${detail})${basis ? `: ${basis}` : ''}` };
 }
 
 /** A task that waits for a human: an approval, a question, or a blocked agent (plan §7.5). */
