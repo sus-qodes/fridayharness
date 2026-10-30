@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { drawBlip, faceLayout, MASCOT_NAME, parseColor, readPalette, rgbString } from './character.js';
+import { drawMascot, faceLayout, MASCOT_NAME, parseColor, readPalette, rgbString } from './character.js';
 import { type Gesture, MascotEngine, PITCH_LIMIT, seededRandom, YAW_LIMIT } from './engine.js';
 import { EYE_SHAPES } from './eyes.js';
 import { CX, R } from './geometry.js';
@@ -26,25 +26,25 @@ describe('palette', () => {
 
   it('falls back to the token values when the page has none', () => {
     const p = readPalette(document.createElement('div'));
-    expect(p.led).toBe('#22d3ee');
-    expect(p.visor).toBe('#05080f');
+    expect(p.ink).toBe('#1a1412');
+    expect(p.bodyTop).toBe('#f6f1e7');
     expect(p.tints['--color-amber']).toEqual({ r: 245, g: 158, b: 11 });
   });
 
   it('reads tokens from the page, refusing anything that is not a plain colour', () => {
     vi.spyOn(window, 'getComputedStyle').mockReturnValue({
       getPropertyValue: (name: string) =>
-        name === '--mascot-led'
+        name === '--mascot-ink'
           ? ' #ff0000 '
-          : name === '--mascot-visor'
+          : name === '--mascot-body-top'
             ? 'url(javascript:alert(1))'
             : name === '--color-amber'
               ? 'rgb(1, 2, 3)'
               : '',
     } as unknown as CSSStyleDeclaration);
     const p = readPalette(document.documentElement);
-    expect(p.led).toBe('#ff0000');
-    expect(p.visor).toBe('#05080f');
+    expect(p.ink).toBe('#ff0000');
+    expect(p.bodyTop).toBe('#f6f1e7');
     expect(p.tints['--color-amber']).toEqual({ r: 1, g: 2, b: 3 });
   });
 
@@ -52,7 +52,7 @@ describe('palette', () => {
     vi.spyOn(window, 'getComputedStyle').mockImplementation(() => {
       throw new Error('no');
     });
-    expect(readPalette().shell).toBe('#1e293b');
+    expect(readPalette().bodyBottom).toBe('#d9cfbe');
   });
 });
 
@@ -81,11 +81,11 @@ describe('face layout', () => {
   });
 });
 
-describe('drawing Blip', () => {
+describe('drawing the mascot', () => {
   const palette = readPalette(document.createElement('div'));
 
-  it('is named Blip', () => {
-    expect(MASCOT_NAME).toBe('Blip');
+  it('is named Friday', () => {
+    expect(MASCOT_NAME).toBe('Friday');
   });
 
   it('draws every state with every outfit using finite numbers', () => {
@@ -98,7 +98,7 @@ describe('drawing Blip', () => {
         e.setPointer({ dx: 200, dy: -80 });
         for (let i = 0; i < 12; i++) e.tick(1 / 60);
         const { g, log } = recordingContext();
-        drawBlip(g, e.pose(), { size: 56, dpr: 2, outfit, palette });
+        drawMascot(g, e.pose(), { size: 56, dpr: 2, outfit, palette });
         expect(numbersOf(log).every(Number.isFinite), `${state} ${outfit}`).toBe(true);
         expect(log.calls.some((c) => c.name === 'fill')).toBe(true);
         const saves = log.calls.filter((c) => c.name === 'save').length;
@@ -113,7 +113,7 @@ describe('drawing Blip', () => {
       const e = new MascotEngine({ random: seededRandom(2) });
       e.express(eyes, 5);
       const { g, log } = recordingContext();
-      drawBlip(g, e.pose(), { size: 36, dpr: 1, outfit: 'none', palette });
+      drawMascot(g, e.pose(), { size: 36, dpr: 1, outfit: 'none', palette });
       expect(numbersOf(log).every(Number.isFinite), eyes).toBe(true);
     }
   });
@@ -121,7 +121,7 @@ describe('drawing Blip', () => {
   it('clears and scales the canvas to its size and device ratio', () => {
     const e = new MascotEngine({ random: seededRandom(3) });
     const { g, log } = recordingContext();
-    drawBlip(g, e.pose(), { size: 48, dpr: 2, outfit: 'none', palette });
+    drawMascot(g, e.pose(), { size: 48, dpr: 2, outfit: 'none', palette });
     const transforms = log.calls.filter((c) => c.name === 'setTransform').map((c) => c.args);
     expect(transforms[0]).toEqual([1, 0, 0, 1, 0, 0]);
     expect(transforms[1]).toEqual([1, 0, 0, 1, 0, 0].map((v, i) => (i === 0 || i === 3 ? (48 / 96) * 2 : v)));
@@ -133,7 +133,7 @@ describe('drawing Blip', () => {
     e.setState('approval');
     const count = (size: number) => {
       const { g, log } = recordingContext();
-      drawBlip(g, e.pose(), { size, dpr: 1, outfit: 'none', palette });
+      drawMascot(g, e.pose(), { size, dpr: 1, outfit: 'none', palette });
       return log.calls.length;
     };
     expect(count(56)).toBeGreaterThan(count(24));
@@ -142,7 +142,7 @@ describe('drawing Blip', () => {
   it('draws nothing for a nonsense size', () => {
     const e = new MascotEngine();
     const { g, log } = recordingContext();
-    drawBlip(g, e.pose(), { size: Number.NaN, dpr: 1, outfit: 'none', palette });
+    drawMascot(g, e.pose(), { size: Number.NaN, dpr: 1, outfit: 'none', palette });
     expect(log.calls).toHaveLength(0);
   });
 });

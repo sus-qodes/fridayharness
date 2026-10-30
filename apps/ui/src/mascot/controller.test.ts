@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 describe('gestureFor', () => {
-  it('maps reactions to what Blip does', () => {
+  it('maps reactions to what the mascot does', () => {
     const table: [MascotReaction, string | null][] = [
       ['click', 'wink'],
       ['node', 'bounce'],
@@ -101,7 +101,7 @@ describe('MascotController', () => {
     expect(spy.mock.calls.slice(2).map((c) => c[0])).toEqual(['bounce', 'droop']);
   });
 
-  it('picks the state from the store and tints Blip with it', () => {
+  it('picks the state from the store and tints the mascot with it', () => {
     mount();
     expect(controller.state).toBe('idle');
     const tint = vi.spyOn(engine, 'setTint');

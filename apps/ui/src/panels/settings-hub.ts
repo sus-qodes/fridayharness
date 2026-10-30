@@ -1,5 +1,5 @@
 /**
- * Coucou-style Settings Hub (Coucou parity, plan §7.10).
+ * The Settings Hub: the full-window settings view (plan §7.10).
  * Features:
  * - Round left panel layout (.hub-side) with 3 categorized groups:
  *   1. General (Look & Friday, Notifications, Sound)
@@ -51,17 +51,17 @@ import {
   worktreesInUse,
 } from './settings.js';
 
-export type CoucouGroup = 'General' | 'AI & Governance' | 'System & Desktop';
+export type HubGroup = 'General' | 'AI & Governance' | 'System & Desktop';
 
-export interface CoucouPageDef {
+export interface HubPageDef {
   id: string;
-  group: CoucouGroup;
+  group: HubGroup;
   icon: IconName;
   title: string;
   subtitle: string;
 }
 
-export const COUCOU_PAGES: CoucouPageDef[] = [
+export const HUB_PAGES: HubPageDef[] = [
   // General
   {
     id: 'look',
@@ -132,7 +132,7 @@ export const COUCOU_PAGES: CoucouPageDef[] = [
   },
 ];
 
-export function mountCoucouSettingsHub(ctx: AppContext): Component {
+export function mountSettingsHub(ctx: AppContext): Component {
   const td = new Teardown();
   const prefs = () => ctx.store.select('prefs');
   const setPrefs = (changes: Partial<Prefs>) => ctx.store.patch('prefs', changes);
@@ -159,11 +159,11 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
 
   // ── Sidebar: Categorized Page Groups ──────────────────────────────────────
   const navButtons = new Map<string, HTMLButtonElement>();
-  const groups: CoucouGroup[] = ['General', 'AI & Governance', 'System & Desktop'];
+  const groups: HubGroup[] = ['General', 'AI & Governance', 'System & Desktop'];
 
   for (const groupName of groups) {
     side.append(h('div', { class: 'hub-group' }, groupName));
-    const pages = COUCOU_PAGES.filter((p) => p.group === groupName);
+    const pages = HUB_PAGES.filter((p) => p.group === groupName);
     for (const page of pages) {
       const btn = button([icon(page.icon, 16), h('span', null, page.title)], () => selectTab(page.id), {
         class: 'hub-item',
@@ -228,7 +228,7 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
   let currentTab = 'look';
 
   function selectTab(tabId: string): void {
-    const valid = COUCOU_PAGES.some((p) => p.id === tabId);
+    const valid = HUB_PAGES.some((p) => p.id === tabId);
     const target = valid ? tabId : 'look';
     if (ctx.store.select('ui').settingsTab !== target) {
       ctx.store.patch('ui', { settingsTab: target });
@@ -239,7 +239,7 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
 
   function renderActiveTab(tabId: string): void {
     currentTab = tabId;
-    const def = COUCOU_PAGES.find((p) => p.id === tabId) ?? COUCOU_PAGES[0];
+    const def = HUB_PAGES.find((p) => p.id === tabId) ?? HUB_PAGES[0];
     if (!def) return;
 
     // Highlight sidebar item
@@ -545,7 +545,7 @@ export function mountCoucouSettingsHub(ctx: AppContext): Component {
         h(
           'div',
           { class: 'text' },
-          h('span', { class: 'title' }, 'Coucou Audio Preview'),
+          h('span', { class: 'title' }, 'Character sound preview'),
           h('span', { class: 'detail' }, 'Test the authentic tactile audio chime'),
         ),
         testChimeBtn,

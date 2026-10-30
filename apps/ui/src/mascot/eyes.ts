@@ -1,5 +1,5 @@
 /**
- * Blip's eyes (plan §7.9): fourteen LED glyphs lit on the dark visor. Each glyph draws itself
+ * The mascot's eyes (plan §7.9): fourteen ink glyphs on the face. Each glyph draws itself
  * centred on `(x, y)` in a `w × h` box with the fill, stroke and glow the caller set; `lid` (0 shut,
  * 1 open) squeezes the glyphs that blink. Pure drawing, no state.
  */

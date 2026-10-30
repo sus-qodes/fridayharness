@@ -1,5 +1,5 @@
 /**
- * Connects the store to Blip's engine (plan §7.9): picks the state on every change (and again when
+ * Connects the store to the mascot.s engine (plan §7.9): picks the state on every change (and again when
  * a time-bound condition runs out), plays reactions once each (consumed by id: the highest handled
  * id is kept, only newer ones play), notices newly registered agents, and follows the motion and
  * outfit preferences.
@@ -10,10 +10,10 @@ import type { Palette } from './character.js';
 import type { Gesture, MascotEngine } from './engine.js';
 import { type MascotState, nextChangeAt, STATE_LOOK, selectState } from './states.js';
 
-/** A reaction from the store, a click on Blip, or an agent that just registered. */
+/** A reaction from the store, a click on the mascot, or an agent that just registered. */
 export type MascotReaction = ReactionKind | 'click' | 'agent';
 
-/** What Blip does for a reaction (plan §7.9; ERRATA F27 maps Part 06's moods to these). */
+/** What the mascot does for a reaction (plan §7.9; ERRATA F27 maps Part 06's moods to these). */
 export function gestureFor(kind: MascotReaction): Gesture | null {
   switch (kind) {
     case 'click':
@@ -85,12 +85,12 @@ export class MascotController {
     private readonly ctx: Pick<AppContext, 'store' | 'now'>,
     private readonly engine: MascotEngine,
     private readonly palette: Palette,
-    /** Called whenever Blip has something new to show (the loop wakes). */
+    /** Called whenever the mascot has something new to show (the loop wakes). */
     private readonly changed: () => void,
     private readonly env: ControllerEnv,
   ) {
     const state = ctx.store.getState();
-    // Reactions from before Blip was mounted are history, not news.
+    // Reactions from before the mascot was mounted are history, not news.
     this.#lastReaction = maxReactionId(state);
     if (state.board) this.#harnesses = new Set(state.board.harnesses.map((h) => h.harness_id));
   }
@@ -146,7 +146,7 @@ export class MascotController {
     this.#schedule(nextChangeAt(root, now), now);
   }
 
-  /** A click (or Enter/Space) on an interactive Blip. */
+  /** A click (or Enter/Space) on an interactive mascot. */
   click(): void {
     this.react('click');
   }

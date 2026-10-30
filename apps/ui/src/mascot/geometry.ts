@@ -1,8 +1,8 @@
 /**
- * Blip's design grid and colour helpers, shared by the character and its outfits. Pure.
+ * The mascot's design grid and colour helpers, shared by the character and its outfits. Pure.
  */
 
-/** The design grid Blip is drawn on (scaled to the canvas). */
+/** The design grid the mascot is drawn on (scaled to the canvas). */
 export const DESIGN = 96;
 /** Head size (design px) and the head's centre at rest. */
 export const R = 24;
@@ -54,28 +54,31 @@ export interface EyeBox {
 }
 
 export interface FaceLayout {
-  /** The visor's centre and size (design px, before the body transform). */
+  /**
+   * The face zone's centre and size (design px, before the body transform): where the eyes and
+   * the glasses-like outfits live. It moves with the gaze so the eyes stay inside it.
+   */
   visor: { x: number; y: number; w: number; h: number; r: number };
   left: EyeBox;
   right: EyeBox;
 }
 
 /**
- * Where the eyes sit for a gaze: features on a gently curved screen. Each eye is a point at
+ * Where the eyes sit for a gaze: two points on the face, sliding with the turn. Each eye is at
  * `yaw·½ ± spread` around the head, projected with sin and narrowed by cos as it turns away;
  * pitch (positive downward) moves both up or down.
  */
 export function faceLayout(yaw: number, pitch: number): FaceLayout {
   const y = Number.isFinite(yaw) ? yaw : 0;
   const p = Number.isFinite(pitch) ? pitch : 0;
-  const visor = { x: CX + y * 1.4, y: CY - 1.5, w: R * 1.62, h: R * 1.1, r: R * 0.4 };
+  const visor = { x: CX + y * 1.2, y: CY + R * 0.02, w: R * 1.5, h: R * 1.0, r: R * 0.35 };
   const eye = (side: -1 | 1): EyeBox => {
-    const a = y * 0.5 + side * 0.42;
+    const a = y * 0.5 + side * 0.4;
     return {
-      x: CX + R * 0.86 * Math.sin(a),
-      y: visor.y + R * 0.32 * Math.sin(p),
-      w: R * 0.27 * Math.max(0.55, Math.cos(a)),
-      h: R * 0.42,
+      x: CX + R * 0.8 * Math.sin(a),
+      y: visor.y + R * 0.06 + R * 0.3 * Math.sin(p),
+      w: R * 0.3 * Math.max(0.55, Math.cos(a)),
+      h: R * 0.46,
     };
   };
   return { visor, left: eye(-1), right: eye(1) };

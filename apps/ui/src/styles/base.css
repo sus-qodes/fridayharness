@@ -1,4 +1,4 @@
-/* Base layer: reset, page, focus, Apple glass surfaces, Coucou pill buttons and tabs. */
+/* Base layer: reset, page, focus, Apple glass surfaces, pill buttons and tabs. */
 *,
 *::before,
 *::after {
@@ -91,7 +91,7 @@ pre,
   overflow: hidden;
 }
 
-/* Coucou Card Radial Light Wash */
+/* Card radial light wash */
 .card.wash::after,
 .wash::after {
   content: "";
@@ -116,7 +116,7 @@ pre,
   box-shadow: 0 0 16px rgba(245, 165, 36, 0.3);
 }
 
-/* ── Coucou Apple Pill Buttons ────────────────────────────────────────────── */
+/* ── Apple Pill Buttons ────────────────────────────────────────────── */
 
 .btn {
   display: inline-flex;
@@ -223,7 +223,7 @@ pre,
   color: var(--ink);
 }
 
-/* Coucou Keyboard Hint Badge */
+/* Keyboard hint badge */
 .kbd,
 .btn .kbd {
   display: inline-block;
@@ -243,7 +243,7 @@ pre,
   color: #0b0c0e;
 }
 
-/* Coucou Apple Segmented Tabs */
+/* Apple Segmented Tabs */
 .tabs {
   display: flex;
   gap: 4px;

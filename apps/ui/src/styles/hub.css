@@ -1,5 +1,5 @@
 /*
- * Coucou-style Settings Hub layout and design system (plan §7.10, Coucou parity).
+ * Settings Hub layout and design system (plan §7.10).
  * Features:
  * - Pure OLED-black sidebar with 3 distinct groups (General, AI & Governance, System & Desktop)
  * - Live animated mascot in brand header and category hero banners
@@ -19,7 +19,7 @@
   --hub-body: #e1e3e6;
   --hub-secondary: #8e939c;
   --hub-muted: #6b7079;
-  --hub-accent: #fb923c;
+  --hub-accent: var(--cyan);
   --hub-on-accent: #170c04;
   --hub-green: #34d399;
   --hub-red: #ff453a;
@@ -110,7 +110,7 @@
   opacity: 1;
 }
 
-/* ── Sidebar (Coucou Left Panel Layout) ─────────────────────────────────────── */
+/* ── Sidebar (left panel layout) ─────────────────────────────────────── */
 
 .hub-side {
   width: 236px;
@@ -257,7 +257,7 @@
   text-align: start;
 }
 
-/* ── Right Panel (Coucou Floating Squircle) ────────────────────────────────── */
+/* ── Right Panel (floating squircle) ────────────────────────────────── */
 
 .hub-panel {
   flex: 1 1 auto;

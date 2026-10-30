@@ -269,7 +269,7 @@
   font-weight: var(--weight-semibold);
 }
 
-/* A button (it opens the card, or in a page shows the rail): Coucou Apple pill badge */
+/* A button (it opens the card, or in a page shows the rail): Apple pill badge */
 .nt-chip {
   flex: none;
   padding: 2px 8px;

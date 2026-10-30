@@ -493,6 +493,14 @@ export class FridayApi {
     return this.post('/ui/prefs', { prefs }, opts);
   }
 
+  /** Records onboarding-tour progress as an observation event (`onboarding.*`). Best effort. */
+  recordOnboarding(
+    event: 'started' | 'step_completed' | 'completed' | 'skipped',
+    step?: string,
+  ): Promise<{ ok: true }> {
+    return this.post('/onboarding', step === undefined ? { event } : { event, step });
+  }
+
   // ---- session
   logout(): Promise<{ ok: boolean }> {
     return this.post('/ui/logout');

@@ -7,7 +7,7 @@
  * Web Audio every call is a no-op.
  */
 
-export const COUCOU_SOUND_NAMES = [
+export const WAV_SOUND_NAMES = [
   'peek',
   'open',
   'close',
@@ -39,7 +39,7 @@ export const COUCOU_SOUND_NAMES = [
   'greeting',
 ] as const;
 
-export type CoucouSoundName = (typeof COUCOU_SOUND_NAMES)[number];
+export type WavSoundName = (typeof WAV_SOUND_NAMES)[number];
 
 export type SoundName =
   | 'node_appear'
@@ -48,7 +48,7 @@ export type SoundName =
   | 'task_complete'
   | 'emergency_halt'
   | 'click_tick'
-  | CoucouSoundName;
+  | WavSoundName;
 
 export const SOUND_NAMES: readonly SoundName[] = [
   'node_appear',
@@ -59,7 +59,7 @@ export const SOUND_NAMES: readonly SoundName[] = [
   'click_tick',
 ];
 
-export const WAV_MAP: Readonly<Record<string, CoucouSoundName>> = Object.freeze({
+export const WAV_MAP: Readonly<Record<string, WavSoundName>> = Object.freeze({
   node_appear: 'pop',
   escalation_alert: 'approval',
   allow_success: 'approve',
@@ -167,7 +167,7 @@ export class Synth {
     return this.#volume;
   }
 
-  /** Preloads all Coucou WAV sounds into memory when running in a live browser or desktop app. */
+  /** Preloads the character WAV palette into memory when running in a live browser or desktop app. */
   async #preload(): Promise<void> {
     if (this.#preloadPromise) return this.#preloadPromise;
     const ctx = this.#ctx;
@@ -182,7 +182,7 @@ export class Synth {
       const dirUrl = base.endsWith('/') ? base : base.slice(0, base.lastIndexOf('/') + 1);
 
       await Promise.all(
-        COUCOU_SOUND_NAMES.map(async (name) => {
+        WAV_SOUND_NAMES.map(async (name) => {
           try {
             const urls = [new URL(`sounds/${name}.wav`, dirUrl).href, `/sounds/${name}.wav`];
             for (const u of urls) {
@@ -297,14 +297,12 @@ export class Synth {
     const master = this.#master;
     if (!ctx || !master || this.#muted || this.#volume <= 0) return false;
     const isKnown =
-      (SOUND_NAMES as readonly string[]).includes(name) || (COUCOU_SOUND_NAMES as readonly string[]).includes(name);
+      (SOUND_NAMES as readonly string[]).includes(name) || (WAV_SOUND_NAMES as readonly string[]).includes(name);
     if (!isKnown) return false;
     this.#resume();
 
-    // Check if Coucou authentic WAV buffer is loaded
-    const wavName = (COUCOU_SOUND_NAMES as readonly string[]).includes(name)
-      ? (name as CoucouSoundName)
-      : WAV_MAP[name];
+    // Prefer the shipped WAV buffer when one is loaded
+    const wavName = (WAV_SOUND_NAMES as readonly string[]).includes(name) ? (name as WavSoundName) : WAV_MAP[name];
     const buf = wavName ? this.#buffers.get(wavName) : undefined;
     if (buf && typeof ctx.createBufferSource === 'function') {
       try {

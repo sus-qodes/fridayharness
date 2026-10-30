@@ -1,13 +1,13 @@
 /**
- * The mascot component (plan §7.9): a canvas of `size × size` CSS pixels with Blip on it. The frame
- * loop runs on demand: a frame is requested when something changes (state, reaction, pointer) and
- * frames continue only while something moves; between blinks a timer wakes it. It stops while the
- * canvas is off screen or the document is hidden, and on `destroy`.
+ * The mascot component (plan §7.9): a canvas of `size × size` CSS pixels with the mascot on it.
+ * The frame loop runs on demand: a frame is requested when something changes (state, reaction,
+ * pointer) and frames continue only while something moves; between blinks a timer wakes it. It
+ * stops while the canvas is off screen or the document is hidden, and on `destroy`.
  */
 import { visible } from '../model/text.js';
 import type { AppContext, Component } from '../shell/context.js';
 import { truncate } from '../ui/format.js';
-import { type Ctx2D, drawBlip, MASCOT_NAME, readPalette } from './character.js';
+import { type Ctx2D, drawMascot, MASCOT_NAME, readPalette } from './character.js';
 import { MascotController } from './controller.js';
 import { MascotEngine, type Random } from './engine.js';
 import { isOutfit } from './outfits.js';
@@ -16,7 +16,7 @@ import { describe, firstPendingApproval, type MascotState } from './states.js';
 export interface MascotOptions {
   /** Width and height in CSS pixels. */
   size: number;
-  /** Clicking (or Enter / Space) makes Blip wink and blush. */
+  /** Clicking (or Enter / Space) makes the mascot wink and blush. */
   interactive?: boolean;
 }
 
@@ -115,7 +115,7 @@ export function setCursor(x: number | null, y?: number): void {
 export interface MascotHandle extends Component {
   readonly el: HTMLCanvasElement;
   readonly engine: MascotEngine;
-  /** The state Blip shows. */
+  /** The state the mascot shows. */
   readonly state: MascotState;
   /** True while a frame or a wake-up timer is pending. */
   readonly running: boolean;
@@ -194,7 +194,7 @@ export function createMascotWith(
     if (!g) g = env.context(canvas);
     if (!g) return;
     const outfit = ctx.store.select('prefs').outfit;
-    drawBlip(g, engine.pose(), { size, dpr: ratio, outfit: isOutfit(outfit) ? outfit : 'none', palette });
+    drawMascot(g, engine.pose(), { size, dpr: ratio, outfit: isOutfit(outfit) ? outfit : 'none', palette });
   }
 
   function clearTimer(): void {
@@ -220,7 +220,7 @@ export function createMascotWith(
     else rest();
   }
 
-  /** Holds still; a timer wakes Blip for the next blink. */
+  /** Holds still; a timer wakes the mascot for the next blink. */
   function rest(): void {
     clearTimer();
     const wait = engine.nextWakeIn();
@@ -246,7 +246,8 @@ export function createMascotWith(
   let label = '';
   function relabel(): void {
     const state = controller.state;
-    let text = `${MASCOT_NAME}: ${describe(state, ctx.store.getState())}`;
+    // The mascot is the product's face and its states already name Friday ("Friday is idle").
+    let text = describe(state, ctx.store.getState());
     if (state === 'approval') {
       const first = firstPendingApproval(ctx.store.select('board'), ctx.now());
       if (first) text += ` (${visible(truncate(first.capability, 80))})`;

@@ -1,0 +1,42 @@
+/* The onboarding tour (plan §7.10): the spotlight and the walking stage's layering. */
+
+.tour-spotlight {
+  position: fixed;
+  inset: 0;
+  z-index: 8990;
+  pointer-events: none;
+}
+
+/* The dim is four strips around the hole; they block clicks outside it. */
+.tour-shade {
+  position: fixed;
+  background: rgba(4, 5, 7, 0.62);
+  pointer-events: auto;
+  transition:
+    top 0.55s var(--ease-snappy),
+    left 0.55s var(--ease-snappy),
+    width 0.55s var(--ease-snappy),
+    height 0.55s var(--ease-snappy);
+}
+
+.tour-ring {
+  position: fixed;
+  border-radius: 12px;
+  border: 2px solid var(--cyan);
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.25),
+    0 0 26px rgba(34, 211, 238, 0.35);
+  pointer-events: none;
+  transition:
+    top 0.55s var(--ease-snappy),
+    left 0.55s var(--ease-snappy),
+    width 0.55s var(--ease-snappy),
+    height 0.55s var(--ease-snappy);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour-shade,
+  .tour-ring {
+    transition: none;
+  }
+}

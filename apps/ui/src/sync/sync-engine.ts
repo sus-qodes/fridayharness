@@ -8,7 +8,7 @@
  * stream that brings only pings causes no other read (review R2).
  *
  * The stream opens only once a snapshot was read, from that snapshot's head: opened without one it
- * would start at 0 and replay the whole history through the dispatcher, with its sounds, Blip and
+ * would start at 0 and replay the whole history through the dispatcher, with its sounds, the mascot and
  * the Notch. Until then the read itself is tried again.
  *
  * Liveness is judged on raw bytes (pings included): a stream silent for 45 s is dropped and opened

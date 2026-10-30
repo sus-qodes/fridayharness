@@ -37,8 +37,8 @@ function finitePose(pose: Pose): boolean {
     pose.pitch,
     pose.lid,
     pose.blush,
-    pose.antennaX,
-    pose.antennaY,
+    pose.earX,
+    pose.earY,
     pose.tint.r,
     pose.tint.g,
     pose.tint.b,
@@ -376,14 +376,14 @@ describe('MascotEngine', () => {
     expect(e.busy).toBe(false);
   });
 
-  it('flattens when halted and lets the antenna droop', () => {
+  it('flattens when halted and lets the ears droop', () => {
     const e = new MascotEngine({ random: seededRandom(13) });
     e.setState('halted');
     run(e, 3);
     const pose = e.pose();
     expect(pose.eyes).toBe('x');
     expect(pose.scaleY).toBeCloseTo(0.72, 2);
-    expect(pose.antennaX).toBeGreaterThan(3);
+    expect(pose.earX).toBeGreaterThan(3);
   });
 
   it('settles everything when it comes back after a pause', () => {

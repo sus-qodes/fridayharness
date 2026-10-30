@@ -1,7 +1,7 @@
 /**
- * What Blip shows (plan §7.9, handoff Part 02 §3 with Friday's conditions, ERRATA F27, F28): one
- * state chosen from the store by priority, and the look of each state (eyes, tint, badge, motion).
- * Pure: no DOM, no timers.
+ * What the mascot shows (plan §7.9, handoff Part 02 §3 with Friday's conditions, ERRATA F27, F28):
+ * one state chosen from the store by priority, and the look of each state (eyes, tint, badge,
+ * motion). Pure: no DOM, no timers.
  */
 import type { UiSnapshot } from '@friday/protocol';
 import { waitsForHuman } from '../model/status.js';
@@ -120,7 +120,7 @@ function agentWorking(state: RootState, now: number): boolean {
   return false;
 }
 
-/** The last moment anything happened that Blip knows of (0: nothing yet). */
+/** The last moment anything happened that the mascot knows of (0: nothing yet). */
 export function lastActive(state: RootState): number {
   return Math.max(state.activity.lastActivityAt || 0, state.system.snapshotAt || 0);
 }
@@ -154,7 +154,7 @@ function toState(c: Condition): MascotState {
   return c === 'paused' ? 'sleeping' : c;
 }
 
-/** The state Blip shows now. */
+/** The state the mascot shows now. */
 export function selectState(state: RootState, now: number): MascotState {
   const first = conditions(state, now)[0];
   return first ? toState(first) : 'idle';
@@ -228,11 +228,11 @@ export interface StateMotion {
   drop: number;
   /** Particles the state emits while its motion runs. */
   emit: { type: ParticleType; everyS: number } | null;
-  /** The antenna light's pulse (0: steady). */
+  /** The halo's pulse (0: steady). */
   pulseHz: number;
-  /** LED brightness 0..1. */
+  /** Halo brightness 0..1. */
   led: number;
-  /** Seconds the looping motion runs after the last stimulus before Blip holds still. */
+  /** Seconds the looping motion runs after the last stimulus before the mascot holds still. */
   ambientS: number;
 }
 
@@ -240,7 +240,7 @@ export interface StateLook {
   eyes: EyeShape;
   tint: TintToken;
   badge: Badge | null;
-  /** Whether Blip blinks in this state. */
+  /** Whether the mascot blinks in this state. */
   blinks: boolean;
   motion: StateMotion;
   /** What the state means, for the accessible name. */
@@ -368,7 +368,7 @@ export const STATE_LOOK: Readonly<Record<MascotState, StateLook>> = Object.freez
   },
 });
 
-/** The accessible description of what Blip shows (paused is said as such). */
+/** The accessible description of what the mascot shows (paused is said as such). */
 export function describe(state: MascotState, root: Pick<RootState, 'board'>): string {
   if (state === 'sleeping' && root.board?.control.paused) return 'Friday is paused';
   return STATE_LOOK[state].description;

@@ -1,4 +1,4 @@
-/** Friday's product mark: Blip's face (a visor with two LED eyes and an antenna light; FD-12). */
+/** Friday's product mark: the mascot — a squishy cream silhouette (ears, egg body, ink eyes). */
 import { s } from '../ui/svg.js';
 
 export function productMark(size = 22, extraClass?: string): SVGSVGElement {
@@ -11,11 +11,18 @@ export function productMark(size = 22, extraClass?: string): SVGSVGElement {
       class: extraClass ? `sh-mark ${extraClass}` : 'sh-mark',
       'aria-hidden': 'true',
     },
-    s('line', { x1: 12, y1: 2.5, x2: 12, y2: 5.5, class: 'sh-mark-antenna' }),
-    s('circle', { cx: 12, cy: 2.5, r: 1.4, class: 'sh-mark-light' }),
-    s('rect', { x: 3, y: 5.5, width: 18, height: 14, rx: 5, class: 'sh-mark-shell' }),
-    s('rect', { x: 5.5, y: 8.5, width: 13, height: 8, rx: 3, class: 'sh-mark-visor' }),
-    s('rect', { x: 8, y: 10.5, width: 2.2, height: 4, rx: 1.1, class: 'sh-mark-eye' }),
-    s('rect', { x: 13.8, y: 10.5, width: 2.2, height: 4, rx: 1.1, class: 'sh-mark-eye' }),
+    s('path', {
+      d: 'M7.2 9.4 Q5.8 3.8 10 6.2 Z',
+      class: 'sh-mark-ear',
+    }),
+    s('path', {
+      d: 'M16.8 9.4 Q18.2 3.8 14 6.2 Z',
+      class: 'sh-mark-ear',
+    }),
+    s('ellipse', { cx: 12, cy: 14, rx: 7.6, ry: 6.6, class: 'sh-mark-body' }),
+    s('rect', { x: 8.7, y: 12.2, width: 2, height: 3.6, rx: 1, class: 'sh-mark-eye' }),
+    s('rect', { x: 13.3, y: 12.2, width: 2, height: 3.6, rx: 1, class: 'sh-mark-eye' }),
+    s('ellipse', { cx: 7.9, cy: 16.2, rx: 1.5, ry: 0.8, class: 'sh-mark-blush' }),
+    s('ellipse', { cx: 16.1, cy: 16.2, rx: 1.5, ry: 0.8, class: 'sh-mark-blush' }),
   );
 }

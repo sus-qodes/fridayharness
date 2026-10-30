@@ -332,6 +332,27 @@ export function buildApp(deps: AppDeps): Hono<Env> {
       return c.json({ ok: true });
     },
   );
+
+  // The onboarding tour's progress (plan §7.10): observations only, so any surface can tell how
+  // far a person got. The interface records them; the CLI may too.
+  const ONBOARDING_EVENTS = new Set(['started', 'step_completed', 'completed', 'skipped']);
+  app.post(`${P}/onboarding`, allow(...OPERATOR), async (c) => {
+    const body = (await json(c)) as { event?: unknown; step?: unknown };
+    const event = typeof body.event === 'string' ? body.event : '';
+    if (!ONBOARDING_EVENTS.has(event)) {
+      throw new FridayError('invalid_request', 'event must be started, step_completed, completed or skipped');
+    }
+    const step = typeof body.step === 'string' ? body.step.slice(0, 64) : undefined;
+    const auth = c.get('auth');
+    state.recordObservation(
+      project.project_id,
+      { kind: 'human', id: auth?.credential_id ?? 'ui' },
+      `onboarding.${event}`,
+      step === undefined ? {} : { step },
+      [],
+    );
+    return c.json({ ok: true }, 201);
+  });
   const diffOpts = (c: Context) => ({
     stat: c.req.query('stat') === '1' || c.req.query('stat') === 'true',
     ...(deps.stateDir ? { stateDir: deps.stateDir } : {}),

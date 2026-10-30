@@ -179,33 +179,25 @@
   }
 }
 
-/* ---- Product mark (Blip's face) */
+/* ---- Product mark (the mascot's silhouette) */
 .sh-mark {
   flex: none;
 }
 
-.sh-mark-shell {
-  fill: var(--mascot-shell);
-  stroke: var(--mascot-shell-highlight);
-  stroke-width: 1;
+.sh-mark-body {
+  fill: var(--mascot-body-top);
 }
 
-.sh-mark-visor {
-  fill: var(--mascot-visor);
+.sh-mark-ear {
+  fill: var(--mascot-body-top);
 }
 
 .sh-mark-eye {
-  fill: var(--mascot-led);
+  fill: var(--mascot-ink);
 }
 
-.sh-mark-antenna {
-  stroke: var(--mascot-shell-highlight);
-  stroke-width: 1.4;
-  stroke-linecap: round;
-}
-
-.sh-mark-light {
-  fill: var(--color-cyan-glow);
+.sh-mark-blush {
+  fill: var(--mascot-blush);
 }
 
 /* ---- Header */

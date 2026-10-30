@@ -18,7 +18,8 @@
  */
 import { FridayApi } from '../api/client.js';
 import { decisionItems } from '../governance/tray.js';
-import { mountCoucouSettingsHub } from '../panels/coucou-settings.js';
+import { createMascotStage } from '../mascot/stage.js';
+import { mountSettingsHub } from '../panels/settings-hub.js';
 import { browserPlatform } from '../platform/browser-platform.js';
 import { HttpTransport } from '../platform/http-transport.js';
 import {
@@ -35,6 +36,8 @@ import { loadPrefs, startPrefsSync, watchPrefs } from '../store/prefs.js';
 import { createStore, type FridayStore, type ReactionKind } from '../store/state.js';
 import { Dispatcher } from '../sync/dispatcher.js';
 import { SyncEngine, UNREACHABLE_MESSAGE } from '../sync/sync-engine.js';
+import { startOnboardingTour, type TourHandle } from '../tour/onboarding.js';
+import { createSpotlight } from '../tour/spotlight.js';
 import { button, h, setText } from '../ui/dom.js';
 import { Keyboard } from '../ui/keys.js';
 import { icon } from '../ui/svg.js';
@@ -271,7 +274,7 @@ export function mountShell(
   mount('The banners', top, () => mountBanners(ctx, { reload: opts.reload }));
   mount('The connection strip', top, () => mountConnectionStrip(ctx.store, { onRetry: opts.onRetry }));
   mount('The Studio', studio, () => areas.studio(ctx, studio));
-  mount('The Settings Hub', settingsHub, () => mountCoucouSettingsHub(ctx));
+  mount('The Settings Hub', settingsHub, () => mountSettingsHub(ctx));
   mount('The decisions', rail, () => areas.tray(ctx, rail, { onCollapse: () => setRailCollapsed(true) }));
   const checklistArea = areas.gettingStarted;
   if (checklistArea) mount('Getting started', rail, () => mountChecklist(ctx, checklistArea));
@@ -282,6 +285,28 @@ export function mountShell(
   // Drawers and modals sit under the confirm dialogs and the toasts.
   mount('The drawers', overlays, () => mountDrawerHost(ctx, services.layers), services.confirms.el);
   mount('The dialogs', overlays, () => mountModalHost(ctx, services.layers), services.confirms.el);
+  // The onboarding tour (plan §7.10): Friday walks first-time users through the loop. The
+  // spotlight dims under the stage, and both sit above the drawers.
+  let tour: TourHandle | null = null;
+  mount(
+    'The tour',
+    overlays,
+    () => {
+      const spotlight = createSpotlight();
+      const stage = createMascotStage(ctx, { size: 72 });
+      tour = startOnboardingTour(ctx, { stage, spotlight });
+      const wrap = h('div', { class: 'sh-tour' });
+      wrap.append(spotlight.el, stage.el);
+      return {
+        el: wrap,
+        destroy() {
+          tour?.destroy();
+          tour = null;
+        },
+      };
+    },
+    services.confirms.el,
+  );
 
   let popSettingsKeys: (() => void) | null = null;
   const popGlobalKeys = ctx.keys.push({

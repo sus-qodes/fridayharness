@@ -261,13 +261,13 @@ describe('createMascot', () => {
     expect(mascot.engine.pose().yaw).toBe(0);
   });
 
-  it('winks and blushes when an interactive Blip is clicked or pressed', () => {
+  it('winks and blushes when an interactive mascot is clicked or pressed', () => {
     const env = fakeEnv();
     mascot = createMascotWith(ctx, { size: 56, interactive: true }, env);
     expect(mascot.el.getAttribute('role')).toBe('button');
     expect(mascot.el.tabIndex).toBe(0);
     expect(mascot.el.className).toContain('ms-interactive');
-    expect(mascot.el.getAttribute('aria-label')).toContain('Blip');
+    expect(mascot.el.getAttribute('aria-label')).toContain('Friday');
     mascot.el.click();
     expect(mascot.engine.eyes).toBe('wink');
     env.settle();
@@ -290,11 +290,11 @@ describe('createMascot', () => {
   it('says what it shows, with agent text as visible text', () => {
     const env = fakeEnv();
     mascot = createMascotWith(ctx, { size: 56 }, env);
-    expect(mascot.el.getAttribute('aria-label')).toBe('Blip: Friday is idle');
+    expect(mascot.el.getAttribute('aria-label')).toBe('Friday is idle');
     const hostile = `<img src=x onerror=alert(1)>‮​${'a'.repeat(5_000)}`;
     ctx.board(makeSnapshot({ approvals: [makeApproval({ capability: hostile })] }));
     const label = mascot.el.getAttribute('aria-label') ?? '';
-    expect(label.startsWith('Blip: An approval waits for you (')).toBe(true);
+    expect(label.startsWith('An approval waits for you (')).toBe(true);
     expect(label).toContain('<img src=x onerror=alert(1)>');
     expect(label).toContain('⟨U+202E⟩');
     expect(label).toContain('⟨U+200B⟩');
@@ -307,7 +307,7 @@ describe('createMascot', () => {
       control: { paused: true, reason: null, changed_at: null, changed_by: null, halted_at: null },
       approvals: [],
     });
-    expect(mascot.el.getAttribute('aria-label')).toBe('Blip: Friday is paused');
+    expect(mascot.el.getAttribute('aria-label')).toBe('Friday is paused');
   });
 
   it('clamps a nonsense size', () => {

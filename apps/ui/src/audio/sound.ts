@@ -12,12 +12,12 @@
 import type { UiSnapshot } from '@friday/protocol';
 import type { AppContext } from '../shell/context.js';
 import type { ReactionKind, RootState } from '../store/state.js';
-import { COUCOU_SOUND_NAMES, type SoundName, Synth } from './synth.js';
+import { type SoundName, Synth, WAV_SOUND_NAMES } from './synth.js';
 
 /** A sound of a kind plays at most this often. */
 // The character sounds have no gap of their own: each plays when its moment comes.
 export const MIN_GAP_MS: Readonly<Record<SoundName, number>> = Object.freeze({
-  ...(Object.fromEntries(COUCOU_SOUND_NAMES.map((n) => [n, 0])) as Record<(typeof COUCOU_SOUND_NAMES)[number], number>),
+  ...(Object.fromEntries(WAV_SOUND_NAMES.map((n) => [n, 0])) as Record<(typeof WAV_SOUND_NAMES)[number], number>),
   node_appear: 1_500,
   escalation_alert: 1_000,
   allow_success: 250,

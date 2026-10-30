@@ -690,6 +690,12 @@ const OBSERVATION_TYPES = new Set([
   'control.task_stopped',
   // The Master Brain began a model call, so a client can show it thinking (plan M9 §5.11).
   'brain.call_started',
+  // The onboarding tour (plan §7.10): how far a person got, so any surface can pick up where
+  // they left off.
+  'onboarding.started',
+  'onboarding.step_completed',
+  'onboarding.completed',
+  'onboarding.skipped',
 ]);
 
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };

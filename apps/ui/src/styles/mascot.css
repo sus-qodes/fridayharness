@@ -1,4 +1,4 @@
-/* The mascot Blip (plan §7.9): its canvas. The drawing itself is Canvas 2D (src/mascot). */
+/* The mascot (plan §7.9): its canvas. The drawing itself is Canvas 2D (src/mascot). */
 
 .ms-canvas {
   display: block;
@@ -19,4 +19,80 @@
 .ms-interactive:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+
+/* ---- The walking stage (onboarding): the mascot and its thought bubble on one overlay. */
+
+.ms-stage {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9000;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.ms-stage .ms-stage-mascot .ms-canvas {
+  pointer-events: auto;
+  filter: drop-shadow(0 14px 22px rgba(0, 0, 0, 0.45));
+}
+
+.ms-bubble {
+  position: absolute;
+  max-width: 280px;
+  padding: 11px 14px 12px;
+  border-radius: 16px;
+  border-bottom-left-radius: 5px;
+  background: var(--bg-surface-glass);
+  backdrop-filter: blur(18px) saturate(180%);
+  border: 1px solid var(--border-medium);
+  box-shadow: var(--shadow-overlay, 0 12px 34px rgba(0, 0, 0, 0.5));
+  color: var(--ink);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  /* The stage is pointer-transparent; the bubble's buttons are not. */
+  pointer-events: auto;
+}
+
+.ms-bubble::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-medium);
+  border-bottom: 1px solid var(--border-medium);
+  border-bottom-right-radius: 4px;
+  transform: rotate(45deg);
+}
+
+.ms-bubble-title {
+  font-weight: 500;
+  margin-bottom: 3px;
+}
+
+.ms-bubble-title[hidden] {
+  display: none;
+}
+
+.ms-bubble-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.ms-bubble-actions[hidden] {
+  display: none;
+}
+
+.ms-bubble-meta {
+  margin-top: 8px;
+  font-size: var(--text-caption);
+  color: var(--dim-2);
+}
+
+.ms-bubble-meta[hidden] {
+  display: none;
 }

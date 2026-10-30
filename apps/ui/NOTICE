@@ -1,9 +1,9 @@
 Friday interface (apps/ui)
 
-Blip, Friday's mascot, is an original character: a small screen-faced robot
-with LED eyes on a dark visor, an antenna light and side pads, drawn in code
-with the Canvas 2D API (src/mascot). Friday's sounds are synthesised in code
-with the Web Audio API (src/audio); no audio files are shipped.
+Friday's mascot is an original character: a squishy cream creature — an egg
+of a body with two rounded ears and a small tail, ink eyes and a blush — drawn
+in code with the Canvas 2D API (src/mascot). The character's geometry,
+colours, expressions and animations are Friday's own.
 
 Some generic animation techniques in src/mascot were learned from the
 MIT-licensed source code of the project "coucou"
@@ -17,9 +17,20 @@ MIT-licensed source code of the project "coucou"
   - an on-demand frame loop that stops when nothing moves, randomised blinks,
     and particles positioned from their age with a ramped alpha.
 
-No names, characters, artwork, icons, expressions, geometry, colours or sounds
-were taken from that project. Its names and its character are reserved by
-their author and are not used by Friday.
+No names, characters, artwork, icons, expressions, geometry or colours are
+taken from that project. Its names and its character are reserved by their
+author and are not used by Friday.
+
+SOUNDS — TEMPORARY, PENDING REPLACEMENT
+
+The files in public/sounds are the "coucou" project's shipped sounds, copied
+verbatim. They are NOT covered by that project's MIT licence: its
+LICENSE-ASSETS.md reserves all rights on the sounds and forbids distributing
+a derivative work that ships them. They are included here for local
+development only and MUST be replaced (with Friday's own recordings or the
+synthesised fallbacks in src/audio/synth.ts, which are original) before any
+public release or redistribution of this app. Do not add new uses of these
+files.
 
 The MIT licence of that project's code:
 

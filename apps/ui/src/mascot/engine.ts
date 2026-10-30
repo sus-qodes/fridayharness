@@ -1,5 +1,5 @@
 /**
- * Blip's motion (plan §7.9, handoff Part 02 §2.2, §5, §6). Pure: no DOM and no timers; the
+ * The mascot's motion (plan §7.9, handoff Part 02 §2.2, §5, §6). Pure: no DOM and no timers; the
  * mascot's frame loop calls `tick` with the time since the last frame and draws `pose()`.
  *
  * - Physics steps take `dt = min(0.05, Δ)`; springs are sub-stepped at 1/240 s with the left-over
@@ -12,8 +12,8 @@
  *   the older one. Every channel is an offset that returns to 0.
  * - `busy` says whether another frame is needed; `nextWakeIn` when the next blink is due.
  *
- * Units are design pixels of the 96 × 96 grid Blip is drawn on; y grows downward, except `lift`,
- * which is upward like Part 02's jump.
+ * Units are design pixels of the 96 × 96 grid the mascot is drawn on; y grows downward, except
+ * `lift`, which is upward like Part 02's jump.
  */
 import { EYE_SHAPES, EYES, type EyeShape } from './eyes.js';
 import type { Rgb } from './geometry.js';
@@ -52,7 +52,7 @@ export function smooth(x: number, target: number, c: number, dt: number): number
   return Math.abs(target - next) < SETTLE ? target : next;
 }
 
-/** The gaze a pointer offset (CSS px from Blip's centre) asks for. */
+/** The gaze a pointer offset (CSS px from the mascot.s centre) asks for. */
 export function gazeFromPointer(dx: number, dy: number, distance = GAZE_DISTANCE): { yaw: number; pitch: number } {
   return {
     yaw: clamp(dx / distance, -YAW_LIMIT, YAW_LIMIT),
@@ -148,7 +148,7 @@ export interface TweenKey {
   ease: Easing;
 }
 
-/** Offsets Blip's tweens drive; each rests at 0. */
+/** Offsets the mascot's tweens drive; each rests at 0. */
 export type Channel = 'lift' | 'scaleX' | 'scaleY' | 'tilt' | 'blush' | 'blink' | 'glow';
 
 /** Part 02 §6: the jump on completion (design px, up positive). */
@@ -370,13 +370,13 @@ export interface Pose {
   /** 0 shut, 1 open. */
   lid: number;
   blush: number;
-  /** Antenna tip displacement (design px). */
-  antennaX: number;
-  antennaY: number;
+  /** The ears' lag displacement (design px): they trail the head's motion. */
+  earX: number;
+  earY: number;
   tint: Rgb;
-  /** Extra glow of the visor rim and antenna (0..1). */
+  /** Extra glow of the halo behind the body (0..1). */
   glow: number;
-  /** Antenna light 0..1 (pulses in some states). */
+  /** The halo's brightness 0..1 (pulses in some states). */
   light: number;
   led: number;
   badge: Badge | null;
@@ -430,9 +430,9 @@ export class MascotEngine {
   #tint: Rgb = { r: 226, g: 232, b: 240 };
   #tintTarget: Rgb = { r: 226, g: 232, b: 240 };
 
-  // Secondary motion: the antenna tip lags the head.
-  readonly #antX = new Spring(0, { stiffness: 140, damping: 9 });
-  readonly #antY = new Spring(0, { stiffness: 160, damping: 11 });
+  // Secondary motion: the ears lag the head.
+  readonly #earLagX = new Spring(0, { stiffness: 140, damping: 9 });
+  readonly #earLagY = new Spring(0, { stiffness: 160, damping: 11 });
   #headVX = 0;
   #headVY = 0;
   #headX = 0;
@@ -479,7 +479,7 @@ export class MascotEngine {
     this.#tint = { ...this.#tintTarget };
   }
 
-  /** The pointer's offset from Blip's centre in CSS px, or null when it left. */
+  /** The pointer's offset from the mascot's centre in CSS px, or null when it left. */
   setPointer(offset: { dx: number; dy: number } | null): void {
     const prev = this.#pointer;
     if (offset && (!Number.isFinite(offset.dx) || !Number.isFinite(offset.dy))) return;
@@ -494,8 +494,8 @@ export class MascotEngine {
     if (reduced) {
       this.#particles = [];
       this.#timeline.finish();
-      this.#antX.snap();
-      this.#antY.snap();
+      this.#earLagX.snap();
+      this.#earLagY.snap();
     }
   }
 
@@ -600,11 +600,15 @@ export class MascotEngine {
     if (this.#timeline.active || this.#particles.length > 0) return true;
     if (this.#expression && this.t < this.#expressionUntil) return true;
     if (this.ambient) return true;
-    if (!this.#antX.settled || !this.#antY.settled) return true;
+    if (!this.#earsSettled()) return true;
     return !this.#converged();
   }
 
-  /** Seconds until something is due while Blip holds still (the next blink); null when nothing is. */
+  #earsSettled(): boolean {
+    return this.#earLagX.settled && this.#earLagY.settled;
+  }
+
+  /** Seconds until something is due while the mascot holds still (the next blink); null when nothing is. */
   nextWakeIn(): number | null {
     if (!this.#look.blinks) return null;
     return Math.max(0, this.#blinks.next - this.t);
@@ -730,10 +734,10 @@ export class MascotEngine {
     this.#timeline.step(dt);
     this.#particles = stepParticles(this.#particles, dt);
 
-    // Secondary motion: the antenna tip feels the head's acceleration.
+    // Secondary motion: the ears feel the head's acceleration.
     if (this.reduced) {
-      this.#antX.snap();
-      this.#antY.snap();
+      this.#earLagX.snap();
+      this.#earLagY.snap();
     } else {
       const tilt = this.#tilt + this.#tiltWave + this.#timeline.value('tilt');
       const headX = Math.sin(tilt) * 26 + this.#yaw * 3;
@@ -753,13 +757,13 @@ export class MascotEngine {
       this.#headY = headY;
       this.#headVX = vx;
       this.#headVY = vy;
-      this.#antX.target = this.state === 'halted' ? 5 : 0;
-      this.#antY.target = this.state === 'halted' ? 3 : this.state === 'sleeping' ? 1.2 : 0;
+      this.#earLagX.target = this.state === 'halted' ? 5 : 0;
+      this.#earLagY.target = this.state === 'halted' ? 3 : this.state === 'sleeping' ? 1.2 : 0;
       const moving = Math.abs(ax) > 1 || Math.abs(ay) > 1;
-      this.#antX.step(dt, moving ? -ax * 0.02 : 0);
-      this.#antY.step(dt, moving ? -ay * 0.012 : 0);
-      this.#antX.x = clamp(this.#antX.x, -8, 8);
-      this.#antY.x = clamp(this.#antY.x, -5, 5);
+      this.#earLagX.step(dt, moving ? -ax * 0.02 : 0);
+      this.#earLagY.step(dt, moving ? -ay * 0.012 : 0);
+      this.#earLagX.x = clamp(this.#earLagX.x, -8, 8);
+      this.#earLagY.x = clamp(this.#earLagY.x, -5, 5);
     }
   }
 
@@ -783,10 +787,10 @@ export class MascotEngine {
     this.#breath = 0;
     this.#bob = 0;
     this.#tiltWave = 0;
-    this.#antX.snap();
-    this.#antY.snap();
+    this.#earLagX.snap();
+    this.#earLagY.snap();
     this.#baseline = true;
-    // Overdue by more than a second: Blip was hidden; plan the next blink from now.
+    // Overdue by more than a second: the mascot was hidden; plan the next blink from now.
     if (this.t - this.#blinks.next > 1) this.#blinks.reset(this.t);
   }
 
@@ -808,8 +812,8 @@ export class MascotEngine {
       pitch: this.#pitch,
       lid: 1 - clamp(tl.value('blink'), 0, 1),
       blush: clamp(tl.value('blush'), 0, 1),
-      antennaX: this.#antX.x,
-      antennaY: this.#antY.x,
+      earX: this.#earLagX.x,
+      earY: this.#earLagY.x,
       tint: { ...this.#tint },
       glow: clamp(tl.value('glow'), 0, 1),
       light: clamp(this.#led * (0.55 + 0.45 * pulse), 0, 1),

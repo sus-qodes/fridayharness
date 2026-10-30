@@ -1,7 +1,8 @@
 /**
- * Blip's outfits (plan §7.9, handoff Part 02 §7): headphones, visor glasses, a winter hat, a witch
- * hat and sunglasses, chosen in Settings (`prefs.outfit`). Each is drawn in two passes: the part
- * behind the head before it, the part in front after the face. Same design grid as the character.
+ * The mascot's outfits (plan §7.9, handoff Part 02 §7): headphones, visor glasses, a winter hat, a
+ * witch hat and sunglasses, chosen in Settings (`prefs.outfit`). Each is drawn in two passes: the
+ * part behind the head before it, the part in front after the face. Same design grid as the
+ * character.
  */
 import type { Prefs } from '../store/state.js';
 import type { Ctx2D, Palette } from './character.js';
@@ -22,7 +23,7 @@ const BRIM_Y = CY - R * 0.8;
 export function drawOutfitBehind(g: Ctx2D, outfit: Outfit, _pose: Pose, pal: Palette, _px: number): void {
   switch (outfit) {
     case 'headphones':
-      // The band passes behind the antenna, over the top of the head.
+      // The band passes behind the ears, over the top of the head.
       g.save();
       g.beginPath();
       g.lineWidth = R * 0.16;
@@ -37,7 +38,7 @@ export function drawOutfitBehind(g: Ctx2D, outfit: Outfit, _pose: Pose, pal: Pal
       g.save();
       g.beginPath();
       g.ellipse(CX, BRIM_Y, R * 1.45, R * 0.3, 0, Math.PI, Math.PI * 2);
-      g.fillStyle = pal.shell;
+      g.fillStyle = pal.slate600;
       g.fill();
       g.restore();
       break;
@@ -63,7 +64,7 @@ export function drawOutfitFront(
         roundRectPath(g, x, CY + 1, R * 0.46, R * 0.92, R * 0.2);
         g.fillStyle = pal.slate600;
         g.fill();
-        // A ring that glows with the antenna light.
+        // A ring that glows with the state's halo.
         g.shadowColor = rgbString(pose.tint, 0.8);
         g.shadowBlur = Math.max(0, (1 + 3 * pose.light) * px);
         g.beginPath();
@@ -99,7 +100,7 @@ export function drawOutfitFront(
     }
     case 'winter': {
       g.save();
-      // A knit dome over the top of the head (it covers the antenna).
+      // A knit dome over the top of the head (it covers the ears).
       g.beginPath();
       g.moveTo(CX - R * 1.04, CY - R * 0.55);
       g.bezierCurveTo(CX - R * 1.04, CY - R * 1.62, CX + R * 1.04, CY - R * 1.62, CX + R * 1.04, CY - R * 0.55);
@@ -123,24 +124,24 @@ export function drawOutfitFront(
       g.fillStyle = pal.slate200;
       g.fill();
       g.beginPath();
-      g.arc(CX + pose.antennaX * 0.5, CY - R * 1.42 + pose.antennaY * 0.5, R * 0.22, 0, Math.PI * 2);
+      g.arc(CX + pose.earX * 0.5, CY - R * 1.42 + pose.earY * 0.5, R * 0.22, 0, Math.PI * 2);
       g.fill();
       g.restore();
       break;
     }
     case 'witch': {
       g.save();
-      const tipX = CX + R * 0.42 + pose.antennaX * 0.6;
-      const tipY = CY - R * 2.2 + pose.antennaY * 0.4;
+      const tipX = CX + R * 0.42 + pose.earX * 0.6;
+      const tipY = CY - R * 2.2 + pose.earY * 0.4;
       g.beginPath();
       g.moveTo(CX - R * 0.78, BRIM_Y);
       g.quadraticCurveTo(CX - R * 0.2, CY - R * 1.5, tipX, tipY);
       g.quadraticCurveTo(CX + R * 0.32, CY - R * 1.4, CX + R * 0.78, BRIM_Y);
       g.closePath();
-      g.fillStyle = pal.shell;
+      g.fillStyle = pal.slate600;
       g.fill();
       g.lineWidth = 0.8;
-      g.strokeStyle = pal.shellHighlight;
+      g.strokeStyle = pal.slate400;
       g.stroke();
       // The band.
       g.beginPath();
@@ -152,9 +153,9 @@ export function drawOutfitFront(
       // The near half of the brim.
       g.beginPath();
       g.ellipse(CX, BRIM_Y, R * 1.45, R * 0.3, 0, 0, Math.PI);
-      g.fillStyle = pal.shell;
+      g.fillStyle = pal.slate600;
       g.fill();
-      g.strokeStyle = pal.shellHighlight;
+      g.strokeStyle = pal.slate400;
       g.lineWidth = 0.8;
       g.stroke();
       g.restore();
@@ -165,7 +166,7 @@ export function drawOutfitFront(
       for (const eye of [face.left, face.right]) {
         g.beginPath();
         roundRectPath(g, eye.x, eye.y, R * 0.56, R * 0.44, R * 0.14);
-        g.fillStyle = pal.visor;
+        g.fillStyle = pal.ink;
         g.globalAlpha = 0.94;
         g.fill();
         g.globalAlpha = 1;

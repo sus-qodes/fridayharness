@@ -1,9 +1,9 @@
 /**
- * Blip's particles (plan §7.9): sparks and stars for celebrations, hearts, sweat drops on errors
+ * The mascot.s particles (plan §7.9): sparks and stars for celebrations, hearts, sweat drops on errors
  * and floating z's while asleep. A particle's position is computed from its age (origin + v·age +
  * ½·g·age²), never integrated, so it is the same at any frame rate; its alpha ramps up over the
  * first fifth of its life and then fades; it is removed once its age reaches its lifetime.
- * Coordinates are design pixels of Blip's 96 × 96 grid, y down, relative to the head's centre.
+ * Coordinates are design pixels of the mascot.s 96 × 96 grid, y down, relative to the head's centre.
  */
 import { heartPath, type Pen, starPath } from './eyes.js';
 
@@ -163,7 +163,7 @@ export function snooze(random: Random, color: string): Particle {
   };
 }
 
-/** Hearts floating up (a click on Blip). */
+/** Hearts floating up (a click on the mascot). */
 export function hearts(random: Random, color: string, count = 2): Particle[] {
   const out: Particle[] = [];
   for (let i = 0; i < count; i++) {

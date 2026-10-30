@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DesktopCommands, DesktopShortcut } from '../shell/context.js';
 import { makeContext } from '../test/context.js';
 import { makeRun, makeSnapshot } from '../test/fixtures.js';
-import { mountCoucouSettingsHub } from './coucou-settings.js';
+import { mountSettingsHub } from './settings-hub.js';
 import { buttonBy, flush, type } from './test-support.js';
 
 const brain = (over: Partial<BrainStatusView> = {}): BrainStatusView => ({
@@ -59,7 +59,7 @@ function desktopContext(over: Partial<BrainStatusView> = {}, desktop: Partial<De
 
 function hubAt(ctx: ReturnType<typeof makeContext>, tab: string) {
   ctx.store.patch('ui', { settingsTab: tab });
-  const hub = mountCoucouSettingsHub(ctx);
+  const hub = mountSettingsHub(ctx);
   document.body.append(hub.el);
   return hub;
 }

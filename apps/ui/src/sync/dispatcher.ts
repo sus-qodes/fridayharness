@@ -179,7 +179,7 @@ export class Dispatcher {
         this.#react('node', now);
         break;
       case 'harness.registered':
-        // A new agent: Blip's happy hop (the label tells sounds and the mascot it was an agent).
+        // A new agent: the mascot.s happy hop (the label tells sounds and the mascot it was an agent).
         this.#react('approved', now, 'agent');
         break;
       case 'control.halted':
