@@ -1114,11 +1114,13 @@ pub fn run() {
         .setup(move |app| {
             let config_dir = app.path().app_config_dir()?;
             let settings = settings::Settings::load(&config_dir);
-            create_windows(app)?;
             let island = Arc::new(island::Island::default());
             island.set_monitor(settings.notch_monitor.clone());
             let show_notch = settings.show_notch;
             let stored_shortcuts = settings.shortcuts.clone();
+            // The state must exist before the first webview does: a warm WebView2 loads the Notch
+            // page during `create_windows` below, and its first `notch_rect` invoke lands while
+            // setup is still running (LESSON: manage before windows, or a page beat the setup).
             app.manage(AppState {
                 project: RwLock::new(None),
                 install: Mutex::new(None),
@@ -1135,6 +1137,7 @@ pub fn run() {
                 muted: AtomicBool::new(false),
                 stopping: AtomicBool::new(false),
             });
+            create_windows(app)?;
             let handle = app.handle().clone();
             if let Some(notch) = island::window(&handle) {
                 platform_windows::keep_tool_window(platform_windows::raw_hwnd(&notch));

@@ -394,6 +394,12 @@ export const FridayConfig = z
       })
       .prefault({}),
     /**
+     * What `friday init` does once for a new project. `graph`: build the code graph then (and on
+     * the daemon's first start when it is missing), so the first task starts from a ready graph;
+     * off, the graph is built the first time something needs it.
+     */
+    setup: z.object({ graph: z.boolean().default(true) }).prefault({}),
+    /**
      * Recovering work from a lost harness or a failed attempt (ADR-0026): how many more attempts a
      * task gets automatically, and how often the same agent error may repeat, before a human decides.
      */
@@ -599,7 +605,7 @@ export function loadConfig(path: string): FridayConfig {
 }
 
 /** Initial config written by `friday init`. Block style so the hook launcher can find the id without a YAML parser. */
-export function renderInitialConfig(projectId: string, name: string): string {
+export function renderInitialConfig(projectId: string, name: string, opts: { graph?: boolean } = {}): string {
   return `# Friday project configuration. Tracked in git; never put secrets here.
 # Reference: docs/BUILD_PLAN.md, Appendix 6.
 project:
@@ -642,6 +648,11 @@ verification:
 #       allow_scripts: false                # true: lifecycle scripts may run (loosening)
 #       timeout_s: 600
 #       on_failure: warn                    # warn: the agent starts and is told; fail: a human decides
+
+# What "friday init" does once for a new project: build the code graph right away, so the Studio
+# and every agent start from a ready one (it then follows your changes). false: built on first use.
+setup:
+  graph: ${opts.graph === false ? 'false' : 'true'}
 
 # The Master Brain turns goals into plans ("friday goal create"). It calls a model only when the
 # project allows remote calls here AND you allowed it on your machine ("friday brain allow-remote");

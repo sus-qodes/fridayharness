@@ -65,7 +65,7 @@ The daemon has no general MCP endpoint. `friday-mcp` is stdio; the spawn adapter
 | Clone key | `<project_id>-<8 hex of sha256(root)>`; the root is lowercased on Windows before hashing. The project root is resolved through its real path by discovery. |
 | Private project directory | `<stateDir>/projects/<project_key>/`; holds discovery, lock, operator/bootstrap tokens, local provider approvals and per-clone runtime configuration. Permissions are checked, not inferred from the profile directory. |
 | User credential store | `<stateDir>/credentials/<name>.key`; provider endpoint preferences use `<name>.json`. Secrets are shared by the user's projects, provider permission is per clone. |
-| Install descriptor | `<stateDir>/install.json`; paths to the installed Node, CLI, daemon and MCP entry points. |
+| Install descriptor | `<stateDir>/install.json`; paths to the installed Node, the CLI and the MCP server entry point. `daemon_entry` is always `null`: the daemon runs inside the CLI (`friday run`), so no separate daemon launcher exists. |
 | Task worktree base, Windows | `%LOCALAPPDATA%/friday-worktrees`. |
 | Task worktree base, POSIX | `<XDG_STATE_HOME>/friday-worktrees`, or `<home>/.local/state/friday-worktrees`. |
 | Worktree overrides | `FRIDAY_WORKTREES_DIR`; otherwise, when `FRIDAY_STATE_DIR` is set, `friday-worktrees` beside that state directory. |

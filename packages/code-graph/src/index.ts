@@ -10,6 +10,7 @@ export { FACTS_FORMAT, type FactsCache, memoryFactsCache, openFactsCache } from 
 export { extractImports, type ImportFact, type ImportKind } from './extract.js';
 export {
   type BuildOptions,
+  type BuildProgress,
   buildGraph,
   CodeGraph,
   type FileFacts,

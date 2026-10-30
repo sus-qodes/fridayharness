@@ -60,12 +60,17 @@ describe('friday start', () => {
       let url = '';
       try {
         expect(first.code, first.stderr).toBe(0);
-        const lines = first.stdout.trim().split('\n');
+        const all = first.stdout.trim().split('\n');
+        // The setup lines come first: the code graph is built before Friday starts.
+        expect(all[0]).toBe('Setting up your project');
+        expect(all.some((l) => l.startsWith('  Code graph ready: '))).toBe(true);
+        const lines = all.slice(all.findIndex((l) => l.startsWith('Initialized Friday')));
         // Three lines, and one more while the project has no approved intent (ADR-0034 §2).
         expect(lines.length).toBeLessThanOrEqual(4);
         if (lines.length === 4) expect(lines[3]).toContain('friday intent');
         expect(lines[0]).toContain('Initialized Friday');
         expect(lines[1]).toContain('Started Friday hidden');
+        expect(existsSync(path.join(dir, '.friday', 'graph', 'setup.json'))).toBe(true);
         const m = /(http:\/\/127\.0\.0\.1:\d+)\/ui\//.exec(first.stdout);
         expect(m, first.stdout).not.toBeNull();
         url = (m as RegExpExecArray)[1] as string;

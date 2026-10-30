@@ -1,4 +1,5 @@
 import {
+  type BuildOptions,
   buildGraph,
   type CodeGraph,
   type FactsCache,
@@ -71,7 +72,11 @@ export class GraphService {
    * built again; the content-addressed parse cache keeps that cheap (review F13). A caller that
    * just read the checkout's identity (the context compiler) passes it, so it is not read twice.
    */
-  async graph(root: string = this.opts.root, known?: SourceIdentity | null): Promise<CodeGraph> {
+  async graph(
+    root: string = this.opts.root,
+    known?: SourceIdentity | null,
+    build: { onProgress?: BuildOptions['onProgress'] } = {},
+  ): Promise<CodeGraph> {
     const e = this.entry(root);
     const git = await e.root;
     const identity = known ?? (await git.identity());
@@ -81,7 +86,7 @@ export class GraphService {
     // caller would expose a stale graph until the next request (review M14.10 race).
     if (e.building) {
       await e.building.promise;
-      return this.graph(root);
+      return this.graph(root, undefined, build);
     }
     // The Merkle tree (ADR-0037 §2): a stat per file, nothing read when nothing changed. When git
     // could not vouch for the checkout, an unchanged tree keeps the last graph, and a changed one
@@ -100,6 +105,7 @@ export class GraphService {
       changedPaths,
       treeHash: scan.root_hash,
       ...(previous ? { previous } : {}),
+      ...(build.onProgress ? { onProgress: build.onProgress } : {}),
     }).then((graph) => {
       // The keyword index follows the graph (ADR-0037 §2).
       this.index().replace(git.root, graph);

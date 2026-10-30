@@ -564,3 +564,37 @@ describe('symbols and the edges between them (ADR-0037 §1)', () => {
     expect(clean.findSymbols('tax')).toHaveLength(1);
   });
 });
+
+describe('progress', () => {
+  it('reports the listing, the reading, the resolution and the result, in that order', async () => {
+    const { dir } = await repoFrom({
+      'src/a.ts': "import { b } from './b.js';\nexport const a = b;\n",
+      'src/b.ts': 'export const b = 1;\n',
+      'notes.md': 'not source\n',
+    });
+    const seen: string[] = [];
+    const graph = await buildGraph(await GitRoot.open(dir), {
+      yieldEvery: 1,
+      onProgress: (p) => {
+        seen.push(p.phase);
+        if (p.phase === 'listing') expect(p.files).toBe(2);
+        if (p.phase === 'resolving') expect(p.files).toBe(2);
+        if (p.phase === 'done') expect(p).toMatchObject({ files: 2, edges: 1, symbols: 2, skipped: 0 });
+      },
+    });
+    expect(seen[0]).toBe('listing');
+    expect(seen.at(-2)).toBe('resolving');
+    expect(seen.at(-1)).toBe('done');
+    expect(seen.filter((p) => p === 'reading').length).toBeGreaterThanOrEqual(1);
+    expect(graph.stats.files).toBe(2);
+    // An incremental build counts the unchanged files in its reading progress.
+    const again: number[] = [];
+    await buildGraph(await GitRoot.open(dir), {
+      previous: graph,
+      onProgress: (p) => {
+        if (p.phase === 'reading') again.push(p.unchanged);
+      },
+    });
+    expect(again.at(-1)).toBe(2);
+  });
+});

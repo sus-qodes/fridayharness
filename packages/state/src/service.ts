@@ -696,6 +696,12 @@ const OBSERVATION_TYPES = new Set([
   'onboarding.step_completed',
   'onboarding.completed',
   'onboarding.skipped',
+  // The project's one-time setup (the code graph built at init or at the first start): each line
+  // of its progress, so a setup screen shows them as they happen.
+  'setup.started',
+  'setup.progress',
+  'setup.completed',
+  'setup.failed',
 ]);
 
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };

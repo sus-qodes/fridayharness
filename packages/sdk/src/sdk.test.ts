@@ -45,6 +45,13 @@ describe('SseParser', () => {
 });
 
 describe('config', () => {
+  it('builds the code graph at init unless the project says not to', () => {
+    expect(parseConfig(renderInitialConfig(PID, 'shop')).setup).toEqual({ graph: true });
+    expect(parseConfig(renderInitialConfig(PID, 'shop', { graph: false })).setup).toEqual({ graph: false });
+    expect(renderInitialConfig(PID, 'shop', { graph: false })).toContain('setup:\n  graph: false\n');
+    expect(parseConfig(`project:\n  id: ${PID}\n`).setup).toEqual({ graph: true });
+  });
+
   it('parses the initial config with defaults', () => {
     const c = parseConfig(renderInitialConfig(PID, 'shop'));
     expect(c.project).toEqual({ id: PID, name: 'shop' });

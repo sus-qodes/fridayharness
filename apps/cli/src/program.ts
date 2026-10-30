@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { GraphSetupStep } from '@friday/daemon';
 import type {
   AgentView,
   DomainEvent,
@@ -44,6 +45,7 @@ import { registerReservationCommands } from './reservations.js';
 import { restoreProject } from './restore.js';
 import { registerRoutingCommands } from './routing.js';
 import { runDaemon } from './run.js';
+import { buildGraphAtInit, graphSummaryLine } from './setup-project.js';
 import { createShortcut } from './shortcut.js';
 import { registerStartCommand } from './start.js';
 import { FRIDAY_DIR_GITIGNORE } from './templates.js';
@@ -131,7 +133,8 @@ export function buildProgram(): Command {
       '--no-hosts',
       'do not wire the installed coding tools to Friday (otherwise done once the machine is set up)',
     )
-    .action((opts: { name?: string; force?: boolean; shortcut?: boolean; hosts?: boolean }) => {
+    .option('--no-graph', 'do not build the code graph now (it is then built the first time something needs it)')
+    .action(async (opts: { name?: string; force?: boolean; shortcut?: boolean; hosts?: boolean; graph?: boolean }) => {
       const root = path.resolve(g().project ?? process.cwd());
       const dir = path.join(root, FRIDAY_DIR);
       const configPath = path.join(dir, 'config.yaml');
@@ -143,7 +146,10 @@ export function buildProgram(): Command {
         );
       }
       if (!existsSync(configPath)) {
-        writeFileSync(configPath, renderInitialConfig(newId('proj'), opts.name ?? path.basename(root)));
+        writeFileSync(
+          configPath,
+          renderInitialConfig(newId('proj'), opts.name ?? path.basename(root), { graph: opts.graph !== false }),
+        );
       }
       writeFileSync(path.join(dir, '.gitignore'), FRIDAY_DIR_GITIGNORE);
       const ref = project({ project: root });
@@ -174,11 +180,20 @@ export function buildProgram(): Command {
           ];
         }
       }
-      out(g(), { project_id: ref.project_id, name: ref.name, root: ref.root, shortcuts, hosts }, () =>
+      // The code graph, once, now: the project's setting decides, and --no-graph turns it off for
+      // this project; a project set up before keeps its record.
+      let graph: GraphSetupStep | null = null;
+      if (opts.graph !== false && ref.config.setup.graph) {
+        const { readSetupRecord } = await import('@friday/daemon');
+        graph = readSetupRecord(ref.root)?.graph ?? null;
+        if (graph?.status !== 'done') graph = await buildGraphAtInit(ref.root, !g().json);
+      }
+      out(g(), { project_id: ref.project_id, name: ref.name, root: ref.root, shortcuts, hosts, graph }, () =>
         [
           `Initialized Friday project "${ref.name}" (${ref.project_id})`,
           `  ${path.relative(process.cwd(), configPath) || configPath}  (commit this)`,
           '  .friday/.gitignore  (commit this; it keeps runtime files out of git)',
+          graphSummaryLine(graph),
           ...shortcuts.map((f) => `  shortcut: ${f}`),
           ...hostLines,
           shortcuts.length ? 'Next: double-click the shortcut' : 'Next: friday start (or friday shortcut)',

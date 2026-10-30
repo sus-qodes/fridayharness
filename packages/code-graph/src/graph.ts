@@ -5,7 +5,7 @@ import { setImmediate as nextTurn } from 'node:timers/promises';
 import type { GitRoot, SourceIdentity } from '@friday/git';
 import { type FactsCache, memoryFactsCache } from './cache.js';
 import type { ImportKind } from './extract.js';
-import { type LanguageId, languageOf, withTree } from './languages.js';
+import { type LanguageId, type LanguageSpec, languageOf, withTree } from './languages.js';
 import { type Certainty, Resolver, readTsconfigPaths, readWorkspacePackages } from './resolve.js';
 import {
   enclosingSymbol,
@@ -251,7 +251,19 @@ export interface BuildOptions {
   changedPaths?: ReadonlySet<string> | null;
   /** The Merkle tree's root hash for this build, recorded on the graph. */
   treeHash?: string | null;
+  /**
+   * Told how the build is going: once after the files are listed, after every `yieldEvery` files
+   * read and at the end of the reading, once before imports and symbols are resolved, and once
+   * when the graph is ready. A setup screen shows these lines; nothing else depends on them.
+   */
+  onProgress?: (progress: BuildProgress) => void;
 }
+
+export type BuildProgress =
+  | { phase: 'listing'; files: number }
+  | { phase: 'reading'; done: number; total: number; parsed: number; cached: number; unchanged: number }
+  | { phase: 'resolving'; files: number }
+  | { phase: 'done'; files: number; edges: number; symbols: number; skipped: number; ms: number };
 
 /**
  * The files whose content may differ from the previous graph's, or null when that cannot be
@@ -292,9 +304,13 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
   let cached = 0;
   let unchanged = 0;
   let count = 0;
-  for (const rel of listed) {
-    const lang = languageOf(rel);
-    if (!lang) continue;
+  const sources = listed.filter((rel) => languageOf(rel) !== undefined);
+  const total = sources.length;
+  const progress = opts.onProgress;
+  const reading = () => progress?.({ phase: 'reading', done: count + unchanged, total, parsed, cached, unchanged });
+  progress?.({ phase: 'listing', files: total });
+  for (const rel of sources) {
+    const lang = languageOf(rel) as LanguageSpec;
     const kept = changed && !changed.has(rel) ? opts.previous?.facts.get(rel) : undefined;
     if (kept) {
       unchanged += 1;
@@ -303,7 +319,10 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
       languages.set(rel, kept.language);
       continue;
     }
-    if (++count % (opts.yieldEvery ?? 25) === 0) await nextTurn();
+    if (++count % (opts.yieldEvery ?? 25) === 0) {
+      reading();
+      await nextTurn();
+    }
     const abs = path.join(root.root, rel);
     let bytes: Buffer;
     try {
@@ -338,6 +357,8 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
     languages.set(rel, lang.id);
   }
   cache.putAll(fresh);
+  reading();
+  progress?.({ phase: 'resolving', files: facts.size });
 
   const packages = await readWorkspacePackages(root.root, files);
   const resolver = new Resolver(files, packages, await readTsconfigPaths(root.root, files));
@@ -408,6 +429,14 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
   const tally: Record<Certainty, number> = { exact: 0, inferred: 0, unsupported: 0 };
   for (const e of edges) tally[e.certainty] += 1;
   const { symbols, symbolEdges, symbolTally } = deriveSymbols(facts, edges);
+  progress?.({
+    phase: 'done',
+    files: nodes.size,
+    edges: edges.length,
+    symbols: symbols.length,
+    skipped: skipped.length,
+    ms: Date.now() - started,
+  });
   return new CodeGraph(
     root.root,
     identity,

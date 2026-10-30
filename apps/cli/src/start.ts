@@ -3,11 +3,13 @@ import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { GraphSetupStep } from '@friday/daemon';
 import { newId } from '@friday/protocol';
 import { FRIDAY_DIR, renderInitialConfig } from '@friday/sdk';
 import type { Command } from 'commander';
 import { type GlobalOptions, operator, out, project, UsageError } from './context.js';
 import { openTarget, runningDaemon, startDetached } from './open-link.js';
+import { buildGraphAtInit } from './setup-project.js';
 import { FRIDAY_DIR_GITIGNORE } from './templates.js';
 
 /**
@@ -39,6 +41,8 @@ export interface StartOutcome {
    * was none and a Master Brain can draft it, or none; null when Friday could not tell.
    */
   intent: 'approved' | 'proposed' | 'drafting' | 'none' | null;
+  /** The code graph built now because the project was just initialized; null otherwise. */
+  graph: GraphSetupStep | null;
 }
 
 export const DESKTOP_MISSING =
@@ -80,11 +84,11 @@ export function repositoryRoot(dir: string): string | undefined {
 }
 
 /** The two files `friday init` writes, with the folder's name as the project's name. */
-export function initProject(root: string): { config: string; gitignore: string } {
+export function initProject(root: string, opts: { graph?: boolean } = {}): { config: string; gitignore: string } {
   const dir = path.join(root, FRIDAY_DIR);
   mkdirSync(dir, { recursive: true });
   const config = path.join(dir, 'config.yaml');
-  writeFileSync(config, renderInitialConfig(newId('proj'), path.basename(root)));
+  writeFileSync(config, renderInitialConfig(newId('proj'), path.basename(root), opts));
   const gitignore = path.join(dir, '.gitignore');
   writeFileSync(gitignore, FRIDAY_DIR_GITIGNORE);
   return { config, gitignore };
@@ -142,6 +146,8 @@ export interface StartOptions {
   desktop?: boolean;
   /** false prints the Studio's address instead of opening anything. */
   open?: boolean;
+  /** false: a project initialized now gets no code graph yet (built the first time something needs it). */
+  graph?: boolean;
 }
 
 export async function start(g: GlobalOptions, o: StartOptions): Promise<StartOutcome> {
@@ -149,8 +155,11 @@ export async function start(g: GlobalOptions, o: StartOptions): Promise<StartOut
   const root = repositoryRoot(dir);
   if (!root) throw new UsageError(notRepositoryMessage(dir));
   const initialized = !existsSync(path.join(root, FRIDAY_DIR, 'config.yaml'));
-  if (initialized) initProject(root);
+  if (initialized) initProject(root, { graph: o.graph !== false });
   const ref = project({ project: root });
+  // A project initialized now gets its code graph before Friday starts, so the Studio opens on a
+  // ready one; the lines print as it builds (not under --json).
+  const graph = initialized && o.graph !== false ? await buildGraphAtInit(ref.root, !g.json) : null;
   let daemon = await runningDaemon(ref);
   const started = !daemon;
   daemon ??= await startDetached(ref);
@@ -167,6 +176,7 @@ export async function start(g: GlobalOptions, o: StartOptions): Promise<StartOut
     desktop: null,
     note: null,
     intent: await intentAtStart(root),
+    graph,
   };
   if (o.desktop) {
     const exe = findDesktopApp(desktopCandidates());
@@ -248,7 +258,11 @@ export function registerStartCommand(program: Command, g: () => GlobalOptions): 
     )
     .option('--desktop', 'open the desktop app instead of the browser (Windows, when it is installed)')
     .option('--no-open', 'print the Studio address instead of opening anything')
-    .action(async (o: { desktop?: boolean; open: boolean }) => {
+    .option(
+      '--no-graph',
+      'when initializing: do not build the code graph now (built the first time something needs it)',
+    )
+    .action(async (o: { desktop?: boolean; open: boolean; graph: boolean }) => {
       const r = await start(g(), o);
       out(g(), r, () => startLines(r).join('\n'));
     });

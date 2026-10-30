@@ -44,6 +44,7 @@ import { OperationManager } from './operations.js';
 import { type EffectivePolicy, loadEffectivePolicy, reloadingPolicy, writePolicyTrust } from './policy.js';
 import { RecoveryManager } from './recovery.js';
 import { RoutingService } from './routing.js';
+import { SetupManager } from './setup.js';
 import { createToolJudge, type ToolJudge } from './tool-policy.js';
 import { UiAuth } from './ui-auth.js';
 import { fileHasher } from './ui-snapshot.js';
@@ -130,6 +131,8 @@ export interface Daemon extends DaemonContext {
   integration: IntegrationManager;
   /** The execution gateway (M6c, ADR-0029). */
   operations: OperationManager;
+  /** The project's one-time setup: the code graph built at init or at the first start. */
+  setup: SetupManager;
   close(reason?: string): Promise<void>;
   /** Resolves when the daemon has fully stopped (after close or an admin shutdown). */
   closed: Promise<void>;
@@ -346,6 +349,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   });
 
   const graph = new GraphService({ root: project.root, cacheDir: path.join(fridayDir, 'graph') });
+  // The one-time setup: the code graph `friday init` built, or built once now when it is missing.
+  const setup = new SetupManager({ state, project, graph, logger, enabled: () => project.config.setup.graph });
   // Every new run is routed in its own transaction (ADR-0031 §6): set before anything can create one.
   const routing = new RoutingService({ state, project, logger });
   state.setRouter(routing.router);
@@ -633,6 +638,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     operations,
     routing,
     judgeTool,
+    setup,
   });
   const extensionClosers: (() => Promise<void>)[] = [];
   for (const ext of opts.extensions ?? []) {
@@ -759,6 +765,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   const sweep = setInterval(() => state.bus.sweepIdempotency(), 60 * 60 * 1000);
   sweep.unref();
   if (brain && !(opts.brain && opts.brain.autoStart === false)) brain.brain.start();
+  // A project initialized without its graph gets it once, now, in the background.
+  void setup.start().catch((e) => logger.warn('setup did not finish', { message: (e as Error).message }));
 
   async function close(reason = 'shutdown'): Promise<void> {
     if (closing) return closing;
@@ -786,6 +794,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
         .close()
         .catch((e: unknown) => logger.error('stopping operations failed', { message: (e as Error).message }));
       await groups.close().catch(() => undefined);
+      // The setup's graph build finishes first, so its stores are not closed under it.
+      if (!(await setup.stop(30_000))) logger.warn('stopping with the setup build still running', { reason });
       graph.close();
       for (const s of streams) s.abort();
       await new Promise((r) => setTimeout(r, 30));
@@ -831,6 +841,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     recovery,
     integration,
     operations,
+    setup,
     close,
     closed,
   };

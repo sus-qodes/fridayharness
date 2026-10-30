@@ -38,6 +38,7 @@ const outcome = (over: Partial<StartOutcome> = {}): StartOutcome => ({
   desktop: null,
   note: null,
   intent: null,
+  graph: null,
   ...over,
 });
 

@@ -48,6 +48,7 @@ import type { EffectivePolicy } from './policy.js';
 import type { RecoveryManager } from './recovery.js';
 import type { RoutingService } from './routing.js';
 import { type AuthInfo, callerFor, dispatchRpc } from './rpc.js';
+import type { SetupManager } from './setup.js';
 import { goalDiff, taskDiff } from './task-diff.js';
 import type { ToolJudge } from './tool-policy.js';
 import { statusPageHtml } from './ui.js';
@@ -107,6 +108,8 @@ export interface AppDeps {
   control?: ControlManager;
   /** What the board snapshot says about the daemon itself (M9). */
   uiInfo?: () => UiSnapshotInfo;
+  /** The project's one-time setup: the code graph built at init or at the first start. */
+  setup?: SetupManager;
 }
 
 type Env = { Variables: { auth: AuthInfo } };
@@ -336,6 +339,23 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   // The onboarding tour's progress (plan §7.10): observations only, so any surface can tell how
   // far a person got. The interface records them; the CLI may too.
   const ONBOARDING_EVENTS = new Set(['started', 'step_completed', 'completed', 'skipped']);
+  // How far the project's setup got: the graph (its lines, for a setup screen) and the intent.
+  app.get(`${P}/setup`, allow(...OPERATOR), (c) => {
+    const setup = deps.setup?.status() ?? null;
+    const approved = state.q.approvedProjectIntent(pid) ?? null;
+    const proposed = state.q.proposedProjectIntent(pid) ?? null;
+    const planner = deps.brain?.status().planner_available ?? false;
+    return c.json({
+      state: setup?.state ?? 'skipped',
+      graph: setup?.graph ?? null,
+      intent: {
+        state: approved ? 'approved' : proposed ? 'proposed' : 'none',
+        version: approved?.version ?? proposed?.version ?? null,
+        planner_available: planner,
+      },
+    });
+  });
+
   app.post(`${P}/onboarding`, allow(...OPERATOR), async (c) => {
     const body = (await json(c)) as { event?: unknown; step?: unknown };
     const event = typeof body.event === 'string' ? body.event : '';
