@@ -251,6 +251,7 @@ export function buildProgram(): Command {
     .addOption(
       new Option('--kind <kind>').choices(['implementation', 'verification', 'review', 'research', 'docs', 'chore']),
     )
+    .option('--role <role>', 'the task contract role (backend, frontend, documentation, …)')
     .option('--description <text>')
     .option('--criteria <text>', 'acceptance criterion (repeatable)', collect)
     .addOption(new Option('--priority <p>').choices(['low', 'normal', 'high', 'urgent']))
@@ -264,6 +265,7 @@ export function buildProgram(): Command {
       const { client } = operator(g());
       const body: Record<string, unknown> = { summary, ready: Boolean(o.ready) };
       if (o.kind) body.kind = o.kind;
+      if (o.role) body.role = o.role;
       if (o.description) body.description = o.description;
       if (o.criteria) body.acceptance_criteria = o.criteria;
       if (o.priority) body.priority = o.priority;
@@ -305,6 +307,12 @@ export function buildProgram(): Command {
             ['task', t.task_id],
             ['status', t.waiting_reason ? `${t.status} (${t.waiting_reason})` : t.status],
             ['summary', t.summary],
+            [
+              'role',
+              `${t.role ?? '(unresolved)'}${t.role_source ? ` (${t.role_source})` : ''}${
+                t.role_confidence !== null ? `, confidence ${t.role_confidence}` : ''
+              }${t.role_registry_version ? `, registry ${t.role_registry_version}` : ''}`,
+            ],
             ['priority', `${t.priority}  risk ${t.risk_level}`],
             ['reserved for', t.reserved_for_agent_key ?? ''],
             [
@@ -381,6 +389,14 @@ export function buildProgram(): Command {
         out(g(), res.task, () => `${res.task.task_id}  ${res.task.status}`);
       });
   }
+  task
+    .command('role <task> <role>')
+    .description('set the task contract role explicitly (a human role assignment)')
+    .action(async (id: string, role: string) => {
+      const { client } = operator(g());
+      const res = await client.post<{ task: TaskView }>(client.projectPath(`/tasks/${id}/role`), { role });
+      out(g(), res.task, () => `${res.task.task_id}  role ${res.task.role} (${res.task.role_source})`);
+    });
   task
     .command('assign <task>')
     .description('assign to an agent: pushed to a live spawn-mode session, otherwise reserved for the agent to claim')

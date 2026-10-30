@@ -24,6 +24,11 @@ export interface TaskRow {
   plan_version: number | null;
   plan_key: string | null;
   role: string | null;
+  role_source: string | null;
+  role_confidence: number | null;
+  role_decision_id: string | null;
+  role_intent_version: string | null;
+  role_registry_version: string | null;
   kind: string;
   summary: string;
   description: string | null;
@@ -130,6 +135,11 @@ export function toTaskView(row: TaskRow, dependencies: string[]): TaskView {
     plan_version: row.plan_version ?? null,
     plan_key: row.plan_key ?? null,
     role: row.role ?? null,
+    role_source: (row.role_source ?? null) as TaskView['role_source'],
+    role_confidence: row.role_confidence ?? null,
+    role_decision_id: row.role_decision_id ?? null,
+    role_intent_version: row.role_intent_version ?? null,
+    role_registry_version: row.role_registry_version ?? null,
     kind: row.kind as TaskView['kind'],
     summary: row.summary,
     description: row.description,

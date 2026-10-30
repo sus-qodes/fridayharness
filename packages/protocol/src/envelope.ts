@@ -71,6 +71,7 @@ export const EVENT_TYPES = [
   'daemon.started',
   'daemon.stopped',
   'task.created',
+  'task.role_resolved',
   'task.ready',
   'task.assigned',
   'task.started',

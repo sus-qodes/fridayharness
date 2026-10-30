@@ -18,6 +18,7 @@ import {
   type RoutingDecisionView,
   type RoutingPinView,
   type RunView,
+  type TaskRoleDecisionView,
   type TaskStatus,
   type TaskView,
   type UsageReport,
@@ -50,6 +51,26 @@ import {
   type VerificationRow,
 } from './rows.js';
 import { buildUsageReport, type UsageReportOptions } from './usage.js';
+
+function toTaskRoleDecisionView(r: Record<string, unknown>): TaskRoleDecisionView {
+  return {
+    decision_id: String(r.decision_id),
+    project_id: String(r.project_id),
+    task_id: String(r.task_id),
+    status: String(r.status) as TaskRoleDecisionView['status'],
+    source: String(r.source) as TaskRoleDecisionView['source'],
+    role: (r.role as string | null) ?? null,
+    confidence: r.confidence === null || r.confidence === undefined ? null : Number(r.confidence),
+    roles: JSON.parse(String(r.roles_json)) as TaskRoleDecisionView['roles'],
+    assumptions: JSON.parse(String(r.assumptions_json)) as string[],
+    missing_facts: JSON.parse(String(r.missing_facts_json)) as string[],
+    questions: JSON.parse(String(r.questions_json)) as string[],
+    intent_version: String(r.intent_version),
+    registry_version: (r.registry_version as string | null) ?? null,
+    reason: String(r.reason),
+    created_at: String(r.created_at),
+  };
+}
 
 /** Harness view plus internal fields the service needs. */
 export type HarnessRecord = HarnessView & {
@@ -522,6 +543,33 @@ export class Queries {
     return this.routingDecisions(row.project_id, { task_id: row.task_id, limit: 1000 }).find(
       (d) => d.decision_id === decisionId,
     );
+  }
+
+  /** Persisted task role decisions, newest first; the full proposed DAG is included (R2). */
+  taskRoleDecisions(projectId: string, filter: { task_id?: string; limit?: number } = {}): TaskRoleDecisionView[] {
+    const rows = filter.task_id
+      ? this.db
+          .prepare(
+            'SELECT * FROM task_role_decisions WHERE project_id = ? AND task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?',
+          )
+          .all<Record<string, unknown>>(projectId, filter.task_id, filter.limit ?? 50)
+      : this.db
+          .prepare(
+            'SELECT * FROM task_role_decisions WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?',
+          )
+          .all<Record<string, unknown>>(projectId, filter.limit ?? 50);
+    return rows.map(toTaskRoleDecisionView);
+  }
+
+  taskRoleDecision(projectId: string, decisionId: string): TaskRoleDecisionView | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM task_role_decisions WHERE project_id = ? AND decision_id = ?')
+      .get<Record<string, unknown>>(projectId, decisionId);
+    return row ? toTaskRoleDecisionView(row) : undefined;
+  }
+
+  latestTaskRoleDecision(projectId: string, taskId: string): TaskRoleDecisionView | undefined {
+    return this.taskRoleDecisions(projectId, { task_id: taskId, limit: 1 })[0];
   }
 
   /** Laya's latest answer for a task (ADR-0031 §10). */

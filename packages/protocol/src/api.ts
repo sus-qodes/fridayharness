@@ -27,6 +27,8 @@ export type TaskScope = z.infer<typeof TaskScope>;
 export const TaskCreateRequest = z.object({
   summary: z.string().min(1).max(500),
   kind: TaskKind.default('implementation'),
+  /** The task contract's role, if it has one (R2; routing still canonicalizes aliases). */
+  role: z.string().trim().min(1).max(64).optional(),
   description: z.string().max(20_000).optional(),
   acceptance_criteria: z.array(z.string().min(1).max(1000)).max(50).default([]),
   priority: Priority.default('normal'),
@@ -40,6 +42,52 @@ export const TaskCreateRequest = z.object({
 });
 export type TaskCreateRequest = z.input<typeof TaskCreateRequest>;
 
+/** Where a task's execution role came from (R2). */
+export const TaskRoleSource = z.enum([
+  'plan',
+  'task',
+  'human',
+  'decision_model',
+  'kind_fallback',
+  'path_fallback',
+  'missing',
+  'none',
+]);
+export type TaskRoleSource = z.infer<typeof TaskRoleSource>;
+
+/** One node of a proposed multi-role work split. It is stored, never silently dispatched. */
+export const ProposedRoleView = z.object({
+  role: z.string(),
+  task_summary: z.string(),
+  depends_on: z.array(z.string()),
+  confidence: z.number(),
+});
+export type ProposedRoleView = z.infer<typeof ProposedRoleView>;
+
+export const TaskRoleDecisionView = z.object({
+  decision_id: z.string(),
+  project_id: z.string(),
+  task_id: z.string(),
+  status: z.enum(['resolved', 'proposed', 'blocked']),
+  source: TaskRoleSource,
+  role: z.string().nullable(),
+  confidence: z.number().nullable(),
+  roles: z.array(ProposedRoleView),
+  assumptions: z.array(z.string()),
+  missing_facts: z.array(z.string()),
+  questions: z.array(z.string()),
+  intent_version: z.string(),
+  registry_version: z.string().nullable(),
+  reason: z.string(),
+  created_at: z.string(),
+});
+export type TaskRoleDecisionView = z.infer<typeof TaskRoleDecisionView>;
+
+export const TaskRoleAssignRequest = z.object({
+  role: z.string().trim().min(1).max(64),
+});
+export type TaskRoleAssignRequest = z.infer<typeof TaskRoleAssignRequest>;
+
 export const TaskView = z.object({
   task_id: z.string(),
   project_id: z.string(),
@@ -48,8 +96,14 @@ export const TaskView = z.object({
   /** The plan version that created the task, and its key in that plan (M2; absent from M1 daemons). */
   plan_version: z.number().int().nullable().default(null),
   plan_key: z.string().nullable().default(null),
-  /** The kind of agent the plan asked for ("backend", "qa", …). */
+  /** The task contract's role ("backend", "qa", …); routing canonicalizes it for execution. */
   role: z.string().nullable().default(null),
+  /** R2: the persisted role-resolution contract, stable for one intent and registry version. */
+  role_source: TaskRoleSource.nullable().default(null),
+  role_confidence: z.number().nullable().default(null),
+  role_decision_id: z.string().nullable().default(null),
+  role_intent_version: z.string().nullable().default(null),
+  role_registry_version: z.string().nullable().default(null),
   kind: TaskKind,
   summary: z.string(),
   description: z.string().nullable(),
@@ -240,7 +294,12 @@ export const RoutingDecisionView = z.object({
   requirements_version: z.string(),
   guide_version: z.string(),
   role: z.string().nullable().default(null),
-  role_source: z.enum(['task', 'decision_model', 'kind_fallback', 'path_fallback', 'missing', 'none']).default('none'),
+  role_source: TaskRoleSource.default('none'),
+  role_confidence: z.number().nullable().default(null),
+  role_decision_id: z.string().nullable().default(null),
+  role_intent_version: z.string().nullable().default(null),
+  role_registry_version: z.string().nullable().default(null),
+  role_proposed: z.boolean().default(false),
   registry_version: z.string().nullable().default(null),
   selected_rank: z.number().int().nullable().default(null),
   selected_harness: z.string().nullable().default(null),

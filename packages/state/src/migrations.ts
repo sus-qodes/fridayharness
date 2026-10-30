@@ -907,6 +907,43 @@ CREATE TABLE project_controls (
   },
 ];
 
+/**
+ * R2: the task's role is a persisted contract, not a property of whichever agent picks it up.
+ * `task_role_decisions` keeps the full resolution, including a multi-role proposed DAG, so an
+ * ambiguous model answer is never silently collapsed into one role.
+ */
+export const ROLE_RESOLUTION_MIGRATIONS: Migration[] = [
+  {
+    version: 23,
+    name: 'role_resolution',
+    up: `
+ALTER TABLE tasks ADD COLUMN role_source TEXT;
+ALTER TABLE tasks ADD COLUMN role_confidence REAL;
+ALTER TABLE tasks ADD COLUMN role_decision_id TEXT;
+ALTER TABLE tasks ADD COLUMN role_intent_version TEXT;
+ALTER TABLE tasks ADD COLUMN role_registry_version TEXT;
+CREATE TABLE task_role_decisions (
+  decision_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('resolved', 'proposed', 'blocked')),
+  source TEXT NOT NULL,
+  role TEXT,
+  confidence REAL,
+  roles_json TEXT NOT NULL DEFAULT '[]',
+  assumptions_json TEXT NOT NULL DEFAULT '[]',
+  missing_facts_json TEXT NOT NULL DEFAULT '[]',
+  questions_json TEXT NOT NULL DEFAULT '[]',
+  intent_version TEXT NOT NULL,
+  registry_version TEXT,
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_task_role_decisions ON task_role_decisions(project_id, task_id, created_at);
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -928,11 +965,13 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...LAYA_MIGRATIONS,
   ...REVIEW_M7_MIGRATIONS,
   ...CONTROL_MIGRATIONS,
+  ...ROLE_RESOLUTION_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */
 export const DOMAIN_TABLES = [
   'project_controls',
+  'task_role_decisions',
   'laya_calibrations',
   'laya_answers',
   'model_outcomes',

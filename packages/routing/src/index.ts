@@ -12,4 +12,5 @@ export * from './registry.js';
 export * from './registry-artifact.js';
 export * from './requirements.js';
 export * from './role-registry.js';
+export * from './role-resolution.js';
 export * from './roles.js';

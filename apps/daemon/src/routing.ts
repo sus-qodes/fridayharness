@@ -87,17 +87,7 @@ export class RoutingService {
       .map((e) => ({ model: e.model, task_class: e.task_class, samples: e.samples, passed: e.passed }));
   }
 
-  private input(
-    task: {
-      task_id: string;
-      kind: string;
-      role: string | null;
-      summary: string;
-      risk_level: 'low' | 'medium' | 'high' | null;
-      scope: { write: readonly string[]; read: readonly string[] } | null;
-    },
-    harness: HarnessRecord | null,
-  ): RouteInput {
+  private input(task: TaskView, harness: HarnessRecord | null): RouteInput {
     const caps = (harness?.capabilities ?? {}) as { models?: unknown; model_control?: unknown };
     const declared = Array.isArray(caps.models) ? caps.models.filter((m): m is string => typeof m === 'string') : null;
     const guide = loadGuide();
@@ -115,6 +105,9 @@ export class RoutingService {
       pins: this.pins(),
       evidence: this.evidence(harness),
       laya: null,
+      // Role vocabulary and canonicalization always apply (R2); registry rank is the dispatch
+      // authority only when `routing.static_registry.enabled` says so.
+      role_vocabulary: this.roleRegistry,
       ...(this.staticRegistryEnabled ? { role_registry: this.roleRegistry } : {}),
     };
     return { ...base, laya: this.laya(task.task_id), laya_status: this.layaStatus(task.task_id) };

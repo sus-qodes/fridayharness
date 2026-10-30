@@ -131,6 +131,7 @@ describe('task lifecycle through Claude-Code-style attach mode', () => {
     const types = state.store.readByRef(PROJECT, 'task', task.task_id).map((e) => e.type);
     expect(types).toEqual([
       'task.created',
+      'task.role_resolved',
       'task.ready',
       'run.created',
       'task.assigned',

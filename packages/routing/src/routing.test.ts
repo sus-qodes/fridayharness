@@ -198,6 +198,47 @@ describe('decideRoute', () => {
     });
   });
 
+  it('blocks a persisted proposed DAG or a blocked role resolution instead of guessing', () => {
+    const proposed = decideRoute(
+      base({
+        role_registry: ROLE_REGISTRY_SOURCE,
+        task: {
+          ...base().task,
+          role: null,
+          role_source: 'decision_model',
+          role_confidence: 0.85,
+          role_decision_id: 'rdec_00000000000000000000000001',
+          role_intent_version: 'ri1_0000000000000000',
+          role_registry_version: ROLE_REGISTRY_SOURCE.version,
+        },
+      }),
+    );
+    expect(proposed).toMatchObject({
+      blocked: true,
+      role: null,
+      role_source: 'decision_model',
+      role_proposed: true,
+      role_confidence: 0.85,
+      role_decision_id: 'rdec_00000000000000000000000001',
+      role_intent_version: 'ri1_0000000000000000',
+      model: null,
+    });
+    expect(proposed.reason_codes).toContain('role.proposed_dag');
+    const blocked = decideRoute(
+      base({
+        role_registry: ROLE_REGISTRY_SOURCE,
+        task: {
+          ...base().task,
+          role: null,
+          role_source: 'missing',
+          role_decision_id: 'rdec_00000000000000000000000002',
+        },
+      }),
+    );
+    expect(blocked).toMatchObject({ blocked: true, role: null, role_source: 'missing', model: null });
+    expect(blocked.reason_codes).toContain('role.classification_required');
+  });
+
   it('applies a role pin to the resolved fallback role', () => {
     const d = decideRoute(
       base({
@@ -236,12 +277,23 @@ describe('decideRoute', () => {
     });
   });
 
-  it('accepts a validated decision-model role without mutating the task role', () => {
-    const d = decideRoute(
+  it('applies a validated decision-model role only after the deterministic fallback, without mutating the task role', () => {
+    const deterministic = decideRoute(
       base({
         role_registry: ROLE_REGISTRY_SOURCE,
         resolved_role: 'review',
         task: { ...base().task, role: null },
+      }),
+    );
+    expect(deterministic).toMatchObject({
+      role: 'implementation',
+      role_source: 'kind_fallback',
+    });
+    const d = decideRoute(
+      base({
+        role_registry: ROLE_REGISTRY_SOURCE,
+        resolved_role: 'review',
+        task: { ...base().task, kind: 'analysis', role: null, scope: { write: [], read: [] } },
       }),
     );
     expect(d).toMatchObject({

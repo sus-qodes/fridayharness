@@ -5,7 +5,7 @@
  */
 import { claudeCodeHooks } from '@friday/adapter-claude';
 import { GenericHarnessClient } from '@friday/adapter-generic';
-import type { RunView, TaskStartParams, TaskView } from '@friday/protocol';
+import type { RunView, TaskRoleDecisionView, TaskStartParams, TaskView } from '@friday/protocol';
 import { useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { claudeSession } from '../helpers/claude-session.js';
@@ -200,6 +200,137 @@ describe('model routing', () => {
     expect(models.stdout).toMatch(/claude-sonnet-5-5\s+docs\s+1\s+100% \(too few\)/);
     const pins = await cli(['--project', dir, 'routing', 'pins']);
     expect(pins.stdout).toContain('model claude-haiku-5-5 for kind docs, by human:local-operator until');
+  }, 120_000);
+
+  it('persists task role resolution and exposes it in routing explain, including a proposed DAG', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: { autoStart: false } });
+    const pid = td.project.project_id;
+    const dir = ws().projectDir;
+    const explained = (id: string) =>
+      td.operator.get<{
+        dry_run: { role: string | null; role_source: string; blocked: boolean; role_proposed: boolean };
+        role_decision: TaskRoleDecisionView | null;
+      }>(td.operator.projectPath(`/routing/explain/${id}`));
+
+    const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Build the checkout API',
+      kind: 'implementation',
+      role: 'backend',
+      scope: { write: ['server/src/api.ts'], read: [] },
+    });
+    expect(task).toMatchObject({
+      role: 'backend',
+      role_source: 'task',
+      role_confidence: 1,
+    });
+    expect(task.role_decision_id).toMatch(/^rdec_/);
+    const taskExplain = await td.operator.get<{
+      dry_run: {
+        role: string | null;
+        role_source: string;
+        role_decision_id: string | null;
+        role_intent_version: string | null;
+      };
+      role_decision: TaskRoleDecisionView | null;
+    }>(td.operator.projectPath(`/routing/explain/${task.task_id}`));
+    expect(taskExplain.role_decision).toMatchObject({
+      status: 'resolved',
+      source: 'task',
+      role: 'backend',
+      intent_version: task.role_intent_version,
+      registry_version: task.role_registry_version,
+    });
+    expect(taskExplain.dry_run).toMatchObject({
+      role: 'backend_engineer',
+      role_source: 'task',
+      role_decision_id: task.role_decision_id,
+      role_intent_version: task.role_intent_version,
+    });
+    const shown = await cli(['--project', dir, 'routing', 'explain', task.task_id]);
+    expect(shown.code, shown.stderr).toBe(0);
+    expect(shown.stdout).toContain('Role decision');
+    expect(shown.stdout).toContain('intent ri1_');
+    expect(shown.stdout).toContain('backend_engineer (task)');
+
+    // A human role assignment is a new persisted resolution.
+    const assigned = await cli(['--project', dir, 'task', 'role', task.task_id, 'frontend']);
+    expect(assigned.code, assigned.stderr).toBe(0);
+    expect(assigned.stdout).toContain('human');
+    expect((await inspect(td, task.task_id)).task).toMatchObject({ role: 'frontend', role_source: 'human' });
+    const after = await explained(task.task_id);
+    expect(after.role_decision).toMatchObject({ status: 'resolved', source: 'human', role: 'frontend' });
+    expect(after.dry_run).toMatchObject({ role: 'frontend_engineer', role_source: 'human' });
+
+    // A multi-role model answer is stored as a proposal and blocks dispatch.
+    const ambiguous = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Split the checkout work',
+      kind: 'implementation',
+      scope: { write: ['apps/web/src/App.tsx', 'server/src/api.ts'], read: [] },
+    });
+    expect(ambiguous).toMatchObject({ role: null, role_source: 'missing' });
+    td.daemon.state.recordTaskRoleDecision(pid, { kind: 'system', id: 'role-classifier' }, ambiguous.task_id, {
+      status: 'classified',
+      assumptions: ['the page and the API can ship together'],
+      roles: [
+        { role: 'frontend_engineer', task_summary: 'Build the page', depends_on: [], confidence: 0.9 },
+        {
+          role: 'backend_engineer',
+          task_summary: 'Build the API',
+          depends_on: ['frontend_engineer'],
+          confidence: 0.85,
+        },
+      ],
+    });
+    const proposal = await explained(ambiguous.task_id);
+    expect(proposal.role_decision).toMatchObject({
+      status: 'proposed',
+      source: 'decision_model',
+      roles: [
+        { role: 'frontend_engineer', task_summary: 'Build the page', depends_on: [] },
+        { role: 'backend_engineer', task_summary: 'Build the API', depends_on: ['frontend_engineer'] },
+      ],
+    });
+    expect(proposal.dry_run).toMatchObject({ blocked: true, role: null, role_proposed: true });
+    const proposalText = await cli(['--project', dir, 'routing', 'explain', ambiguous.task_id]);
+    expect(proposalText.code, proposalText.stderr).toBe(0);
+    expect(proposalText.stdout).toContain('proposed DAG (stored, not dispatched)');
+    expect(proposalText.stdout).toContain('frontend_engineer');
+    expect(proposalText.stdout).toContain('backend_engineer after frontend_engineer');
+
+    // A plan role is the contract from the moment the plan is approved.
+    const goal = await td.operator.post<{ goal_id: string }>(td.operator.projectPath('/goals'), {
+      request: 'A checkout page',
+      plan: false,
+    });
+    const version = await td.operator.post<{ plan_id: string; version: number }>(
+      td.operator.projectPath(`/goals/${goal.goal_id}/plans`),
+      {
+        draft: {
+          objective: 'A checkout page',
+          summary: 'one page',
+          tasks: [
+            {
+              key: 'page',
+              summary: 'Build the page',
+              acceptance_criteria: ['tests pass'],
+              scope: { write: ['apps/web/src/App.tsx'], read: [] },
+              depends_on: [],
+              role: 'frontend',
+            },
+          ],
+        },
+      },
+    );
+    await td.operator.post(
+      td.operator.projectPath(`/plans/${version.plan_id}/versions/${version.version}/approve`),
+      {},
+    );
+    const planned = td.daemon.state.q.goalTasks(pid, goal.goal_id)[0];
+    if (!planned) throw new Error('the approved plan did not materialize a task');
+    expect(planned).toMatchObject({ role: 'frontend', role_source: 'plan' });
+    const planExplain = await explained(planned.task_id);
+    expect(planExplain.role_decision).toMatchObject({ status: 'resolved', source: 'plan', role: 'frontend' });
+    expect(planExplain.dry_run).toMatchObject({ role: 'frontend_engineer', role_source: 'plan' });
   }, 120_000);
 
   it('starts no work its route forbids, assigned, claimed or delegated, and runs what it allows (review F01)', async () => {

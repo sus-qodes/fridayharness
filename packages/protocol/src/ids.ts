@@ -52,6 +52,8 @@ export const ID_PREFIXES = [
   // M7: routing pins and model outcomes (decisions use `route`).
   'pin',
   'oc',
+  // R2: persisted task role-resolution decisions.
+  'rdec',
 ] as const;
 export type IdPrefix = (typeof ID_PREFIXES)[number];
 export type Id<P extends IdPrefix = IdPrefix> = `${P}_${string}`;

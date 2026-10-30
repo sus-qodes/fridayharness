@@ -11,6 +11,7 @@ import {
   PROTOCOL_VERSIONS,
   TaskActionRequest,
   TaskCreateRequest,
+  TaskRoleAssignRequest,
   type TaskStatus,
   TaskStatus as TaskStatusEnum,
   type TokenClass,
@@ -614,6 +615,11 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     });
   for (const a of ['ready', 'release', 'cancel', 'rework', 'assign', 'unreserve'] as const) action(a);
 
+  app.post(`${P}/tasks/:tid/role`, allow(...OPERATOR), async (c) => {
+    const body = TaskRoleAssignRequest.parse(await json(c));
+    return c.json({ task: state.assignTaskRole(pid, HUMAN, c.req.param('tid'), body.role) });
+  });
+
   app.post(`${P}/tasks/:tid/verify`, allow(...OPERATOR), async (c) => {
     const tid = c.req.param('tid');
     const body = VerifyRequest.parse(await json(c));
@@ -1130,7 +1136,11 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   );
   app.get(`${P}/routing/explain/:tid`, allow(...OPERATOR), (c) => {
     const tid = c.req.param('tid');
-    return c.json({ dry_run: routingOf().explain(tid), decisions: state.q.routingDecisions(pid, { task_id: tid }) });
+    return c.json({
+      dry_run: routingOf().explain(tid),
+      decisions: state.q.routingDecisions(pid, { task_id: tid }),
+      role_decision: state.q.latestTaskRoleDecision(pid, tid) ?? null,
+    });
   });
   app.get(`${P}/routing/decisions`, allow(...OPERATOR), (c) =>
     c.json({

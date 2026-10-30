@@ -54,6 +54,7 @@ import {
   type RunStatus,
   type RunView,
   TaskCreateRequest,
+  type TaskRoleDecisionView,
   type TaskScope,
   type TaskStartParams,
   type TaskStatus,
@@ -64,6 +65,7 @@ import {
   type WaitingReason,
   type WorktreeView,
 } from '@friday/protocol';
+import { ROLE_REGISTRY_SOURCE, type RoleDecision, resolveTaskRoleContract, type TaskRoleOrigin } from '@friday/routing';
 import type { z } from 'zod';
 import { CommandBus, type CommandContext, type CommandMeta } from './bus.js';
 import { MemoryService } from './memory.js';
@@ -1487,6 +1489,102 @@ export class FridayState {
     });
   }
 
+  /**
+   * Persists a task's role contract (R2) and emits `task.role_resolved`. Resolution happens once
+   * when the task is created or a human/classifier changes its role, so routing cannot drift with
+   * a later agent or registry lookup.
+   */
+  private resolveTaskRoleWithin(
+    ctx: CommandContext,
+    taskId: string,
+    origin: TaskRoleOrigin,
+    explicitRole: string | null,
+    opts: { decision?: RoleDecision | null; preferDecision?: boolean; intentVersion?: string | null } = {},
+  ): TaskRoleDecisionView {
+    const task = this.q.task(ctx.project_id, taskId);
+    const resolution = resolveTaskRoleContract({
+      task,
+      origin,
+      explicit_role: explicitRole,
+      registry: ROLE_REGISTRY_SOURCE,
+      decision: opts.decision ?? null,
+      prefer_decision: opts.preferDecision ?? false,
+      ...(opts.intentVersion !== undefined ? { intent_version: opts.intentVersion } : {}),
+    });
+    const decision_id = this.ids.next('rdec');
+    const decision = {
+      ...resolution,
+      decision_id,
+      project_id: ctx.project_id,
+      task_id: taskId,
+      created_at: ctx.now,
+    };
+    ctx.emit({
+      type: 'task.role_resolved',
+      payload: { task_id: taskId, decision },
+      refs: [
+        { kind: 'task', id: taskId },
+        ...(task.goal_id ? [{ kind: 'goal' as const, id: task.goal_id }] : []),
+        ...(task.plan_id ? [{ kind: 'plan' as const, id: task.plan_id }] : []),
+      ],
+    });
+    const stored = this.q.latestTaskRoleDecision(ctx.project_id, taskId);
+    if (!stored) throw new Error(`task ${taskId}: role resolution was not projected`);
+    return stored;
+  }
+
+  /** A human deliberately replaces an existing task's stored role contract (R2). */
+  assignTaskRole(projectId: string, actor: Actor, taskId: string, role: string): TaskView {
+    if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human can assign a task role');
+    const named = role.trim();
+    if (!named) throw new FridayError('invalid_request', 'name the role');
+    return this.exec({ name: 'task.role', project_id: projectId, actor, params: { taskId, role: named } }, (ctx) => {
+      const task = this.q.task(projectId, taskId);
+      if (task.status === 'COMPLETED' || task.status === 'CANCELLED') {
+        throw new FridayError('invalid_state_transition', `task ${taskId} is ${task.status}`);
+      }
+      this.resolveTaskRoleWithin(ctx, taskId, 'human', named);
+      return this.q.task(projectId, taskId);
+    });
+  }
+
+  /**
+   * Records an already-validated decision-model result (R2). Multi-role output is stored as a
+   * proposed DAG with no single `role`, so nothing can dispatch it by guessing.
+   */
+  recordTaskRoleDecision(
+    projectId: string,
+    actor: Actor,
+    taskId: string,
+    decision: RoleDecision,
+    opts: { intent_version?: string | null; idempotency_key?: string } = {},
+  ): TaskView {
+    return this.exec(
+      {
+        name: 'task.role_decision',
+        project_id: projectId,
+        actor,
+        idempotency_key: opts.idempotency_key,
+        params: { taskId, decision, intent_version: opts.intent_version ?? null },
+      },
+      (ctx) => {
+        const task = this.q.task(projectId, taskId);
+        if (task.role && !['decision_model', 'none'].includes(task.role_source ?? 'none')) {
+          throw new FridayError(
+            'invalid_state_transition',
+            `task ${taskId} already has a ${task.role_source ?? 'task'} role (${task.role}); a classifier may not override it`,
+          );
+        }
+        this.resolveTaskRoleWithin(ctx, taskId, 'none', null, {
+          decision,
+          preferDecision: true,
+          intentVersion: opts.intent_version ?? null,
+        });
+        return this.q.task(projectId, taskId);
+      },
+    );
+  }
+
   createTask(
     projectId: string,
     actor: Actor,
@@ -1505,6 +1603,7 @@ export class FridayState {
           payload: {
             task: {
               task_id,
+              role: req.role ?? null,
               kind: req.kind,
               summary: req.summary,
               description: req.description ?? null,
@@ -1521,6 +1620,7 @@ export class FridayState {
           },
           refs: [{ kind: 'task', id: task_id }],
         });
+        this.resolveTaskRoleWithin(ctx, task_id, req.role ? 'task' : 'none', req.role ?? null);
         let task = this.q.task(projectId, task_id);
         if (req.ready || req.assign_agent_key) task = this.moveTask(ctx, task, 'task.ready');
         return task;
@@ -2975,6 +3075,7 @@ export class FridayState {
             { kind: 'plan', id: planId },
           ],
         });
+        this.resolveTaskRoleWithin(ctx, task_id, 'plan', t.role);
         ctx.emit({
           type: 'plan.task_materialized',
           payload: {

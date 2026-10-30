@@ -24,6 +24,7 @@
     "@friday/db": "workspace:*",
     "@friday/events": "workspace:*",
     "@friday/protocol": "workspace:*",
+    "@friday/routing": "workspace:*",
     "zod": "^4.6.5"
   },
   "devDependencies": {

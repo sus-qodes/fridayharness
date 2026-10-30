@@ -1,20 +1,69 @@
 import { z } from 'zod';
 import { canonicalRole, type RoleRegistry } from './role-registry.js';
 
-/** Where a decision's execution role came from. */
-export type RoutingRoleSource = 'task' | 'decision_model' | 'kind_fallback' | 'path_fallback' | 'missing' | 'none';
+/** Where a task's execution role came from. */
+export type RoutingRoleSource =
+  | 'plan'
+  | 'task'
+  | 'human'
+  | 'decision_model'
+  | 'kind_fallback'
+  | 'path_fallback'
+  | 'missing'
+  | 'none';
+
+/** One node of a role decision model's proposed work split. */
+export interface ProposedRole {
+  role: string;
+  task_summary: string;
+  depends_on: string[];
+  confidence: number;
+}
 
 export interface TaskRoleFacts {
   kind: string;
   role: string | null | undefined;
   summary?: string;
+  description?: string | null;
+  acceptance_criteria?: readonly string[];
+  risk_level?: string | null;
   scope?: { write: readonly string[]; read: readonly string[] } | null | undefined;
+  goal_id?: string | null;
+  plan_id?: string | null;
+  plan_version?: number | null;
+  plan_key?: string | null;
+  /** The persisted role contract, when the task already carries one (R2). */
+  role_source?: string | null;
+  role_confidence?: number | null;
+  role_decision_id?: string | null;
+  role_intent_version?: string | null;
+  role_registry_version?: string | null;
 }
 
 export interface RoleResolution {
   role: string | null;
   source: RoutingRoleSource;
   reason: string;
+  confidence: number | null;
+  decision_id: string | null;
+  intent_version: string | null;
+  registry_version: string | null;
+  /** Empty unless a decision model proposed a multi-role work split. */
+  proposed_roles: ProposedRole[];
+}
+
+const PERSISTED_ROLE_SOURCES: ReadonlySet<RoutingRoleSource> = new Set([
+  'plan',
+  'task',
+  'human',
+  'decision_model',
+  'kind_fallback',
+  'path_fallback',
+  'missing',
+]);
+
+function persistedSource(value: string | null | undefined): RoutingRoleSource | null {
+  return value && PERSISTED_ROLE_SOURCES.has(value as RoutingRoleSource) ? (value as RoutingRoleSource) : null;
 }
 
 const KIND_ROLES: Readonly<Record<string, string>> = {
@@ -54,27 +103,65 @@ function pathRole(path: string): string | null {
  * Friday's own, else the role its paths unambiguously point at. Ambiguous or multi-role work returns
  * null and is left for the decision router; this function never guesses from prose.
  */
+type RoleResolutionMetadata = Pick<
+  RoleResolution,
+  'confidence' | 'decision_id' | 'intent_version' | 'registry_version' | 'proposed_roles'
+>;
+
+const emptyResolution = (): RoleResolutionMetadata => ({
+  confidence: null,
+  decision_id: null,
+  intent_version: null,
+  registry_version: null,
+  proposed_roles: [],
+});
+
 export function fallbackTaskRole(task: TaskRoleFacts): RoleResolution | null {
   const byKind = KIND_ROLES[task.kind];
-  if (byKind) {
-    return { role: byKind, source: 'kind_fallback', reason: `task kind "${task.kind}" is unambiguous` };
+  // A kind other than implementation is unambiguous on its own. Implementation is the general
+  // case: a clear frontend/backend/... scope may specialize it, while conflicting scopes are
+  // exactly the multi-role work the decision model exists for (R2).
+  if (byKind && task.kind !== 'implementation') {
+    return {
+      role: byKind,
+      source: 'kind_fallback',
+      reason: `task kind "${task.kind}" is unambiguous`,
+      ...emptyResolution(),
+    };
   }
   const write = task.scope?.write ?? [];
   const paths = write.length ? write : (task.scope?.read ?? []);
   const roles = new Set(paths.map(pathRole).filter((role): role is string => role !== null));
+  if (roles.size > 1) return null;
   if (roles.size === 1) {
     const [role] = roles;
-    if (role) return { role, source: 'path_fallback', reason: `scope paths point at ${role}` };
+    if (!role) return null;
+    // For an implementation task the kind fallback is more direct; for any other kind a
+    // non-specialized source path still points unambiguously at implementation.
+    if (role !== 'implementation' || !byKind) {
+      return {
+        role,
+        source: 'path_fallback',
+        reason: `scope paths point at ${role}`,
+        ...emptyResolution(),
+      };
+    }
   }
-  if (roles.size > 1) {
-    return null;
+  if (byKind) {
+    return {
+      role: byKind,
+      source: 'kind_fallback',
+      reason: `task kind "${task.kind}" is unambiguous`,
+      ...emptyResolution(),
+    };
   }
   return null;
 }
 
 /**
- * The execution role a decision may dispatch: a validated decision-model result, the plan/task role,
- * or a deterministic kind/path fallback for an unroled task when the static registry is in use.
+ * The execution role a decision may dispatch (R2). The task's persisted contract wins; otherwise
+ * the deterministic kind/path fallback applies before the decision model. A decision model result
+ * is only consulted when the task itself and the deterministic fallback leave the role ambiguous.
  * Without a registry, a task role is reported as written and an unroled task stays unroled.
  */
 export function resolveTaskRole(input: {
@@ -83,6 +170,62 @@ export function resolveTaskRole(input: {
   resolvedRole?: string | null;
 }): RoleResolution {
   const registry = input.registry ?? null;
+  const source = persistedSource(input.task.role_source);
+  const withMetadata = (r: Omit<RoleResolution, keyof ReturnType<typeof emptyResolution>>): RoleResolution => ({
+    ...r,
+    confidence: input.task.role_confidence ?? 1,
+    decision_id: input.task.role_decision_id ?? null,
+    intent_version: input.task.role_intent_version ?? null,
+    registry_version: input.task.role_registry_version ?? registry?.version ?? null,
+    proposed_roles: [],
+  });
+  const named = input.task.role?.trim();
+  if (named) {
+    const role = registry ? (canonicalRole(named, registry) ?? named) : named;
+    const from = source ?? 'task';
+    const why =
+      from === 'plan'
+        ? 'the plan names'
+        : from === 'human'
+          ? 'a human assigned'
+          : from === 'decision_model'
+            ? 'the decision model classified'
+            : from === 'kind_fallback' || from === 'path_fallback'
+              ? 'the deterministic fallback resolved'
+              : 'the task names';
+    return withMetadata({
+      role,
+      source: from,
+      reason: role === named ? `${why} role ${named}` : `${why} role ${named}, which is ${role}`,
+    });
+  }
+  if (source === 'decision_model' && input.task.role_decision_id) {
+    return withMetadata({
+      role: null,
+      source: 'decision_model',
+      reason: 'the decision model proposed more than one role; a human decides the work split',
+    });
+  }
+  if (source === 'missing' && input.task.role_decision_id) {
+    return withMetadata({
+      role: null,
+      source: 'missing',
+      reason: 'role resolution is blocked; a human must name the role',
+    });
+  }
+  if (registry) {
+    const fallback = fallbackTaskRole(input.task);
+    if (fallback) {
+      return {
+        ...fallback,
+        confidence: input.task.role_confidence ?? 1,
+        decision_id: input.task.role_decision_id ?? null,
+        intent_version: input.task.role_intent_version ?? null,
+        registry_version: input.task.role_registry_version ?? registry.version,
+        proposed_roles: [],
+      };
+    }
+  }
   const resolved = input.resolvedRole?.trim();
   if (resolved) {
     const role = registry ? (canonicalRole(resolved, registry) ?? resolved) : resolved;
@@ -93,26 +236,18 @@ export function resolveTaskRole(input: {
         role === resolved
           ? `decision model classified the task as ${role}`
           : `decision model classified the task as ${resolved} (${role})`,
+      confidence: null,
+      decision_id: null,
+      intent_version: null,
+      registry_version: registry?.version ?? null,
+      proposed_roles: [],
     };
   }
-  const named = input.task.role?.trim();
-  if (named) {
-    const role = registry ? (canonicalRole(named, registry) ?? named) : named;
-    return {
-      role,
-      source: 'task',
-      reason: role === named ? `task names role ${named}` : `task names role ${named}, which is ${role}`,
-    };
-  }
-  if (registry) {
-    const fallback = fallbackTaskRole(input.task);
-    if (fallback) return fallback;
-  }
-  return {
+  return withMetadata({
     role: null,
     source: 'missing',
     reason: 'the task names no role and no deterministic kind or path fallback applies',
-  };
+  });
 }
 
 /** The result a decision model may return when Friday needs to assign a role. */

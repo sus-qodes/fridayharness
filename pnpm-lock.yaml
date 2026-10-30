@@ -727,6 +727,9 @@ importers:
       '@friday/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@friday/routing':
+        specifier: workspace:*
+        version: link:../routing
       zod:
         specifier: ^4.6.5
         version: 4.6.6

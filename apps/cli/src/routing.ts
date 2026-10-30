@@ -1,4 +1,4 @@
-import type { ModelEvidenceView, RoutingDecisionView, RoutingPinView } from '@friday/protocol';
+import type { ModelEvidenceView, RoutingDecisionView, RoutingPinView, TaskRoleDecisionView } from '@friday/protocol';
 import type { Command } from 'commander';
 import { type GlobalOptions, operator, out, UsageError } from './context.js';
 import { shortTime, table } from './output.js';
@@ -33,7 +33,14 @@ function decisionLines(
 ): string[] {
   const lines = [
     `${d.model ?? 'no model'} (${d.source}, mode ${d.mode}, class ${d.task_class}${d.binding ? ', binding' : ''})`,
-    `  role: ${d.role ?? 'missing'} (${d.role_source})${d.registry_version ? `, registry ${d.registry_version}` : ''}`,
+    `  role: ${d.role ?? (d.role_proposed ? 'proposed DAG' : 'missing')} (${d.role_source})${
+      d.role_confidence !== null ? `, confidence ${d.role_confidence}` : ''
+    }${d.role_registry_version ? `, role registry ${d.role_registry_version}` : ''}${
+      d.registry_version && d.registry_version !== d.role_registry_version
+        ? `, dispatch registry ${d.registry_version}`
+        : ''
+    }${d.role_decision_id ? `, decision ${d.role_decision_id}` : ''}`,
+    ...(d.role_intent_version ? [`  role intent: ${d.role_intent_version}`] : []),
     `  profile: ${d.profile} (${d.profile_reasons.join('; ') || 'no additional facts'})`,
     `  ${d.reason}`,
   ];
@@ -118,9 +125,31 @@ export function registerRoutingCommands(program: Command, g: () => GlobalOptions
       const r = await client.get<{
         dry_run: Omit<RoutingDecisionView, 'decision_id' | 'task_id' | 'run_id' | 'harness_id' | 'created_at'>;
         decisions: RoutingDecisionView[];
+        role_decision: TaskRoleDecisionView | null;
       }>(client.projectPath(`/routing/explain/${taskId}`));
       out(g(), r, () => {
         const lines: string[] = [];
+        const role = r.role_decision;
+        if (role) {
+          lines.push(
+            `Role decision ${role.decision_id}: ${role.role ?? role.status} (${role.source}, ${role.status})${
+              role.confidence !== null ? `, confidence ${role.confidence}` : ''
+            }`,
+            `  intent ${role.intent_version}${role.registry_version ? `, registry ${role.registry_version}` : ''}`,
+            `  ${role.reason}`,
+          );
+          if (role.roles.length > 1) {
+            lines.push(
+              '  proposed DAG (stored, not dispatched):',
+              ...role.roles.map(
+                (entry) =>
+                  `    ${entry.role}${entry.depends_on.length ? ` after ${entry.depends_on.join(', ')}` : ''}: ${entry.task_summary} (${entry.confidence})`,
+              ),
+            );
+          }
+          if (role.questions.length) lines.push(`  question: ${role.questions.join('; ')}`);
+          lines.push('');
+        }
         for (const d of r.decisions) {
           lines.push(`Decided ${shortTime(d.created_at)} for run ${d.run_id ?? '-'}:`, ...decisionLines(d), '');
         }

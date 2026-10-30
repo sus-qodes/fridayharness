@@ -1,8 +1,7 @@
 import { classifyRoutingProfile, type RoutingProfile } from './profiles.js';
 import type { GuideClass, ModelRecord } from './registry.js';
 import { REQUIREMENTS_VERSION, type Requirements, requirementsFor } from './requirements.js';
-import type { RoleRegistry } from './role-registry.js';
-import { canonicalRole } from './role-registry.js';
+import { canonicalRole, ROLE_REGISTRY_SOURCE, type RoleRegistry } from './role-registry.js';
 import { type RoutingRoleSource, resolveTaskRole } from './roles.js';
 
 /**
@@ -82,7 +81,15 @@ export interface RouteInput {
     task_id: string;
     kind: string;
     role: string | null;
+    /** The persisted role contract (R2); absent on records older than it. */
+    role_source?: string | null;
+    role_confidence?: number | null;
+    role_decision_id?: string | null;
+    role_intent_version?: string | null;
+    role_registry_version?: string | null;
     summary: string;
+    description?: string | null;
+    acceptance_criteria?: readonly string[];
     risk_level: 'low' | 'medium' | 'high' | null | undefined;
     scope: { write: readonly string[]; read: readonly string[] } | null | undefined;
   };
@@ -114,6 +121,11 @@ export interface RouteInput {
   laya_status?: 'off' | 'answered' | 'unavailable' | 'pending';
   /** The typed role registry. When present, registry rank replaces score/Laya dispatch selection. */
   role_registry?: RoleRegistry;
+  /**
+   * The role vocabulary used to canonicalize and fall back (R2), independent of whether registry
+   * rank is the dispatch authority. Defaults to Friday's shipped registry.
+   */
+  role_vocabulary?: RoleRegistry;
   /** A role already assigned by the plan or a validated decision-model result. */
   resolved_role?: string | null;
 }
@@ -158,6 +170,12 @@ export interface RoutingDecision {
   guide_version: string;
   role: string | null;
   role_source: RoutingRoleSource;
+  role_confidence: number | null;
+  role_decision_id: string | null;
+  role_intent_version: string | null;
+  role_registry_version: string | null;
+  /** The role decision model returned a multi-role DAG instead of one role (R2). */
+  role_proposed: boolean;
   registry_version: string | null;
   selected_rank: number | null;
   selected_harness: string | null;
@@ -208,7 +226,7 @@ export function decideRoute(input: RouteInput): RoutingDecision {
   const profile = classification.profile;
   const resolved = resolveTaskRole({
     task,
-    registry: input.role_registry ?? null,
+    registry: input.role_vocabulary ?? input.role_registry ?? ROLE_REGISTRY_SOURCE,
     resolvedRole: input.resolved_role ?? null,
   });
   const role = resolved.role;
@@ -243,6 +261,8 @@ export function decideRoute(input: RouteInput): RoutingDecision {
   const codes: string[] = [];
   if (roleSource === 'kind_fallback') codes.push('role.kind_fallback');
   if (roleSource === 'path_fallback') codes.push('role.path_fallback');
+  if (roleSource === 'plan') codes.push('role.plan');
+  if (roleSource === 'human') codes.push('role.human');
 
   // What the harness can run: its own list, else the registry's vendors.
   const known = new Map(input.models.map((m) => [m.id, m]));
@@ -327,6 +347,13 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     guide_version: input.guide_version,
     role,
     role_source: roleSource,
+    role_confidence: resolved.confidence,
+    role_decision_id: resolved.decision_id,
+    role_intent_version: resolved.intent_version,
+    role_registry_version: resolved.registry_version,
+    role_proposed:
+      resolved.proposed_roles.length > 1 ||
+      (roleSource === 'decision_model' && role === null && resolved.decision_id !== null),
     registry_version: input.role_registry?.version ?? null,
     selected_rank: null,
     selected_harness: null,
@@ -396,6 +423,16 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     return blocked(
       'sensitive work runs only on a local model a human pinned for it ("friday routing pin --sensitive --model <local model>")',
     );
+  }
+  // R2: a task whose persisted role resolution is blocked or still a proposed multi-role DAG does
+  // not dispatch on a guess, whatever the static-registry setting.
+  if (!role && resolved.decision_id && (roleSource === 'decision_model' || roleSource === 'missing')) {
+    if (roleSource === 'decision_model') {
+      codes.push('role.proposed_dag');
+      return blocked(resolved.reason);
+    }
+    codes.push('role.classification_required');
+    return blocked(resolved.reason);
   }
   if (input.role_registry) {
     if (!role) {

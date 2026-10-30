@@ -7,6 +7,12 @@ type Encoder = string | { column: string; encode: (v: unknown) => SqlValue };
 
 /** Columns an event's `changes` may touch, per table. Anything else is a bug and fails loudly. */
 const TASK_CHANGES: Record<string, Encoder> = {
+  role: 'role',
+  role_source: 'role_source',
+  role_confidence: 'role_confidence',
+  role_decision_id: 'role_decision_id',
+  role_intent_version: 'role_intent_version',
+  role_registry_version: 'role_registry_version',
   waiting_reason: 'waiting_reason',
   reserved_for_agent_key: 'reserved_for_agent_key',
   reserved_by: 'reserved_by',
@@ -83,6 +89,50 @@ export class StateProjector implements Projector {
       case 'task.created':
         this.insertTask(e, p.task as Payload);
         return;
+      case 'task.role_resolved': {
+        const d = p.decision as Payload;
+        this.update(
+          'tasks',
+          'task_id',
+          str(p.task_id),
+          {
+            role: d.role ?? null,
+            role_source: d.source,
+            role_confidence: d.confidence ?? null,
+            role_decision_id: d.decision_id,
+            role_intent_version: d.intent_version,
+            role_registry_version: d.registry_version ?? null,
+          },
+          TASK_CHANGES,
+          e,
+          {},
+        );
+        this.db
+          .prepare(
+            `INSERT INTO task_role_decisions (decision_id, project_id, task_id, status, source, role, confidence,
+               roles_json, assumptions_json, missing_facts_json, questions_json, intent_version, registry_version,
+               reason, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            str(d.decision_id),
+            e.project_id,
+            str(p.task_id),
+            str(d.status),
+            str(d.source),
+            opt(d.role),
+            opt(d.confidence),
+            toJson(d.roles ?? []),
+            toJson(d.assumptions ?? []),
+            toJson(d.missing_facts ?? []),
+            toJson(d.questions ?? []),
+            str(d.intent_version),
+            opt(d.registry_version),
+            str(d.reason),
+            e.occurred_at,
+          );
+        return;
+      }
       case 'task.updated':
       case 'task.reservation_released':
         this.update('tasks', 'task_id', str(p.task_id), p.changes as Payload, TASK_CHANGES, e, {});
