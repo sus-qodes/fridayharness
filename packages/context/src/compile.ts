@@ -1512,6 +1512,15 @@ export function handoffSummary(
   const attempts =
     numbers.length <= 1 ? String(numbers[0] ?? current.attempt) : `${Math.min(...numbers)}-${Math.max(...numbers)}`;
   const byRun = new Map(runs.map((r) => [r.run_id, r]));
+  // Why the attempt before stopped, when its host failed (ADR-0035 §4), and where this one runs.
+  const failover = state.readiness.failoverFrom(pid, task.task_id, current.run_id);
+  const here = state.q.findHarness(current.harness_id)?.vendor ?? null;
+  const stopped = failover
+    ? clip(
+        `Stopped: the previous attempt on ${failover.host}${failover.model ? `/${failover.model}` : ''} stopped (${failover.kind}${failover.detail ? `: ${failover.detail}` : ''}); ${failover.bench_until ? `it is benched until ${when(failover.bench_until)}` : 'it waits for a human to clear it'}. This attempt runs on ${here ?? 'another host'}${here && here === failover.host ? ' again' : ''}.`,
+        400,
+      )
+    : null;
 
   // Done so far: progress notes and claims of every attempt, oldest first.
   const done: { at: string; line: string; next: string | null }[] = [];
@@ -1595,6 +1604,7 @@ export function handoffSummary(
     [
       `Handoff: attempt ${attempts} of ${task.task_id}, ${resumed ? `resumed as attempt ${current.attempt}` : `for attempt ${current.attempt}`}.`,
       `Goal: ${objective} Constraints: ${constraints}`,
+      ...(stopped ? [stopped] : []),
       'Done so far:',
       ...(doneCut ? [`- (${doneCut} earlier line${doneCut === 1 ? '' : 's'} cut)`] : []),
       ...(done.length ? done.map((d) => d.line) : doneCut ? [] : ['- nothing recorded']),

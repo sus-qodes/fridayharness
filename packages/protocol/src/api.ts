@@ -262,6 +262,28 @@ export const OperationRunView = z.object({
 });
 export type OperationRunView = z.infer<typeof OperationRunView>;
 
+/** Why a host failed an attempt, as its adapter or Friday classified it (ADR-0035 §3); never a work failure. */
+export const HostFailureKind = z.enum(['start', 'auth', 'rate_limit', 'transport', 'timeout', 'runtime_unavailable']);
+export type HostFailureKind = z.infer<typeof HostFailureKind>;
+export const HostFailure = z.object({
+  kind: HostFailureKind,
+  /** When the host said it may be tried again, in seconds (a rate limit's reset). */
+  retry_after_s: z.number().int().positive().max(86_400).optional(),
+});
+export type HostFailure = z.infer<typeof HostFailure>;
+
+/** The host failure an earlier attempt of the task ended with, from the bench it recorded (ADR-0035 §4). */
+export const FailoverFrom = z.object({
+  run_id: z.string(),
+  host: z.string(),
+  model: z.string().nullable(),
+  kind: HostFailureKind,
+  detail: z.string().nullable(),
+  /** Until when that host and model are benched; null when a human must clear it. */
+  bench_until: z.string().nullable(),
+});
+export type FailoverFrom = z.infer<typeof FailoverFrom>;
+
 /** One readiness check routing made for a candidate, in the order made (ADR-0035 §2). */
 export const ReadinessCheckView = z.object({
   host: z.string(),
@@ -317,6 +339,8 @@ export const RoutingDecisionView = z.object({
   failover_policy: z.enum(['host_failure', 'none']).default('none'),
   /** The readiness checks made (ADR-0035 §2); empty for a decision older than them. */
   readiness: z.array(ReadinessCheckView).default([]),
+  /** The host failure the attempt before ended with, when one did (ADR-0035 §4). */
+  failover_from: FailoverFrom.nullable().default(null),
   created_at: z.string(),
 });
 export type RoutingDecisionView = z.infer<typeof RoutingDecisionView>;

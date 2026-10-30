@@ -29,6 +29,30 @@
     "fatal": {
       "default": false,
       "type": "boolean"
+    },
+    "failure": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "start",
+            "auth",
+            "rate_limit",
+            "transport",
+            "timeout",
+            "runtime_unavailable"
+          ]
+        },
+        "retry_after_s": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 86400
+        }
+      },
+      "required": [
+        "kind"
+      ]
     }
   },
   "required": [

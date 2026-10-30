@@ -80,7 +80,7 @@ import { MemoryService } from './memory.js';
 import { ALL_MIGRATIONS } from './migrations.js';
 import { StateProjector } from './projector.js';
 import { type HarnessRecord, Queries } from './queries.js';
-import { ReadinessService } from './readiness.js';
+import { type HostFailure, ReadinessService } from './readiness.js';
 import type { DeliveryRow, MessageRow } from './rows.js';
 
 /**
@@ -1090,6 +1090,10 @@ export class FridayState {
         reason_codes: ['router.error'],
       };
     }
+    // The host failure the attempt before ended with, when one did (ADR-0035 §4): the receipt names
+    // the failed attempt, its host, model and failure, beside what was chosen next.
+    const failover_from = this.readiness.failoverFrom(ctx.project_id, task.task_id, runId);
+    if (failover_from) decision = { ...decision, failover_from };
     if (decision.blocked) {
       throw new FridayError('routing_blocked', `routing does not let ${task.task_id} start here: ${decision.reason}`, {
         task_id: task.task_id,
@@ -2342,10 +2346,30 @@ export class FridayState {
     );
   }
 
+  /** A host failure benches the host and model the attempt ran on (ADR-0035 §3). */
+  private benchRun(ctx: CommandContext, projectId: string, run: RunView, failure: HostFailure, detail: string): void {
+    const harness = this.q.harness(run.harness_id);
+    this.readiness.benchWithin(ctx, projectId, {
+      host: harness.vendor,
+      model: run.model_observed ?? run.model_requested ?? null,
+      failure,
+      source: `run:${run.run_id}`,
+      detail,
+    });
+  }
+
   reportAgentError(
     projectId: string,
     caller: Caller,
-    p: { task_id: string; run_id: string; message: string; fatal: boolean; idempotency_key?: string | undefined },
+    p: {
+      task_id: string;
+      run_id: string;
+      message: string;
+      fatal: boolean;
+      /** Why the host failed, when the adapter could tell (ADR-0035 §3); absent for a work failure. */
+      failure?: HostFailure | undefined;
+      idempotency_key?: string | undefined;
+    },
   ): { task_status: TaskView['status'] } {
     const actor: Actor = { kind: 'agent', id: caller.agent_id };
     return this.exec(
@@ -2361,6 +2385,7 @@ export class FridayState {
             event_type: 'error',
             message: p.message,
             fatal: p.fatal,
+            ...(p.failure ? { failure: p.failure } : {}),
           },
           refs: [{ kind: 'task', id: task.task_id }],
         });
@@ -2373,7 +2398,9 @@ export class FridayState {
         }
         if (run.status === 'STARTING') {
           // The work never started (Friday had not heard that the run was accepted): the harness
-          // could not take it, which is a decline, and the task is free again.
+          // could not take it, which is a decline, and the task is free again. The host is benched
+          // for the failure the adapter saw, else as one that could not start (ADR-0035 §3).
+          this.benchRun(ctx, projectId, run, p.failure ?? { kind: 'start' }, p.message);
           this.declineWithin(ctx, projectId, run, `the harness could not start: ${p.message}`.slice(0, 500), {
             kind: 'harness',
             id: caller.harness_id,
@@ -2398,6 +2425,9 @@ export class FridayState {
           task = this.updateTaskFields(ctx, task.task_id, { waiting_reason: 'agent_error' });
         }
         this.endRun(ctx, run, 'failed');
+        // The host's failure, not the work's, benches the host and model (ADR-0035 §3); an error
+        // without a kind is the work's and benches nothing.
+        if (p.failure) this.benchRun(ctx, projectId, run, p.failure, p.message);
         this.releaseAgent(ctx, caller.agent_id, task.task_id);
         this.syncHarnessBusy(ctx, caller.harness_id);
         return { task_status: task.status };
@@ -2667,6 +2697,23 @@ export class FridayState {
               { task_id: taskId, run_id: run.run_id, reason: `${action}: ${opts.reason}` },
               run.run_id,
             );
+          }
+          // A reservation for an agent whose host cannot take the work now would hold the task for
+          // the one agent that cannot take it (ADR-0035 §4). A claim already clears reservations,
+          // so this guards only a reservation placed on the freed task by another path.
+          const freed = this.q.task(projectId, taskId);
+          if (freed.status === 'READY' && freed.reserved_for_agent_key && freed.reserved_by !== 'human') {
+            const holder = this.q.agentByKey(projectId, freed.reserved_for_agent_key);
+            const hh = holder?.harness_id ? this.q.findHarness(holder.harness_id) : undefined;
+            const a = hh ? this.readiness.assess(projectId, hh.vendor, hh.observed_model ?? null, ctx.now) : null;
+            if (a && !a.dispatchable) {
+              return this.unreserveWithin(
+                ctx,
+                projectId,
+                taskId,
+                `${freed.reserved_for_agent_key} cannot take it now: ${a.reason}`,
+              );
+            }
           }
           return released;
         },
@@ -4282,11 +4329,26 @@ export class FridayState {
         nowMs - Date.parse(l.disconnected_at) > this.config.reconnectWindowMs &&
         !hasActive
       ) {
-        this.exec({ name: 'harness.terminate', project_id: projectId, actor: LEASE_MANAGER }, (ctx) =>
+        this.exec({ name: 'harness.terminate', project_id: projectId, actor: LEASE_MANAGER }, (ctx) => {
           this.moveHarness(ctx, this.q.harness(l.harness_id), 'TERMINATED', 'reconnect window expired', {
             terminated_at: ctx.now,
-          }),
-        );
+          });
+          // Work it held when it went is a transport failure of its host (ADR-0035 §3): the next
+          // attempt goes to the next host in the ranking, not back to the one that vanished.
+          for (const t of this.q.tasks(projectId, { statuses: ['HARNESS_LOST'] })) {
+            if (t.assigned_harness_id !== l.harness_id || !t.current_run_id) continue;
+            const run = this.q.findRun(t.current_run_id);
+            if (run) {
+              this.benchRun(
+                ctx,
+                projectId,
+                run,
+                { kind: 'transport' },
+                'the session did not come back within the reconnect window',
+              );
+            }
+          }
+        });
         out.terminated.push(l.harness_id);
       }
       if (l.shadow && !expired) this.tryPromoteShadow(projectId, l.harness_id);
@@ -4316,7 +4378,7 @@ export class FridayState {
           m.delivered_at !== null &&
           nowMs - Date.parse(m.delivered_at) > this.config.ackTimeoutMs);
       if (!timedOut || !m.run_id) continue;
-      this.declineRun(projectId, m.run_id, 'ack timeout', LEASE_MANAGER);
+      this.declineRun(projectId, m.run_id, 'ack timeout', LEASE_MANAGER, { kind: 'timeout' });
       this.db.prepare("UPDATE outbox_messages SET status = 'expired' WHERE message_id = ?").run(m.message_id);
       out.declined.push(m.run_id);
     }
@@ -4350,10 +4412,12 @@ export class FridayState {
     return out;
   }
 
-  private declineRun(projectId: string, runId: string, reason: string, actor: Actor): void {
+  private declineRun(projectId: string, runId: string, reason: string, actor: Actor, failure?: HostFailure): void {
     this.exec({ name: 'run.decline', project_id: projectId, actor }, (ctx) => {
       const run = this.q.run(runId);
       if (run.status !== 'STARTING') return;
+      // Friday's own classification of what it observed (ADR-0035 §3): a start never acknowledged.
+      if (failure) this.benchRun(ctx, projectId, run, failure, reason);
       this.declineWithin(ctx, projectId, run, reason);
     });
   }

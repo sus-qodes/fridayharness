@@ -841,6 +841,27 @@ describe('the handoff summary (plan M12.3)', () => {
     expect(section(tight.packet, 'task.progress')).toContain('Handoff: attempt 1');
   });
 
+  it('tells the next attempt why the one before stopped, when its host failed (ADR-0035 §4)', async () => {
+    const taskId = backendTask();
+    const run1 = startAttempt(taskId);
+    state.reportAgentError(PROJECT, caller(), {
+      task_id: taskId,
+      run_id: run1,
+      message: 'Codex stopped: HTTP 429 Too Many Requests',
+      fatal: true,
+      failure: { kind: 'rate_limit', retry_after_s: 900 },
+    });
+    state.recoverTask(PROJECT, human, taskId, 'reassign', { reason: 'its host is rate limited' });
+    startAttempt(taskId);
+    const { packet } = await compile(taskId, { purpose: 'after a host failure' });
+    const text = section(packet, 'task.progress');
+    expectLabelled(text);
+    expect(text).toContain(
+      'Stopped: the previous attempt on generic stopped (rate_limit: Codex stopped: HTTP 429 Too Many Requests); it is benched until ',
+    );
+    expect(text).toContain('This attempt runs on generic again.');
+  });
+
   it('cuts the oldest "Done so far" lines first and never exceeds 1,500 characters', async () => {
     const taskId = backendTask();
     const run1 = startAttempt(taskId);

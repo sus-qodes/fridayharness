@@ -1,6 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  classifyHostFailure,
   FINAL_SCHEMA,
   type GenericHarnessClient,
   type HarnessDescriptor,
@@ -785,16 +786,18 @@ export class CodexAdapter {
         );
       }
     } else {
+      const message = `the Codex turn ${turn.status ?? 'ended'}: ${turn.error?.message ?? 'no reason given'}`;
+      // A turn the host failed because it could not serve it (not signed in, rate limited) is the
+      // host's failure (ADR-0035 §3); any other error of the turn is the work's.
+      const failure = classifyHostFailure(message, 'turn');
       void reports.report(
         'error',
         {
           ...ids,
-          message: `the Codex turn ${turn.status ?? 'ended'}: ${turn.error?.message ?? 'no reason given'}`.slice(
-            0,
-            2000,
-          ),
+          message: message.slice(0, 2000),
           // The attempt is over (its host ends below): Friday's recovery decides what follows.
           fatal: true,
+          ...(failure ? { failure } : {}),
         },
         spent,
       );
@@ -807,10 +810,15 @@ export class CodexAdapter {
     return { events: [{ event_type: 'host.usage', data: codexHostUsage(a.usage, a.turns, a.model) }] };
   }
 
-  /** The host ended without the turn ending: an agent error Friday's recovery handles. */
+  /**
+   * The host ended without the turn ending: an agent error Friday's recovery handles, classified as
+   * the host's failure where the cause can be told (ADR-0035 §3): before any turn ran, a start
+   * failure; mid-turn, a lost process; a sign-in problem or a rate limit wherever it appears.
+   */
   async #lost(a: Attempt, why: string): Promise<void> {
     if (a.done || a.stopping) return;
     a.done = true;
+    const failure = classifyHostFailure(why, a.turns > 0 ? 'exit' : 'start');
     void this.#link.reports.report(
       'error',
       {
@@ -818,6 +826,7 @@ export class CodexAdapter {
         run_id: a.runId,
         message: `Codex stopped: ${why}`.slice(0, 2000),
         fatal: true,
+        ...(failure ? { failure } : {}),
       },
       // Once a turn ran, what the host had counted by the time it stopped was spent all the same.
       a.turns > 0 ? this.#spent(a) : {},

@@ -3,9 +3,11 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  classifyHostFailure,
   FINAL_SCHEMA,
   type GenericHarnessClient,
   type HarnessDescriptor,
+  type HostFailureSite,
   parseFinal,
   type Registration,
   relayedMessage,
@@ -687,7 +689,7 @@ export class ClaudeSpawnAdapter {
       repository_config: 'ignored',
     });
     if (str(m.model)) void this.#event(a, 'model.observed', { model: m.model, basis: 'reported' });
-    if (!a.verdict.valid) void this.#lost(a, a.verdict.why);
+    if (!a.verdict.valid) void this.#lost(a, a.verdict.why, 'turn');
   }
 
   async #finish(a: Attempt, m: Record<string, unknown>): Promise<void> {
@@ -698,6 +700,7 @@ export class ClaudeSpawnAdapter {
       return this.#lost(
         a,
         a.verdict && !a.verdict.valid ? a.verdict.why : 'Claude Code ended its turn before reporting what it runs with',
+        'turn',
       );
     }
     a.done = true;
@@ -742,17 +745,18 @@ export class ClaudeSpawnAdapter {
         );
       }
     } else {
+      const message = `the Claude Code turn ended: ${String(m.subtype ?? 'error')}${str(m.result) ? `: ${m.result}` : ''}`;
+      // A turn the host ended because it could not serve it (not signed in, rate limited) is the
+      // host's failure (ADR-0035 §3); any other error of the turn is the work's.
+      const failure = classifyHostFailure(message, 'turn');
       void reports.report(
         'error',
         {
           ...ids,
-          message:
-            `the Claude Code turn ended: ${String(m.subtype ?? 'error')}${str(m.result) ? `: ${m.result}` : ''}`.slice(
-              0,
-              2000,
-            ),
+          message: message.slice(0, 2000),
           // The attempt is over (its session ends below): Friday's recovery decides what follows.
           fatal: true,
+          ...(failure ? { failure } : {}),
         },
         spent,
       );
@@ -760,15 +764,21 @@ export class ClaudeSpawnAdapter {
     await this.#end(a.runId);
   }
 
-  /** The session ended without a result: an agent error Friday's recovery handles. */
-  async #lost(a: Attempt, why: string): Promise<void> {
+  /**
+   * The session ended without a result: an agent error Friday's recovery handles, classified as the
+   * host's failure where the cause can be told (ADR-0035 §3): before the task was given, a start
+   * failure; mid-turn, a lost process; a verdict Friday refused, the work's.
+   */
+  async #lost(a: Attempt, why: string, site: HostFailureSite = a.started ? 'exit' : 'start'): Promise<void> {
     if (a.done || a.stopping) return;
     a.done = true;
+    const failure = classifyHostFailure(why, site);
     void this.#link.reports.report('error', {
       task_id: a.taskId,
       run_id: a.runId,
       message: `Claude Code stopped: ${why}`.slice(0, 2000),
       fatal: true,
+      ...(failure ? { failure } : {}),
     });
     await this.#end(a.runId);
   }

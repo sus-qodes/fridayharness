@@ -61,6 +61,12 @@ function decisionLines(
   for (const r of (d.readiness ?? []).slice(0, 8)) {
     lines.push(`    readiness ${r.host}/${r.model}: ${r.dispatchable ? 'ready' : `not ready, ${r.reason}`}`);
   }
+  if (d.failover_from) {
+    const f = d.failover_from;
+    lines.push(
+      `  failover: attempt ${f.run_id} stopped on ${f.host}${f.model ? `/${f.model}` : ''} (${f.kind}${f.detail ? `: ${f.detail}` : ''})${f.bench_until ? `, benched until ${f.bench_until}` : ', until a human clears it'}`,
+    );
+  }
   if (d.fallback_chain.length) {
     lines.push(`  fallback: ${d.fallback_chain.map((f) => f.model ?? 'a human').join(' -> ')}`);
   }

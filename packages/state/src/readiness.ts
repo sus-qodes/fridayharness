@@ -1,7 +1,10 @@
 import {
   type Actor,
+  type FailoverFrom,
   FridayError,
   type HarnessView,
+  type HostFailure,
+  HostFailureKind,
   type ReadinessEvidenceView,
   ReadinessRecordRequest,
   type RunView,
@@ -15,6 +18,12 @@ import type { FridayState } from './service.js';
 export const AUTHENTICATED_TTL_MS = 7 * 86_400_000;
 /** What a doctor check saw counts for this long. */
 export const DOCTOR_TTL_MS = 86_400_000;
+/** A crash, a lost connection, a failed start or a timeout benches the host and model for this long (ADR-0035 §3). */
+export const HOST_FAILURE_BENCH_MS = 10 * 60_000;
+/** A rate limit without a reset time benches the model for this long. */
+export const RATE_LIMIT_BENCH_MS = 30 * 60_000;
+
+export type { HostFailure };
 
 export interface ReadinessObservation {
   host: string;
@@ -155,6 +164,80 @@ export class ReadinessService {
           .filter((e) => ended.some((x) => x.evidence_id === e.evidence_id));
       },
     ).result;
+  }
+
+  /**
+   * A host failed an attempt (ADR-0035 §3). A sign-in failure marks the host not signed in until
+   * it is seen signed in again or a human clears it; a rate limit benches the model until its reset
+   * time, else 30 minutes; a failed start, a lost connection, a timeout or an unavailable runtime
+   * benches the host and model for 10 minutes. Work failures never reach here. The source names
+   * the attempt (`run:<run_id>`) and the detail starts with the kind, so the next route and the
+   * next attempt's handoff can say what happened.
+   */
+  benchWithin(
+    ctx: CommandContext,
+    projectId: string,
+    f: { host: string; model: string | null; failure: HostFailure; source: string; detail: string | null },
+  ): string[] {
+    const kind = f.failure.kind;
+    const detail = `${kind}: ${f.detail?.trim() || 'no detail given'}`;
+    if (kind === 'auth') {
+      return this.recordWithin(ctx, projectId, [
+        {
+          host: f.host,
+          model: null,
+          stage: 'authenticated',
+          status: 'failed',
+          source: f.source,
+          detail,
+          expires_at: null,
+        },
+      ]);
+    }
+    const ms =
+      kind === 'rate_limit'
+        ? f.failure.retry_after_s
+          ? f.failure.retry_after_s * 1000
+          : RATE_LIMIT_BENCH_MS
+        : HOST_FAILURE_BENCH_MS;
+    return this.recordWithin(ctx, projectId, [
+      {
+        host: f.host,
+        model: f.model,
+        stage: 'benched',
+        status: 'failed',
+        source: f.source,
+        detail,
+        expires_at: plus(ctx.now, ms),
+      },
+    ]);
+  }
+
+  /**
+   * The host failure an earlier attempt of the task ended with, if any (ADR-0035 §4): the newest
+   * bench or sign-in failure one of its other attempts recorded.
+   */
+  failoverFrom(projectId: string, taskId: string, runId: string): FailoverFrom | null {
+    const earlier = new Set(
+      this.state.q
+        .runs(taskId)
+        .filter((r) => r.run_id !== runId)
+        .map((r) => `run:${r.run_id}`),
+    );
+    const e = this.state.q
+      .readinessEvidence(projectId, { all: true })
+      .find((x) => x.status === 'failed' && earlier.has(x.source));
+    if (!e) return null;
+    const m = /^([a-z_]+): ([\s\S]*)$/.exec(e.detail ?? '');
+    const kind = HostFailureKind.safeParse(m?.[1]);
+    return {
+      run_id: e.source.slice('run:'.length),
+      host: e.host,
+      model: e.model,
+      kind: kind.success ? kind.data : 'transport',
+      detail: m ? (m[2] ?? null) : e.detail,
+      bench_until: e.expires_at,
+    };
   }
 
   /** The loose-rule verdict for one host and model now (ADR-0035 §1). */

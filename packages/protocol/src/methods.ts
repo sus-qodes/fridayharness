@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { LearningProposalView, LearningProposeRequest, TaskView } from './api.js';
+import { HostFailure, LearningProposalView, LearningProposeRequest, TaskView } from './api.js';
 import { ContextPacket } from './context.js';
 import {
   AttachMode,
@@ -262,6 +262,8 @@ export const AgentErrorParams = z.object({
   run_id: z.string(),
   message: z.string().min(1).max(2000),
   fatal: z.boolean().default(false),
+  /** Why the host failed, when the adapter could tell (ADR-0035 §3); absent for a work failure. */
+  failure: HostFailure.optional(),
 });
 export const AgentErrorResult = z.object({ task_status: TaskStatus });
 

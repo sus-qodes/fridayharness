@@ -3,11 +3,17 @@
  * makes its host ready, a doctor check makes a host ready for a day, a dry run judges each
  * candidate on its own host, the receipt records the checks, and `friday readiness` shows it all.
  */
-import type { ReadinessEvidenceView, ReadinessReport, RoutingDecisionView, TaskView } from '@friday/protocol';
+import type {
+  ReadinessEvidenceView,
+  ReadinessReport,
+  RoutingDecisionView,
+  TaskStartParams,
+  TaskView,
+} from '@friday/protocol';
 import { useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli } from '../helpers/cli.js';
-import { startTestDaemon } from '../helpers/daemon.js';
+import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
 import { FakeHarness } from '../helpers/fake-harness.js';
 import { hostSeen } from '../helpers/readiness.js';
 
@@ -23,6 +29,18 @@ afterEach(() => {
 });
 
 type DryRun = { model: string | null; blocked: boolean; reason: string; readiness: RoutingDecisionView['readiness'] };
+
+const taskOf = (td: TestDaemon, id: string) =>
+  td.operator.get<{ task: TaskView }>(td.operator.projectPath(`/tasks/${id}`)).then((r) => r.task);
+async function until<T>(fn: () => Promise<T>, ok: (v: T) => boolean, what: string, ms = 20_000): Promise<T> {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = await fn();
+    if (ok(v)) return v;
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}: ${JSON.stringify(v).slice(0, 300)}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
 
 describe('runtime readiness', () => {
   it('routes only to hosts this machine has seen, and says why the others are out', async () => {
@@ -137,4 +155,80 @@ describe('runtime readiness', () => {
     const after = await td.operator.get<{ dry_run: DryRun }>(P(`/routing/explain/${task.task_id}`));
     expect(after.dry_run).toMatchObject({ blocked: false, model: 'openai/gpt-6.1-sol' });
   }, 60_000);
+
+  it('fails over to the next host in the ranking after a host failure, and says so (ADR-0035 §3–§4)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const dir = ws().projectDir;
+    const P = (p: string) => td.operator.projectPath(p);
+    const caps = (models: string[]) => ({ task_start: true, model_control: 'set', models });
+    const cx = await FakeHarness.connect(td, {
+      agentKey: 'cx-1',
+      vendor: 'codex',
+      capabilities: caps(['openai/gpt-6.1-sol']),
+    });
+    const cc = await FakeHarness.connect(td, {
+      agentKey: 'cc-1',
+      vendor: 'claude-code',
+      capabilities: caps(['claude-sonnet-5-5']),
+    });
+    const task = await td.operator.post<TaskView>(P('/tasks'), {
+      summary: 'Fix one file',
+      kind: 'implementation',
+      risk_level: 'low',
+      scope: { write: ['src/a.ts'], read: [] },
+      ready: true,
+    });
+    await td.operator.post(P(`/tasks/${task.task_id}/assign`), { agent_key: 'cx-1' });
+    const first = (await cx.waitFor('task.start', 20_000)).params as TaskStartParams;
+    expect(first).toMatchObject({ model: 'openai/gpt-6.1-sol', model_binding: true });
+    await until(
+      () => taskOf(td, task.task_id),
+      (t) => t.status === 'RUNNING',
+      'attempt 1 to run',
+    );
+
+    // The host is rate limited: the attempt ends as the host's failure, not the work's.
+    await cx.client.reportError({
+      task_id: task.task_id,
+      run_id: first.run_id,
+      message: 'Codex stopped: HTTP 429 Too Many Requests',
+      fatal: true,
+      failure: { kind: 'rate_limit', retry_after_s: 1800 },
+    });
+    await until(
+      () => taskOf(td, task.task_id),
+      (t) => t.waiting_reason === 'agent_error',
+      'the host failure',
+    );
+    let report = await td.operator.get<ReadinessReport>(P('/readiness'));
+    const sol = () =>
+      report.hosts.find((h) => h.host === 'codex')?.assessments.find((a) => a.model === 'openai/gpt-6.1-sol');
+    expect(sol()).toMatchObject({ dispatchable: false, blocking: { stage: 'benched', status: 'failed' } });
+    expect(sol()?.reason).toContain('rate_limit: Codex stopped: HTTP 429 Too Many Requests');
+
+    // Recovery reassigns as before; the next route skips the benched host for the next rank.
+    expect(await td.daemon.recovery.sweep()).toEqual([`${task.task_id}: reassign`]);
+    expect((await taskOf(td, task.task_id)).status).toBe('READY');
+    const dry = await td.operator.get<{ dry_run: DryRun }>(P(`/routing/explain/${task.task_id}`));
+    expect(dry.dry_run).toMatchObject({ blocked: false, model: 'claude-sonnet-5-5' });
+    expect(dry.dry_run.readiness.find((r) => r.host === 'codex')).toMatchObject({ dispatchable: false });
+    await td.operator.post(P(`/tasks/${task.task_id}/assign`), { agent_key: 'cc-1' });
+    const second = (await cc.waitFor('task.start', 20_000)).params as TaskStartParams;
+    expect(second).toMatchObject({ model: 'claude-sonnet-5-5', attempt: 2 });
+    const explained = await cli(['--project', dir, 'routing', 'explain', task.task_id]);
+    expect(explained.code, explained.stderr).toBe(0);
+    expect(explained.stdout).toContain(
+      `failover: attempt ${first.run_id} stopped on codex/openai/gpt-6.1-sol (rate_limit: Codex stopped: HTTP 429 Too Many Requests), benched until`,
+    );
+    expect(explained.stdout).toContain('excluded openai/gpt-6.1-sol: readiness.benched');
+
+    // A human lifts the bench: the host is tried again.
+    const cleared = await cli(['--project', dir, 'readiness', 'clear', 'codex', '--model', 'openai/gpt-6.1-sol']);
+    expect(cleared.code, cleared.stderr).toBe(0);
+    expect(cleared.stdout).toContain('Cleared 1 record(s) for codex/openai/gpt-6.1-sol');
+    report = await td.operator.get<ReadinessReport>(P('/readiness'));
+    expect(sol()?.dispatchable).toBe(true);
+    await cx.close();
+    await cc.close();
+  }, 120_000);
 });

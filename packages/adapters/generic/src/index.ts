@@ -292,6 +292,7 @@ export class GenericHarnessClient {
 }
 
 export { cleanSummary, FINAL_SCHEMA, type Final, parseFinal, STRICT_FINAL_SCHEMA } from './final.js';
+export { classifyHostFailure, type HostFailureSite, retryAfterSeconds } from './host-failure.js';
 export {
   type KeptEvent,
   type ReportOutcome,

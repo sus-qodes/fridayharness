@@ -38,7 +38,14 @@ export {
 } from './migrations.js';
 export { StateProjector } from './projector.js';
 export { type HarnessRecord, type LayaAnswerRecord, type LayaCalibrationRecord, Queries } from './queries.js';
-export { AUTHENTICATED_TTL_MS, DOCTOR_TTL_MS, type ReadinessObservation, ReadinessService } from './readiness.js';
+export {
+  AUTHENTICATED_TTL_MS,
+  DOCTOR_TTL_MS,
+  HOST_FAILURE_BENCH_MS,
+  RATE_LIMIT_BENCH_MS,
+  type ReadinessObservation,
+  ReadinessService,
+} from './readiness.js';
 export {
   achievedEnforcement,
   type BrainJob,
