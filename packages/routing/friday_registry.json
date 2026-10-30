@@ -1,113 +1,563 @@
 {
-  "version": "2026-10-21.2",
+  "version": "2026-10-21.3",
   "aliases": {
-    "backend": "implementation",
-    "frontend": "implementation",
+    "classifier": "decision_router",
+    "router": "decision_router",
+    "architect": "system_architect",
+    "system-architect": "system_architect",
+    "architecture": "system_architect",
+    "backend": "backend_engineer",
+    "backend-engineer": "backend_engineer",
+    "frontend": "frontend_engineer",
+    "frontend-engineer": "frontend_engineer",
+    "ui": "frontend_engineer",
+    "web": "frontend_engineer",
     "developer": "implementation",
     "dev": "implementation",
     "engineer": "implementation",
-    "qa": "verification",
-    "test": "verification",
-    "tester": "verification",
-    "testing": "verification",
+    "qa": "qa_and_debugging",
+    "test": "qa_and_debugging",
+    "tester": "qa_and_debugging",
+    "testing": "qa_and_debugging",
+    "verification": "qa_and_debugging",
+    "debugger": "qa_and_debugging",
+    "devops": "devops_and_terminal",
+    "ops": "devops_and_terminal",
+    "infrastructure": "devops_and_terminal",
+    "infra": "devops_and_terminal",
+    "terminal": "devops_and_terminal",
+    "review": "code_reviewer_and_security",
+    "reviewer": "code_reviewer_and_security",
+    "security": "code_reviewer_and_security",
+    "security-reviewer": "code_reviewer_and_security",
     "documentation": "docs",
+    "doc": "docs",
     "maintenance": "chore",
     "investigate": "research"
   },
   "roles": {
     "decision_router": {
       "role": "decision_router",
-      "description": "Classifies an unassigned task into one or more execution roles.",
+      "description": "Classifies unassigned work into execution roles; it never chooses a model or harness.",
       "candidates": [
         {
           "rank": 1,
           "model": "claude-haiku-5-5",
           "harness": "claude-code",
-          "dispatchable": true,
-          "mcp_required": true,
-          "reason_if_unavailable": null
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": false,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": false
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
         },
         {
           "rank": 2,
           "model": "claude-sonnet-5-5",
           "harness": "claude-code",
-          "dispatchable": true,
-          "mcp_required": true,
-          "reason_if_unavailable": null
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": false,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": false
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        }
+      ]
+    },
+    "system_architect": {
+      "role": "system_architect",
+      "description": "Bounds system architecture, interfaces, trade-offs and migration plans.",
+      "candidates": [
+        {
+          "rank": 1,
+          "model": "claude-opus-5-5",
+          "harness": "claude-code",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 2,
+          "model": "claude-fable-5-1",
+          "harness": "claude-code",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 3,
+          "model": "gpt-5.6-luna",
+          "harness": "codex",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        }
+      ]
+    },
+    "backend_engineer": {
+      "role": "backend_engineer",
+      "description": "Changes server, API, data-path and backend library code, with its tests.",
+      "candidates": [
+        {
+          "rank": 1,
+          "model": "claude-opus-5-5",
+          "harness": "claude-code",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 2,
+          "model": "gpt-5.6-luna",
+          "harness": "codex",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 3,
+          "model": "claude-sonnet-5-5",
+          "harness": "claude-code",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        }
+      ]
+    },
+    "frontend_engineer": {
+      "role": "frontend_engineer",
+      "description": "Changes browser, client and user-interface code, with its tests.",
+      "candidates": [
+        {
+          "rank": 1,
+          "model": "claude-opus-5-5",
+          "harness": "claude-code",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 2,
+          "model": "claude-sonnet-5-5",
+          "harness": "claude-code",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 3,
+          "model": "gpt-5.6-luna",
+          "harness": "codex",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        }
+      ]
+    },
+    "qa_and_debugging": {
+      "role": "qa_and_debugging",
+      "description": "Reproduces failures, runs checks and investigates defects in bounded scope.",
+      "candidates": [
+        {
+          "rank": 1,
+          "model": "claude-sonnet-5-5",
+          "harness": "claude-code",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 2,
+          "model": "claude-haiku-5-5",
+          "harness": "claude-code",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 3,
+          "model": "gpt-5.6-luna",
+          "harness": "codex",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        }
+      ]
+    },
+    "devops_and_terminal": {
+      "role": "devops_and_terminal",
+      "description": "Changes build, CI, deployment, environment and terminal automation.",
+      "candidates": [
+        {
+          "rank": 1,
+          "model": "claude-sonnet-5-5",
+          "harness": "claude-code",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 2,
+          "model": "claude-opus-5-5",
+          "harness": "claude-code",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 3,
+          "model": "gpt-5.6-luna",
+          "harness": "codex",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        }
+      ]
+    },
+    "code_reviewer_and_security": {
+      "role": "code_reviewer_and_security",
+      "description": "Reviews correctness, security, permissions and architectural regressions.",
+      "candidates": [
+        {
+          "rank": 1,
+          "model": "claude-opus-5-5",
+          "harness": "claude-code",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 2,
+          "model": "claude-fable-5-1",
+          "harness": "claude-code",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 3,
+          "model": "gpt-5.6-luna",
+          "harness": "codex",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 4,
+          "model": "claude-sonnet-5-5",
+          "harness": "claude-code",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
         }
       ]
     },
     "implementation": {
       "role": "implementation",
-      "description": "Changes application or library source code and tests.",
+      "description": "Changes cross-cutting application or library source code and tests.",
       "candidates": [
         {
           "rank": 1,
           "model": "claude-opus-5-5",
           "harness": "claude-code",
-          "dispatchable": true,
-          "mcp_required": true,
-          "reason_if_unavailable": null
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
         },
         {
           "rank": 2,
           "model": "gpt-5.6-luna",
           "harness": "codex",
-          "dispatchable": true,
-          "mcp_required": true,
-          "reason_if_unavailable": null
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
         },
         {
           "rank": 3,
           "model": "future-implementation-model",
           "harness": "future-harness",
-          "dispatchable": false,
-          "mcp_required": true,
-          "reason_if_unavailable": "adapter_not_verified"
-        }
-      ]
-    },
-    "verification": {
-      "role": "verification",
-      "description": "Runs checks, reproduces failures and reports verification results.",
-      "candidates": [
-        {
-          "rank": 1,
-          "model": "claude-sonnet-5-5",
-          "harness": "claude-code",
-          "dispatchable": true,
-          "mcp_required": true,
-          "reason_if_unavailable": null
-        },
-        {
-          "rank": 2,
-          "model": "claude-haiku-5-5",
-          "harness": "claude-code",
-          "dispatchable": true,
-          "mcp_required": true,
-          "reason_if_unavailable": null
-        }
-      ]
-    },
-    "review": {
-      "role": "review",
-      "description": "Reviews changes for correctness, security and architectural regressions.",
-      "candidates": [
-        {
-          "rank": 1,
-          "model": "claude-opus-5-5",
-          "harness": "claude-code",
-          "dispatchable": true,
-          "mcp_required": true,
-          "reason_if_unavailable": null
-        },
-        {
-          "rank": 2,
-          "model": "gpt-5.6-luna",
-          "harness": "codex",
-          "dispatchable": true,
-          "mcp_required": true,
-          "reason_if_unavailable": null
+          "declared_dispatchable": false,
+          "reason_if_unavailable": "adapter_not_verified",
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": null,
+          "cost": null,
+          "benchmark": null
         }
       ]
     },
@@ -117,19 +567,63 @@
       "candidates": [
         {
           "rank": 1,
-          "model": "claude-sonnet-5-5",
+          "model": "claude-opus-5-5",
           "harness": "claude-code",
-          "dispatchable": true,
-          "mcp_required": true,
-          "reason_if_unavailable": null
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
         },
         {
           "rank": 2,
+          "model": "claude-sonnet-5-5",
+          "harness": "claude-code",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 3,
           "model": "gpt-5.6-luna",
           "harness": "codex",
-          "dispatchable": true,
-          "mcp_required": true,
-          "reason_if_unavailable": null
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
         }
       ]
     },
@@ -141,17 +635,41 @@
           "rank": 1,
           "model": "claude-sonnet-5-5",
           "harness": "claude-code",
-          "dispatchable": true,
-          "mcp_required": true,
-          "reason_if_unavailable": null
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
         },
         {
           "rank": 2,
           "model": "claude-haiku-5-5",
           "harness": "claude-code",
-          "dispatchable": true,
-          "mcp_required": true,
-          "reason_if_unavailable": null
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
         }
       ]
     },
@@ -163,17 +681,41 @@
           "rank": 1,
           "model": "claude-haiku-5-5",
           "harness": "claude-code",
-          "dispatchable": true,
-          "mcp_required": true,
-          "reason_if_unavailable": null
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
         },
         {
           "rank": 2,
           "model": "claude-sonnet-5-5",
           "harness": "claude-code",
-          "dispatchable": true,
-          "mcp_required": true,
-          "reason_if_unavailable": null
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "model-guide.yaml",
+            "observed_at": "2026-10-20"
+          },
+          "benchmark": null
         }
       ]
     }

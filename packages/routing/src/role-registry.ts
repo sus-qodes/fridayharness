@@ -1,12 +1,50 @@
 import type { ModelRecord } from './registry.js';
 
+/**
+ * What a candidate needs before it may be dispatched. These are requirements, never observations:
+ * the static registry does not claim that a host, model or MCP server is available now. Runtime
+ * readiness (a later slice) answers that question from installed/configured/authenticated state.
+ */
+export interface RoleCandidateRequirements {
+  mcp_required: boolean;
+  auth_required: boolean;
+  host_verified: boolean;
+  model_verified: boolean;
+  mcp_verified: boolean;
+}
+
+/** Where a candidate's cost information comes from. No cost value is claimed here. */
+export interface RoleCandidateCostProvenance {
+  source: string;
+  /** YYYY-MM-DD. */
+  observed_at: string;
+}
+
+/** A benchmark claim and the evidence that supports it; null means no benchmark claim is made. */
+export interface RoleCandidateBenchmarkProvenance {
+  source: string;
+  metric: string;
+  value: number;
+  /** YYYY-MM-DD. */
+  measured_at: string;
+  samples: number;
+}
+
 export interface RoleRegistryCandidate {
   rank: number;
   model: string;
   harness: string;
-  dispatchable: boolean;
-  mcp_required: boolean;
+  /**
+   * Friday ships this candidate as dispatchable once readiness allows it. It is not a claim that
+   * the host, credentials, MCP connection or model are available on this machine now.
+   */
+  declared_dispatchable: boolean;
   reason_if_unavailable: string | null;
+  requirements: RoleCandidateRequirements;
+  /** The last time a human reviewed this declaration and its sources; null when never reviewed. */
+  last_checked: string | null;
+  cost: RoleCandidateCostProvenance | null;
+  benchmark: RoleCandidateBenchmarkProvenance | null;
 }
 
 export interface RoleRegistryRole {
@@ -29,9 +67,68 @@ export interface ProjectRoleCandidate {
   rank?: number;
   model: string;
   harness: string;
-  dispatchable?: boolean;
-  mcp_required?: boolean;
+  declared_dispatchable?: boolean;
   reason_if_unavailable?: string | null;
+  requirements?: Partial<RoleCandidateRequirements>;
+  last_checked?: string | null;
+  cost?: RoleCandidateCostProvenance | null;
+  benchmark?: RoleCandidateBenchmarkProvenance | null;
+}
+
+/**
+ * Friday knows how to reach these harnesses. Unknown names may still appear on a candidate that is
+ * declared non-dispatchable (a future adapter); they may not be dispatched.
+ */
+export const KNOWN_HARNESSES: ReadonlySet<string> = new Set([
+  'claude-code',
+  'codex',
+  'cursor',
+  'antigravity',
+  'gemini',
+  'opencode',
+  'october',
+  'generic',
+]);
+
+const REGISTRY_CHECKED_AT = '2026-10-21';
+const GUIDE_COST: RoleCandidateCostProvenance = {
+  source: 'model-guide.yaml',
+  observed_at: '2026-10-20',
+};
+const DEFAULT_REQUIREMENTS: RoleCandidateRequirements = {
+  mcp_required: true,
+  auth_required: true,
+  host_verified: true,
+  model_verified: true,
+  mcp_verified: true,
+};
+
+interface CandidateOptions {
+  declared_dispatchable?: boolean;
+  reason_if_unavailable?: string | null;
+  requirements?: Partial<RoleCandidateRequirements>;
+  last_checked?: string | null;
+  cost?: RoleCandidateCostProvenance | null;
+  benchmark?: RoleCandidateBenchmarkProvenance | null;
+}
+
+function candidate(
+  rank: number,
+  model: string,
+  harness: string,
+  options: CandidateOptions = {},
+): RoleRegistryCandidate {
+  return {
+    rank,
+    model,
+    harness,
+    declared_dispatchable: options.declared_dispatchable ?? true,
+    reason_if_unavailable: options.reason_if_unavailable ?? null,
+    requirements: { ...DEFAULT_REQUIREMENTS, ...options.requirements },
+    last_checked: options.last_checked === undefined ? REGISTRY_CHECKED_AT : options.last_checked,
+    cost: options.cost === undefined ? { ...GUIDE_COST } : options.cost,
+    benchmark: options.benchmark ?? null,
+  };
 }
 
 /**
@@ -39,189 +136,149 @@ export interface ProjectRoleCandidate {
  * are declared for future adapters remain visible but are deliberately non-dispatchable.
  */
 export const ROLE_REGISTRY_SOURCE: RoleRegistry = {
-  version: '2026-10-21.2',
+  version: '2026-10-21.3',
   aliases: {
-    backend: 'implementation',
-    frontend: 'implementation',
+    classifier: 'decision_router',
+    router: 'decision_router',
+    architect: 'system_architect',
+    'system-architect': 'system_architect',
+    architecture: 'system_architect',
+    backend: 'backend_engineer',
+    'backend-engineer': 'backend_engineer',
+    frontend: 'frontend_engineer',
+    'frontend-engineer': 'frontend_engineer',
+    ui: 'frontend_engineer',
+    web: 'frontend_engineer',
     developer: 'implementation',
     dev: 'implementation',
     engineer: 'implementation',
-    qa: 'verification',
-    test: 'verification',
-    tester: 'verification',
-    testing: 'verification',
+    qa: 'qa_and_debugging',
+    test: 'qa_and_debugging',
+    tester: 'qa_and_debugging',
+    testing: 'qa_and_debugging',
+    verification: 'qa_and_debugging',
+    debugger: 'qa_and_debugging',
+    devops: 'devops_and_terminal',
+    ops: 'devops_and_terminal',
+    infrastructure: 'devops_and_terminal',
+    infra: 'devops_and_terminal',
+    terminal: 'devops_and_terminal',
+    review: 'code_reviewer_and_security',
+    reviewer: 'code_reviewer_and_security',
+    security: 'code_reviewer_and_security',
+    'security-reviewer': 'code_reviewer_and_security',
     documentation: 'docs',
+    doc: 'docs',
     maintenance: 'chore',
     investigate: 'research',
   },
   roles: {
     decision_router: {
       role: 'decision_router',
-      description: 'Classifies an unassigned task into one or more execution roles.',
+      description: 'Classifies unassigned work into execution roles; it never chooses a model or harness.',
       candidates: [
-        {
-          rank: 1,
-          model: 'claude-haiku-5-5',
-          harness: 'claude-code',
-          dispatchable: true,
-          mcp_required: true,
-          reason_if_unavailable: null,
-        },
-        {
-          rank: 2,
-          model: 'claude-sonnet-5-5',
-          harness: 'claude-code',
-          dispatchable: true,
-          mcp_required: true,
-          reason_if_unavailable: null,
-        },
+        candidate(1, 'claude-haiku-5-5', 'claude-code', {
+          requirements: { mcp_required: false, mcp_verified: false },
+        }),
+        candidate(2, 'claude-sonnet-5-5', 'claude-code', {
+          requirements: { mcp_required: false, mcp_verified: false },
+        }),
+      ],
+    },
+    system_architect: {
+      role: 'system_architect',
+      description: 'Bounds system architecture, interfaces, trade-offs and migration plans.',
+      candidates: [
+        candidate(1, 'claude-opus-5-5', 'claude-code'),
+        candidate(2, 'claude-fable-5-1', 'claude-code'),
+        candidate(3, 'gpt-5.6-luna', 'codex'),
+      ],
+    },
+    backend_engineer: {
+      role: 'backend_engineer',
+      description: 'Changes server, API, data-path and backend library code, with its tests.',
+      candidates: [
+        candidate(1, 'claude-opus-5-5', 'claude-code'),
+        candidate(2, 'gpt-5.6-luna', 'codex'),
+        candidate(3, 'claude-sonnet-5-5', 'claude-code'),
+      ],
+    },
+    frontend_engineer: {
+      role: 'frontend_engineer',
+      description: 'Changes browser, client and user-interface code, with its tests.',
+      candidates: [
+        candidate(1, 'claude-opus-5-5', 'claude-code'),
+        candidate(2, 'claude-sonnet-5-5', 'claude-code'),
+        candidate(3, 'gpt-5.6-luna', 'codex'),
+      ],
+    },
+    qa_and_debugging: {
+      role: 'qa_and_debugging',
+      description: 'Reproduces failures, runs checks and investigates defects in bounded scope.',
+      candidates: [
+        candidate(1, 'claude-sonnet-5-5', 'claude-code'),
+        candidate(2, 'claude-haiku-5-5', 'claude-code'),
+        candidate(3, 'gpt-5.6-luna', 'codex'),
+      ],
+    },
+    devops_and_terminal: {
+      role: 'devops_and_terminal',
+      description: 'Changes build, CI, deployment, environment and terminal automation.',
+      candidates: [
+        candidate(1, 'claude-sonnet-5-5', 'claude-code'),
+        candidate(2, 'claude-opus-5-5', 'claude-code'),
+        candidate(3, 'gpt-5.6-luna', 'codex'),
+      ],
+    },
+    code_reviewer_and_security: {
+      role: 'code_reviewer_and_security',
+      description: 'Reviews correctness, security, permissions and architectural regressions.',
+      candidates: [
+        candidate(1, 'claude-opus-5-5', 'claude-code'),
+        candidate(2, 'claude-fable-5-1', 'claude-code'),
+        candidate(3, 'gpt-5.6-luna', 'codex'),
+        candidate(4, 'claude-sonnet-5-5', 'claude-code'),
       ],
     },
     implementation: {
       role: 'implementation',
-      description: 'Changes application or library source code and tests.',
+      description: 'Changes cross-cutting application or library source code and tests.',
       candidates: [
-        {
-          rank: 1,
-          model: 'claude-opus-5-5',
-          harness: 'claude-code',
-          dispatchable: true,
-          mcp_required: true,
-          reason_if_unavailable: null,
-        },
-        {
-          rank: 2,
-          model: 'gpt-5.6-luna',
-          harness: 'codex',
-          dispatchable: true,
-          mcp_required: true,
-          reason_if_unavailable: null,
-        },
-        {
-          rank: 3,
-          model: 'future-implementation-model',
-          harness: 'future-harness',
-          dispatchable: false,
-          mcp_required: true,
+        candidate(1, 'claude-opus-5-5', 'claude-code'),
+        candidate(2, 'gpt-5.6-luna', 'codex'),
+        candidate(3, 'future-implementation-model', 'future-harness', {
+          declared_dispatchable: false,
           reason_if_unavailable: 'adapter_not_verified',
-        },
-      ],
-    },
-    verification: {
-      role: 'verification',
-      description: 'Runs checks, reproduces failures and reports verification results.',
-      candidates: [
-        {
-          rank: 1,
-          model: 'claude-sonnet-5-5',
-          harness: 'claude-code',
-          dispatchable: true,
-          mcp_required: true,
-          reason_if_unavailable: null,
-        },
-        {
-          rank: 2,
-          model: 'claude-haiku-5-5',
-          harness: 'claude-code',
-          dispatchable: true,
-          mcp_required: true,
-          reason_if_unavailable: null,
-        },
-      ],
-    },
-    review: {
-      role: 'review',
-      description: 'Reviews changes for correctness, security and architectural regressions.',
-      candidates: [
-        {
-          rank: 1,
-          model: 'claude-opus-5-5',
-          harness: 'claude-code',
-          dispatchable: true,
-          mcp_required: true,
-          reason_if_unavailable: null,
-        },
-        {
-          rank: 2,
-          model: 'gpt-5.6-luna',
-          harness: 'codex',
-          dispatchable: true,
-          mcp_required: true,
-          reason_if_unavailable: null,
-        },
+          last_checked: null,
+          cost: null,
+        }),
       ],
     },
     research: {
       role: 'research',
       description: 'Navigates the repository and produces bounded technical findings.',
       candidates: [
-        {
-          rank: 1,
-          model: 'claude-sonnet-5-5',
-          harness: 'claude-code',
-          dispatchable: true,
-          mcp_required: true,
-          reason_if_unavailable: null,
-        },
-        {
-          rank: 2,
-          model: 'gpt-5.6-luna',
-          harness: 'codex',
-          dispatchable: true,
-          mcp_required: true,
-          reason_if_unavailable: null,
-        },
+        candidate(1, 'claude-opus-5-5', 'claude-code'),
+        candidate(2, 'claude-sonnet-5-5', 'claude-code'),
+        candidate(3, 'gpt-5.6-luna', 'codex'),
       ],
     },
     docs: {
       role: 'docs',
       description: 'Writes or updates project documentation.',
-      candidates: [
-        {
-          rank: 1,
-          model: 'claude-sonnet-5-5',
-          harness: 'claude-code',
-          dispatchable: true,
-          mcp_required: true,
-          reason_if_unavailable: null,
-        },
-        {
-          rank: 2,
-          model: 'claude-haiku-5-5',
-          harness: 'claude-code',
-          dispatchable: true,
-          mcp_required: true,
-          reason_if_unavailable: null,
-        },
-      ],
+      candidates: [candidate(1, 'claude-sonnet-5-5', 'claude-code'), candidate(2, 'claude-haiku-5-5', 'claude-code')],
     },
     chore: {
       role: 'chore',
       description: 'Performs small mechanical maintenance changes.',
-      candidates: [
-        {
-          rank: 1,
-          model: 'claude-haiku-5-5',
-          harness: 'claude-code',
-          dispatchable: true,
-          mcp_required: true,
-          reason_if_unavailable: null,
-        },
-        {
-          rank: 2,
-          model: 'claude-sonnet-5-5',
-          harness: 'claude-code',
-          dispatchable: true,
-          mcp_required: true,
-          reason_if_unavailable: null,
-        },
-      ],
+      candidates: [candidate(1, 'claude-haiku-5-5', 'claude-code'), candidate(2, 'claude-sonnet-5-5', 'claude-code')],
     },
   },
 };
 
+/** The canonical roles a decision may report. Aliases are input spellings, not decision output. */
 export function roleRegistryRoles(registry: RoleRegistry = ROLE_REGISTRY_SOURCE): ReadonlySet<string> {
-  return new Set([...Object.keys(registry.roles), ...Object.keys(registry.aliases)]);
+  return new Set(Object.keys(registry.roles));
 }
 
 /** A role as the registry spells it: its canonical name, an alias, or null when unknown. */
@@ -234,6 +291,27 @@ export function canonicalRole(role: string, registry: RoleRegistry = ROLE_REGIST
     if (target) return target;
   }
   return null;
+}
+
+function projectCandidate(candidate: ProjectRoleCandidate, defaultRank: number): RoleRegistryCandidate {
+  const requirements = candidate.requirements ?? {};
+  return {
+    rank: candidate.rank ?? defaultRank,
+    model: candidate.model,
+    harness: candidate.harness,
+    declared_dispatchable: candidate.declared_dispatchable ?? true,
+    reason_if_unavailable: candidate.reason_if_unavailable ?? null,
+    requirements: {
+      mcp_required: requirements.mcp_required ?? false,
+      auth_required: requirements.auth_required ?? false,
+      host_verified: requirements.host_verified ?? true,
+      model_verified: requirements.model_verified ?? true,
+      mcp_verified: requirements.mcp_verified ?? false,
+    },
+    last_checked: candidate.last_checked ?? null,
+    cost: candidate.cost ?? null,
+    benchmark: candidate.benchmark ?? null,
+  };
 }
 
 /**
@@ -253,14 +331,7 @@ export function withProjectRoleCandidates(
     const definition = roles[role];
     if (!definition) throw new Error(`project role candidates name unknown role "${name}"`);
     let nextRank = Math.max(0, ...definition.candidates.map((candidate) => candidate.rank)) + 1;
-    const added: RoleRegistryCandidate[] = projectCandidates.map((candidate) => ({
-      rank: candidate.rank ?? nextRank++,
-      model: candidate.model,
-      harness: candidate.harness,
-      dispatchable: candidate.dispatchable ?? true,
-      mcp_required: candidate.mcp_required ?? false,
-      reason_if_unavailable: candidate.reason_if_unavailable ?? null,
-    }));
+    const added = projectCandidates.map((entry) => projectCandidate(entry, nextRank++));
     roles[role] = {
       ...definition,
       candidates: [...definition.candidates, ...added].sort((a, b) => a.rank - b.rank),
@@ -269,25 +340,87 @@ export function withProjectRoleCandidates(
   return { ...base, roles };
 }
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const isDate = (value: string): boolean => ISO_DATE.test(value);
+
 export function validateRoleRegistry(registry: RoleRegistry, models: readonly ModelRecord[]): void {
-  const known = new Set(models.map((model) => model.id));
+  const knownModels = new Set(models.map((model) => model.id));
+  const names = new Map<string, string>();
+  for (const role of Object.keys(registry.roles)) names.set(role.toLowerCase(), `role ${role}`);
   for (const [alias, target] of Object.entries(registry.aliases)) {
     if (registry.roles[alias]) throw new Error(`role alias "${alias}" shadows a canonical role`);
     if (!registry.roles[target]) throw new Error(`role alias "${alias}" targets unknown role "${target}"`);
+    const lower = alias.toLowerCase();
+    const collision = names.get(lower);
+    if (collision) throw new Error(`role alias "${alias}" collides with ${collision}`);
+    names.set(lower, `alias ${alias}`);
   }
   for (const [role, definition] of Object.entries(registry.roles)) {
     if (role !== definition.role) throw new Error(`role registry key does not match role "${role}"`);
+    if (!definition.description.trim()) throw new Error(`role ${role} has no description`);
+    if (!definition.candidates.length) throw new Error(`role ${role} has no candidates`);
     const ranks = definition.candidates.map((candidate) => candidate.rank);
     if (new Set(ranks).size !== ranks.length) throw new Error(`role ${role} has duplicate candidate ranks`);
     if (ranks.some((rank) => !Number.isInteger(rank) || rank < 1))
       throw new Error(`role ${role} has an invalid candidate rank`);
-    if (!definition.candidates.length) throw new Error(`role ${role} has no candidates`);
-    for (const candidate of definition.candidates) {
-      if (!known.has(candidate.model) && candidate.dispatchable) {
-        throw new Error(`role ${role} dispatches unknown model "${candidate.model}"`);
+    for (let index = 1; index < ranks.length; index += 1) {
+      if ((ranks[index] as number) < (ranks[index - 1] as number)) {
+        throw new Error(`role ${role} has candidates out of rank order`);
       }
-      if (!candidate.dispatchable && !candidate.reason_if_unavailable) {
+    }
+    for (const candidate of definition.candidates) {
+      if (!candidate.model.trim() || !candidate.harness.trim()) {
+        throw new Error(`role ${role} has a candidate with an empty model or harness`);
+      }
+      if (candidate.declared_dispatchable) {
+        if (!knownModels.has(candidate.model)) {
+          throw new Error(`role ${role} dispatches unknown model "${candidate.model}"`);
+        }
+        if (!KNOWN_HARNESSES.has(candidate.harness)) {
+          throw new Error(`role ${role} dispatches unknown harness "${candidate.harness}"`);
+        }
+        const requirements = candidate.requirements;
+        if (
+          !requirements ||
+          typeof requirements.mcp_required !== 'boolean' ||
+          typeof requirements.auth_required !== 'boolean' ||
+          typeof requirements.host_verified !== 'boolean' ||
+          typeof requirements.model_verified !== 'boolean' ||
+          typeof requirements.mcp_verified !== 'boolean'
+        ) {
+          throw new Error(
+            `role ${role} dispatches candidate "${candidate.model}" without complete dispatch requirements`,
+          );
+        }
+        if (candidate.reason_if_unavailable) {
+          throw new Error(
+            `role ${role} declares candidate "${candidate.model}" dispatchable with an unavailability reason`,
+          );
+        }
+      } else if (!candidate.reason_if_unavailable?.trim()) {
         throw new Error(`role ${role} declares a non-dispatchable candidate without a reason`);
+      }
+      if (candidate.requirements.mcp_verified && !candidate.requirements.mcp_required) {
+        throw new Error(`role ${role} candidate "${candidate.model}" requires MCP verification but not MCP`);
+      }
+      if (candidate.last_checked !== null && !isDate(candidate.last_checked)) {
+        throw new Error(`role ${role} candidate "${candidate.model}" has an invalid last_checked date`);
+      }
+      if (candidate.cost && (!candidate.cost.source.trim() || !isDate(candidate.cost.observed_at))) {
+        throw new Error(`role ${role} candidate "${candidate.model}" has invalid cost provenance`);
+      }
+      if (candidate.benchmark) {
+        const benchmark = candidate.benchmark;
+        if (
+          !benchmark.source.trim() ||
+          !benchmark.metric.trim() ||
+          !Number.isFinite(benchmark.value) ||
+          !isDate(benchmark.measured_at) ||
+          !Number.isInteger(benchmark.samples) ||
+          benchmark.samples < 1
+        ) {
+          throw new Error(`role ${role} candidate "${candidate.model}" has invalid benchmark provenance`);
+        }
       }
     }
   }

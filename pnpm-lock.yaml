@@ -220,6 +220,9 @@ importers:
       '@friday/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@friday/routing':
+        specifier: workspace:*
+        version: link:../../packages/routing
       '@friday/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk

@@ -84,13 +84,16 @@ describe('decideRoute', () => {
     expect(d).toMatchObject({
       model: 'claude-opus-5-5',
       source: 'registry',
-      role: 'implementation',
+      role: 'backend_engineer',
       role_source: 'task',
       selected_rank: 1,
       failover_policy: 'host_failure',
     });
     expect(d.reason_codes).toContain('registry.rank');
-    expect(d.fallback_chain).toEqual([{ model: null, reason: 'human' }]);
+    expect(d.fallback_chain).toEqual([
+      { model: 'claude-sonnet-5-5', reason: 'registry.rank.next' },
+      { model: null, reason: 'human' },
+    ]);
   });
 
   it('resolves an unroled task deterministically, but blocks an unsupported or undeterminable role', () => {
@@ -141,6 +144,58 @@ describe('decideRoute', () => {
       }),
     );
     expect(source).toMatchObject({ role: 'implementation', role_source: 'path_fallback', model: 'claude-opus-5-5' });
+    const web = decideRoute(
+      base({
+        role_registry: ROLE_REGISTRY_SOURCE,
+        task: { ...base().task, kind: 'analysis', role: null, scope: { write: ['apps/web/src/App.tsx'], read: [] } },
+      }),
+    );
+    expect(web).toMatchObject({ role: 'frontend_engineer', role_source: 'path_fallback', model: 'claude-opus-5-5' });
+    const api = decideRoute(
+      base({
+        role_registry: ROLE_REGISTRY_SOURCE,
+        task: { ...base().task, kind: 'analysis', role: null, scope: { write: ['server/src/api.ts'], read: [] } },
+      }),
+    );
+    expect(api).toMatchObject({ role: 'backend_engineer', role_source: 'path_fallback', model: 'claude-opus-5-5' });
+    const ci = decideRoute(
+      base({
+        role_registry: ROLE_REGISTRY_SOURCE,
+        task: {
+          ...base().task,
+          kind: 'analysis',
+          role: null,
+          scope: { write: ['.github/workflows/ci.yml'], read: [] },
+        },
+      }),
+    );
+    expect(ci).toMatchObject({
+      role: 'devops_and_terminal',
+      role_source: 'path_fallback',
+      model: 'claude-sonnet-5-5',
+    });
+    const verification = decideRoute(
+      base({
+        role_registry: ROLE_REGISTRY_SOURCE,
+        task: { ...base().task, kind: 'verification', role: null, scope: { write: [], read: ['src/a.ts'] } },
+      }),
+    );
+    expect(verification).toMatchObject({
+      role: 'qa_and_debugging',
+      role_source: 'kind_fallback',
+      model: 'claude-sonnet-5-5',
+    });
+    const review = decideRoute(
+      base({
+        role_registry: ROLE_REGISTRY_SOURCE,
+        task: { ...base().task, kind: 'review', role: null, scope: { write: [], read: ['src/a.ts'] } },
+      }),
+    );
+    expect(review).toMatchObject({
+      role: 'code_reviewer_and_security',
+      role_source: 'kind_fallback',
+      model: 'claude-opus-5-5',
+    });
   });
 
   it('applies a role pin to the resolved fallback role', () => {
@@ -189,7 +244,11 @@ describe('decideRoute', () => {
         task: { ...base().task, role: null },
       }),
     );
-    expect(d).toMatchObject({ role: 'review', role_source: 'decision_model', model: 'claude-opus-5-5' });
+    expect(d).toMatchObject({
+      role: 'code_reviewer_and_security',
+      role_source: 'decision_model',
+      model: 'claude-opus-5-5',
+    });
   });
 
   it('keeps pins ahead of the static registry and excludes candidates for another harness', () => {

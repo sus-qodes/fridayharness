@@ -19,8 +19,8 @@ export interface RoleResolution {
 
 const KIND_ROLES: Readonly<Record<string, string>> = {
   implementation: 'implementation',
-  verification: 'verification',
-  review: 'review',
+  verification: 'qa_and_debugging',
+  review: 'code_reviewer_and_security',
   research: 'research',
   docs: 'docs',
   chore: 'chore',
@@ -29,14 +29,21 @@ const KIND_ROLES: Readonly<Record<string, string>> = {
 const DOC_PATH =
   /(^|[\\/])(docs?|documentation)([\\/]|$)|\.(md|mdx|rst|adoc)$|(^|[\\/])(readme|changelog|contributing)(\.|$)/i;
 const TEST_PATH = /(^|[\\/])(__tests__|tests?|spec|specs|fixtures?)([\\/]|$)|\.(test|spec)\.[^\\/]+$/i;
+const DEVOPS_PATH =
+  /(^|[\\/])(\.github|\.gitlab|devops|deploy|deployment|infra|infrastructure|terraform|k8s|kubernetes|helm|ansible|ops)([\\/]|$)|(^|[\\/])(dockerfile|docker-compose\.[^\\/]+|makefile|justfile)$/i;
+const FRONTEND_PATH = /(^|[\\/])(frontend|web|ui|client|browser)([\\/]|$)/i;
+const BACKEND_PATH = /(^|[\\/])(backend|server|service|services|api|database|db)([\\/]|$)/i;
 const CHORE_PATH =
-  /(^|[\\/])(package\.json|pnpm-lock\.yaml|package-lock\.json|yarn\.lock|tsconfig[^\\/]*\.json|biome\.json|\.gitignore|\.gitattributes|\.github)([\\/]|$)/i;
+  /(^|[\\/])(package\.json|pnpm-lock\.yaml|package-lock\.json|yarn\.lock|tsconfig[^\\/]*\.json|biome\.json|\.gitignore|\.gitattributes)([\\/]|$)/i;
 const CODE_PATH = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|cs|rb|php|swift|c|cc|cpp|h|hpp|sql|sh|ps1)$/i;
 const SOURCE_PATH = /(^|[\\/])(src|lib|app|apps|packages|pkg|internal|cmd)([\\/]|$)/i;
 
 function pathRole(path: string): string | null {
   if (DOC_PATH.test(path)) return 'docs';
-  if (TEST_PATH.test(path)) return 'verification';
+  if (TEST_PATH.test(path)) return 'qa_and_debugging';
+  if (DEVOPS_PATH.test(path)) return 'devops_and_terminal';
+  if (FRONTEND_PATH.test(path)) return 'frontend_engineer';
+  if (BACKEND_PATH.test(path)) return 'backend_engineer';
   if (CHORE_PATH.test(path)) return 'chore';
   if (CODE_PATH.test(path) || SOURCE_PATH.test(path)) return 'implementation';
   return null;

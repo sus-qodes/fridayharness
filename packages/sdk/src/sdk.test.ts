@@ -107,9 +107,18 @@ describe('config', () => {
       {
         model: 'local-coder',
         harness: 'generic',
-        dispatchable: true,
-        mcp_required: false,
+        declared_dispatchable: true,
         reason_if_unavailable: null,
+        requirements: {
+          mcp_required: false,
+          auth_required: false,
+          host_verified: true,
+          model_verified: true,
+          mcp_verified: false,
+        },
+        last_checked: null,
+        cost: null,
+        benchmark: null,
       },
     ]);
   });

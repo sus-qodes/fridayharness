@@ -26,6 +26,7 @@ import { registerOperationCommands } from './operations.js';
 import { clip, describeEvent, kv, shortTime, table, verificationLines } from './output.js';
 import { registerPolicyCommands } from './policy.js';
 import { registerRecoveryCommands } from './recovery.js';
+import { registerRegistryCommands } from './registry.js';
 import { registerReservationCommands } from './reservations.js';
 import { restoreProject } from './restore.js';
 import { registerLayaCommands, registerRoutingCommands } from './routing.js';
@@ -834,6 +835,7 @@ export function buildProgram(): Command {
   registerPolicyCommands(program, g);
   registerOperationCommands(program, g);
   registerRoutingCommands(program, g);
+  registerRegistryCommands(program, g);
   registerLayaCommands(program, g);
   registerUsageCommands(program, g);
   registerMemoryCommands(program, g);

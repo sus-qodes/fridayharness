@@ -4,9 +4,10 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { REGISTRY_ARTIFACT_URL } from '../src/registry-artifact.js';
 import { generatedRegistryView } from '../src/role-registry.js';
 
-const target = fileURLToPath(new URL('../friday_registry.json', import.meta.url));
+const target = fileURLToPath(REGISTRY_ARTIFACT_URL);
 const generated = generatedRegistryView();
 const check = process.argv.includes('--check');
 

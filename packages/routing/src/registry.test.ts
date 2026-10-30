@@ -5,6 +5,10 @@ import {
   canonicalRole,
   generatedRegistryView,
   ROLE_REGISTRY_SOURCE,
+  type RoleCandidateRequirements,
+  type RoleRegistry,
+  type RoleRegistryCandidate,
+  roleRegistryRoles,
   validateRoleRegistry,
   withProjectRoleCandidates,
 } from './role-registry.js';
@@ -55,22 +59,70 @@ describe('cost classes in the registry (plan M13.3)', () => {
   });
 });
 
+function withImplementationCandidate(candidate: RoleRegistryCandidate): RoleRegistry {
+  const definition = ROLE_REGISTRY_SOURCE.roles.implementation;
+  if (!definition) throw new Error('implementation role missing');
+  return {
+    ...ROLE_REGISTRY_SOURCE,
+    roles: {
+      ...ROLE_REGISTRY_SOURCE.roles,
+      implementation: { ...definition, candidates: [candidate] },
+    },
+  };
+}
+
 describe('the static role registry', () => {
-  it('is typed, ordered, and exposes future entries without making them dispatchable', () => {
+  it('covers the handoff roles, canonical aliases and declared requirements', () => {
     const models = loadGuide().models;
     validateRoleRegistry(ROLE_REGISTRY_SOURCE, models);
+    expect(Object.keys(ROLE_REGISTRY_SOURCE.roles)).toEqual([
+      'decision_router',
+      'system_architect',
+      'backend_engineer',
+      'frontend_engineer',
+      'qa_and_debugging',
+      'devops_and_terminal',
+      'code_reviewer_and_security',
+      'implementation',
+      'research',
+      'docs',
+      'chore',
+    ]);
     expect(ROLE_REGISTRY_SOURCE.roles.implementation?.candidates[0]).toMatchObject({
       rank: 1,
       model: 'claude-opus-5-5',
-      dispatchable: true,
+      harness: 'claude-code',
+      declared_dispatchable: true,
+      requirements: {
+        mcp_required: true,
+        auth_required: true,
+        host_verified: true,
+        model_verified: true,
+        mcp_verified: true,
+      },
+      last_checked: '2026-10-21',
+      cost: { source: 'model-guide.yaml', observed_at: '2026-10-20' },
+      benchmark: null,
     });
     expect(ROLE_REGISTRY_SOURCE.roles.implementation?.candidates.at(-1)).toMatchObject({
-      dispatchable: false,
+      declared_dispatchable: false,
       reason_if_unavailable: 'adapter_not_verified',
     });
-    expect(canonicalRole('backend')).toBe('implementation');
-    expect(canonicalRole('QA')).toBe('verification');
+    expect(ROLE_REGISTRY_SOURCE.roles.decision_router?.candidates[0]).toMatchObject({
+      requirements: { mcp_required: false, mcp_verified: false },
+    });
+    expect(canonicalRole('backend')).toBe('backend_engineer');
+    expect(canonicalRole('frontend')).toBe('frontend_engineer');
+    expect(canonicalRole('architect')).toBe('system_architect');
+    expect(canonicalRole('QA')).toBe('qa_and_debugging');
+    expect(canonicalRole('security')).toBe('code_reviewer_and_security');
+    expect(canonicalRole('review')).toBe('code_reviewer_and_security');
+    expect(canonicalRole('documentation')).toBe('docs');
     expect(canonicalRole('designer')).toBeNull();
+    // Decision output uses canonical names; aliases are input spellings.
+    expect(roleRegistryRoles()).toContain('qa_and_debugging');
+    expect(roleRegistryRoles()).not.toContain('qa');
+    expect(roleRegistryRoles()).not.toContain('review');
   });
 
   it('is generated exactly into friday_registry.json (drift check)', () => {
@@ -82,13 +134,22 @@ describe('the static role registry', () => {
     const extended = withProjectRoleCandidates(ROLE_REGISTRY_SOURCE, {
       backend: [{ model: 'local-coder', harness: 'generic' }],
     });
-    expect(extended.roles.implementation?.candidates.at(-1)).toEqual({
+    expect(extended.roles.backend_engineer?.candidates.at(-1)).toEqual({
       rank: 4,
       model: 'local-coder',
       harness: 'generic',
-      dispatchable: true,
-      mcp_required: false,
+      declared_dispatchable: true,
       reason_if_unavailable: null,
+      requirements: {
+        mcp_required: false,
+        auth_required: false,
+        host_verified: true,
+        model_verified: true,
+        mcp_verified: false,
+      },
+      last_checked: null,
+      cost: null,
+      benchmark: null,
     });
     validateRoleRegistry(
       extended,
@@ -111,22 +172,117 @@ describe('the static role registry', () => {
   });
 });
 
+describe('static registry validation', () => {
+  const first = ROLE_REGISTRY_SOURCE.roles.implementation?.candidates[0];
+  if (!first) throw new Error('implementation candidate missing');
+
+  it('rejects dispatchable candidates with an unknown model, harness or missing requirements', () => {
+    expect(() =>
+      validateRoleRegistry(withImplementationCandidate({ ...first, model: 'not-in-the-guide' }), loadGuide().models),
+    ).toThrow(/unknown model/);
+    expect(() =>
+      validateRoleRegistry(withImplementationCandidate({ ...first, harness: 'future-harness' }), loadGuide().models),
+    ).toThrow(/unknown harness/);
+    expect(() =>
+      validateRoleRegistry(
+        withImplementationCandidate({
+          ...first,
+          requirements: undefined as unknown as RoleCandidateRequirements,
+        }),
+        loadGuide().models,
+      ),
+    ).toThrow(/without complete dispatch requirements/);
+    // An unknown future harness is allowed only while the candidate is declared non-dispatchable.
+    validateRoleRegistry(
+      withImplementationCandidate({
+        ...first,
+        harness: 'future-harness',
+        declared_dispatchable: false,
+        reason_if_unavailable: 'adapter_not_verified',
+      }),
+      loadGuide().models,
+    );
+  });
+
+  it('rejects aliases that collide by case, empty roles and missing unavailability reasons', () => {
+    expect(() =>
+      validateRoleRegistry(
+        { ...ROLE_REGISTRY_SOURCE, aliases: { ...ROLE_REGISTRY_SOURCE.aliases, Backend: 'backend_engineer' } },
+        loadGuide().models,
+      ),
+    ).toThrow(/collides/);
+    const docs = ROLE_REGISTRY_SOURCE.roles.docs;
+    if (!docs) throw new Error('docs role missing');
+    expect(() =>
+      validateRoleRegistry(
+        { ...ROLE_REGISTRY_SOURCE, roles: { ...ROLE_REGISTRY_SOURCE.roles, docs: { ...docs, candidates: [] } } },
+        loadGuide().models,
+      ),
+    ).toThrow(/no candidates/);
+    expect(() =>
+      validateRoleRegistry(
+        withImplementationCandidate({
+          ...first,
+          declared_dispatchable: false,
+          reason_if_unavailable: null,
+        }),
+        loadGuide().models,
+      ),
+    ).toThrow(/without a reason/);
+  });
+
+  it('rejects invalid provenance and contradictions between MCP requirements', () => {
+    expect(() =>
+      validateRoleRegistry(withImplementationCandidate({ ...first, last_checked: 'yesterday' }), loadGuide().models),
+    ).toThrow(/last_checked/);
+    expect(() =>
+      validateRoleRegistry(
+        withImplementationCandidate({ ...first, cost: { source: '', observed_at: '2026-10-20' } }),
+        loadGuide().models,
+      ),
+    ).toThrow(/cost provenance/);
+    expect(() =>
+      validateRoleRegistry(
+        withImplementationCandidate({
+          ...first,
+          benchmark: { source: 'a benchmark', metric: 'pass@1', value: 0.8, measured_at: '2026-10-20', samples: 0 },
+        }),
+        loadGuide().models,
+      ),
+    ).toThrow(/benchmark provenance/);
+    expect(() =>
+      validateRoleRegistry(
+        withImplementationCandidate({
+          ...first,
+          requirements: { ...first.requirements, mcp_required: false, mcp_verified: true },
+        }),
+        loadGuide().models,
+      ),
+    ).toThrow(/requires MCP verification but not MCP/);
+  });
+});
+
 describe('decision-model role output', () => {
   it('accepts a known multi-role DAG and rejects unsupported or cyclic output', () => {
-    const roles = new Set(['implementation', 'verification', 'review']);
+    const roles = new Set(['implementation', 'qa_and_debugging', 'code_reviewer_and_security']);
     expect(
       parseRoleDecision(
         {
           status: 'classified',
           roles: [
             { role: 'implementation', task_summary: 'make the change', depends_on: [], confidence: 0.92 },
-            { role: 'verification', task_summary: 'run the checks', depends_on: ['implementation'], confidence: 0.88 },
+            {
+              role: 'qa_and_debugging',
+              task_summary: 'run the checks',
+              depends_on: ['implementation'],
+              confidence: 0.88,
+            },
           ],
           assumptions: [],
         },
         roles,
       ),
-    ).toMatchObject({ status: 'classified', roles: [{ role: 'implementation' }, { role: 'verification' }] });
+    ).toMatchObject({ status: 'classified', roles: [{ role: 'implementation' }, { role: 'qa_and_debugging' }] });
     expect(() =>
       parseRoleDecision(
         {
@@ -142,8 +298,8 @@ describe('decision-model role output', () => {
         {
           status: 'classified',
           roles: [
-            { role: 'implementation', task_summary: 'a', depends_on: ['verification'], confidence: 0.5 },
-            { role: 'verification', task_summary: 'b', depends_on: ['implementation'], confidence: 0.5 },
+            { role: 'implementation', task_summary: 'a', depends_on: ['qa_and_debugging'], confidence: 0.5 },
+            { role: 'qa_and_debugging', task_summary: 'b', depends_on: ['implementation'], confidence: 0.5 },
           ],
           assumptions: [],
         },

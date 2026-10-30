@@ -267,7 +267,7 @@ describe('config.yaml read again while Friday runs', () => {
       blocked: true,
       role: 'docs',
       role_source: 'kind_fallback',
-      registry_version: '2026-10-21.2',
+      registry_version: '2026-10-21.3',
       selected_rank: 3,
       selected_harness: 'generic',
     });

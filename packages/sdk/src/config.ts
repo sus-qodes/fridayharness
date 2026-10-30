@@ -132,6 +132,19 @@ const loopbackUrl = (message: string) =>
     }, message);
 const LoopbackUrl = loopbackUrl('Laya must run on this machine: use http://127.0.0.1:<port>');
 
+const ProvenanceDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'use a YYYY-MM-DD date');
+
+const RoleCandidateRequirementsSettings = z
+  .object({
+    mcp_required: z.boolean().default(false),
+    auth_required: z.boolean().default(false),
+    host_verified: z.boolean().default(true),
+    model_verified: z.boolean().default(true),
+    mcp_verified: z.boolean().default(false),
+  })
+  .strict()
+  .prefault({});
+
 /** A project's additional candidate for a static role (`routing.role_candidates`). */
 export const RoleCandidateSettings = z
   .object({
@@ -139,9 +152,27 @@ export const RoleCandidateSettings = z
     rank: z.number().int().min(1).optional(),
     model: z.string().min(1).max(100),
     harness: z.string().min(1).max(50),
-    dispatchable: z.boolean().default(true),
-    mcp_required: z.boolean().default(false),
+    /** What the candidate requires before dispatch; not a claim that it is available now. */
+    declared_dispatchable: z.boolean().default(true),
     reason_if_unavailable: z.string().min(1).max(200).nullable().default(null),
+    requirements: RoleCandidateRequirementsSettings,
+    last_checked: ProvenanceDate.nullable().default(null),
+    cost: z
+      .object({ source: z.string().min(1).max(200), observed_at: ProvenanceDate })
+      .strict()
+      .nullable()
+      .default(null),
+    benchmark: z
+      .object({
+        source: z.string().min(1).max(200),
+        metric: z.string().min(1).max(100),
+        value: z.number().finite(),
+        measured_at: ProvenanceDate,
+        samples: z.number().int().min(1),
+      })
+      .strict()
+      .nullable()
+      .default(null),
   })
   .strict();
 export type RoleCandidateSettings = z.input<typeof RoleCandidateSettings>;

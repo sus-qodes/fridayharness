@@ -418,7 +418,7 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     const modelById = new Map(input.models.map((model) => [model.id, model]));
     for (const candidate of registryCandidates) {
       const model = modelById.get(candidate.model);
-      if (!candidate.dispatchable) {
+      if (!candidate.declared_dispatchable) {
         registryExcluded.push({
           model: candidate.model,
           reason: candidate.reason_if_unavailable ?? 'registry.not_dispatchable',

@@ -11,6 +11,9 @@
       "path": "../../packages/protocol"
     },
     {
+      "path": "../../packages/routing"
+    },
+    {
       "path": "../../packages/sdk"
     },
     {
