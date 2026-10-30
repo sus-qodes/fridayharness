@@ -82,6 +82,11 @@ export interface PolicySource {
    * address a browser signs in at, which an earlier program there may have poisoned (LESSONS UI-24).
    */
   daemon_port?: number;
+  /**
+   * Dependencies in a task worktree (plan Phase 7): the project's own install command, and whether
+   * lifecycle scripts may run. Both run project code as Friday, so both are loosenings.
+   */
+  worktree_setup?: { command?: string; args?: string[]; allow_scripts?: boolean };
 }
 
 export interface Loosening {
@@ -114,6 +119,12 @@ export interface ProjectPolicy {
   elicitation: boolean;
   /** The fixed port the daemon listens on, once trusted; null: a random port at every start. */
   daemon_port: number | null;
+  /** The project's own worktree install command, once trusted; null: the lockfile decides. */
+  worktree_setup: { source: string; command: string; args: string[] } | null;
+  /** A declared command not applied, and why. */
+  worktree_setup_held: { source: string; reason: string } | null;
+  /** Whether a worktree install may run lifecycle scripts (trusted `allow_scripts`). */
+  worktree_scripts: boolean;
   /** What tracked files loosen, with where each comes from. */
   loosening: Loosening[];
   /** The hash `friday policy trust` records; null when nothing loosens. */
@@ -198,6 +209,19 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     }
     if (s.daemon_port) {
       loosening.push({ source: s.name, setting: 'daemon.port', from: 'random', to: String(s.daemon_port) });
+    }
+    // A worktree install runs project code as Friday (plan Phase 7): the project's own command, or
+    // the lifecycle scripts of a detected install.
+    if (s.worktree_setup?.command) {
+      loosening.push({
+        source: s.name,
+        setting: 'worktrees.setup.command',
+        from: 'detected',
+        to: [s.worktree_setup.command, ...(s.worktree_setup.args ?? [])].join(' '),
+      });
+    }
+    if (s.worktree_setup?.allow_scripts) {
+      loosening.push({ source: s.name, setting: 'worktrees.setup.allow_scripts', from: 'false', to: 'true' });
     }
     // A third-party MCP tool without review (ADR-0030 §3).
     for (const [server, m] of Object.entries(s.mcp ?? {})) {
@@ -303,6 +327,18 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     }),
   );
   const elicitation = !sources.some((s) => s.elicitation === false);
+  // The worktree install (plan Phase 7): the first declared command, only once trusted.
+  const declaredSetup = sources.flatMap((s) =>
+    s.worktree_setup?.command
+      ? [{ source: s.name, command: s.worktree_setup.command, args: [...(s.worktree_setup.args ?? [])] }]
+      : [],
+  );
+  const worktree_setup = trusted ? (declaredSetup[0] ?? null) : null;
+  const worktree_setup_held =
+    !trusted && declaredSetup[0]
+      ? { source: declaredSetup[0].source, reason: 'waits for "friday policy trust"' }
+      : null;
+  const worktree_scripts = trusted && sources.some((s) => s.worktree_setup?.allow_scripts === true);
 
   const effective = {
     autonomy,
@@ -318,10 +354,13 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     mcp,
     elicitation,
     daemon_port,
+    worktree_setup,
+    worktree_scripts,
   };
   return {
     ...effective,
     operations_held,
+    worktree_setup_held,
     loosening,
     loosening_hash,
     trusted,

@@ -2,6 +2,12 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — Phase 7.1, dependencies installed in a fresh task worktree
+
+- **No attempt waits mid-run for an install:** before the agent starts, Friday installs the worktree's dependencies in the execution profile: the install the lockfile calls for (pnpm, npm, yarn or bun; frozen, offline first, lifecycle scripts ignored, so no project code runs), or the project's own `worktrees.setup.command`. The project's own command and `allow_scripts: true` are loosenings that wait for `friday policy trust`; a declared command this clone has not trusted is refused, never replaced by a guess. Nothing runs when there is no `package.json`, no lockfile, or `node_modules` already.
+- **Nothing is installed silently:** `run.workspace_ready` records what ran, how long and how it ended (output redacted), `friday task inspect` shows it, and an agent whose dependencies could not be installed is told so in its `task.start` note. `worktrees.setup.on_failure: fail` declines the attempt instead and asks a human. The worktree timeout follows the install's `timeout_s` (default 600 s).
+- The large multi-file rerun the plan asks for (Phase 7) still waits for the owner: it needs the Edutube repositories and paid model calls.
+
 ## Unreleased — Phase 2.3, a multi-role proposal is approved by splitting the task (ADR-0035 §5)
 
 - **`friday task split <task>`:** a human approves the classifier's multi-role proposal by splitting the task into one task per role, in dependency order; each part carries the proposal's summary for its role and the original's kind, scope, acceptance criteria, priority, risk and goal, and the roles' `depends_on` become task dependencies. The original is cancelled as split, naming its parts, and whatever depended on it now depends on the split's last parts (`task.dependencies_changed`). A standalone task's parts carry a `human` role and are READY when the original was; a task of a goal is split through a plan revision the same approval approves, so the planner stays the one authority for a goal's tasks and the parts carry the plan's role. Neither asks the classifier again. Route: `POST tasks/:tid/split`; event: `task.split`.

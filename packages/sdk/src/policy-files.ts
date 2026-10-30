@@ -59,6 +59,8 @@ export interface PolicySourceData {
   elicitation?: boolean;
   /** `daemon.port` when fixed (loosening, plan M9 §5.13). */
   daemon_port?: number;
+  /** `worktrees.setup`: the project's own install command, and lifecycle scripts (loosenings, plan Phase 7). */
+  worktree_setup?: { command?: string; args?: string[]; allow_scripts?: boolean };
 }
 
 export const POLICY_DIR = path.join('.friday', 'policies');
@@ -82,6 +84,16 @@ export function readPolicySources(
       mcp: config.mcp.servers,
       elicitation: config.approvals.elicitation,
       ...(config.daemon.port ? { daemon_port: config.daemon.port } : {}),
+      ...(config.worktrees.setup.command || config.worktrees.setup.allow_scripts
+        ? {
+            worktree_setup: {
+              ...(config.worktrees.setup.command
+                ? { command: config.worktrees.setup.command, args: [...config.worktrees.setup.args] }
+                : {}),
+              ...(config.worktrees.setup.allow_scripts ? { allow_scripts: true } : {}),
+            },
+          }
+        : {}),
     },
   ];
   const errors: { file: string; error: string }[] = [];

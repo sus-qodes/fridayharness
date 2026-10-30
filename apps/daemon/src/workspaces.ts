@@ -18,6 +18,7 @@ import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
 import { InFlight } from './in-flight.js';
 import type { Logger } from './log.js';
+import type { SetupOutcome } from './worktree-setup.js';
 
 const SYSTEM: Actor = { kind: 'system', id: 'friday' };
 
@@ -78,6 +79,10 @@ export class WorkspaceManager {
       env: NodeJS.ProcessEnv;
       /** Stops the task's gateway operations, confirmed (review F07). */
       quiesce?: (taskId: string) => Promise<void>;
+      /** Installs a fresh worktree's dependencies before the agent starts (plan Phase 7). */
+      setup?: (worktree: { path: string }, ids: { task_id: string; run_id: string }) => Promise<SetupOutcome | null>;
+      /** What a failed or refused install does to the attempt: `warn` (the agent is told) or `fail`. */
+      setupFailure?: () => 'warn' | 'fail';
     },
   ) {}
 
@@ -143,7 +148,15 @@ export class WorkspaceManager {
         await this.opts.quiesce?.(run.task_id);
       }
       const alloc = await this.#allocate(run.task_id);
-      state.workspaceReady(this.pid, runId, alloc);
+      // Dependencies before the agent starts (plan Phase 7): no attempt waits for an install
+      // approval mid-run, and what happened is on the run's record.
+      const setup = this.opts.setup ? await this.opts.setup(alloc, { task_id: run.task_id, run_id: runId }) : null;
+      if (setup && (setup.status === 'failed' || setup.status === 'refused') && this.opts.setupFailure?.() === 'fail') {
+        const reason = `its dependencies could not be installed in its worktree (${setup.reason}); fix the install (worktrees.setup in config.yaml, "friday policy trust"), or set worktrees.setup.on_failure to warn`;
+        this.#askHuman(run.task_id, reason, { worktree: alloc.path, setup });
+        throw new FridayError('invalid_request', reason);
+      }
+      state.workspaceReady(this.pid, runId, { ...alloc, setup });
       logger.info('task worktree ready', {
         task_id: run.task_id,
         run_id: runId,

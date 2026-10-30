@@ -175,3 +175,32 @@ describe('project policy', () => {
     });
   });
 });
+
+describe('the worktree install (plan Phase 7)', () => {
+  it("holds the project's own command and lifecycle scripts until trusted; a detected install needs no trust", () => {
+    const own = {
+      name: 'config.yaml',
+      worktree_setup: { command: 'pnpm', args: ['install', '--frozen-lockfile'], allow_scripts: true },
+    };
+    const untrusted = projectPolicy([own], null);
+    expect(untrusted.loosening.map((l) => [l.setting, l.to])).toEqual([
+      ['worktrees.setup.allow_scripts', 'true'],
+      ['worktrees.setup.command', 'pnpm install --frozen-lockfile'],
+    ]);
+    expect(untrusted.worktree_setup).toBeNull();
+    expect(untrusted.worktree_setup_held).toEqual({ source: 'config.yaml', reason: 'waits for "friday policy trust"' });
+    expect(untrusted.worktree_scripts).toBe(false);
+    const trusted = projectPolicy([own], untrusted.loosening_hash);
+    expect(trusted.worktree_setup).toEqual({
+      source: 'config.yaml',
+      command: 'pnpm',
+      args: ['install', '--frozen-lockfile'],
+    });
+    expect(trusted.worktree_setup_held).toBeNull();
+    expect(trusted.worktree_scripts).toBe(true);
+    // Nothing declared: nothing loosens, and the lockfile decides at the worktree.
+    const plain = projectPolicy([{ name: 'config.yaml' }], null);
+    expect(plain.trusted).toBe(true);
+    expect([plain.worktree_setup, plain.worktree_setup_held, plain.worktree_scripts]).toEqual([null, null, false]);
+  });
+});

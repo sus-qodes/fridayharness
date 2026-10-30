@@ -50,6 +50,7 @@ import { fileHasher } from './ui-snapshot.js';
 import { openUiBundle } from './ui-static.js';
 import { runVerification } from './verify.js';
 import { WorkspaceManager } from './workspaces.js';
+import { WorktreeSetup } from './worktree-setup.js';
 
 export interface DaemonOptions {
   /** Any directory inside the project; resolved to the main worktree root. */
@@ -151,6 +152,8 @@ function stateSettings(cfg: FridayConfig): Partial<StateConfig> {
     blockingReplyMs: cfg.communication.blocking_reply_ms,
     maxOpenPerRecipient: cfg.communication.max_open_per_recipient,
     fileReservationTtlMs: cfg.reservations.ttl_ms,
+    // A worktree waits for its dependencies (plan Phase 7): the install's time, then a margin.
+    workspaceTimeoutMs: Math.max(600_000, cfg.worktrees.setup.timeout_s * 1000 + 120_000),
   };
 }
 
@@ -398,17 +401,29 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   // Set once the execution gateway exists: a task's operations stop before its worktree is reused.
   let quiesce: DaemonContext['quiesce'] = async () => undefined;
   // Task worktrees: prepared as soon as a run needs one, released when its task ends (ADR-0023).
+  // Set once the execution profile exists (below): a fresh worktree's dependencies (plan Phase 7).
+  let worktreeSetup: WorktreeSetup | undefined;
   const workspaces = new WorkspaceManager({
     state,
     project,
     logger,
     env,
     quiesce: (taskId) => quiesce(taskId, 'a new attempt needs its worktree'),
+    setup: (w, ids) => (worktreeSetup ? worktreeSetup.run(w, ids) : Promise.resolve(null)),
+    setupFailure: () => project.config.worktrees.setup.on_failure,
   });
   // Checks and operations run in the execution profile of the effective policy (ADR-0029 §4).
   const stateRoot = path.dirname(path.dirname(privateDir));
   const profileOf = profileCache({ forbiddenRoots: () => [project.root, workspaces.dir], stateDir: stateRoot, env });
   const profile = () => profileOf(currentPolicy());
+  worktreeSetup = new WorktreeSetup({
+    settings: () => project.config.worktrees.setup,
+    policy: currentPolicy,
+    profile,
+    groups,
+    logger,
+    redact: (text) => state.redactor.redactString(text).value,
+  });
   // A completed goal task's verified work goes to its goal branch before its worktree is released (ADR-0025).
   const integration = new IntegrationManager({ state, project, logger, workspaces, profile, groups });
   const stopWorkspaces = state.transport.subscribe(

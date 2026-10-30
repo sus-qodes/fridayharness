@@ -104,6 +104,19 @@ export interface RunRouting {
 }
 export type RunRouter = (args: { task: TaskView; harness: HarnessRecord; agent: AgentView }) => RunRouting | null;
 
+/** What installing a fresh worktree's dependencies did (plan Phase 7), carried by `run.workspace_ready`. */
+export interface WorkspaceSetupRecord {
+  status: 'passed' | 'failed' | 'skipped' | 'refused';
+  source: string | null;
+  command: string | null;
+  args: string[];
+  exit_code: number | null;
+  timed_out: boolean;
+  duration_ms: number | null;
+  reason: string;
+  output_tail: string | null;
+}
+
 /** What a `routing_blocked` error carries (review F01). */
 interface RoutingBlock {
   task_id: string;
@@ -4839,7 +4852,15 @@ export class FridayState {
   workspaceReady(
     projectId: string,
     runId: string,
-    alloc: { path: string; branch: string; base_commit: string; created: boolean; warnings: string[] },
+    alloc: {
+      path: string;
+      branch: string;
+      base_commit: string;
+      created: boolean;
+      warnings: string[];
+      /** What installing the worktree's dependencies did; null when nothing was attempted. */
+      setup?: WorkspaceSetupRecord | null;
+    },
   ): RunView {
     return this.exec({ name: 'run.workspace', project_id: projectId, actor: SYSTEM, params: { runId } }, (ctx) => {
       const run = this.q.run(runId);
@@ -4894,6 +4915,7 @@ export class FridayState {
           branch_ref: alloc.branch,
           worktree_id: worktree?.worktree_id ?? null,
           warnings: alloc.warnings,
+          setup: alloc.setup ?? null,
         },
         refs: [
           { kind: 'task', id: task.task_id },
@@ -4902,11 +4924,17 @@ export class FridayState {
       });
       const ready = this.q.run(run.run_id);
       const agent = this.q.agent(run.agent_id);
+      // An agent whose dependencies could not be installed is told so, never left to find out.
+      const setup = alloc.setup;
+      const trouble =
+        setup && (setup.status === 'failed' || setup.status === 'refused')
+          ? `Friday could not install this worktree's dependencies (${setup.reason}). If the task needs them, install them yourself; that may need an approval.`
+          : null;
       this.enqueue(
         ctx,
         run.harness_id,
         'task.start',
-        this.taskStartParams(projectId, task, ready, agent.role),
+        this.taskStartParams(projectId, task, ready, agent.role, trouble),
         run.run_id,
       );
       return ready;
@@ -5415,10 +5443,17 @@ export class FridayState {
   }
 
   /** A new attempt's `task.start`: with the session it continues, when it is a rework that can (plan M13.2). */
-  private taskStartParams(projectId: string, task: TaskView, run: RunView, role: string): TaskStartParams {
+  private taskStartParams(
+    projectId: string,
+    task: TaskView,
+    run: RunView,
+    role: string,
+    extra: string | null = null,
+  ): TaskStartParams {
     const cont = this.continuation(projectId, task, run);
+    const note = [cont?.note, extra].filter((n): n is string => Boolean(n)).join('\n\n');
     return {
-      ...this.startParams(projectId, task, run, role, cont?.note ?? null),
+      ...this.startParams(projectId, task, run, role, note.slice(0, 2000) || null),
       continue_session: cont?.session ?? null,
     };
   }

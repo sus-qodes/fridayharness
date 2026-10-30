@@ -45,6 +45,12 @@ export function describeEvent(e: { type: string; payload: Record<string, unknown
       return `${p.event_type ?? ''} ${p.note ?? p.summary ?? ''}`.trim();
     case 'run.paths_observed':
       return ((p.paths as string[]) ?? []).join(', ');
+    case 'run.workspace_ready': {
+      const s = p.setup as { status?: string; command?: string | null; args?: string[]; reason?: string } | null;
+      if (!s) return `worktree ready at ${p.execution_root ?? ''}`;
+      const cmd = s.command ? ` (${[s.command, ...(s.args ?? [])].join(' ')})` : '';
+      return `worktree ready; dependencies ${s.status}${cmd}${s.reason && s.reason !== 'ok' ? `: ${s.reason}` : ''}`;
+    }
     case 'command.rejected':
       return `${p.command} ${(p.error as { code?: string })?.code ?? ''} ${(p.error as { message?: string })?.message ?? ''}`;
     case 'verification.finished':

@@ -371,7 +371,28 @@ export const FridayConfig = z
      * Task worktrees (ADR-0023). `per_task`: each spawn-mode run works in its task's own checkout
      * beside Friday's state directory; `off`: everything works in the main checkout.
      */
-    worktrees: z.object({ mode: z.enum(['per_task', 'off']).default('per_task') }).prefault({}),
+    worktrees: z
+      .object({
+        mode: z.enum(['per_task', 'off']).default('per_task'),
+        /**
+         * Dependencies in a fresh task worktree (plan Phase 7): Friday installs them before the agent
+         * starts, in the execution profile. Without a command, the lockfile decides (pnpm, npm, yarn,
+         * bun; frozen, offline first, lifecycle scripts ignored). The project's own command, and
+         * lifecycle scripts, are loosenings: they wait for `friday policy trust` on every clone.
+         */
+        setup: z
+          .object({
+            enabled: z.boolean().default(true),
+            command: z.string().trim().min(1).max(200).optional(),
+            args: z.array(z.string().max(1000)).max(50).default([]),
+            allow_scripts: z.boolean().default(false),
+            timeout_s: z.number().int().min(10).max(3600).default(600),
+            /** `warn`: the agent starts and is told; `fail`: the attempt is declined and a human decides. */
+            on_failure: z.enum(['warn', 'fail']).default('warn'),
+          })
+          .prefault({}),
+      })
+      .prefault({}),
     /**
      * Recovering work from a lost harness or a failed attempt (ADR-0026): how many more attempts a
      * task gets automatically, and how often the same agent error may repeat, before a human decides.
@@ -610,6 +631,17 @@ verification:
 #       command: node
 #       args: ["--test", "test/stripe.integration.test.mjs"]
 #       credentials: { STRIPE_SECRET_KEY: stripe-test }
+
+# Dependencies in a fresh task worktree. Without settings, Friday runs the install the lockfile
+# calls for (pnpm, npm, yarn or bun; frozen, offline first, lifecycle scripts ignored) before the
+# agent starts. Your own command, and lifecycle scripts, wait for "friday policy trust" on every clone.
+#   worktrees:
+#     setup:
+#       command: pnpm                       # optional: your own install command
+#       args: ["install", "--frozen-lockfile"]
+#       allow_scripts: false                # true: lifecycle scripts may run (loosening)
+#       timeout_s: 600
+#       on_failure: warn                    # warn: the agent starts and is told; fail: a human decides
 
 # The Master Brain turns goals into plans ("friday goal create"). It calls a model only when the
 # project allows remote calls here AND you allowed it on your machine ("friday brain allow-remote");
