@@ -166,7 +166,18 @@ describe('planPatch', () => {
     expect(words[6]).toContain('is empty');
     expect(words[7]).toBe('no declaration named nothing in the file');
     expect(words[8]).toContain('does not parse as it is');
-    expect(words[9]).toMatch(/exactly one declaration|does not parse|no longer parses/);
+    expect(words[9]).toMatch(/exactly one|does not parse|no longer parses/);
+    // A member body with a static block or a second member beside it (review 2026-10-22 R9).
+    const extra = await Promise.all([
+      planPatch(ts, SRC, { symbol: 'Cart.total' }, "total(): number { return 1; }\n  static { console.log('extra'); }"),
+      planPatch(ts, SRC, { symbol: 'Cart.total' }, 'total(): number { return 1; }\n  other() {}'),
+      planPatch(ts, SRC, { symbol: 'Cart.total' }, '// the total\n  total(): number { return 1; }'),
+    ]);
+    expect(extra.map((r) => (r.ok ? 'ok' : r.reason))).toEqual([
+      expect.stringContaining('exactly one member (found 1, 2 elements)'),
+      expect.stringContaining('exactly one member (found 2, 2 elements)'),
+      'ok',
+    ]);
   });
 });
 

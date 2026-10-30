@@ -308,12 +308,30 @@ function readArtifact(deps: RpcDeps, c: Caller, p: ParsedParamsOf<'artifact.read
   let to = 0;
   let matched: number | null = null;
   let truncated = false;
+  let cut: { line: number; col: number } | null = null;
   let chars = 0;
-  /** Keeps a line while the bounds allow; false once they do not. */
-  const take = (text: string, n: number): boolean => {
-    if (picked.length >= p.limit || chars + text.length + 1 > ARTIFACT_READ_CHARS) return false;
-    picked.push(text);
-    chars += text.length + 1;
+  /**
+   * Keeps a line while the bounds allow; false once they do not. A line that alone is longer than
+   * one answer is given in a slice when nothing else was picked, with where it was cut, so a
+   * minified line or a long assertion is reachable in several calls (review 2026-10-22 R8).
+   */
+  const take = (text: string, n: number, prefix = ''): boolean => {
+    if (picked.length >= p.limit) return false;
+    // The newline between lines counts; the first line of an answer pays none.
+    const room = ARTIFACT_READ_CHARS - chars - prefix.length - (picked.length ? 1 : 0);
+    if (text.length > room) {
+      if (picked.length > 0 || room <= 0) return false;
+      const startCol = n === p.offset ? p.col : 1;
+      const slice = text.slice(startCol - 1, startCol - 1 + room);
+      picked.push(`${prefix}${slice}`);
+      chars += prefix.length + slice.length + 1;
+      from = n;
+      to = n;
+      if (startCol - 1 + room < text.length) cut = { line: n, col: startCol + room };
+      return false;
+    }
+    picked.push(`${prefix}${text}`);
+    chars += prefix.length + text.length + 1;
     if (!from) from = n;
     to = n;
     return true;
@@ -328,14 +346,20 @@ function readArtifact(deps: RpcDeps, c: Caller, p: ParsedParamsOf<'artifact.read
       matched++;
       if (i + 1 < p.offset) continue;
       eligible++;
-      take(`${i + 1}: ${line}`, i + 1);
+      take(line, i + 1, `${i + 1}: `);
     }
-    truncated = picked.length < eligible;
+    truncated = picked.length < eligible || cut !== null;
   } else {
-    for (let i = p.offset - 1; i < lines.length; i++) {
-      if (!take(lines[i] as string, i + 1)) break;
+    const first = lines[p.offset - 1];
+    if (first !== undefined && p.col > 1) {
+      // Reading on inside one line: that line from `col`, alone.
+      take(first, p.offset);
+    } else {
+      for (let i = p.offset - 1; i < lines.length; i++) {
+        if (!take(lines[i] as string, i + 1)) break;
+      }
     }
-    truncated = to < lines.length;
+    truncated = to < lines.length || cut !== null;
   }
   return {
     artifact_ref: p.artifact_ref,
@@ -348,6 +372,7 @@ function readArtifact(deps: RpcDeps, c: Caller, p: ParsedParamsOf<'artifact.read
     text: picked.join('\n'),
     truncated,
     matched,
+    cut,
   };
 }
 

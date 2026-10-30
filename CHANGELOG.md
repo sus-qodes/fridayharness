@@ -2,6 +2,15 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — review of 2026-10-22, R8 and R9: a long line is readable, a member body is one element
+
+- **`artifact.read` reads a line longer than one answer in slices:** when the first line to return is longer than the 16,000-character budget, the answer carries its slice and `cut: { line, col }`, and `col` with `offset` reads that line on; the same for a matched line under `find`. The tool's words say how (R8; such a line used to come back empty, with nothing to retry).
+- **A member patch is exactly one element of the body:** the probe counts every element of the class or interface body it parsed the new text in, a static block or a second member included, not only what the declaration walk recognizes (R9; `m() {}` followed by `static { … }` used to pass as one declaration).
+
+## Unreleased — review of 2026-10-22, R7: a shadowed name is nobody's edge
+
+- **The reference walk tracks the names bound nearer than the file's declarations:** a function's parameters and type parameters, a block's own `const`, `let`, `var`, functions and classes, a loop's and a catch clause's bindings, a class's or type's type parameters. A call, construction, type use or JSX element of such a name is recorded as shadowed and the graph links it to nothing, and a member call on such a value is a name-only reference like any unknown object (R7: `use(target: () => number) { target() }` used to read as an exact edge to the imported `target`, and a blast radius reached `use` with high confidence). The facts format is 3; an older `facts.db` is discarded.
+
 ## Unreleased — review of 2026-10-22, R5 and R6: stale classifications dropped, dependency labels made stable
 
 - **A classification answers the decision it was asked for, under the intent it was made for:** the Master Brain records its answer with the blocked decision's id and intent version, and the state refuses it as stale when the contract moved on meanwhile (an intent change reopened it, a human chose); the job ends saying so and the contract in force has already queued its own question. An intent change now also reopens a classification still awaited, not only a role a model chose (R5). The classifier's input carries the project's objective, constraints and outcomes beside the goal's.

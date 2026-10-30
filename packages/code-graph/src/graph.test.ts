@@ -525,6 +525,31 @@ describe('symbols and the edges between them (ADR-0037 §1)', () => {
     ).toBe(graph.symbolEdges.length);
   });
 
+  it('never links a shadowed name to the file-level symbol (review 2026-10-22 R7)', async () => {
+    const { dir } = await repoFrom(
+      {
+        'src/api.ts': 'export function target(): number {\n  return 1;\n}\n',
+        'src/consumer.ts': [
+          "import { target } from './api.ts';",
+          'export function use(target: () => number): number {',
+          '  return target();',
+          '}',
+          'export function direct(): number {',
+          '  return target();',
+          '}',
+          '',
+        ].join('\n'),
+      },
+      'shadow',
+    );
+    const graph = await buildGraph(await GitRoot.open(dir));
+    expect(graph.calleesOf('src/consumer.ts', 'use')).toEqual([]);
+    expect(graph.calleesOf('src/consumer.ts', 'direct').map((e) => [e.to?.symbol, e.certainty])).toEqual([
+      ['target', 'exact'],
+    ]);
+    expect(graph.callersOf('src/api.ts', 'target').map((e) => e.from.symbol)).toEqual(['direct']);
+  });
+
   it('keeps symbols equal between a clean build and an incremental one', async () => {
     const { dir, g } = await repoFrom(FILES, 'symbols-inc');
     const root = await GitRoot.open(dir);

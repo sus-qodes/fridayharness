@@ -16,7 +16,7 @@ export interface FactsCache {
 }
 
 /** Bump when the shape of the facts changes: an older cache is discarded, never migrated. */
-export const FACTS_FORMAT = 2;
+export const FACTS_FORMAT = 3;
 
 export function memoryFactsCache(): FactsCache {
   const map = new Map<string, ParsedFacts>();

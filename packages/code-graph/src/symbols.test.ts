@@ -39,6 +39,37 @@ let typed: I = { k: 'x' };
 const fs = require('node:fs');
 `;
 
+describe('extractFacts: names bound nearer than the file (review 2026-10-22 R7)', () => {
+  it('marks a reference to a parameter, a local, a nested declaration, a catch binding or a type parameter', async () => {
+    const src = [
+      "import { target, Thing } from './api.ts';",
+      'export function use(target: () => number, { Thing }: { Thing: number }) {',
+      '  return target() + Thing;',
+      '}',
+      'export function plain() {',
+      '  return target();',
+      '}',
+      'export function block() {',
+      '  const target = () => 2;',
+      '  function Thing() {}',
+      '  try { return target(); } catch (Thing) { return new Thing(); }',
+      '}',
+      'export function typed<Thing>(x: Thing): Thing { return x; }',
+      'export const arrow = (target: string) => target.length;',
+      '',
+    ].join('\n');
+    const f = await facts(src);
+    const refs = f.references.map((r) => `${r.line}:${r.kind}:${r.via ?? ''}:${r.name}${r.shadowed ? '!' : ''}`);
+    expect(refs).toContain('3:call::target!');
+    expect(refs).toContain('6:call::target');
+    expect(refs).toContain('11:call::target!');
+    expect(refs).toContain('11:new::Thing!');
+    expect(refs).toContain('13:type::Thing!');
+    expect(refs.filter((r) => r.startsWith('3:') && r.endsWith('target'))).toEqual([]);
+    expect(refs.filter((r) => r.startsWith('6:') && r.endsWith('!'))).toEqual([]);
+  });
+});
+
 describe('extractFacts', () => {
   it('declares every kind of symbol with its range, export and signature', async () => {
     const f = await facts(SAMPLE);

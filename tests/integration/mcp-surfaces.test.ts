@@ -26,12 +26,18 @@ afterEach(() => {
 });
 
 const SCRIPT = "for (let i = 1; i <= 50; i++) console.log('line ' + i + (i % 10 === 0 ? ' error here' : ''))";
+const LONG = "console.log('x'.repeat(20000)); console.log('tail')";
 const OPERATIONS = [
   'operations:',
   '  lines:',
   '    description: prints fifty lines',
   '    command: node',
   `    args: ["-e", ${JSON.stringify(SCRIPT)}]`,
+  '    risk: low',
+  '  long:',
+  '    description: prints one line longer than an answer',
+  '    command: node',
+  `    args: ["-e", ${JSON.stringify(LONG)}]`,
   '    risk: low',
   '',
 ].join('\n');
@@ -235,6 +241,26 @@ describe('raw output and a lesson from a failure (ADR-0038 §3, §5)', () => {
       /not an output you may read/,
     );
     await expect(client.call('artifact.read', { artifact_ref: 'snapshot:x' })).rejects.toThrow(/invalid params/);
+
+    // A line longer than one answer is read in slices with a character cursor (review R8).
+    const long = await settle(
+      client,
+      await client.call('operation.run', { operation: 'long', reason: 'long', run_id }),
+    );
+    expect(long.status).toBe('passed');
+    const longRef = long.artifact_ref as string;
+    const first = await client.call('artifact.read', { artifact_ref: longRef, offset: 3 });
+    expect(first).toMatchObject({ from: 3, to: 3, truncated: true, cut: { line: 3, col: 16001 } });
+    expect(first.text).toBe('x'.repeat(16000));
+    const second = await client.call('artifact.read', { artifact_ref: longRef, offset: 3, col: 16001 });
+    expect(second).toMatchObject({ from: 3, to: 3, cut: null });
+    expect(second.text).toBe('x'.repeat(4000));
+    const rest = await client.call('artifact.read', { artifact_ref: longRef, offset: 4 });
+    expect(rest).toMatchObject({ from: 4, to: 4, truncated: false, cut: null, text: 'tail' });
+    const foundLong = await client.call('artifact.read', { artifact_ref: longRef, find: 'xxxx' });
+    expect(foundLong.matched).toBe(1);
+    expect(foundLong.cut).toMatchObject({ line: 3 });
+    expect(foundLong.text.startsWith('3: xxxx')).toBe(true);
 
     // A passed operation is no failure to learn from.
     await expect(

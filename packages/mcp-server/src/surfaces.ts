@@ -103,7 +103,12 @@ export function skeletonText(r: ResultOf<'graph.skeleton'>): string {
 
 export function artifactText(r: ResultOf<'artifact.read'>): string {
   const range = r.to ? `lines ${r.from}-${r.to} of ${r.lines_total}` : `no line of ${r.lines_total}`;
-  const head = `${r.artifact_ref} (${r.kind} ${r.of.id}${r.of.task_id ? ` of ${r.of.task_id}` : ''}): ${range}${r.matched !== null ? `; ${r.matched} matched` : ''}${r.truncated ? `; more: ask again with offset ${r.to + 1}` : ''}.`;
+  const more = r.cut
+    ? `; line ${r.cut.line} is cut: read on with offset ${r.cut.line}, col ${r.cut.col}`
+    : r.truncated
+      ? `; more: ask again with offset ${r.to + 1}`
+      : '';
+  const head = `${r.artifact_ref} (${r.kind} ${r.of.id}${r.of.task_id ? ` of ${r.of.task_id}` : ''}): ${range}${r.matched !== null ? `; ${r.matched} matched` : ''}${more}.`;
   return r.text ? `${head}\n${r.text}` : head;
 }
 
@@ -247,12 +252,13 @@ export function createSurfaceTools(session: FridaySession): FridayTool[] {
       name: 'friday_ccr_retrieve',
       title: 'Read raw output',
       description:
-        'The whole, redacted output behind a filtered result, when the summary and the end of the output are not enough: an artifact reference ("artifact:<id>") named by friday_run_operation, by a verification check of your task, or by a message to you. Bounded: offset (a line, from 1), limit (lines, at most 400), find (only the lines containing the text, numbered); at most 16,000 characters per call, and the answer says how to read on. Only the output of your own work.',
+        'The whole, redacted output behind a filtered result, when the summary and the end of the output are not enough: an artifact reference ("artifact:<id>") named by friday_run_operation, by a verification check of your task, or by a message to you. Bounded: offset (a line, from 1), limit (lines, at most 400), find (only the lines containing the text, numbered); at most 16,000 characters per call, and the answer says how to read on, a line longer than one answer included (col). Only the output of your own work.',
       shape: {
         artifact_ref: z.string().regex(/^artifact:[A-Za-z0-9_-]+$/),
         offset: z.number().int().min(1).optional(),
         limit: z.number().int().min(1).max(400).optional(),
         find: z.string().min(1).max(200).optional(),
+        col: z.number().int().min(1).optional().describe('with offset: read that line on from this character'),
       },
       alwaysLoad: false,
       readOnly: true,
@@ -263,6 +269,7 @@ export function createSurfaceTools(session: FridaySession): FridayTool[] {
             ...(a.offset ? { offset: a.offset as number } : {}),
             ...(a.limit ? { limit: a.limit as number } : {}),
             ...(a.find ? { find: a.find as string } : {}),
+            ...(a.col ? { col: a.col as number } : {}),
           }),
         );
         return { text: artifactText(res), structured: res as unknown as Record<string, unknown> };

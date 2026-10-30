@@ -187,8 +187,26 @@ describe('the surface tools (ADR-0038 §1)', () => {
         text: 'one\ntwo',
         truncated: true,
         matched: null,
+        cut: null,
       }),
     ).toBe('artifact:x (operation opr_1 of task_1): lines 1-2 of 52; more: ask again with offset 3.\none\ntwo');
+    expect(
+      artifactText({
+        artifact_ref: 'artifact:x',
+        kind: 'operation',
+        of: { kind: 'operation', id: 'opr_1', task_id: 'task_1' },
+        bytes: 10,
+        lines_total: 3,
+        from: 3,
+        to: 3,
+        text: 'aaaa',
+        truncated: true,
+        matched: null,
+        cut: { line: 3, col: 16001 },
+      }),
+    ).toBe(
+      'artifact:x (operation opr_1 of task_1): lines 3-3 of 3; line 3 is cut: read on with offset 3, col 16001.\naaaa',
+    );
     expect(
       artifactText({
         artifact_ref: 'artifact:x',
@@ -201,6 +219,7 @@ describe('the surface tools (ADR-0038 §1)', () => {
         text: '',
         truncated: false,
         matched: 0,
+        cut: null,
       }),
     ).toBe('artifact:x (check chk_1 of task_1): no line of 52; 0 matched.');
   });

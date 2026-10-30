@@ -325,17 +325,22 @@ export async function planPatch(lang: LanguageSpec, source: string, want: Want, 
   // The new text alone: one declaration, the same name, a compatible kind.
   const member = found.kind === 'method' || found.kind === 'field';
   const probe = member ? `${found.parent_kind === 'interface' ? 'interface' : 'class'} __ {\n${text}\n}` : text;
-  const own = await withTree(lang, probe, (root) => ({
-    errors: countErrors(root),
-    decls: collectDeclarations(root),
-    statements: root.namedChildren.filter((c) => c && c.type !== 'comment').length,
-  }));
+  const own = await withTree(lang, probe, (root) => {
+    const notComment = (c: TsNode | null): c is TsNode => c !== null && c.type !== 'comment';
+    // For a member: every element of the probe's body counts, a static block or a second member
+    // included, not only what the declaration walk recognizes (review 2026-10-22 R9).
+    const holder = root.namedChildren.find(notComment);
+    const elements = member
+      ? (holder?.childForFieldName('body')?.namedChildren ?? []).filter(notComment).length
+      : root.namedChildren.filter(notComment).length;
+    return { errors: countErrors(root), decls: collectDeclarations(root), elements };
+  });
   if (own.errors > 0)
     return fail(`the new text does not parse (${own.errors} syntax error${own.errors > 1 ? 's' : ''})`);
   const declared = member ? own.decls.filter((d) => d.parent === '__') : own.decls.filter((d) => d.parent === null);
-  if (declared.length !== 1 || (!member && own.statements !== 1)) {
+  if (declared.length !== 1 || own.elements !== 1) {
     return fail(
-      `the new text must be exactly one declaration (found ${declared.length}${member ? '' : `, ${own.statements} statements`})`,
+      `the new text must be exactly one ${member ? 'member' : 'declaration'} (found ${declared.length}, ${own.elements} ${member ? 'elements' : 'statements'})`,
     );
   }
   const next = declared[0] as Declaration;

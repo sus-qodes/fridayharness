@@ -508,6 +508,8 @@ function deriveSymbols(
       emit(r, { path: fe.to, symbol: found.name }, fe.certainty);
     };
     for (const r of f.references) {
+      // Bound nearer than the file's declarations (a parameter, a local): not the file's name at all.
+      if (r.shadowed) continue;
       if (r.via === null) {
         const b = bindings.get(r.name);
         if (b) {

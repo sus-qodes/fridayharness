@@ -780,6 +780,8 @@ export const ArtifactReadParams = z.object({
   limit: z.number().int().min(1).max(400).default(200),
   /** Only the lines containing this text (case ignored), each prefixed with its number. */
   find: z.string().trim().min(1).max(200).optional(),
+  /** With `offset`: the character of that line to start from (from 1), to read on in a line longer than one answer. */
+  col: z.number().int().min(1).default(1),
 });
 export const ArtifactReadResult = z.object({
   artifact_ref: z.string(),
@@ -797,6 +799,11 @@ export const ArtifactReadResult = z.object({
   truncated: z.boolean(),
   /** With `find`: how many lines matched in all. */
   matched: z.number().int().nullable(),
+  /**
+   * The last line returned was cut at this character because it alone is longer than one answer:
+   * read on with `offset: line, col`. Null when every line returned is whole.
+   */
+  cut: z.object({ line: z.number().int(), col: z.number().int() }).nullable(),
 });
 
 /**

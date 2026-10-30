@@ -68,6 +68,32 @@
           "type": "null"
         }
       ]
+    },
+    "cut": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "line": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "col": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "line",
+            "col"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -80,6 +106,7 @@
     "to",
     "text",
     "truncated",
-    "matched"
+    "matched",
+    "cut"
   ]
 }

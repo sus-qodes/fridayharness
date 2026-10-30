@@ -47,6 +47,12 @@ export interface ReferenceFact {
   via: string | null;
   kind: ReferenceKind;
   line: number;
+  /**
+   * The name is bound nearer than the file's declarations and imports: a parameter, a local, a
+   * nested declaration, a type parameter or a catch binding. Such a reference is nobody's edge
+   * (review 2026-10-22 R7: it used to resolve to the file-level name and read as exact).
+   */
+  shadowed?: true;
 }
 
 export interface ParsedFacts {
@@ -105,6 +111,105 @@ function nameOf(node: TsNode): string | null {
   return first?.text ?? null;
 }
 
+const FUNCTION_LIKE = new Set([
+  'function_declaration',
+  'generator_function_declaration',
+  'function_expression',
+  'function',
+  'generator_function',
+  'arrow_function',
+  'method_definition',
+  'method_signature',
+  'abstract_method_signature',
+  'function_signature',
+]);
+const TYPED = new Set([
+  'class_declaration',
+  'abstract_class_declaration',
+  'interface_declaration',
+  'type_alias_declaration',
+]);
+
+/** The names a binding pattern binds: identifiers, shorthand properties, the left side of defaults. */
+function patternNames(node: TsNode | null | undefined, into: Set<string>): void {
+  if (!node) return;
+  switch (node.type) {
+    case 'identifier':
+    case 'shorthand_property_identifier_pattern':
+      into.add(node.text);
+      return;
+    case 'assignment_pattern':
+      patternNames(node.childForFieldName('left'), into);
+      return;
+    case 'pair_pattern':
+      patternNames(node.childForFieldName('value'), into);
+      return;
+    case 'required_parameter':
+    case 'optional_parameter':
+      patternNames(node.childForFieldName('pattern'), into);
+      return;
+    case 'object_pattern':
+    case 'array_pattern':
+    case 'rest_pattern':
+    case 'formal_parameters':
+      for (const c of node.namedChildren) if (c) patternNames(c, into);
+      return;
+    default:
+      return;
+  }
+}
+
+function typeParameterNames(node: TsNode, into: Set<string>): void {
+  const params = node.childForFieldName('type_parameters');
+  for (const p of params?.namedChildren ?? []) {
+    const name = p?.type === 'type_parameter' ? (p.childForFieldName('name') ?? p.namedChildren[0]) : null;
+    if (name) into.add(name.text);
+  }
+}
+
+/**
+ * The names a node binds for everything inside it (review 2026-10-22 R7): a function's parameters
+ * and type parameters, a block's own declarations, a loop's, a catch clause's, a class's or type's
+ * type parameters. Null when the node binds nothing.
+ */
+function boundNames(node: TsNode): Set<string> | null {
+  const names = new Set<string>();
+  if (FUNCTION_LIKE.has(node.type)) {
+    patternNames(node.childForFieldName('parameters'), names);
+    patternNames(node.childForFieldName('parameter'), names);
+    typeParameterNames(node, names);
+  } else if (TYPED.has(node.type)) {
+    typeParameterNames(node, names);
+  } else if (node.type === 'statement_block' || node.type === 'class_body') {
+    for (const s of node.namedChildren) {
+      if (!s) continue;
+      if (s.type === 'lexical_declaration' || s.type === 'variable_declaration') {
+        for (const d of s.namedChildren)
+          if (d?.type === 'variable_declarator') patternNames(d.childForFieldName('name'), names);
+      } else if (
+        s.type === 'function_declaration' ||
+        s.type === 'generator_function_declaration' ||
+        s.type === 'class_declaration'
+      ) {
+        const n = nameOf(s);
+        if (n) names.add(n);
+      }
+    }
+  } else if (node.type === 'for_statement' || node.type === 'for_in_statement') {
+    for (const field of ['initializer', 'left']) {
+      const d = node.childForFieldName(field);
+      if (!d) continue;
+      if (d.type === 'lexical_declaration' || d.type === 'variable_declaration') {
+        for (const x of d.namedChildren)
+          if (x?.type === 'variable_declarator') patternNames(x.childForFieldName('name'), names);
+      } else patternNames(d, names);
+    }
+  } else if (node.type === 'catch_clause') {
+    patternNames(node.childForFieldName('parameter'), names);
+  }
+  return names.size ? names : null;
+}
+
 /** Every symbol, binding and reference of a syntax tree, in source order. */
 export function extractFacts(root: TsNode): ParsedFacts {
   const symbols: SymbolFact[] = [];
@@ -115,7 +220,7 @@ export function extractFacts(root: TsNode): ParsedFacts {
 
   const addSymbol = (s: SymbolFact) => symbols.push(s);
   const addRef = (r: ReferenceFact) => {
-    const key = `${r.kind}:${r.via ?? ''}:${r.name}:${r.line}`;
+    const key = `${r.kind}:${r.via ?? ''}:${r.name}:${r.line}:${r.shadowed ? 's' : ''}`;
     if (!references.has(key)) references.set(key, r);
   };
 
@@ -354,37 +459,39 @@ export function extractFacts(root: TsNode): ParsedFacts {
   for (const s of root.namedChildren) if (s) statement(s, null);
   for (const s of symbols) if (!s.exported && s.parent === null && exportedNames.has(s.name)) s.exported = true;
 
-  // References, over the whole tree.
-  const stack: TsNode[] = [root];
+  // References, over the whole tree, each judged against the names bound nearer than the file's
+  // declarations (review 2026-10-22 R7): a shadowed name is marked; an object a nearer binding
+  // names is unknown (`?`), as any value whose shape the graph does not follow.
+  type Frame = { node: TsNode; scopes: Set<string>[] };
+  const stack: Frame[] = [{ node: root, scopes: [] }];
   while (stack.length) {
-    const node = stack.pop() as TsNode;
+    const { node, scopes } = stack.pop() as Frame;
     const line = row(node);
+    const shadowed = (name: string) => scopes.some((s) => s.has(name));
+    const flag = (name: string) => (shadowed(name) ? { shadowed: true as const } : {});
+    const viaOf = (obj: TsNode) =>
+      obj.type === 'this' ? 'this' : obj.type === 'identifier' && !shadowed(obj.text) ? obj.text : '?';
+    const bound = boundNames(node);
+    const inner = bound ? [...scopes, bound] : scopes;
     switch (node.type) {
       case 'call_expression': {
         const fn = node.childForFieldName('function');
         if (fn?.type === 'identifier') {
-          if (fn.text !== 'require') addRef({ name: fn.text, via: null, kind: 'call', line });
+          if (fn.text !== 'require') addRef({ name: fn.text, via: null, kind: 'call', line, ...flag(fn.text) });
         } else if (fn?.type === 'member_expression') {
           const prop = fn.childForFieldName('property');
           const obj = fn.childForFieldName('object');
-          if (prop && obj)
-            addRef({
-              name: prop.text,
-              via: obj.type === 'identifier' || obj.type === 'this' ? obj.text : '?',
-              kind: 'member',
-              line,
-            });
+          if (prop && obj) addRef({ name: prop.text, via: viaOf(obj), kind: 'member', line });
         }
         break;
       }
       case 'new_expression': {
         const ctor = node.childForFieldName('constructor');
-        if (ctor?.type === 'identifier') addRef({ name: ctor.text, via: null, kind: 'new', line });
+        if (ctor?.type === 'identifier') addRef({ name: ctor.text, via: null, kind: 'new', line, ...flag(ctor.text) });
         else if (ctor?.type === 'member_expression') {
           const prop = ctor.childForFieldName('property');
           const obj = ctor.childForFieldName('object');
-          if (prop && obj)
-            addRef({ name: prop.text, via: obj.type === 'identifier' ? obj.text : '?', kind: 'new', line });
+          if (prop && obj) addRef({ name: prop.text, via: obj.type === 'this' ? '?' : viaOf(obj), kind: 'new', line });
         }
         break;
       }
@@ -392,22 +499,21 @@ export function extractFacts(root: TsNode): ParsedFacts {
       case 'jsx_self_closing_element': {
         const name = node.childForFieldName('name') ?? node.namedChildren[0];
         if (name?.type === 'identifier' && /^[A-Z]/.test(name.text))
-          addRef({ name: name.text, via: null, kind: 'jsx', line });
+          addRef({ name: name.text, via: null, kind: 'jsx', line, ...flag(name.text) });
         else if (name?.type === 'member_expression') {
           const prop = name.childForFieldName('property');
           const obj = name.childForFieldName('object');
-          if (prop && obj)
-            addRef({ name: prop.text, via: obj.type === 'identifier' ? obj.text : '?', kind: 'jsx', line });
+          if (prop && obj) addRef({ name: prop.text, via: obj.type === 'this' ? '?' : viaOf(obj), kind: 'jsx', line });
         }
         break;
       }
       case 'type_identifier': {
-        addRef({ name: node.text, via: null, kind: 'type', line });
+        addRef({ name: node.text, via: null, kind: 'type', line, ...flag(node.text) });
         break;
       }
       case 'extends_clause': {
         for (const c of node.namedChildren)
-          if (c?.type === 'identifier') addRef({ name: c.text, via: null, kind: 'type', line });
+          if (c?.type === 'identifier') addRef({ name: c.text, via: null, kind: 'type', line, ...flag(c.text) });
         break;
       }
       default:
@@ -418,7 +524,7 @@ export function extractFacts(root: TsNode): ParsedFacts {
       if (!child) continue;
       // A declaration's own name is not a reference to itself.
       if (child.type === 'type_identifier' && DECLARATIONS.has(node.type) && nameOf(node) === child.text) continue;
-      stack.push(child);
+      stack.push({ node: child, scopes: inner });
     }
   }
 
