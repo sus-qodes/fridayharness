@@ -2,10 +2,18 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M14.8, the cheap fixes of the core audit
+
+- **A file asked for through `friday_request_context` now arrives:** the tool sends the path it was given as the request's path (it sent it as a query the compiler never read, so every file request answered "names no paths"). `history` takes a path the same way.
+- **The planner's cache survives a commit:** the revision and the recent commits are sent after the cached project context, not inside it, so a commit no longer rebuilds the provider's cache. They stay in every planning call, as source material.
+- **A small task names its files:** cost-class routing sends the cheapest agent only to a low-risk task that may change one to three named files; a scope with a glob (`backend/**`, `**`) is of unknown size and is routed by the score.
+- **A plan cannot ask for an edit it forbids:** a criterion that asks to change a named file outside the task's write scope is a validation error the planner repairs; criteria about running or passing a file are not edits.
+- **Context requests cache better and read git once:** a request's answer is reused across unrelated memory or inbox changes (the code, the policy, the grants and the task's state still key it), and each compile reads the working tree's status once.
+
 ## Unreleased — M14.7, a minimal first packet
 
 - **The first packet of a session names no files:** it carries who the agent is, the task, its criteria, the checks that will judge it, what it may change (`write:`) and one line against exploring broadly, with the project's memory and, for a rework, the handoff summary. The read-scope list, the related code and the recent commits left it: when measured, every file named got opened whether the task needed it or not, at 40% more cost and no gain in correctness.
-- **A context request is answered alone:** `friday_request_context` with `scope_files` (the files the task may change and the code the graph relates to them), `file`, `history` or `symbol` returns that material and nothing of the task packet; `task` and `decision` are as before. `friday context explain` of a task shows the packet as the agent got it.
+- **A context request is answered alone:** `friday_request_context` with `scope_files` (the files the task may change, each once with what the graph knows of it, and the code the graph relates to them), `file` or `history` returns that material and nothing of the task packet; `task` and `decision` keep the task's context; `symbol` stays unsupported. The first packet lists no uncommitted paths either: its head line counts them, and `scope_files` marks the changed ones. `friday context explain` of a task shows the packet as the agent got it.
 - **`friday context explain <task> --files`** shows what an agent's `scope_files` request is answered with: the files the task may change and the code related to them, with each file's reason. Without the flag, the command explains the packet the agent was given, which names no files.
 - The context evals (`FRIDAY_TEST_BENCH=1`) score the first packet by default; `FRIDAY_EVAL_REQUEST=scope_files` scores the request that now holds the related files.
 

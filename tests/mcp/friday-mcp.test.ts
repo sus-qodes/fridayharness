@@ -117,6 +117,17 @@ describe('friday-mcp over stdio', () => {
     expect(current.text).toContain('Add discount codes');
     const ctx = await mcp.call('friday_request_context', { kind: 'task' });
     expect(ctx.text).toContain('Acceptance criteria');
+    // A file by its path in `query`, answered alone: the file's text, not the task packet again.
+    const file = await mcp.call('friday_request_context', { kind: 'file', query: 'README.md' });
+    expect(file.isError, file.text).toBe(false);
+    expect(file.text).toContain('README.md:');
+    expect(file.text).toContain('# test project');
+    expect(file.text).not.toContain('Acceptance criteria');
+    expect(file.structured.sections).toContain('code.requested');
+    // A path the agent may not read is withheld, and the answer says so without naming it.
+    const kept = await mcp.call('friday_request_context', { kind: 'file', query: '.git/config' });
+    expect(kept.isError, kept.text).toBe(false);
+    expect(kept.structured.sections).not.toContain('code.requested');
 
     const progress = await mcp.call('friday_report_progress', {
       note: 'wrote the discount module',

@@ -65,7 +65,9 @@ describe('friday context explain (M4 gate, Part 12 §13)', () => {
     // The files of the scope and the code related to them come on request, answered alone.
     const files = await be.client.requestContext({ task_id: task.task_id, kind: 'scope_files' });
     const related = files.sections.find((s) => s.kind === 'code.related')?.content ?? '';
-    expect(related).toContain('backend/src/checkout.service.ts — in your write scope');
+    expect(files.sections.find((s) => s.kind === 'code.requested')?.content ?? '').toContain(
+      '- backend/src/checkout.service.ts — in your write scope',
+    );
     expect(related).toMatch(/shared\/src\/api\.ts — .*shared contract used by backend, frontend/);
     expect(related).toMatch(/frontend\/src\/api-client\.ts — uses the shared contract shared\/src\/api\.ts/);
     expect(JSON.stringify(files)).not.toContain('infra/');
@@ -143,14 +145,15 @@ describe('friday context explain (M4 gate, Part 12 §13)', () => {
     });
     await be.client.call('task.claim', { task_id: task.task_id });
     const client = 'frontend/src/api-client.ts';
-    const first = (await be.client.requestContext({ task_id: task.task_id, kind: 'task' })) as ContextPacket;
+    // The files come on request (plan M14.7): the same permissions judge that answer.
+    const first = (await be.client.requestContext({ task_id: task.task_id, kind: 'scope_files' })) as ContextPacket;
     expect(JSON.stringify(first.sections)).toContain(client);
 
     // The project now keeps the frontend from agents; tightening applies at once.
     mkdirSync(path.join(ws().fridayDir, 'policies'), { recursive: true });
     writeFileSync(path.join(ws().fridayDir, 'policies', 'private.yaml'), 'deny:\n  read: ["frontend/**"]\n');
     await td.operator.post(td.operator.projectPath('/policy/reload'), {});
-    const second = (await be.client.requestContext({ task_id: task.task_id, kind: 'task' })) as ContextPacket;
+    const second = (await be.client.requestContext({ task_id: task.task_id, kind: 'scope_files' })) as ContextPacket;
     expect(second.context_id).not.toBe(first.context_id);
     expect(JSON.stringify(second.sections)).not.toContain('frontend/');
     const explained = await cli(['--project', dir, 'context', 'explain', second.context_id]);
@@ -168,14 +171,14 @@ describe('friday context explain (M4 gate, Part 12 §13)', () => {
     });
     expect(asked.status).toBe('pending');
     expect((await cli(['--project', dir, 'approve', asked.approval_id as string])).code).toBe(0);
-    const third = (await be.client.requestContext({ task_id: task.task_id, kind: 'task' })) as ContextPacket;
+    const third = (await be.client.requestContext({ task_id: task.task_id, kind: 'scope_files' })) as ContextPacket;
     const text = JSON.stringify(third.sections);
     expect(text).toContain(client);
     expect([...new Set(text.match(/frontend\/[\w./-]+/g))]).toEqual([client]);
 
     // The approval is revoked: the file is gone again, and the packet that showed it is stale.
     expect((await cli(['--project', dir, 'approvals', 'revoke', asked.approval_id as string])).code).toBe(0);
-    const fourth = (await be.client.requestContext({ task_id: task.task_id, kind: 'task' })) as ContextPacket;
+    const fourth = (await be.client.requestContext({ task_id: task.task_id, kind: 'scope_files' })) as ContextPacket;
     expect(fourth.context_id).not.toBe(third.context_id);
     expect(JSON.stringify(fourth.sections)).not.toContain('frontend/');
     const shown = await td.operator.get<ContextPacket>(td.operator.projectPath(`/context/${third.context_id}`));

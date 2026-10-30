@@ -132,7 +132,7 @@ function whyMissed(file: string, task: EvalTask, explanation: ContextExplanation
   if (checkout.matches(file, task.scope.write)) {
     return checkout.inScopeNodes > 20
       ? `in the write scope, but the scope has ${checkout.inScopeNodes} code files and the compiler seeds the first 20`
-      : 'in the write scope but not named (unexpected: an in-scope code file is a seed)';
+      : 'in the write scope but not named (the first packet names no files since plan M14.7; FRIDAY_EVAL_REQUEST=scope_files scores the request that lists them)';
   }
   return 'in the code graph, but no import relation within two steps of the write scope reaches it';
 }

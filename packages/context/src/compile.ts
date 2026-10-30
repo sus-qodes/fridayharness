@@ -286,7 +286,10 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
   // Everything that reads code reads the recipient's execution root (ADR-0014 §5, ADR-0023).
   const root = executionRootOf(deps, input, task);
   const git = await deps.git(root).catch(() => null);
-  const identity: SourceIdentity | null = git ? await git.identity().catch(() => null) : null;
+  // One read of the working tree's status per compile: the identity is made from it, and the head
+  // line below reads it too (plan M14.8).
+  const status = git ? await git.status().catch(() => null) : null;
+  const identity: SourceIdentity | null = git && status ? await git.identity(status).catch(() => null) : null;
   lap('git_identity', t);
 
   const policy = deps.policy?.() ?? null;
@@ -651,7 +654,6 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
     });
   let dirtyPaths: string[] = [];
   if (git && identity) {
-    const status = await git.status().catch(() => null);
     const branch = status?.head.branch ?? '(detached)';
     const headText = `${branch} @ ${identity.head?.slice(0, 12) ?? '(no commits yet)'}${identity.dirty ? ` with ${identity.files} uncommitted change${identity.files === 1 ? '' : 's'} (source version ${identity.version})` : ' (clean)'}`;
     add({
@@ -664,30 +666,9 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
       reason: 'the code as it is now',
       rule: 'git state (priority 0)',
     });
+    // The first packet names no files (plan M14.7): the head line counts the uncommitted changes,
+    // and the scope's files (changed ones marked), the recent history and any file come on request.
     dirtyPaths = identity.paths;
-    // A request for one thing is answered with that thing: the working tree's changes are in the
-    // task packet. The recent history of the scope left the first packet too (plan M14.7): it is
-    // answered on request (kind "history").
-    const shown = requestOnly
-      ? []
-      : dirtyPaths.filter((p) => {
-          if (readable(p)) return true;
-          withheld += 1;
-          return false;
-        });
-    for (const p of shown.slice(0, 30)) {
-      add({
-        section: 'repo.dirty',
-        line: `- ${p}`,
-        source: gitSrc('an uncommitted change in the working tree', p),
-        priority: 0,
-        relevance: 0.85,
-        protected: false,
-        reason: 'uncommitted change',
-        rule: 'git state (priority 0)',
-      });
-    }
-    if (shown.length > 30) notes.push(`${shown.length - 30} more uncommitted paths are not listed`);
   } else {
     const line = 'git is not available for this project';
     add({
@@ -709,11 +690,13 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
   t = performance.now();
   const unsupportedEdges: ContextExplanation['unsupported_edges'] = [];
   let related = 0;
+  // What the graph knows of each file in the write scope, said on the scope's own listing below.
+  let seedReasons = new Map<string, string>();
   if (task?.scope?.write.length && request?.kind === 'scope_files') {
     const graph = await deps.graph(root, identity).catch(() => null);
     if (!graph) notes.push('the code graph is not available; no related files were gathered');
     else {
-      related = gatherGraph(
+      const gathered = gatherGraph(
         graph,
         task.scope.write,
         dirtyPaths,
@@ -723,6 +706,8 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
         src,
         add,
       );
+      related = gathered.count;
+      seedReasons = gathered.seedReasons;
     }
   }
   lap('graph', t);
@@ -784,14 +769,16 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
         return false;
       });
       for (const f of shown.slice(0, 100)) {
+        // Each file once: here, with what the graph knows of it; the related code is the rest.
+        const reason = seedReasons.get(f) ?? 'in your write scope';
         add({
           section: 'code.requested',
-          line: `- ${f}`,
-          source: fileRef(f, 'a file in your write scope', f),
+          line: `- ${f} — ${reason}`,
+          source: fileRef(f, reason, f),
           priority: 0,
-          relevance: 0.95,
+          relevance: dirtyPaths.includes(f) ? 1 : 0.95,
           protected: false,
-          reason: 'a file in your write scope',
+          reason,
           rule: 'requested (priority 0)',
         });
       }
@@ -1422,9 +1409,11 @@ function gatherGraph(
   unsupported: ContextExplanation['unsupported_edges'],
   src: (s: Omit<SourceRef, 'estimated_tokens' | 'recency'> & { content: string; recency?: string }) => SourceRef,
   add: (c: Omit<Candidate, 'authority'> & { authority?: Authority }) => void,
-): number {
+): { count: number; seedReasons: Map<string, string> } {
   const inScope = [...graph.nodes.keys()].filter((p) => matchesAny(p, writeScope));
   const dirty = new Set(dirtyPaths);
+  // What the graph knows of each seed, for the scope's listing: a seed is not a related file.
+  const seedReasons = new Map<string, string>();
   const seeds = [...inScope]
     .sort((a, b) => Number(dirty.has(b)) - Number(dirty.has(a)) || a.localeCompare(b))
     .slice(0, 20);
@@ -1448,16 +1437,7 @@ function gatherGraph(
     }
     const node = graph.nodes.get(s);
     const reason = `in your write scope${dirty.has(s) ? ', changed' : ''}${node?.test ? '; a test' : ''}${node?.contract ? `; shared contract used by ${node.contract.areas.join(', ')}` : ''}`;
-    add({
-      section: 'code.related',
-      line: `- ${s} — ${reason}`,
-      source: fileSrc(s, reason, 0),
-      priority: 1,
-      relevance: dirty.has(s) ? 1 : 0.95,
-      protected: false,
-      reason,
-      rule: 'task files (priority 1)',
-    });
+    seedReasons.set(s, reason);
     count += 1;
     for (const e of graph.dependencies(s)) {
       if (e.certainty === 'unsupported' && unsupported.length < 50)
@@ -1525,7 +1505,7 @@ function gatherGraph(
     });
     count += 1;
   }
-  return count;
+  return { count, seedReasons };
 }
 
 /** The cache key of ADR-0022 §7. */
@@ -1543,22 +1523,38 @@ async function cacheKey(
 ): Promise<string> {
   const { state, project } = deps;
   const pid = project.project_id;
-  const memory = state.db
-    .prepare('SELECT COUNT(*) AS n, MAX(updated_at) AS at FROM memories WHERE project_id = ?')
-    .get<{ n: number; at: string | null }>(pid);
-  const inbox = agentId ? state.peekInbox(pid, agentId, 50).items.map((m) => m.delivery_id) : [];
-  const progress = task ? (progressEvents(state, pid, task.task_id).at(-1)?.event_id ?? null) : null;
+  // A request answered alone (plan M14.7) holds no memory, inbox, progress, handoff or board, so
+  // none of them keys it (plan M14.8): the code, the policy, the grants, the task's state and the
+  // request itself do. The task packet depends on all of them.
+  const alone = Boolean(
+    input.request && ['file', 'scope_files', 'history', 'symbol', 'freeform'].includes(input.request.kind),
+  );
+  const memory = alone
+    ? null
+    : state.db
+        .prepare('SELECT COUNT(*) AS n, MAX(updated_at) AS at FROM memories WHERE project_id = ?')
+        .get<{ n: number; at: string | null }>(pid);
+  const inbox = agentId && !alone ? state.peekInbox(pid, agentId, 50).items.map((m) => m.delivery_id) : [];
+  const progress = task && !alone ? (progressEvents(state, pid, task.task_id).at(-1)?.event_id ?? null) : null;
   // The handoff summary (plan M12.3) changes with every record it is built from: the text itself
   // keys the packet, so a new claim, verdict or approval compiles a new one. The compiler hands in
   // the one it builds for the packet; a staleness check builds it here.
-  const handoff =
-    known.handoff !== undefined ? known.handoff : task ? (handoffSummary(state, pid, task, goal)?.text ?? null) : null;
-  const rework = task
-    ? (state.store.readByRef(pid, 'task', task.task_id, { types: ['task.rework'] }).at(-1)?.event_id ?? null)
-    : null;
-  const decisions = goal ? state.q.escalations(pid, 'answered', { goal_id: goal.goal_id }).length : 0;
+  const handoff = alone
+    ? null
+    : known.handoff !== undefined
+      ? known.handoff
+      : task
+        ? (handoffSummary(state, pid, task, goal)?.text ?? null)
+        : null;
+  const rework =
+    task && !alone
+      ? (state.store.readByRef(pid, 'task', task.task_id, { types: ['task.rework'] }).at(-1)?.event_id ?? null)
+      : null;
+  const decisions = goal && !alone ? state.q.escalations(pid, 'answered', { goal_id: goal.goal_id }).length : 0;
   const claimable =
-    agentId && !task ? state.claimableTasks(pid, state.q.agent(agentId).agent_key, 5).map((x) => x.task_id) : [];
+    agentId && !task && !alone
+      ? state.claimableTasks(pid, state.q.agent(agentId).agent_key, 5).map((x) => x.task_id)
+      : [];
   // What the recipient may read is part of what the packet is (review F02): the effective policy's
   // version, and the exact-path grants a human gave it.
   const policyVersion = deps.policy?.().version ?? null;

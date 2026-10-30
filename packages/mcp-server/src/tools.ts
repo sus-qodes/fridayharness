@@ -412,7 +412,7 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
       name: 'friday_request_context',
       title: 'Request context',
       description:
-        'Ask Friday for context, with provenance: kind "task" for your task (contract, scope, git state, recent progress); "scope_files" for the files you may change and the code related to them; "file" for a file (query: its path); "history" for the commits of your scope; "decision" for recorded decisions. Anything but "task" is answered alone, without the task packet.',
+        'Ask Friday for context, with provenance: kind "task" for your task (contract, scope, git state, recent progress); "scope_files" for the files you may change and the code related to them; "file" for a file (query: its path); "history" for the commits of your scope (query: a path, else the scope); "decision" for recorded decisions with the task\'s context. scope_files, file and history are answered alone, without the task packet; symbol lookups are not supported.',
       shape: {
         kind: z.enum(['task', 'scope_files', 'file', 'symbol', 'history', 'decision', 'freeform']).optional(),
         query: z.string().max(500).optional(),
@@ -423,9 +423,13 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
       readOnly: true,
       handler: async (a) => {
         const client = await session.ready();
+        // The tool names a file or a history's path in `query`; the compiler reads them from `paths`.
+        const query = typeof a.query === 'string' && a.query.trim() ? a.query.trim() : undefined;
+        const paths = query && (a.kind === 'file' || a.kind === 'history') ? [query] : undefined;
         const packet = await client.call('context.request', {
           ...(a.kind ? { kind: a.kind as 'task' } : {}),
-          ...(a.query ? { query: a.query as string } : {}),
+          ...(query ? { query } : {}),
+          ...(paths ? { paths } : {}),
           ...(a.task_id ? { task_id: a.task_id as string } : {}),
           ...(a.max_chars ? { max_chars: a.max_chars as number } : {}),
         });

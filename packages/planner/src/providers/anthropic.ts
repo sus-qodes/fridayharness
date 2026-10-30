@@ -159,10 +159,12 @@ export class AnthropicPlannerModel implements PlannerModel {
           model: req.model,
           max_tokens: req.maxTokens,
           // Friday's rules, then the repository's text as marked source material carrying the cache
-          // breakpoint (plan and replan calls share both), then what this call is for.
+          // breakpoint (plan and replan calls share both), then the revision and recent commits,
+          // which change with every commit and so come after the breakpoint, then what this call is for.
           system: [
             { type: 'text', text: req.system },
             { type: 'text', text: wrapProjectContext(req.context), cache_control: cache },
+            ...(req.status ? [{ type: 'text' as const, text: wrapProjectContext(req.status) }] : []),
             { type: 'text', text: req.instructions },
           ],
           messages,

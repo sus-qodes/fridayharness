@@ -5,7 +5,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import { PlanDraft, ReplanDraft } from './schemas.js';
-import { type ExistingTask, type PlanTaskBounder, validatePlanDraft, validateReplanDraft } from './validate.js';
+import {
+  type ExistingTask,
+  editedPathsInCriterion,
+  type PlanTaskBounder,
+  validatePlanDraft,
+  validateReplanDraft,
+} from './validate.js';
 
 const task = (key: string, role: string, write: string[], depends_on: string[] = []) => ({
   key,
@@ -90,5 +96,66 @@ describe('the ceiling in plan checks (plan M12.2)', () => {
     const refused = validateReplanDraft(revision(['docs/**']), existing, bound);
     expect(refused.ok).toBe(false);
     expect(refused.errors[0]).toMatch(/new task "page" exceeds its ceiling/);
+  });
+});
+
+describe('criteria that ask for a file outside the write scope (plan M14.8)', () => {
+  const plan = (write: string[], criteria: string[]) =>
+    PlanDraft.parse({
+      objective: 'Show the whole-file share',
+      summary: 'One task',
+      tasks: [
+        {
+          key: 'usage',
+          summary: 'Show the share',
+          acceptance_criteria: criteria,
+          depends_on: [],
+          scope: { write },
+          role: 'backend',
+        },
+      ],
+    });
+
+  it('finds the paths a criterion asks to change, and none in one about running or passing', () => {
+    expect(editedPathsInCriterion('Update packages/state/src/usage.ts and docs/measurements/README.md')).toEqual([
+      'packages/state/src/usage.ts',
+      'docs/measurements/README.md',
+    ]);
+    expect(editedPathsInCriterion('Add a test to tests/integration/usage.test.ts')).toEqual([
+      'tests/integration/usage.test.ts',
+    ]);
+    expect(editedPathsInCriterion('tests/integration/usage.test.ts passes')).toEqual([]);
+    expect(editedPathsInCriterion('Run node tests/integration/usage.test.ts')).toEqual([]);
+    expect(editedPathsInCriterion('The table is updated')).toEqual([]);
+    expect(editedPathsInCriterion('Update the table so that tests/integration/usage.test.ts passes')).toEqual([]);
+    // A glob is a scope, not a file to change; a path before the verb is not what the verb changes.
+    expect(editedPathsInCriterion('Change nothing under backend/**')).toEqual([]);
+    expect(editedPathsInCriterion('src/a.ts: add the export')).toEqual([]);
+  });
+
+  it('rejects an explicit edit outside the scope, with the file and the scope named, and accepts the rest', () => {
+    const outside = validatePlanDraft(
+      plan(['apps/cli/src/usage.ts'], ['Update tests/integration/usage.test.ts', 'node --test passes']),
+    );
+    expect(outside.ok).toBe(false);
+    expect(outside.errors).toEqual([
+      'task "usage" names tests/integration/usage.test.ts as a file to change in its acceptance criteria, but scope.write (apps/cli/src/usage.ts) does not include it: widen the scope or rewrite the criterion',
+    ]);
+    for (const criteria of [
+      ['tests/integration/usage.test.ts passes'],
+      ['Run node tests/integration/usage.test.ts'],
+      ['Update apps/cli/src/usage.ts'],
+      ['The table is updated'],
+    ]) {
+      expect(validatePlanDraft(plan(['apps/cli/src/usage.ts'], criteria)), criteria.join()).toEqual({
+        ok: true,
+        errors: [],
+      });
+    }
+    // A scope glob that covers the file is fine.
+    expect(validatePlanDraft(plan(['tests/**'], ['Update tests/integration/usage.test.ts']))).toEqual({
+      ok: true,
+      errors: [],
+    });
   });
 });

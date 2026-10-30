@@ -267,10 +267,9 @@ describe.skipIf(!BENCH)('the context evals on a clean checkout of this repositor
       expect(v.totals.exclusion_all, `${label(v)}: ${JSON.stringify(failed)}`).toBe(true);
       expect(v.totals.within_budget_all, label(v)).toBe(true);
       expect(v.totals.deterministic_share, label(v)).toBe(1);
-      // The three decoys were seen by git and kept out of every delivered packet.
-      for (const s of v.tasks.filter((s) => !s.error)) {
-        expect(s.withheld_by_permission, `${s.id}, ${label(v)}`).toBeGreaterThanOrEqual(3);
-      }
+      // The three decoys are in no delivered packet (`exclusion` above checks each packet's text).
+      // Since plan M14.7 the first packet lists no paths, so nothing is withheld on the way: the
+      // count is a figure of the record, not an assertion.
     }
     expect(record.variants[0]?.totals.mean_recall).not.toBeNull();
   });

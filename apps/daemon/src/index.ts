@@ -6,7 +6,7 @@ export const PACKAGE_NAME = '@friday/daemon';
 
 export { type AppDeps, type AppEnv, buildApp } from './app.js';
 export { type BrainHandle, type BrainStatus, createMasterBrain } from './brain.js';
-export { buildBrainContext } from './brain-context.js';
+export { buildBrainContext, buildRepositoryStatus } from './brain-context.js';
 export { escalationView } from './brain-routes.js';
 export { type CompileInput, type ContextService, createContextService } from './context.js';
 export { ControlManager } from './control.js';

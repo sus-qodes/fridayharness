@@ -54,8 +54,22 @@ export const CAPABLE_FIT = 0.6;
  * A small, low-risk task (plan M13.3): risk `low`, a kind a smaller model does well, and at most
  * three write globs. Such a task goes to the cheapest capable agent.
  */
+/** A write-scope entry that names one file: no glob characters, so its size is known. */
+const namesOneFile = (pattern: string) => !/[*?[\]{}]/.test(pattern);
+
+/**
+ * A small task: low risk, of a kind that is usually quick, and allowed to change at most three
+ * named files. A glob (`backend/**`, `src/*.ts`, `**`) may cover anything, so a scope with one is
+ * of unknown size, never small: the cheapest agent is not sent to the whole repository.
+ */
 export function isSmallTask(t: DelegationTask): boolean {
-  return t.risk_level === 'low' && SMALL_KINDS.has(t.kind ?? 'implementation') && t.write.length <= 3;
+  return (
+    t.risk_level === 'low' &&
+    SMALL_KINDS.has(t.kind ?? 'implementation') &&
+    t.write.length > 0 &&
+    t.write.length <= 3 &&
+    t.write.every(namesOneFile)
+  );
 }
 
 export interface ScoreParts {

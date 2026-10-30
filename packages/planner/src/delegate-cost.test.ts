@@ -45,10 +45,20 @@ describe('the cheapest capable agent (plan M13.3)', () => {
     for (const t of [
       task({ risk_level: 'medium' }),
       task({ kind: 'review', write: [] }),
-      task({ write: ['a/**', 'b/**', 'c/**', 'd/**'] }),
+      task({ write: ['a.ts', 'b.ts', 'c.ts', 'd.ts'] }),
     ]) {
       expect(isSmallTask(t)).toBe(false);
       expect(delegate(t, [std, cheap], []).agent_key).toBe('be-std');
+    }
+  });
+
+  it('counts named files, never globs: a scope that may cover anything is not small', () => {
+    for (const write of [['backend/src/a.ts'], ['a.ts', 'b.ts', 'c.ts']])
+      expect(isSmallTask(task({ write }))).toBe(true);
+    for (const write of [['**'], ['backend/**'], ['src/*.ts'], ['a.ts', 'lib/**'], ['src/[ab].ts'], ['src/{a,b}.ts']]) {
+      const t = task({ write });
+      expect(isSmallTask(t), write.join(',')).toBe(false);
+      expect(delegate(t, [std, cheap], []).agent_key, write.join(',')).toBe('be-std');
     }
   });
 

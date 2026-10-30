@@ -97,12 +97,9 @@ export function buildBrainContext(state: FridayState, project: ProjectRef, opts:
   const parts: string[] = [`# Project "${project.name}" (${project.project_id})`];
   const sources: ContextSource[] = [];
 
-  const head = git(root, ['rev-parse', '--short', 'HEAD']);
-  const log = git(root, ['log', '-8', '--format=%h %s']);
+  // The revision and recent commits are not here: they change with every commit and would make
+  // the provider's cache of this block useless (plan M14.8); `buildRepositoryStatus` carries them.
   const files = (git(root, ['ls-files']) ?? '').split('\n').filter(Boolean);
-  parts.push(
-    head ? `## Repository\nHEAD ${head}\nRecent commits:\n${log ?? ''}` : '## Repository\nNo git history is available.',
-  );
   if (files.length) {
     const shown = files.slice(0, MAX_FILES);
     parts.push(
@@ -147,4 +144,18 @@ export function buildBrainContext(state: FridayState, project: ProjectRef, opts:
   const joined = parts.join('\n\n');
   const bounded = joined.length > MAX_TOTAL ? `${joined.slice(0, MAX_TOTAL)}\n…(truncated)` : joined;
   return opts.redactor.redactString(bounded).value;
+}
+
+/**
+ * The part of the repository's state that changes with every commit: the revision and the recent
+ * commits (plan M14.8). Sent after the cached context, so a commit does not rebuild the cache;
+ * source material like the rest, so it passes the redactor and is marked as such by the provider.
+ */
+export function buildRepositoryStatus(root: string, redactor: { redactString(s: string): { value: string } }): string {
+  const head = git(root, ['rev-parse', '--short', 'HEAD']);
+  const log = git(root, ['log', '-8', '--format=%h %s']);
+  const text = head
+    ? `## Repository\nHEAD ${head}\nRecent commits:\n${log ?? ''}`
+    : '## Repository\nNo git history is available.';
+  return redactor.redactString(text).value;
 }

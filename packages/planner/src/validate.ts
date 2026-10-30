@@ -1,4 +1,4 @@
-import { globsOverlap } from '@friday/policy';
+import { globsOverlap, matchesAny } from '@friday/policy';
 import type { PlanDraft, PlanTaskDraft, ReplanDraft } from './schemas.js';
 
 /**
@@ -116,12 +116,44 @@ function parallelConflicts(nodes: Map<string, Node>, involving?: Set<string>): s
   return errors;
 }
 
+/** A criterion that asks for a change, by one of these words before the path it names. */
+const EDIT_VERB =
+  /\b(add|adds|create|creates|edit|edits|modify|modifies|update|updates|change|changes|delete|deletes|remove|removes|rename|renames|write|writes|extend|extends)\b/i;
+/** A criterion about running or passing something is not asking for an edit of what it names. */
+const RUN_WORD = /\b(run|runs|running|pass|passes|passing|green|succeed|succeeds)\b/i;
+/** A project-relative path in prose: folders, a file name and an extension; never a glob. */
+const PATH_IN_PROSE = /(?<![\w./-])((?:[\w.-]+\/)+[\w.-]+\.[A-Za-z0-9]+)(?![\w/*])/g;
+
+/**
+ * The files a criterion asks to be changed (plan M14.8): a project-relative path after an edit
+ * word in a criterion that is not about running or passing something. Only explicit edits count;
+ * "tests/a.test.ts passes" or "run node tests/a.test.ts" ask for no change to that file.
+ */
+export function editedPathsInCriterion(criterion: string): string[] {
+  const verb = EDIT_VERB.exec(criterion);
+  if (!verb || RUN_WORD.test(criterion)) return [];
+  const after = criterion.slice(verb.index + verb[0].length);
+  return [...new Set([...after.matchAll(PATH_IN_PROSE)].map((m) => (m[1] as string).replace(/^\.\//, '')))];
+}
+
 function taskErrors(t: PlanTaskDraft, label: string): string[] {
   const errors: string[] = [];
   if (t.scope.write.length === 0 && !READ_ONLY_KINDS.has(t.kind)) {
     errors.push(`${label} must declare scope.write (only review and research tasks may be read-only)`);
   }
   if (new Set(t.depends_on).size !== t.depends_on.length) errors.push(`${label} lists a dependency twice`);
+  // A criterion that asks for a file to be changed outside the write scope cannot be met by an
+  // agent that keeps to the scope (plan M14.8): the plan is wrong, in its scope or its criterion.
+  if (t.scope.write.length) {
+    for (const c of t.acceptance_criteria) {
+      for (const p of editedPathsInCriterion(c)) {
+        if (!matchesAny(p, t.scope.write))
+          errors.push(
+            `${label} names ${p} as a file to change in its acceptance criteria, but scope.write (${t.scope.write.join(', ')}) does not include it: widen the scope or rewrite the criterion`,
+          );
+      }
+    }
+  }
   return errors;
 }
 

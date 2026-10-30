@@ -176,7 +176,12 @@ export class OpenAICompatiblePlannerModel implements PlannerModel {
     const schema = localOutputSchema(req.schema);
     // Friday's rules, then the repository's text as marked source material, then what this call is
     // for: one system message, since servers differ in how they join several.
-    const system = [req.system, wrapProjectContext(req.context), req.instructions];
+    const system = [
+      req.system,
+      wrapProjectContext(req.context),
+      ...(req.status ? [wrapProjectContext(req.status)] : []),
+      req.instructions,
+    ];
     if (!jsonSchema) system.push(jsonModeInstructions(schema));
     const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
       { role: 'system', content: system.join('\n\n') },

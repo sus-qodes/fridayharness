@@ -34,6 +34,7 @@ const req: ModelRequest = {
   model: 'qwen2.5:7b',
   system: 'You are the Master Brain.',
   context: 'Repository layout: backend/, frontend/, shared/',
+  status: 'HEAD abc1234\nRecent commits:\nabc1234 the checkout',
   instructions: 'Your job now: the first plan.',
   prompt: 'Goal goal_1: add subscriptions',
   schema: draftJsonSchema('plan'),
@@ -158,7 +159,10 @@ describe('OpenAI-compatible provider', () => {
     const system = systemOf(call);
     expect(system.indexOf(req.system)).toBe(0);
     expect(system).toContain(wrapProjectContext(req.context));
-    expect(system.indexOf(req.instructions)).toBeGreaterThan(system.indexOf('</project_context>'));
+    // The revision follows the stable context, as source material too, before the instructions (plan M14.8).
+    expect(system.indexOf('HEAD abc1234')).toBeGreaterThan(system.indexOf(req.context));
+    expect(system.indexOf(req.instructions)).toBeGreaterThan(system.indexOf('HEAD abc1234'));
+    expect(system.indexOf(req.instructions)).toBeGreaterThan(system.lastIndexOf('</project_context>'));
     expect(system).not.toContain('JSON Schema exactly');
     expect(call?.body.temperature).toBeUndefined();
     const schema = schemaOf(call);

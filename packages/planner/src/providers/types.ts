@@ -28,6 +28,11 @@ export interface ModelRequest {
    * instructions. Redacted and bounded before it gets here; providers that can cache it do.
    */
   context: string;
+  /**
+   * The repository's revision and recent commits: source material too, but it changes with every
+   * commit, so it is sent after the cached context, not inside it (plan M14.8).
+   */
+  status?: string;
   /** What this call is for: first plan or revision (trusted, after the context). */
   instructions: string;
   /** The per-call request: goal, requirements, plan state and evidence. */

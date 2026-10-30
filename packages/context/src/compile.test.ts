@@ -154,12 +154,14 @@ describe('what a backend task receives (Part 12 §13)', () => {
     const taskId = backendTask();
     const { packet, explanation } = await ask(taskId, { kind: 'scope_files' });
     // The request is answered alone: the scope's files and the code related to them, no task packet.
-    expect(section(packet, 'code.requested')).toContain('- backend/src/checkout.service.ts');
+    // Each file of the scope once, with what the graph knows of it; the related code is the rest.
+    const requested = section(packet, 'code.requested');
+    expect(requested).toContain('- backend/src/checkout.service.ts — in your write scope');
+    expect(requested).toContain('- backend/test/checkout.service.test.ts — in your write scope; a test');
     const related = section(packet, 'code.related');
-    expect(related).toContain('backend/src/checkout.service.ts — in your write scope');
+    expect(related).not.toContain('backend/src/checkout.service.ts');
     expect(related).toMatch(/shared\/src\/api\.ts — .*shared contract used by backend, frontend/);
     expect(related).toMatch(/frontend\/src\/api-client\.ts — uses the shared contract shared\/src\/api\.ts/);
-    expect(related).toContain('backend/test/checkout.service.test.ts — in your write scope; a test');
     expect(JSON.stringify(packet)).not.toContain('infra/');
     expect(explanation.included.find((i) => i.source_id === 'frontend/src/api-client.ts')).toMatchObject({
       rule: 'graph exact, distance 2 (priority 3)',
@@ -343,7 +345,9 @@ describe('cache and staleness', () => {
     });
     const edited = await compile(taskId);
     expect(edited.cached).toBe(false);
-    expect(section(edited.packet, 'repo.dirty')).toContain('backend/src/checkout.service.ts');
+    // The first packet names no files, the changed one included: the head line counts it.
+    expect(edited.packet.sections.map((s) => s.kind)).not.toContain('repo.dirty');
+    expect(section(edited.packet, 'repo.head')).toContain('with 1 uncommitted change');
     // So does a new memory.
     state.memory.record(
       PROJECT,
@@ -371,6 +375,60 @@ describe('cache and staleness', () => {
       is_stale: true,
       reason: expect.stringContaining('approximately'),
     });
+  });
+});
+
+describe("a request's answer and what keys it (plan M14.8)", () => {
+  it('is reused across unrelated memory, and compiled again for the file, the policy or a grant', async () => {
+    const taskId = backendTask();
+    const file = 'backend/src/checkout.service.ts';
+    const first = await ask(taskId, { kind: 'file', paths: [file] });
+    expect(first.cached).toBe(false);
+    state.memory.record(
+      PROJECT,
+      { kind: 'human', actor: human },
+      { scope_type: 'project', kind: 'decision', subject: 'colours', content: 'The dashboard is blue.' },
+    );
+    expect((await ask(taskId, { kind: 'file', paths: [file] })).cached).toBe(true);
+    // The file changed: a new answer.
+    writeFileSync(path.join(dir, file), `${readFileSync(path.join(dir, file), 'utf8')}// changed\n`);
+    const edited = await ask(taskId, { kind: 'file', paths: [file] });
+    expect(edited.cached).toBe(false);
+    expect(section(edited.packet, 'code.requested')).toContain('// changed');
+    // The policy changed: a new answer, under it.
+    deps.policy = () => ({ version: 'p2', deny: { read: [] }, teams: {} });
+    expect((await ask(taskId, { kind: 'file', paths: [file] })).cached).toBe(false);
+    // A policy that denies the file is a new version, as Friday's own policy always is.
+    deps.policy = () => ({ version: 'p3', deny: { read: ['backend/**'] }, teams: {} });
+    const denied = await ask(taskId, { kind: 'file', paths: [file] });
+    expect(JSON.stringify(denied.packet)).not.toContain('// changed');
+    deps.policy = undefined;
+    // A grant: part of the key, so a request under one is its own answer.
+    deps.readGrants = () => [{ approval_id: 'apr_k', target: file }];
+    expect((await ask(taskId, { kind: 'file', paths: [file] })).cached).toBe(false);
+    deps.readGrants = undefined;
+  });
+
+  it('reads the working tree once per compile', async () => {
+    const taskId = backendTask();
+    const gitOf = deps.git;
+    let reads = 0;
+    deps.git = async (root) => {
+      const real = await gitOf(root);
+      if (!real) return real;
+      // The same checkout, its status reads counted; the identity reads it through this object too.
+      const counted = Object.create(real) as typeof real;
+      counted.status = async (...args: Parameters<typeof real.status>) => {
+        reads += 1;
+        return real.status(...args);
+      };
+      return counted;
+    };
+    await compile(taskId, { purpose: 'once' });
+    expect(reads).toBe(1);
+    await ask(taskId, { kind: 'file', paths: ['shared/src/api.ts'] });
+    expect(reads).toBe(2);
+    deps.git = gitOf;
   });
 });
 

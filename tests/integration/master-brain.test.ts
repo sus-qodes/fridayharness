@@ -444,22 +444,33 @@ describe('Anthropic provider through the daemon', () => {
     expect(req.url).toBe('/v1/messages');
     expect(req.headers['x-api-key']).toBe(key);
     expect(req.headers['anthropic-version']).toBeTruthy();
-    // Friday's rules first, the repository's text marked as untrusted source material (cached), then the job.
+    // Friday's rules first, the repository's text marked as untrusted source material (cached),
+    // then the revision and recent commits after the cache boundary (plan M14.8), then the job.
     expect(req.body).toMatchObject({
       model: 'claude-opus-5-5',
       max_tokens: 16_000,
       output_config: { format: { type: 'json_schema' } },
-      system: [{ type: 'text' }, { type: 'text', cache_control: { type: 'ephemeral' } }, { type: 'text' }],
+      system: [
+        { type: 'text' },
+        { type: 'text', cache_control: { type: 'ephemeral' } },
+        { type: 'text' },
+        { type: 'text' },
+      ],
     });
     expect(req.body.temperature).toBeUndefined();
     expect(req.body.tools).toBeUndefined();
-    const system = req.body.system as { text: string }[];
+    const system = req.body.system as { text: string; cache_control?: unknown }[];
     expect(system[0]?.text).toContain('You are the Master Brain of Friday');
     const context = system[1]?.text ?? '';
     expect(context).toContain('<project_context source="repository" trust="untrusted">');
     expect(context).toContain('## README.md');
     expect(context).toContain('one-time checkout');
-    expect(system[2]?.text).toContain('Your job now: turn a new goal into the first plan');
+    expect(context).not.toMatch(/^HEAD /m);
+    const revision = system[2]?.text ?? '';
+    expect(revision).toContain('<project_context source="repository" trust="untrusted">');
+    expect(revision).toMatch(/HEAD [0-9a-f]{7,}/);
+    expect(system[2]?.cache_control).toBeUndefined();
+    expect(system[3]?.text).toContain('Your job now: turn a new goal into the first plan');
 
     // Outbound boundary (review F03): seeded secrets are masked, a document linked outside the
     // project is not read, and the key itself never appears in the body.

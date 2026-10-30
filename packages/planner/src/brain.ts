@@ -71,6 +71,8 @@ export interface BrainDeps {
   remotePolicy?: () => RemotePolicy;
   /** Stable project context for planning prompts: layout, docs, scopes, checks, agents. */
   projectContext: () => string;
+  /** The revision and recent commits, sent after the cached context (plan M14.8). */
+  repositoryStatus?: () => string;
   log?: (level: 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void;
   /** Waits before retrying a job whose action failed; the last failure escalates (tests shorten them). */
   retryDelaysMs?: number[];
@@ -126,6 +128,7 @@ export function redactRequest(r: ModelRequest, redactor: { redactString(s: strin
   return {
     ...r,
     context: clean(r.context),
+    ...(r.status ? { status: clean(r.status) } : {}),
     prompt: clean(r.prompt),
     ...(r.repair ? { repair: { previous: clean(r.repair.previous), errors: r.repair.errors.map(clean) } } : {}),
   };
@@ -749,6 +752,7 @@ export class MasterBrain {
         model: settings.model,
         system: PLANNER_SYSTEM,
         context: this.#deps.projectContext(),
+        ...(this.#deps.repositoryStatus ? { status: this.#deps.repositoryStatus() } : {}),
         instructions: PLAN_INSTRUCTIONS,
         prompt: planPrompt(promptGoal(goal), {
           feedback: [feedback, ...decisions].filter(Boolean).join('\n') || null,
@@ -843,6 +847,7 @@ export class MasterBrain {
         model: settings.model,
         system: PLANNER_SYSTEM,
         context: this.#deps.projectContext(),
+        ...(this.#deps.repositoryStatus ? { status: this.#deps.repositoryStatus() } : {}),
         instructions: REPLAN_INSTRUCTIONS,
         prompt: replanPrompt({
           goal: promptGoal(goal),
