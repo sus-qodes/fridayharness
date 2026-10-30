@@ -587,7 +587,6 @@ describe('the Codex adapter', () => {
       () => c.adapter.running(runId),
       (r) => !r,
       'the attempt ended',
-      15_000,
     );
     // Its group ends with the attempt: the writer stops growing.
     await eventually(
@@ -598,7 +597,6 @@ describe('the Codex adapter', () => {
       },
       Boolean,
       'the writer to stop',
-      10_000,
     );
   });
 
@@ -615,7 +613,6 @@ describe('the Codex adapter', () => {
       () => status(td, first).status,
       (s) => s === 'READY_FOR_VERIFICATION',
       'the first claim',
-      15_000,
     );
     // The second is recorded, and its answer is lost on the way back.
     const b = interceptedBootstrap(td);
@@ -627,7 +624,6 @@ describe('the Codex adapter', () => {
       () => status(td, second).status,
       (s) => s === 'READY_FOR_VERIFICATION',
       'the second claim',
-      15_000,
     );
     await eventually(
       () => b.calls.filter((c) => c.method === 'agent.result').length,
@@ -663,7 +659,6 @@ describe('the Codex adapter', () => {
       () => status(td, id).status,
       (s) => s === 'READY_FOR_VERIFICATION',
       'the claim',
-      15_000,
     );
     // The record was tried again and recorded, once, before the claim it belongs with.
     const events = td.daemon.state.store.readByRef(pid, 'task', id);
@@ -723,7 +718,6 @@ describe('the Codex adapter', () => {
       () => status(td, id).status,
       (s) => s === 'READY_FOR_VERIFICATION',
       'the claim',
-      15_000,
     );
     const claimed = td.daemon.state.store
       .readByRef(td.project.project_id, 'task', id)
@@ -764,7 +758,6 @@ describe('the Codex adapter', () => {
       () => c.adapter.running(runId),
       (r) => !r,
       'the hosts stopped',
-      15_000,
     );
     // Its group ends with the attempt: the writer stops growing.
     await eventually(
@@ -775,7 +768,6 @@ describe('the Codex adapter', () => {
       },
       Boolean,
       'the writer to stop',
-      10_000,
     );
     // Friday answers again: the adapter registers again, and Friday resumes the same run.
     stopFailing();
@@ -783,7 +775,6 @@ describe('the Codex adapter', () => {
       () => status(td, id).status,
       (s) => s === 'READY_FOR_VERIFICATION',
       'the claim after resuming',
-      20_000,
     );
     expect(td.daemon.state.q.findRun(runId)?.outcome).toBe('completed_claim');
     expect(
@@ -824,7 +815,6 @@ describe('the Codex adapter', () => {
       () => c.adapter.running(runId),
       (r) => !r,
       'the attempt ended',
-      20_000,
     );
     // Its group ends with the attempt: the writer stops growing.
     await eventually(
@@ -835,7 +825,6 @@ describe('the Codex adapter', () => {
       },
       Boolean,
       'the writer to stop',
-      10_000,
     );
   });
 });

@@ -711,7 +711,6 @@ describe('Claude Code in spawn mode', () => {
       () => c.adapter.running(runId),
       (r) => !r,
       'the attempt ended',
-      15_000,
     );
     // Its group ends with the attempt: the writer stops growing.
     await eventually(
@@ -722,7 +721,6 @@ describe('Claude Code in spawn mode', () => {
       },
       Boolean,
       'the writer to stop',
-      10_000,
     );
   });
 
@@ -739,7 +737,6 @@ describe('Claude Code in spawn mode', () => {
       () => status(td, first).status,
       (s) => s === 'READY_FOR_VERIFICATION',
       'the first claim',
-      15_000,
     );
     // The second is recorded, and its answer is lost on the way back.
     const b = interceptedBootstrap(td);
@@ -751,7 +748,6 @@ describe('Claude Code in spawn mode', () => {
       () => status(td, second).status,
       (s) => s === 'READY_FOR_VERIFICATION',
       'the second claim',
-      15_000,
     );
     await eventually(
       () => b.calls.filter((c) => c.method === 'agent.result').length,
@@ -799,7 +795,6 @@ describe('Claude Code in spawn mode', () => {
       () => status(td, id).status,
       (s) => s === 'READY_FOR_VERIFICATION',
       'the claim',
-      15_000,
     );
     const claimed = td.daemon.state.store
       .readByRef(td.project.project_id, 'task', id)
@@ -836,7 +831,6 @@ describe('Claude Code in spawn mode', () => {
       () => status(td, id),
       (t) => t.status === 'READY_FOR_VERIFICATION' || t.waiting_reason === 'agent_error',
       'the outcome',
-      15_000,
     );
     held.open();
     expect(status(td, id)).toMatchObject({ status: 'WAITING', waiting_reason: 'agent_error' });
@@ -859,7 +853,6 @@ describe('Claude Code in spawn mode', () => {
         () => status(td, id),
         (t) => t.status === 'READY_FOR_VERIFICATION' || t.waiting_reason === 'agent_error',
         'the outcome',
-        15_000,
       );
       expect(status(td, id), id).toMatchObject({ status: 'WAITING', waiting_reason: 'agent_error' });
     }
@@ -892,7 +885,6 @@ describe('Claude Code in spawn mode', () => {
       () => c.adapter.running(runId),
       (r) => !r,
       'the hosts stopped',
-      15_000,
     );
     // Its group ends with the attempt: the writer stops growing.
     await eventually(
@@ -903,7 +895,6 @@ describe('Claude Code in spawn mode', () => {
       },
       Boolean,
       'the writer to stop',
-      10_000,
     );
     // Friday answers again: the adapter registers again, and Friday resumes the same run.
     stopFailing();
@@ -911,7 +902,6 @@ describe('Claude Code in spawn mode', () => {
       () => status(td, id).status,
       (s) => s === 'READY_FOR_VERIFICATION',
       'the claim after resuming',
-      20_000,
     );
     expect(td.daemon.state.q.findRun(runId)?.outcome).toBe('completed_claim');
     expect(
@@ -1042,7 +1032,6 @@ describe('Claude Code in spawn mode', () => {
       () => status(td, id).status,
       (s) => s === 'READY_FOR_VERIFICATION',
       'the claim',
-      15_000,
     );
     // The report was tried again and recorded, once, before the claim it belongs with.
     const events = td.daemon.state.store.readByRef(pid, 'task', id);

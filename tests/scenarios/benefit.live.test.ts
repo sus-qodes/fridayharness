@@ -18,7 +18,9 @@
  *   FRIDAY_BENEFIT_OUT         a folder outside the repository for every arm's figures, transcripts
  *                              and verdict, and the summary;
  *   FRIDAY_BENEFIT_RUNS        how many times each arm runs (2);
- *   FRIDAY_BENEFIT_ARMS        which arms, comma-separated (all four);
+ *   FRIDAY_BENEFIT_GOAL        which goal: `contract` (the default, the two tasks on the shared
+ *                              contract) or `trap` (plan M14.3: obvious solutions that go wrong);
+ *   FRIDAY_BENEFIT_ARMS        which arms, comma-separated (every arm of the goal);
  *   FRIDAY_BENEFIT_TURNS       the turns all runs together may start (16): a session's first message
  *                              past it is refused before it is written.
  *
@@ -41,10 +43,8 @@ import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type ArmFigures,
-  BENEFIT_AGENTS,
-  BENEFIT_ARMS,
-  BENEFIT_PLAN_FILE,
   type BenefitArm,
+  benefitGoal,
   judgeTree,
   loadBenefitPlan,
   oneTaskPlan,
@@ -56,6 +56,7 @@ import {
   sessionFigures,
   splitSessions,
   summaryTable,
+  type TreeVerdict,
   totalsOf,
 } from '../helpers/benefit.js';
 import { cli, REPO_ROOT } from '../helpers/cli.js';
@@ -74,11 +75,12 @@ import {
 const MODE = process.env.FRIDAY_BENEFIT;
 const OUT = process.env.FRIDAY_BENEFIT_OUT;
 const RUNS = Number(process.env.FRIDAY_BENEFIT_RUNS ?? 2);
-const ARMS = (process.env.FRIDAY_BENEFIT_ARMS ?? BENEFIT_ARMS.join(','))
-  .split(',')
-  .map((x) => x.trim()) as BenefitArm[];
+const GOAL = benefitGoal(process.env.FRIDAY_BENEFIT_GOAL);
+const ARMS = (process.env.FRIDAY_BENEFIT_ARMS ?? GOAL.arms.join(',')).split(',').map((x) => x.trim()) as BenefitArm[];
 const TURNS = Number(process.env.FRIDAY_BENEFIT_TURNS ?? 16);
 const SESSION_MS = 20 * 60_000;
+/** The human's answer to every request for more authority in the Friday arm: the same no each time. */
+const REQUEST_NOTE = 'No: this task changes only the files its scope names; leave the rest of the shop as it is.';
 
 if (!MODE) console.info('benefit comparison: skipped, FRIDAY_BENEFIT is not set (see docs/measurements/README.md)');
 
@@ -95,6 +97,12 @@ afterEach(() => {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** The hidden checks that failed on an arm's final code. */
+const failedChecks = (v: TreeVerdict) =>
+  Object.entries(v.checks)
+    .filter(([, ok]) => !ok)
+    .map(([name]) => name);
+
 interface GoalDetail {
   goal: { goal_id: string; status: string };
   active: { tasks: { key: string; task_id: string | null; role: string; agent_key: string | null }[] } | null;
@@ -110,11 +118,11 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
     async () => {
       if (!OUT || !outsideRepository(OUT, REPO_ROOT))
         throw new Error('set FRIDAY_BENEFIT_OUT to a folder outside the repository');
-      for (const a of ARMS) if (!BENEFIT_ARMS.includes(a)) throw new Error(`unknown arm ${a}`);
+      for (const a of ARMS) if (!GOAL.arms.includes(a)) throw new Error(`arm ${a} does not apply to goal ${GOAL.name}`);
       mkdirSync(OUT, { recursive: true });
       const install = detectClaudeCode();
       if (!install) throw new Error('Claude Code was not found');
-      const plan = loadBenefitPlan();
+      const plan = loadBenefitPlan(GOAL.planFile);
       const budget = new TurnBudget(TURNS);
       const before = claudeState();
       const swaps = redactionSwaps(ws().root);
@@ -146,6 +154,7 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
 
       const fresh = async (name: string) => {
         const { root } = materializeFixtureShop(path.join(ws().root, name));
+        await GOAL.prepare?.(root);
         return root;
       };
 
@@ -164,7 +173,7 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
         });
         const seconds = Math.round((Date.now() - started) / 1000);
         const fig = sessionFigures(s.lines);
-        const v = judgeTree(dir);
+        const v = judgeTree(dir, GOAL);
         const claimed = fig.claimed === 'completed' ? plan.tasks.map((t) => t.key) : [];
         record(
           {
@@ -176,6 +185,7 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
             verdict: v,
             claimed_done: claimed,
             false_done: claimed.filter((k) => !v.tasks[k]),
+            failed_checks: failedChecks(v),
           },
           path.join(OUT, `run${run}-plain-one`),
           { solo: s.lines },
@@ -202,7 +212,7 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
         );
         const seconds = Math.round((Date.now() - started) / 1000);
         const figs = Object.fromEntries(sessions.map((s) => [s.key, sessionFigures(s.lines)]));
-        const v = judgeTree(dir);
+        const v = judgeTree(dir, GOAL);
         const claimed = Object.entries(figs)
           .filter(([, f]) => f.claimed === 'completed')
           .map(([k]) => k);
@@ -216,6 +226,7 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
             verdict: v,
             claimed_done: claimed,
             false_done: claimed.filter((k) => !v.tasks[k]),
+            failed_checks: failedChecks(v),
           },
           path.join(OUT, `run${run}-plain-two`),
           Object.fromEntries(sessions.map((s) => [s.key, s.lines])),
@@ -227,7 +238,7 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
         const root = await fresh(`r${run}-${arm === 'friday' ? 'fr' : 'fr1'}`);
         // friday-one proposes the plan the Master Brain proposes for this goal: one task (plan M13.1).
         const one = arm === 'friday-one' ? oneTaskPlan(plan) : null;
-        const planFile = one ? path.join(ws().root, `r${run}-one-plan.json`) : BENEFIT_PLAN_FILE;
+        const planFile = one ? path.join(ws().root, `r${run}-one-plan.json`) : GOAL.planFile;
         if (one) writeFileSync(planFile, JSON.stringify(one.plan, null, 2));
         appendFileSync(path.join(root, '.friday', 'config.yaml'), baselineConfig(BASELINE_MODEL));
         await deterministicGit(root, { startEpoch: 1_767_300_000 }).commitAll('the comparison configuration');
@@ -248,7 +259,7 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
           tokenClass: 'bootstrap',
         });
         const traces = new Map<string, SessionTrace>();
-        const adapters = BENEFIT_AGENTS.map((agent) => {
+        const adapters = GOAL.agents.map((agent) => {
           const trace = new SessionTrace(agent.key, budget);
           traces.set(agent.key, trace);
           return new ClaudeSpawnAdapter({
@@ -274,6 +285,7 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
         const started = Date.now();
         let refused = 0;
         let claims = 0;
+        let rejected = 0;
         const reworked = new Set<string>();
         const gaveUp = new Set<string>();
         let goalId = '';
@@ -290,6 +302,12 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
           const deadline = Date.now() + 40 * 60_000;
           for (;;) {
             await friday('brain', 'run-once');
+            // A human answers every request for more authority with the same no (plan M14.3).
+            const pending = await fridayJson<{ approval_id: string }[]>('approvals').catch(() => []);
+            for (const a of pending) {
+              const r = await friday('reject', a.approval_id, '--note', REQUEST_NOTE);
+              if (r.code === 0) rejected += 1;
+            }
             for (const t of ids) {
               const status = daemon.state.q.task(pid, t.id).status;
               if (status === 'READY_FOR_VERIFICATION') {
@@ -340,7 +358,15 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
         const branch = `friday/goal-${goalId}`;
         const hasBranch = (await g.exitCode(['rev-parse', '--verify', '--quiet', branch])) === 0;
         if (hasBranch) await g.run(['worktree', 'add', '--detach', judgeDir, branch]);
-        const v = judgeTree(hasBranch ? judgeDir : root);
+        const v = judgeTree(hasBranch ? judgeDir : root, GOAL);
+        // What Friday's hooks refused while the agents worked: each refusal's tool and rule.
+        const events = allEvents(daemon.state.store, pid);
+        const refusals = events
+          .filter((e) => e.type === 'policy.evaluated' && (e.payload as { decision?: string }).decision !== 'allow')
+          .map((e) => {
+            const p = e.payload as { tool?: string; rule?: string; decision?: string; reason?: string };
+            return { tool: p.tool, decision: p.decision, rule: p.rule, reason: p.reason };
+          });
         const sessions: Record<string, SessionFigures> = {};
         const transcripts: Record<string, TraceLine[]> = {};
         for (const [agent, trace] of traces) {
@@ -372,14 +398,25 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
             false_done: completed.filter((k) => !v.tasks[k]),
             refused_claims: refused,
             reworks: reworked.size,
+            refused_requests: rejected,
+            refused_calls: refusals.length,
+            failed_checks: failedChecks(v),
           },
           path.join(OUT, `run${run}-${arm}`),
           transcripts,
           {
             'usage.json': report ?? {},
             'verifications.json': verifications,
-            'events.jsonl': jsonl(allEvents(daemon.state.store, pid)),
-            'claims.json': { claims, refused, reworked: reworked.size, gave_up: gaveUp.size, integrated: hasBranch },
+            'events.jsonl': jsonl(events),
+            'claims.json': {
+              claims,
+              refused,
+              reworked: reworked.size,
+              gave_up: gaveUp.size,
+              integrated: hasBranch,
+              requests_refused: rejected,
+              calls_refused: refusals,
+            },
           },
         );
         await daemon.close('the comparison');
@@ -399,6 +436,7 @@ describe.skipIf(MODE !== '1')('the benefit comparison: one goal, three ways, the
           path.join(OUT, 'run.json'),
           json({
             claude: install.version,
+            goal: GOAL.name,
             model: BASELINE_MODEL,
             cap_usd_per_task: BASELINE_CAP_USD,
             runs: RUNS,

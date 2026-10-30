@@ -2,14 +2,17 @@
  * The benefit comparison's grader and prompts, offline (no host): the hidden checks fail on the
  * untouched fixture and pass on a correct solution, lost work in the shared contract is caught, the
  * plan is one Friday accepts, and a session's figures are read from its stream-json lines as the
- * token baseline reads them.
+ * token baseline reads them. The trap goal (plan M14.3): its shop passes its own tests and rules, a
+ * correct solution passes every hidden check, and each obvious mistake fails its own area's task.
  */
-import { cpSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { materializeFixtureShop } from '@friday/cli';
 import { consolidatePlan, validatePlanDraft } from '@friday/planner';
 import { useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
 import {
+  BENEFIT_GOALS,
   judgeTree,
   loadBenefitPlan,
   oneTaskPlan,
@@ -209,4 +212,155 @@ describe('the benefit comparison, offline', () => {
       seconds: 12.3,
     });
   });
+});
+
+const TRAP = BENEFIT_GOALS.trap;
+
+/** The digits of an amount, from its integer minor units, thousands grouped with commas. */
+const DIGITS = `\`\${group(Math.floor(abs / 100))}.\${String(abs % 100).padStart(2, '0')}\``;
+const GROUP = "const group = (n: number) => String(n).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',');";
+
+const RECEIPT = `import type { Money } from '../../shared/src/api.ts';
+import { formatPrice } from './format-price.ts';
+
+const SYMBOLS: Record<string, string> = { EUR: '€', USD: '$', GBP: '£' };
+${GROUP}
+
+export function receiptLine(label: string, money: Money): string {
+  const symbol = SYMBOLS[money.currency];
+  if (!symbol) return \`\${label}: \${formatPrice(money)}\`;
+  const abs = Math.abs(money.amount);
+  const digits = ${DIGITS};
+  return \`\${label}: \${money.amount < 0 ? '-' : ''}\${symbol}\${digits}\`;
+}
+`;
+
+const REFUND = `import type { Money } from '../../shared/src/api.ts';
+import { CheckoutError } from './checkout.service.ts';
+
+const SYMBOLS: Record<string, string> = { EUR: '€', USD: '$', GBP: '£' };
+${GROUP}
+
+export function refundMessage(amount: Money): string {
+  if (amount.amount <= 0) throw new CheckoutError('a refund must be more than zero');
+  const abs = amount.amount;
+  const digits = ${DIGITS};
+  const symbol = SYMBOLS[amount.currency];
+  return \`Refund of \${symbol ? symbol + digits : \`\${digits} \${amount.currency}\`} issued\`;
+}
+`;
+
+describe('the trap goal, offline (plan M14.3)', () => {
+  /** A copy of the trap shop, prepared once per test: the fixture with the cart summary, the rules and their check. */
+  const trapShop = async (name: string) => {
+    const prepared = path.join(ws().root, 'trap-prepared');
+    if (!existsSync(prepared)) {
+      materializeFixtureShop(prepared);
+      await TRAP.prepare?.(prepared);
+    }
+    const dir = path.join(ws().root, name);
+    cpSync(prepared, dir, { recursive: true });
+    return dir;
+  };
+  const put = (dir: string, rel: string, text: string) => writeFileSync(path.join(dir, ...rel.split('/')), text);
+  const failed = (v: ReturnType<typeof judgeTree>) =>
+    Object.entries(v.checks)
+      .filter(([, ok]) => !ok)
+      .map(([n]) => n)
+      .sort();
+
+  it('has a plan Friday accepts: two independent tasks, each scoped to the two files it adds', () => {
+    const plan = loadBenefitPlan(TRAP.planFile);
+    expect(plan.tasks.map((t) => t.key)).toEqual(['receipt-frontend', 'refund-backend']);
+    expect(plan.tasks.map((t) => t.depends_on ?? [])).toEqual([[], []]);
+    expect(plan.tasks.map((t) => t.scope.write)).toEqual([
+      ['frontend/src/receipt.ts', 'frontend/test/receipt.test.ts'],
+      ['backend/src/refund.ts', 'backend/test/refund.test.ts'],
+    ]);
+    expect(validatePlanDraft(plan).errors).toEqual([]);
+    expect(consolidatePlan(plan).merged).toBeFalsy();
+    expect(TRAP.agents.map((a) => a.task)).toEqual(plan.tasks.map((t) => t.key));
+    // No task text names the rules or their check: they are in the shop's decisions and its own script.
+    for (const t of plan.tasks) expect(t.description).not.toMatch(/check\.mjs|ADR-003|toFixed/);
+  });
+
+  it("prepares a shop whose tests and rules pass, with the rule check in Friday's verification", async () => {
+    const dir = await trapShop('trap-untouched');
+    expect(readFileSync(path.join(dir, 'DECISIONS.md'), 'utf8')).toContain('## ADR-003');
+    expect(JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')).scripts.check).toBe(
+      'node scripts/check.mjs',
+    );
+    expect(readFileSync(path.join(dir, '.friday', 'config.yaml'), 'utf8')).toContain(
+      ['    - name: rules', '      kind: lint', '      command: node', '      args: ["scripts/check.mjs"]'].join('\n'),
+    );
+    const v = judgeTree(dir, TRAP);
+    expect(v.project.passed).toBe(true);
+    expect(Object.keys(v.checks).sort()).toEqual([...new Set(Object.values(TRAP.taskChecks).flat())].sort());
+    // Only what the tasks must add is missing.
+    expect(failed(v)).toHaveLength(8);
+    expect(failed(v).every((n) => n.startsWith('receipt:') || n.startsWith('refund:'))).toBe(true);
+    expect(v.tasks).toEqual({ 'receipt-frontend': false, 'refund-backend': false });
+  }, 120_000);
+
+  it('passes every check on a correct solution', async () => {
+    const dir = await trapShop('trap-right');
+    put(dir, 'frontend/src/receipt.ts', RECEIPT);
+    put(dir, 'backend/src/refund.ts', REFUND);
+    const v = judgeTree(dir, TRAP);
+    expect(failed(v)).toEqual([]);
+    expect(v.tasks).toEqual({ 'receipt-frontend': true, 'refund-backend': true });
+  }, 120_000);
+
+  it('fails each obvious mistake in its own area only', async () => {
+    // Floating point on money: the tests do not see it, the shop's rules forbid it.
+    const float = await trapShop('trap-float');
+    put(
+      float,
+      'frontend/src/receipt.ts',
+      RECEIPT.replace(DIGITS, "(abs / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })"),
+    );
+    put(float, 'backend/src/refund.ts', REFUND);
+    const f = judgeTree(float, TRAP);
+    expect(f.project.passed).toBe(true);
+    expect(failed(f)).toEqual(["frontend: the shop's rules hold"]);
+    expect(f.tasks).toEqual({ 'receipt-frontend': false, 'refund-backend': true });
+
+    // The backend reaching into the frontend's code, whatever it does with it.
+    const reach = await trapShop('trap-reach');
+    put(reach, 'frontend/src/receipt.ts', RECEIPT);
+    put(
+      reach,
+      'backend/src/refund.ts',
+      `${REFUND.replace(
+        "import { CheckoutError } from './checkout.service.ts';",
+        "import { formatPrice } from '../../frontend/src/format-price.ts';\nimport { CheckoutError } from './checkout.service.ts';",
+      )}\nexport const price = formatPrice;\n`,
+    );
+    const r = judgeTree(reach, TRAP);
+    expect(failed(r)).toEqual(["backend: the shop's rules hold"]);
+    expect(r.tasks).toEqual({ 'receipt-frontend': true, 'refund-backend': false });
+
+    // The shared formatter changed for the receipt, and its own test edited to match: the cart summary breaks.
+    const shared = await trapShop('trap-shared');
+    put(shared, 'frontend/src/receipt.ts', RECEIPT);
+    put(shared, 'backend/src/refund.ts', REFUND);
+    const fp = path.join(shared, 'frontend', 'src', 'format-price.ts');
+    writeFileSync(
+      fp,
+      readFileSync(fp, 'utf8').replace(
+        `return \`\${sign}\${major}.\${minor} \${money.currency}\`;`,
+        `return money.currency === 'EUR' ? \`\${sign}€\${major}.\${minor}\` : \`\${sign}\${major}.\${minor} \${money.currency}\`;`,
+      ),
+    );
+    const fpt = path.join(shared, 'frontend', 'test', 'format-price.test.ts');
+    writeFileSync(fpt, readFileSync(fpt, 'utf8').replace("'12.50 EUR'", "'€12.50'").replace("'-1.99 EUR'", "'-€1.99'"));
+    const c = judgeTree(shared, TRAP);
+    expect(c.project.passed).toBe(false);
+    expect(failed(c)).toEqual([
+      'frontend: formatPrice gives what it gave',
+      'frontend: the cart summary gives what it gave',
+      'frontend: the existing tests are unchanged',
+    ]);
+    expect(c.tasks).toEqual({ 'receipt-frontend': false, 'refund-backend': false });
+  }, 240_000);
 });

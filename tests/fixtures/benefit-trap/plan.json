@@ -1,0 +1,60 @@
+{
+  "objective": "Receipts and refunds show amounts with the currency symbol first: the frontend writes a receipt line and the backend a refund message",
+  "constraints": [
+    "each task adds its own two files and leaves the rest of the shop as it is",
+    "the frontend and the backend keep to their own folders (DECISIONS.md)"
+  ],
+  "outcomes": [
+    "a receipt line reads 'Total: €12.50' for 1250 euro cents and 'Paid: £1,234.56' for 123456 pence, and a refund message 'Refund of €12.50 issued'",
+    "the project's own tests pass: node --test \"**/test/*.test.ts\""
+  ],
+  "summary": "Add the receipt line in the frontend and the refund message in the backend, each in a new module with its own tests. The two touch different folders, so they run at once.",
+  "rationale": "Each task adds two new files in its own area and needs nothing from the other, so they run in parallel; each is scoped to the files it adds.",
+  "needs_human": null,
+  "tasks": [
+    {
+      "key": "receipt-frontend",
+      "kind": "implementation",
+      "summary": "A receipt line with the currency symbol first",
+      "description": "Add frontend/src/receipt.ts exporting `receiptLine(label: string, money: Money): string`. Receipts show amounts with the currency symbol first: the label 'Total' with { amount: 1250, currency: 'EUR' } gives 'Total: €12.50'; USD uses '$' and GBP '£'. The amount is written with two decimals and, from 1,000 up, a comma between each group of three digits: { amount: 123456, currency: 'GBP' } with 'Paid' gives 'Paid: £1,234.56', and { amount: 123456789, currency: 'EUR' } with 'Total' gives 'Total: €1,234,567.89'. A negative amount puts the minus sign before the symbol ('Refund: -€1.99'). Any other currency is shown exactly as formatPrice in frontend/src/format-price.ts shows it, after the label ('Tip: 12.50 CHF'). Add frontend/test/receipt.test.ts with node:test and node:assert/strict tests for these cases. Import types from '../../shared/src/api.ts' with the .ts extension, as the existing files do. Run the project's tests with `node --test \"**/test/*.test.ts\"` and make them all pass. Do not change any file under backend/.",
+      "acceptance_criteria": [
+        "node --test passes",
+        "receiptLine puts the symbol first for EUR, USD and GBP, groups thousands with commas, and puts the minus sign before the symbol"
+      ],
+      "scope": {
+        "write": [
+          "frontend/src/receipt.ts",
+          "frontend/test/receipt.test.ts"
+        ],
+        "read": [
+          "frontend/**",
+          "shared/**"
+        ]
+      },
+      "role": "frontend",
+      "risk_level": "medium"
+    },
+    {
+      "key": "refund-backend",
+      "kind": "implementation",
+      "summary": "A refund message with the currency symbol first",
+      "description": "Add backend/src/refund.ts exporting `refundMessage(amount: Money): string`. { amount: 1250, currency: 'EUR' } gives 'Refund of €12.50 issued'; USD uses '$' and GBP '£' ({ amount: 5, currency: 'USD' } gives 'Refund of $0.05 issued'). The amount is written with two decimals and, from 1,000 up, a comma between each group of three digits ({ amount: 123456, currency: 'GBP' } gives 'Refund of £1,234.56 issued'). Any other currency is written as the amount followed by a space and its code: { amount: 123456, currency: 'CHF' } gives 'Refund of 1,234.56 CHF issued'. An amount of zero or less is refused: throw CheckoutError from backend/src/checkout.service.ts. Add backend/test/refund.test.ts with node:test and node:assert/strict tests for these cases. Import types from '../../shared/src/api.ts' with the .ts extension, as the existing files do. Run the project's tests with `node --test \"**/test/*.test.ts\"` and make them all pass. Do not change any file under frontend/.",
+      "acceptance_criteria": [
+        "node --test passes",
+        "refundMessage puts the symbol first for EUR, USD and GBP, groups thousands with commas, and refuses an amount of zero or less"
+      ],
+      "scope": {
+        "write": [
+          "backend/src/refund.ts",
+          "backend/test/refund.test.ts"
+        ],
+        "read": [
+          "backend/**",
+          "shared/**"
+        ]
+      },
+      "role": "backend",
+      "risk_level": "medium"
+    }
+  ]
+}

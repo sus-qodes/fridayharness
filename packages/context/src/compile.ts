@@ -52,6 +52,27 @@ export interface ContextDeps {
   readGrants?: (input: CompileInput, task: TaskView | undefined) => { approval_id: string; target: string }[];
 }
 
+/** A check the project's verification runs (`verification.checks`), as a packet names it. */
+interface ProjectCheck {
+  name: string;
+  command: string;
+  args?: readonly string[];
+  task_kinds?: readonly string[];
+}
+
+/**
+ * The checks Friday's verification runs on a claim of a task of this kind, chosen as verification
+ * chooses them: every configured check without task kinds, and those that name this kind.
+ */
+export function checksFor(project: ContextProject, kind: string): ProjectCheck[] {
+  const checks = (project.config.verification as { checks?: ProjectCheck[] } | undefined)?.checks ?? [];
+  return checks.filter((c) => !c.task_kinds?.length || c.task_kinds.includes(kind));
+}
+
+/** A check as an agent runs it: its name and its command line. */
+const checkLine = (c: ProjectCheck) =>
+  `- ${c.name}: ${[c.command, ...(c.args ?? [])].map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(' ')}`;
+
 /** What the compiler takes from the effective policy (review F02). */
 export interface ContextPolicy {
   version: string;
@@ -410,6 +431,31 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
         protected: true,
         reason: 'what verification checks',
         rule: 'protected: acceptance criteria',
+      });
+    }
+    // The checks verification runs on a claim (plan M14.6): an agent kept to its task's files
+    // otherwise never meets a project rule that only a check enforces (LESSONS D-94).
+    const checks = checksFor(project, task.kind);
+    if (checks.length) {
+      const line = `Friday verifies a claim with these project checks; run them before you claim:\n${checks.map(checkLine).join('\n')}`;
+      add({
+        section: 'task.acceptance',
+        line,
+        source: src({
+          source_id: 'verification.checks',
+          source_type: 'daemon',
+          authority: 'system',
+          relevance: 1,
+          relationship_distance: 0,
+          verification_status: 'verified',
+          selection_reason: "the project's checks that verification runs",
+          content: line,
+        }),
+        priority: 1,
+        relevance: 1,
+        protected: true,
+        reason: 'what verification runs',
+        rule: 'protected: verification checks',
       });
     }
     const scope = task.scope
@@ -1547,7 +1593,12 @@ async function cacheKey(
     overflow: input.overflow ?? null,
     request: input.request ?? null,
     budget: [maxChars, maxSources],
-    config: { context: project.config.context, security: project.config.security ?? null },
+    config: {
+      context: project.config.context,
+      security: project.config.security ?? null,
+      // The checks the packet names (plan M14.6): a changed check compiles a new packet.
+      checks: task ? checksFor(project, task.kind) : null,
+    },
   };
   return createHash('sha256').update(stableStringify(parts)).digest('hex');
 }

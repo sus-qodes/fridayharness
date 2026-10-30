@@ -2,6 +2,18 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M14.6, the packet names the project's checks
+
+- **An agent is told which checks will judge its claim:** every task packet's acceptance section names the checks Friday's verification runs for the task, with their commands (`Friday verifies a claim with these project checks; run them before you claim: - tests: node --test … - rules: node scripts/check.mjs`). An agent kept to its task's files no longer misses a project rule that only a check enforces. A change of the checks compiles a new packet. Token cost: one line per configured check in each task packet.
+
+## Unreleased — M14.3, a goal where something goes wrong
+
+- **The benefit comparison has a trap goal** (`FRIDAY_BENEFIT_GOAL=trap`): receipts and refunds with the currency symbol first, in a shop whose formatter another area relies on and whose rules a check of its own enforces. On Haiku every way shipped both tasks right; Friday's verification refused a claim that broke a project rule its tests could not see, and the rework fixed it in one edit. The plain sessions avoided that mistake by reading the project's decisions, which Friday's packet did not point its agent to. Record: `docs/measurements/2026-10-19-benefit-trap.md`.
+
+## Unreleased — M14.2, cost classes live
+
+- **Cost classes checked with a real host** (`tests/scenarios/cost-classes.live.test.ts`): a small, low-risk task went to the agent limited to claude-haiku-5-5 as the cheapest capable agent; its claim, refused by a human, was reserved for and reworked by the agent limited to claude-sonnet-5-5 and passed verification. Record: `docs/measurements/2026-10-19-cost-classes.md`.
+
 ## Unreleased — M14.1, the leftovers
 
 - **Settings Hub:** the trust question lists exactly what is trusted and its hash; Stop Friday says how to start it again; the Friday and About pages follow the board; the notification refusals say where to allow them again; the browser session note and the clean-up hint are back.

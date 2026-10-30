@@ -771,3 +771,43 @@ describe('the handoff summary (plan M12.3)', () => {
     expect(text).toContain('Next: batch 1 of the pricing tables rewritten');
   });
 });
+
+describe("the project's checks in a task packet (plan M14.6)", () => {
+  const withChecks = (checks: unknown[]) => {
+    deps.project.config = { ...deps.project.config, verification: { checks } };
+  };
+
+  it('names the checks verification runs for the task, with their commands, and nothing without checks', async () => {
+    const bare = await compile(backendTask(), { purpose: 'no checks' });
+    expect(section(bare.packet, 'task.acceptance')).not.toContain('project checks');
+    withChecks([
+      { name: 'tests', kind: 'test', command: 'node', args: ['--test', '**/test/*.test.ts'] },
+      { name: 'rules', kind: 'lint', command: 'node', args: ['scripts/check.mjs'], task_kinds: ['implementation'] },
+      { name: 'docs', kind: 'lint', command: 'node', args: ['scripts/docs check.mjs'], task_kinds: ['docs'] },
+    ]);
+    const { packet } = await compile(backendTask(), { purpose: 'checks' });
+    const text = section(packet, 'task.acceptance');
+    expect(text).toContain('node --test passes');
+    // Verification's own choice for the task's kind: no task kinds, or this one; an argument with
+    // a space is quoted as a shell would need it.
+    expect(text).toContain(
+      'Friday verifies a claim with these project checks; run them before you claim:\n- tests: node --test **/test/*.test.ts\n- rules: node scripts/check.mjs',
+    );
+    expect(text).not.toContain('docs check');
+  });
+
+  it('compiles a new packet when the checks change', async () => {
+    const taskId = backendTask();
+    withChecks([{ name: 'tests', kind: 'test', command: 'node', args: ['--test'] }]);
+    const first = await compile(taskId, { purpose: 'same' });
+    expect((await compile(taskId, { purpose: 'same' })).cached).toBe(true);
+    withChecks([
+      { name: 'tests', kind: 'test', command: 'node', args: ['--test'] },
+      { name: 'rules', kind: 'lint', command: 'node', args: ['scripts/check.mjs'] },
+    ]);
+    const changed = await compile(taskId, { purpose: 'same' });
+    expect(changed.cached).toBe(false);
+    expect(changed.packet.context_id).not.toBe(first.packet.context_id);
+    expect(section(changed.packet, 'task.acceptance')).toContain('- rules: node scripts/check.mjs');
+  });
+});

@@ -13,13 +13,18 @@
  *   and integrates verified work into the goal's branch;
  * - `friday-one`: the same, with the plan the Master Brain proposes for this goal (plan M13.1): its
  *   two tasks run one after another on the shared contract, so they are one task for one agent.
+ *
+ * Two goals (`BENEFIT_GOALS`): `contract`, whose two tasks both change the shared contract, and
+ * `trap` (plan M14.3), whose obvious solutions go wrong: the shop's price formatter is relied on by
+ * another area, and the shop's rules (no floating point on money, neither side importing the other)
+ * are written in its decisions and checked by its own script, which no task text mentions.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { cpSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { FINAL_SCHEMA } from '@friday/adapter-generic';
 import { consolidatePlan, formatIssues, PlanDraft } from '@friday/planner';
-import { killTree } from '@friday/test-support';
+import { deterministicGit, killTree } from '@friday/test-support';
 import { REPO_ROOT } from './cli.js';
 import type { Msg } from './live-claude.js';
 import type { TraceLine, TurnBudget } from './token-baseline.js';
@@ -53,6 +58,123 @@ export const TASK_CHECKS: Record<string, string[]> = {
     'backend: an unknown, empty or missing code changes nothing',
   ],
 };
+
+const TRAP_DIR = path.join(REPO_ROOT, 'tests', 'fixtures', 'benefit-trap');
+
+/** A goal the comparison runs: its plan, its hidden checks, its agents, and how its shop is made. */
+export interface BenefitGoal {
+  name: 'contract' | 'trap';
+  planFile: string;
+  hiddenTests: string;
+  /** The spawned agents of the Friday arm, each of the role of the task it takes. */
+  agents: readonly { key: string; role: string; task: string }[];
+  /** The hidden checks of each task. */
+  taskChecks: Record<string, string[]>;
+  /** The arms that apply: `friday-one` only where the plan's tasks merge into one. */
+  arms: readonly BenefitArm[];
+  /** Changes a fresh copy of the fixture shop before an arm starts, and commits the change. */
+  prepare?: (root: string) => Promise<void>;
+}
+
+/** The shop's rules, appended to its decisions in the trap goal. */
+const TRAP_DECISION = [
+  '',
+  '## ADR-003 Each side keeps to its own code, and the rules are checked',
+  'Code both sides need lives in `shared/`: the backend never imports from `frontend/`, as the frontend never',
+  'imports from `backend/` (ADR-002). Money is formatted from its integer minor units, never through floating',
+  'point: no `toFixed`, `parseFloat`, `Intl.NumberFormat` or `toLocaleString` on amounts (ADR-001).',
+  '`node scripts/check.mjs` checks both rules; run it with the tests before you hand in a change.',
+  '',
+].join('\n');
+
+/** The trap goal's shop: the cart summary, the rule check, the decision and the check in Friday's configuration. */
+export async function prepareTrapShop(root: string): Promise<void> {
+  cpSync(path.join(TRAP_DIR, 'shop'), root, { recursive: true });
+  const patch = (rel: string, change: (text: string) => string) => {
+    const file = path.join(root, rel);
+    const before = readFileSync(file, 'utf8');
+    const after = change(before);
+    if (after === before) throw new Error(`the trap shop could not change ${rel}`);
+    writeFileSync(file, after);
+  };
+  patch('DECISIONS.md', (t) => `${t.trimEnd()}\n${TRAP_DECISION}`);
+  patch(
+    'README.md',
+    (t) => `${t.trimEnd()}\n\nCheck the shop's rules with \`node scripts/check.mjs\` (DECISIONS.md ADR-003).\n`,
+  );
+  patch('package.json', (t) => {
+    const pkg = JSON.parse(t) as { scripts: Record<string, string> };
+    pkg.scripts.check = 'node scripts/check.mjs';
+    return `${JSON.stringify(pkg, null, 2)}\n`;
+  });
+  patch('.friday/config.yaml', (t) =>
+    t.replace(
+      '      timeout_ms: 120000\n',
+      [
+        '      timeout_ms: 120000',
+        '    - name: rules',
+        '      kind: lint',
+        '      command: node',
+        '      args: ["scripts/check.mjs"]',
+        '      timeout_ms: 60000',
+        '',
+      ].join('\n'),
+    ),
+  );
+  await deterministicGit(root, { startEpoch: 1_767_250_000 }).commitAll("feat: cart summary and the shop's rules");
+}
+
+export const BENEFIT_GOALS: Record<BenefitGoal['name'], BenefitGoal> = {
+  contract: {
+    name: 'contract',
+    planFile: BENEFIT_PLAN_FILE,
+    hiddenTests: BENEFIT_HIDDEN_TESTS,
+    agents: BENEFIT_AGENTS,
+    taskChecks: TASK_CHECKS,
+    arms: BENEFIT_ARMS,
+  },
+  trap: {
+    name: 'trap',
+    planFile: path.join(TRAP_DIR, 'plan.json'),
+    hiddenTests: path.join(TRAP_DIR, 'acceptance.hidden.test.mjs'),
+    agents: [
+      { key: 'fe-1', role: 'frontend', task: 'receipt-frontend' },
+      { key: 'be-1', role: 'backend', task: 'refund-backend' },
+    ],
+    taskChecks: {
+      'receipt-frontend': [
+        'shop: the shared tests are unchanged',
+        'frontend: formatPrice gives what it gave',
+        'frontend: the cart summary gives what it gave',
+        'frontend: the existing tests are unchanged',
+        "frontend: the shop's rules hold",
+        'receipt: EUR, USD and GBP put the symbol first',
+        'receipt: thousands are grouped with commas',
+        'receipt: a negative amount puts the minus before the symbol',
+        'receipt: another currency is shown as formatPrice shows it',
+      ],
+      'refund-backend': [
+        'shop: the shared tests are unchanged',
+        'backend: the existing tests are unchanged',
+        "backend: the shop's rules hold",
+        'refund: EUR, USD and GBP put the symbol first',
+        'refund: thousands are grouped with commas',
+        'refund: another currency is written with its code',
+        'refund: an amount of zero or less is refused',
+      ],
+    },
+    // Its two tasks are independent, so nothing merges: friday-one would be the friday arm again.
+    arms: ['plain-one', 'plain-two', 'friday'],
+    prepare: prepareTrapShop,
+  },
+};
+
+/** The goal `FRIDAY_BENEFIT_GOAL` names (`contract` when unset). */
+export function benefitGoal(name: string | undefined): BenefitGoal {
+  const goal = BENEFIT_GOALS[(name ?? 'contract') as BenefitGoal['name']];
+  if (!goal) throw new Error(`unknown goal ${name}: ${Object.keys(BENEFIT_GOALS).join(', ')}`);
+  return goal;
+}
 
 /** The plan fixture, validated as `friday plan propose --file` validates it. */
 export function loadBenefitPlan(file: string = BENEFIT_PLAN_FILE): PlanDraft {
@@ -229,8 +351,8 @@ export interface TreeVerdict {
 const tapCount = (text: string, what: 'pass' | 'fail') =>
   num(Number(new RegExp(`^# ${what} (\\d+)`, 'm').exec(text)?.[1]));
 
-/** Judges a folder's final code: the project's tests, then the hidden checks, each run by Node. */
-export function judgeTree(dir: string): TreeVerdict {
+/** Judges a folder's final code: the project's tests, then the goal's hidden checks, each run by Node. */
+export function judgeTree(dir: string, goal: BenefitGoal = BENEFIT_GOALS.contract): TreeVerdict {
   const project = spawnSync(process.execPath, ['--test', '--test-reporter=tap', '**/test/*.test.ts'], {
     cwd: dir,
     encoding: 'utf8',
@@ -238,7 +360,7 @@ export function judgeTree(dir: string): TreeVerdict {
     windowsHide: true,
   });
   const projectOut = `${project.stdout ?? ''}`;
-  const hidden = spawnSync(process.execPath, ['--test', '--test-reporter=tap', BENEFIT_HIDDEN_TESTS], {
+  const hidden = spawnSync(process.execPath, ['--test', '--test-reporter=tap', goal.hiddenTests], {
     cwd: dir,
     encoding: 'utf8',
     timeout: 120_000,
@@ -248,7 +370,7 @@ export function judgeTree(dir: string): TreeVerdict {
   const checks = parseTap(`${hidden.stdout ?? ''}`);
   const passed = project.status === 0;
   const tasks = Object.fromEntries(
-    Object.entries(TASK_CHECKS).map(([key, names]) => [key, passed && names.every((n) => checks[n] === true)]),
+    Object.entries(goal.taskChecks).map(([key, names]) => [key, passed && names.every((n) => checks[n] === true)]),
   );
   return {
     project: { passed, pass: tapCount(projectOut, 'pass'), fail: tapCount(projectOut, 'fail') },
@@ -414,6 +536,11 @@ export interface ArmFigures {
   /** Friday only: claims its verification refused, and the reworks that followed. */
   refused_claims?: number;
   reworks?: number;
+  /** Friday only: the agents' requests for more authority a human refused, and the writes and commands Friday's hooks refused. */
+  refused_requests?: number;
+  refused_calls?: number;
+  /** The hidden checks that failed on the final code. */
+  failed_checks?: string[];
 }
 
 const sum = (xs: (number | null)[]): number | null =>
