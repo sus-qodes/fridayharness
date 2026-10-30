@@ -19,6 +19,10 @@ export const SPAWNED_AGENT_TOOLS = [
   'friday_request_permission',
   'friday_run_operation',
   'friday_remember',
+  // The owner's decision of 2026-10-22 for the testing phase: whether these two cost more than
+  // they save is measured there (ADR-0038 §1, ADR-0039 §5).
+  'friday_blast_radius',
+  'friday_symbolic_patch',
 ] as const;
 export type SpawnedAgentTool = (typeof SPAWNED_AGENT_TOOLS)[number];
 
@@ -103,6 +107,30 @@ const SPAWNED_FORM: Record<
     },
     rule: 'friday_remember proposes what the project should learn from your work',
     fixed: { share: 'project' },
+  },
+  friday_blast_radius: {
+    description:
+      'Before changing a shared symbol or file: what depends on it, with a confidence (high, medium, low). Seed it with paths, symbols as "file#name", or diff: true for the files you changed. It lists; it judges nothing.',
+    shape: {
+      paths: z.array(z.string()).optional(),
+      symbols: z.array(z.string()).optional(),
+      diff: z.boolean().optional(),
+      depth: z.number().int().min(1).max(5).optional(),
+    },
+    rule: 'friday_blast_radius says what a change would reach',
+  },
+  friday_symbolic_patch: {
+    description:
+      'Replace one declaration by name (Parent.member for a member) without rewriting the file; body: the whole new declaration. Refused with the reason unless exactly one matches and the file still parses; dry_run: true previews. When refused, edit the file.',
+    shape: {
+      path: z.string(),
+      symbol: z.string(),
+      body: z.string(),
+      kind: z.string().optional(),
+      line: z.number().int().optional(),
+      dry_run: z.boolean().optional(),
+    },
+    rule: 'friday_symbolic_patch replaces one declaration by name',
   },
 };
 

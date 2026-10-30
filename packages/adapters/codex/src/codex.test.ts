@@ -3,6 +3,7 @@
  * the usage record a thread's token counts become, and the environment its host gets.
  */
 import { describe, expect, it } from 'vitest';
+import { codexModelName, routedModelName } from './adapter.js';
 import {
   codexHostUsage,
   FINAL_SCHEMA,
@@ -161,5 +162,15 @@ describe("the host's environment", () => {
       HOME: '/home/me',
     });
     expect(Object.keys(env).sort()).toEqual(['CODEX_HOME', 'HOME', 'OPENAI_API_KEY', 'PATH']);
+  });
+});
+
+describe('model names between the registry and Codex (live check of 2026-10-22)', () => {
+  it('sends Codex the bare name and reports the routed one back', () => {
+    expect(codexModelName('openai/gpt-6.1-sol')).toBe('gpt-6.1-sol');
+    expect(codexModelName('gpt-5.6-luna')).toBe('gpt-5.6-luna');
+    expect(routedModelName('gpt-6.1-sol', 'openai/gpt-6.1-sol')).toBe('openai/gpt-6.1-sol');
+    expect(routedModelName('gpt-5.6-luna', 'openai/gpt-6.1-sol')).toBe('gpt-5.6-luna');
+    expect(routedModelName('gpt-5.6-luna', null)).toBe('gpt-5.6-luna');
   });
 });

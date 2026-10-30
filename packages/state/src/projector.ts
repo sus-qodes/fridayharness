@@ -664,15 +664,33 @@ export class StateProjector implements Projector {
         this.insertLearningProposal(e, p.proposal as Payload);
         return;
       case 'readiness.recorded': {
-        // The newest observation of a stage is the one that counts: earlier open ones end with it.
+        // The newest observation of a stage by the same witness is the one that counts: a session's
+        // earlier rows end with its new ones, a doctor's with the next doctor's. One witness never
+        // erases another's (the live check of 2026-10-22: a session that ended had taken the doctor's
+        // day-long check with it, and the host read as not installed).
         for (const raw of p.evidence as Payload[]) {
           const model = opt(raw.model);
+          const harnessId = opt(raw.harness_id);
+          // A bench is one per host and model whoever benched it: the newer replaces the older.
+          const witness =
+            raw.stage === 'benched'
+              ? ''
+              : harnessId === null
+                ? 'AND harness_id IS NULL AND source = ?'
+                : 'AND harness_id = ?';
           this.db
             .prepare(
               `UPDATE readiness_evidence SET ended_at = ?, ended_reason = 'superseded'
-               WHERE project_id = ? AND host = ? AND stage = ? AND ended_at IS NULL AND ${model === null ? 'model IS NULL' : 'model = ?'}`,
+               WHERE project_id = ? AND host = ? AND stage = ? AND ended_at IS NULL AND ${model === null ? 'model IS NULL' : 'model = ?'} ${witness}`,
             )
-            .run(e.occurred_at, e.project_id, str(raw.host), str(raw.stage), ...(model === null ? [] : [model]));
+            .run(
+              e.occurred_at,
+              e.project_id,
+              str(raw.host),
+              str(raw.stage),
+              ...(model === null ? [] : [model]),
+              ...(witness ? [harnessId === null ? str(raw.source) : harnessId] : []),
+            );
           this.db
             .prepare(
               `INSERT INTO readiness_evidence (evidence_id, project_id, host, model, stage, status, checked_at, expires_at,

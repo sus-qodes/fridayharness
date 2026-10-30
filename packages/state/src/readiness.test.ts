@@ -131,6 +131,46 @@ describe('readiness evidence (ADR-0035 §1)', () => {
     expect(stages('codex', SOL).authenticated).toBe('stale');
   });
 
+  it('a session that registers and ends leaves the doctor’s check in place (the live check of 2026-10-22)', () => {
+    state.readiness.record(PROJECT, human, {
+      host: 'claude-code',
+      version: '2.1.306',
+      source: 'harness doctor',
+      stages: [
+        { stage: 'detected', status: 'passed' },
+        { stage: 'configured', status: 'passed' },
+        { stage: 'handshake', status: 'passed' },
+      ],
+    });
+    expect(state.readiness.assess(PROJECT, 'claude-code', null)).toMatchObject({ live: false, dispatchable: true });
+    // An attached session: live now, its own rows beside the doctor's.
+    const session = register('cc-1', 'claude-code');
+    expect(state.readiness.assess(PROJECT, 'claude-code', null)).toMatchObject({ live: true, dispatchable: true });
+    const open = state.q.readinessEvidence(PROJECT, { host: 'claude-code' });
+    expect(
+      open
+        .filter((e) => e.stage === 'handshake')
+        .map((e) => e.source)
+        .sort(),
+    ).toEqual(['harness doctor', 'harness.register']);
+    // The session ends: its rows end, the doctor's day-long check still counts.
+    state.disconnectHarness(PROJECT, session.harness_id, 'the host closed', true);
+    expect(state.q.harness(session.harness_id).status).toBe('TERMINATED');
+    expect(state.readiness.assess(PROJECT, 'claude-code', null)).toMatchObject({ live: false, dispatchable: true });
+    const left = state.q.readinessEvidence(PROJECT, { host: 'claude-code' });
+    expect(left.map((e) => e.source)).toEqual(['harness doctor', 'harness doctor', 'harness doctor']);
+    // The next doctor check replaces the earlier one, as before.
+    state.readiness.record(PROJECT, human, {
+      host: 'claude-code',
+      source: 'harness doctor',
+      stages: [{ stage: 'handshake', status: 'passed' }],
+    });
+    const handshakes = state.q
+      .readinessEvidence(PROJECT, { host: 'claude-code', all: true })
+      .filter((e) => e.stage === 'handshake' && e.source === 'harness doctor');
+    expect(handshakes.map((e) => e.ended_reason)).toEqual([null, 'superseded']);
+  });
+
   it('a doctor check counts for a day, and a later check of the same stage replaces it', () => {
     const first = state.readiness.record(PROJECT, human, {
       host: 'claude-code',

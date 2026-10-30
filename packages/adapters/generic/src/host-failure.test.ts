@@ -23,6 +23,17 @@ describe('classifyHostFailure (ADR-0035 §3)', () => {
     expect(retryAfterSeconds('nothing said')).toBeUndefined();
   });
 
+  it('is a runtime failure when the host cannot serve the model it was given (the live check of 2026-10-22)', () => {
+    expect(
+      classifyHostFailure(
+        `the Codex turn failed: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'openai/gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."}}`,
+        'turn',
+      ),
+    ).toEqual({ kind: 'runtime_unavailable' });
+    expect(classifyHostFailure('unknown model: gpt-9', 'turn')).toEqual({ kind: 'runtime_unavailable' });
+    expect(classifyHostFailure('model_not_found', 'exit')).toEqual({ kind: 'runtime_unavailable' });
+  });
+
   it('is a start failure when the host could not be launched or given its task', () => {
     expect(classifyHostFailure('the turn could not start: EPIPE', 'start')).toEqual({ kind: 'start' });
     expect(classifyHostFailure('spawn claude ENOENT', 'exit')).toEqual({ kind: 'start' });

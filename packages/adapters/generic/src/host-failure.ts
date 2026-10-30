@@ -13,6 +13,10 @@ const RATE = /rate[ -]?limit|too many requests|\b429\b|\b529\b|overloaded|quota|
 const RETRY_AFTER = /retry[- ]after[:\s]+(\d+)/i;
 const TRY_AGAIN = /try again in (\d+)\s*(s|secs?|seconds?|m|mins?|minutes?|h|hours?)\b/i;
 const LAUNCH = /ENOENT|EACCES|spawn|not found|is not recognized|no such file|cannot execute|command not found/i;
+// A model the host cannot serve on this account or machine (Codex with a ChatGPT account refusing a
+// model name; a model that does not exist there): the host's failure, benched as `runtime_unavailable`.
+const UNSUPPORTED_MODEL =
+  /model['"]? .{0,80}?(?:is )?not (?:supported|available|found)|unsupported model|unknown model|model_not_found|no such model|model .{0,40}?does not exist/i;
 
 const UNIT_S: Record<string, number> = { s: 1, sec: 1, secs: 1, second: 1, seconds: 1 };
 const unitSeconds = (unit: string): number => {
@@ -40,6 +44,7 @@ export function retryAfterSeconds(text: string): number | undefined {
 export function classifyHostFailure(text: string, site: HostFailureSite): HostFailure | null {
   const t = text ?? '';
   if (AUTH.test(t)) return { kind: 'auth' };
+  if (UNSUPPORTED_MODEL.test(t)) return { kind: 'runtime_unavailable' };
   if (RATE.test(t)) {
     const retry_after_s = retryAfterSeconds(t);
     return retry_after_s === undefined ? { kind: 'rate_limit' } : { kind: 'rate_limit', retry_after_s };

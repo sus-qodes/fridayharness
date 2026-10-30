@@ -2,6 +2,23 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — the live host checks of 2026-10-22, and two fixes they found
+
+- **Checked live on this machine** (`docs/measurements/2026-10-22-live-hosts.md`): `friday setup` and `friday hosts setup` wired Claude Code 2.1.306, Codex 0.162.1, Gemini CLI 0.65.0 and OpenCode 2.1.2; every doctor ran with the daemon up; Claude Code (attached, headless, haiku) and Codex (spawn mode, unelevated Windows sandbox) each did a small task that verification passed. Gemini CLI refuses the owner's consumer account itself; OpenCode 2.1.2 is refused by the profile pinned to 1.19.3; Antigravity is configured and doctored (no headless mode); Cursor and DeepSeek are not installed here.
+- **Codex gets the bare model name:** the registry's `openai/gpt-6.1-sol` is sent to Codex as `gpt-6.1-sol` (a ChatGPT account refuses the prefixed name) and reported back under the registry's name; a model the host cannot serve ("model … is not supported", "unknown model", "model_not_found") is a host failure, `runtime_unavailable`, benched and failed over, instead of a fatal agent error that asks a human.
+- **Readiness evidence is no longer erased across witnesses:** a new observation supersedes only the earlier rows of the same session, or of the same source when there is no session; a session's end takes only its own rows, so the doctor's day-long check and a claim's week still count afterwards. A bench still replaces the earlier bench whoever made it. Found when a Gemini session's end left Claude Code reading as "not installed".
+
+## Unreleased — the owner's rulings of 2026-10-22
+
+- **ADR-0036, ADR-0037, ADR-0038 and ADR-0039 are accepted** by the owner. Symbolic patching stays under test: the testing phase decides whether it is kept.
+- **Two more tools for spawned sessions, for the testing phase:** `friday_blast_radius` and `friday_symbolic_patch` join the compact set (seven tools now), one line each; whether they cost more than they save is measured there and they are removed if they do. The rules of a spawned session name them like the others.
+- **Phase 7.2 is skipped:** a test suite with repositories in it, designed for the testing phase, replaces the reruns against the baseline.
+
+## Unreleased — Phase 8B, the handoff completion record
+
+- **`docs/plans/2026-10-22-handoff-completion-record.md`:** for each area the handoff asked for, what exists, where its evidence is, and what stays open (Phase 7.2's reruns, the live host gates of the plan's §8, the owner's acceptance of ADR-0036 to ADR-0039, whether a spawned session gets any of the six attached-only tools, vectors and patch insertion for a later measurement). The plan's status points at it; a 2026-10-22 amendment at the head of `docs/BUILD_PLAN.md` names the program's ADRs and says which of its older sections they supersede.
+- **The validation set of the closure, run on 2026-10-22:** typecheck (28 tasks), build (26 tasks), the portability check and the whitespace check clean; `pnpm test:all` (every unit, integration and end-to-end suite) 283 files passed and 17 skipped, 2,957 tests passed and 27 skipped (the skipped ones are the live gates that need a host, a model or a human), in 13 minutes on this machine.
+
 ## Unreleased — Phase 8A, symbolic patching (ADR-0039, proposed)
 
 - **One declaration replaced by name:** the RPC method `symbol.patch` and the tool `friday_symbolic_patch` (attached sessions, deferred, listed only with a code graph) replace a function, class, method, field, interface, type, enum, namespace or single-variable statement by its name (`Parent.member` for a member) without rewriting the file. The boundary comes from a fresh parse of the file at the moment of the patch, never from the graph's recorded lines; the patch is refused, with the reason and the candidates, unless exactly one declaration matches (the `kind` and `line` an agent read may narrow it), the new text is one declaration of the same name and a compatible kind, and the whole file still parses afterwards. The `export` prefix stays as it is; adding or removing an export, inserting or deleting a declaration, and a file that does not parse are the editor's. `dry_run` previews the lines replaced and the text in and out.

@@ -26,6 +26,16 @@ import type { InboxItem, OutboundMessage, TaskStartParams, ToolAction } from '@f
 import { type DaemonClient, FRIDAY_VERSION, firstTaskMessage, holdsContract, renderContextMarkdown } from '@friday/sdk';
 import { JsonRpcLines, MethodNotFound } from './rpc.js';
 
+/**
+ * The registry names Codex's models with their provider (`openai/gpt-6.1-sol`); Codex takes the bare
+ * name, and a ChatGPT account refuses the prefixed one (the live check of 2026-10-22, ADR-0035 §3).
+ */
+export const codexModelName = (id: string): string => id.replace(/^openai\//, '');
+
+/** What the host reported, under the registry's name when it is the model that was routed. */
+export const routedModelName = (reported: string, routed: string | null | undefined): string =>
+  routed && codexModelName(routed) === reported ? routed : reported;
+
 /** The sandbox Codex applies to the commands it runs (`thread/start`'s `sandbox`). */
 export type CodexSandbox = 'read-only' | 'workspace-write' | 'danger-full-access';
 
@@ -416,7 +426,7 @@ export class CodexAdapter {
     const host = await this.#hostConfig(a);
     const settings = () => ({
       cwd: p.working_directory,
-      ...(p.model ? { model: p.model } : {}),
+      ...(p.model ? { model: codexModelName(p.model) } : {}),
       approvalPolicy: 'untrusted',
       approvalsReviewer: 'user',
       sandbox: this.opts.sandbox,
@@ -462,9 +472,10 @@ export class CodexAdapter {
     if (!threadId) throw new Error('the host returned no thread');
     a.threadId = threadId;
     this.#keep(threadId, instructions);
-    a.model = str(opened.model) ?? null;
+    const reported = str(opened.model);
+    a.model = reported ? routedModelName(reported, p.model) : null;
     await this.#confirmSettings(a, opened, host.servers);
-    if (str(opened.model)) await this.#event(a, 'model.observed', { model: opened.model, basis: 'reported' });
+    if (a.model) await this.#event(a, 'model.observed', { model: a.model, basis: 'reported' });
     if (opened.multiAgentMode !== undefined && opened.multiAgentMode !== 'explicitRequestOnly') {
       await this.#event(a, 'host.multi_agent', { mode: opened.multiAgentMode });
     }
@@ -590,7 +601,7 @@ export class CodexAdapter {
       .request<{ turn?: { id?: string } }>('turn/start', {
         threadId: a.threadId,
         input: [{ type: 'text', text, text_elements: [] }],
-        ...(p.model ? { model: p.model } : {}),
+        ...(p.model ? { model: codexModelName(p.model) } : {}),
         ...(this.opts.effort ? { effort: this.opts.effort } : {}),
         // Codex's structured output is strict: every field required (plan M13.4).
         outputSchema: STRICT_FINAL_SCHEMA,
