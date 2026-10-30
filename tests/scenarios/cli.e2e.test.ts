@@ -67,6 +67,14 @@ describe('friday CLI end to end', () => {
     const list = await cli(['--project', dir, 'tasks']);
     expect(list.stdout).toContain(task.task_id);
 
+    // A loose task without a reservation is nobody's to start: the command says so.
+    const loose = await cli(['--project', dir, 'task', 'create', 'Tidy the README', '--ready']);
+    expect(loose.code, loose.stderr).toBe(0);
+    expect(loose.stdout).toContain('not delegated: Friday hands out the tasks of a goal');
+    expect(loose.stdout).toContain('friday task assign');
+    const reserved = await cli(['--project', dir, 'task', 'create', 'Tidy the docs', '--assign', 'dev-1']);
+    expect(reserved.stdout).not.toContain('not delegated');
+
     // An attach-mode harness claims the reserved task and submits a completion claim.
     const ref = loadProject(dir);
     const h = new GenericHarnessClient(DaemonClient.forProject(ref, 'bootstrap'), {

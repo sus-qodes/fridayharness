@@ -109,7 +109,10 @@ describe('config.yaml read again while Friday runs', () => {
     // The scope is in force for everything that reads the project's configuration.
     expect(td.project.config.scopes.frontend?.write).toEqual(['frontend/**']);
     expect(
-      buildBrainContext(td.daemon.state, td.project, { redactor: td.daemon.state.redactor, stateDir: ws().stateDir }),
+      await buildBrainContext(td.daemon.state, td.project, {
+        redactor: td.daemon.state.redactor,
+        stateDir: ws().stateDir,
+      }),
     ).toContain('frontend: write frontend/**');
     // The Master Brain reads its thresholds at each use: the next planning pass has the new limit.
     expect(td.daemon.brain?.status().max_replans).toBe(7);

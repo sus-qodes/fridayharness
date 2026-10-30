@@ -114,6 +114,8 @@ const HOST_CONFIG = [
   '.friday/.gitignore',
 ];
 const SECRETS = ['**/.env', '**/.env.*', '**/*.pem', '**/id_rsa', '**/id_rsa.*', '**/id_ed25519', '**/id_ed25519.*'];
+/** Committed templates that document a project's configuration without holding a secret: readable. */
+const ENV_TEMPLATE = /(^|\/)\.env\.(example|sample|template)$/i;
 const GIT_INTERNAL = ['.git/**'];
 const PATHEXT = ['com', 'exe', 'bat', 'cmd', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'msc'];
 export const ROOT_PROGRAMS: readonly string[] = ['node', 'git'].flatMap((n) => PATHEXT.map((e) => `${n}.${e}`));
@@ -123,7 +125,7 @@ export const ROOT_PROGRAMS: readonly string[] = ['node', 'git'].flatMap((n) => P
 |---|---|
 | `friday.private` | Reads, searches, writes and explicit command references inside the per-user state directory, including other projects and credentials. Recognizes textual environment/home forms and token filenames. |
 | `friday.runtime` | Reads/searches/writes of RUNTIME files; commands naming runtime paths or running/changing directory inside `.friday` are also refused. |
-| `secrets` | Reads/searches/writes of the exact SECRETS globs, including outside-project paths. `.env.example` matches `.env.*`; `id_rsa_backup` does not match `id_rsa` or `id_rsa.*`. |
+| `secrets` | Reads/searches/writes of the exact SECRETS globs, including outside-project paths, except the env templates `.env.example`, `.env.sample` and `.env.template`, which are readable; `id_rsa_backup` does not match `id_rsa` or `id_rsa.*`. |
 | `git.internal` | Direct file/search/write access into `.git`; shell `git` commands are classified independently, and explicit changes into `.git` are denied. Do not claim all shell reads of git metadata are intercepted. |
 | `host.config` | Writes to HOST_CONFIG and root `node.*`/`git.*` executable names. Reads/searches are allowed by this class; task read policy still applies. Shell writes are classified separately and must not be auto-allowed. |
 

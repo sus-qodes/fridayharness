@@ -78,9 +78,9 @@ export interface BrainDeps {
   /** Read before every model call; defaults to `settings`. */
   remotePolicy?: () => RemotePolicy;
   /** Stable project context for planning prompts: layout, docs, scopes, checks, agents. */
-  projectContext: () => string;
+  projectContext: () => string | Promise<string>;
   /** The revision and recent commits, sent after the cached context (plan M14.8). */
-  repositoryStatus?: () => string;
+  repositoryStatus?: () => string | Promise<string>;
   /** The bounded, redacted documents a project-intent draft may draw on (ADR-0034 §2). */
   intentSources?: () => IntentSource[];
   log?: (level: 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void;
@@ -405,6 +405,15 @@ export class MasterBrain {
           payload: { detail: a.detail },
           dedupe_key: `escalate:${a.reason}:${a.goal_id ?? '-'}:${a.task_id ?? '-'}`,
         };
+      case 'rework':
+        return {
+          kind: 'rework',
+          goal_id: a.goal_id,
+          task_id: a.task_id,
+          reason: 'verification failed and no planner can revise the plan',
+          payload: { detail: a.reason },
+          dedupe_key: `rework:${a.task_id}`,
+        };
       default:
         throw new Error(`no job for ${a.kind}`);
     }
@@ -437,6 +446,8 @@ export class MasterBrain {
           status: 'done',
           result: this.#escalate(job.reason as EscalationReason, job.goal_id, job.task_id, String(p.detail ?? '')),
         };
+      case 'rework':
+        return { status: 'done', result: this.#reworkFailed(job.task_id as string, String(p.detail ?? '')) };
       case 'auto_approve':
         return { status: 'done', result: this.#autoApprove(String(p.plan_id), Number(p.version)) };
       case 'after_rejection':
@@ -895,9 +906,7 @@ export class MasterBrain {
     );
     const planId = task.goal_id ? (state.q.findGoal(projectId, task.goal_id)?.plan_id ?? null) : null;
     this.#recordCalls(outcome.calls, job.goal_id, planId);
-    if (this.#closed && !outcome.ok && outcome.reason === 'provider') {
-      return { status: 'retry', result: 'interrupted by shutdown' };
-    }
+    if (this.#closed && !outcome.ok && outcome.reason === 'provider') return this.#interruptedByShutdown(job);
     if (!outcome.ok) {
       if (outcome.reason === 'provider') {
         // Auth, bad request and an explicit refusal need a human or a config change, not the retry
@@ -932,6 +941,36 @@ export class MasterBrain {
       };
     }
     return { status: 'done', result: `resolved ${taskId} as ${outcome.draft.roles[0]?.role ?? 'a role'}` };
+  }
+
+  /**
+   * The stop aborted this job's request: its call is already recorded (above), so the job goes
+   * back to pending now, and a restart does not record it a second time as interrupted.
+   */
+  #interruptedByShutdown(job: BrainJob): JobOutcome {
+    this.#deps.state.updateBrainJob(job.job_id, {
+      status: 'pending',
+      attempts: job.attempts + 1,
+      result: 'interrupted by shutdown',
+    });
+    return { status: 'retry', result: 'interrupted by shutdown' };
+  }
+
+  /**
+   * A task failed verification and no planner can revise the plan: send it back to its agent with
+   * verification's note, as `friday task rework` does, instead of waiting for a human to type
+   * that. The failure rules still escalate at the limit (`failureAction`), so this cannot loop.
+   */
+  #reworkFailed(taskId: string, why: string): string {
+    const { state, projectId } = this.#deps;
+    const task = state.q.findTask(projectId, taskId);
+    if (task?.status !== 'FAILED') return `skipped: the task is not FAILED (${task?.status ?? 'unknown'})`;
+    const verification = state.q.latestVerification(taskId);
+    const note = verification?.summary ? `verification failed: ${verification.summary}` : 'verification failed';
+    const failures = state.q.verificationFailures(taskId);
+    const limit = this.#deps.settings.escalateAfterFailures;
+    state.reworkTask(projectId, MASTER_BRAIN, taskId, `${note} (no planner to revise the plan: ${why})`);
+    return `reworked ${taskId} with verification's note (failure ${failures} of ${limit} before a human decides)`;
   }
 
   /**
@@ -999,7 +1038,7 @@ export class MasterBrain {
     );
     this.#recordCalls(outcome.calls, null, null);
     if (!outcome.ok) {
-      if (this.#closed && outcome.reason === 'provider') return { status: 'retry', result: 'interrupted by shutdown' };
+      if (this.#closed && outcome.reason === 'provider') return this.#interruptedByShutdown(job);
       const detail = outcome.errors.length ? `${outcome.message}: ${outcome.errors.join('; ')}` : outcome.message;
       return { status: 'done', result: `failed: ${detail}` };
     }
@@ -1039,8 +1078,8 @@ export class MasterBrain {
         purpose: 'plan',
         model: settings.model,
         system: PLANNER_SYSTEM,
-        context: this.#deps.projectContext(),
-        ...(this.#deps.repositoryStatus ? { status: this.#deps.repositoryStatus() } : {}),
+        context: await this.#deps.projectContext(),
+        ...(this.#deps.repositoryStatus ? { status: await this.#deps.repositoryStatus() } : {}),
         instructions: PLAN_INSTRUCTIONS,
         prompt: planPrompt(promptGoal(goal), {
           feedback: [feedback, ...decisions].filter(Boolean).join('\n') || null,
@@ -1055,9 +1094,7 @@ export class MasterBrain {
       PROMPT_VERSIONS.plan,
     );
     const callId = this.#recordCalls(outcome.calls, goalId, goal.plan_id);
-    if (this.#closed && !outcome.ok && outcome.reason === 'provider') {
-      return { status: 'retry', result: 'interrupted by shutdown' };
-    }
+    if (this.#closed && !outcome.ok && outcome.reason === 'provider') return this.#interruptedByShutdown(job);
     if (!outcome.ok) return { status: 'done', result: this.#plannerFailed(outcome, goalId, null) };
     // The goal may have moved on while the model was thinking (review F06).
     const now = state.q.goal(projectId, goalId);
@@ -1134,8 +1171,8 @@ export class MasterBrain {
         purpose: 'replan',
         model: settings.model,
         system: PLANNER_SYSTEM,
-        context: this.#deps.projectContext(),
-        ...(this.#deps.repositoryStatus ? { status: this.#deps.repositoryStatus() } : {}),
+        context: await this.#deps.projectContext(),
+        ...(this.#deps.repositoryStatus ? { status: await this.#deps.repositoryStatus() } : {}),
         instructions: REPLAN_INSTRUCTIONS,
         prompt: replanPrompt({
           goal: promptGoal(goal),
@@ -1158,9 +1195,7 @@ export class MasterBrain {
       PROMPT_VERSIONS.replan,
     );
     const callId = this.#recordCalls(outcome.calls, goalId, goal.plan_id);
-    if (this.#closed && !outcome.ok && outcome.reason === 'provider') {
-      return { status: 'retry', result: 'interrupted by shutdown' };
-    }
+    if (this.#closed && !outcome.ok && outcome.reason === 'provider') return this.#interruptedByShutdown(job);
     if (!outcome.ok) return { status: 'done', result: this.#plannerFailed(outcome, goalId, taskId) };
     const d = outcome.draft;
     // Freshness (review F06): the revision must still fit the plan and the tasks as they are now.
@@ -1511,8 +1546,11 @@ export class MasterBrain {
         }
         continue;
       }
+      // A review or research task without a write scope is read-only (the policy keeps it so), so
+      // it conflicts with nothing; an implementation task without a scope may write anywhere.
       const running = state.q
         .tasks(projectId, { statuses: ['ASSIGNED', 'RUNNING', 'WAITING'] })
+        .filter((t) => !((t.kind === 'review' || t.kind === 'research') && (t.scope?.write ?? []).length === 0))
         .map((t) => t.scope?.write ?? []);
       // The model each agent's harness would run for this task, and its cost (ADR-0031 §9). An
       // agent whose route blocks the task is no candidate (review F01).

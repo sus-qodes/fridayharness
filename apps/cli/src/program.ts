@@ -338,12 +338,12 @@ export function buildProgram(): Command {
       if (o.scopeWrite || o.scopeRead) body.scope = { write: o.scopeWrite ?? [], read: o.scopeRead ?? [] };
       if (o.assign) body.assign_agent_key = o.assign;
       const t = await client.post<TaskView>(client.projectPath('/tasks'), body, { idempotencyKey: newId('msg') });
-      out(
-        g(),
-        t,
-        () =>
-          `${t.task_id}  ${t.status}${t.reserved_for_agent_key ? `  reserved for ${t.reserved_for_agent_key}` : ''}  ${t.summary}`,
-      );
+      // A loose task without a reservation is nobody's to start: Friday delegates the plan tasks of
+      // a goal and tasks reserved for an agent; say so, or the task sits READY in silence.
+      const loose = !t.goal_id && !t.reserved_for_agent_key;
+      const line = `${t.task_id}  ${t.status}${t.reserved_for_agent_key ? `  reserved for ${t.reserved_for_agent_key}` : ''}  ${t.summary}`;
+      const note = `  not delegated: Friday hands out the tasks of a goal's plan and tasks reserved with --assign; start this one with "friday task assign ${t.task_id} --agent <key>", or put it in a goal`;
+      out(g(), t, () => (loose ? `${line}\n${note}` : line));
     });
 
   task

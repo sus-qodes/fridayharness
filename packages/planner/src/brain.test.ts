@@ -607,9 +607,19 @@ describe('Master Brain', () => {
     await b.runOnce();
     accept(dev);
     const task = finish(dev, byKey(goal.goal_id)['vat-note'] as TaskView, false);
+    // Without a planner, the first failure goes back to the agent with verification's note:
+    // no question yet.
+    const reworked = await b.runOnce();
+    expect(reworked.steps.map((s) => s.action)).toContain('rework');
+    expect(pending()).toEqual([]);
+    expect(['READY', 'ASSIGNED']).toContain(state.q.task(PROJECT, task.task_id).status);
+    if (state.q.task(PROJECT, task.task_id).status === 'READY') await b.runOnce();
+    accept(dev);
+    finish(dev, byKey(goal.goal_id)['vat-note'] as TaskView, false);
     await b.runOnce();
+    // The second failure reaches the limit: a human decides.
     const asked = pending();
-    expect(asked).toMatchObject([{ kind: 'planner_unavailable', task_id: task.task_id }]);
+    expect(asked).toMatchObject([{ kind: 'repeated_verification_failures', task_id: task.task_id }]);
     // The human does what the question asked: the task goes back for rework.
     state.reworkTask(PROJECT, human, task.task_id, 'show the note under the total');
     expect(pending()).toEqual([]);

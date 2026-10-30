@@ -18,7 +18,7 @@ describe('friday registry', () => {
     expect(text).toContain('claude-sonnet-5-5 via claude-code [dispatchable]');
     expect(text).toContain('claude-opus-5-5 via cursor [dispatchable]');
     expect(text).toContain('requires: MCP, auth, host verification, model verification, MCP verification');
-    expect(text).toContain('checked 2026-10-21; cost handoff specification §4 (2026-10-21)@2026-10-21');
+    expect(text).toContain('checked 2026-10-21; cost Friday registry cost table (2026-10-21)@2026-10-21');
     expect(text).toContain('deepseek-flash via deepseek [unavailable: adapter_not_implemented]');
     expect(text).toContain('Requirements are declarations checked at dispatch time');
   });

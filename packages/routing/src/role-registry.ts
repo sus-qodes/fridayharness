@@ -127,9 +127,9 @@ function candidate(
   };
 }
 
-/** Prices and benchmark notes come from the owner's handoff specification (§4–§5, 2026-10-21). */
+/** Prices and benchmark notes come from the owner's cost table (2026-10-21). */
 const HANDOFF_COST: RoleCandidateCostProvenance = {
-  source: 'handoff specification §4 (2026-10-21)',
+  source: 'Friday registry cost table (2026-10-21)',
   observed_at: '2026-10-21',
 };
 /** The decision router classifies roles; it reads no code graph, so it needs no MCP connection. */
@@ -145,7 +145,7 @@ const ranked = (rank: number, model: string, harness: string, options: Candidate
   candidate(rank, model, harness, { cost: HANDOFF_COST, ...options });
 
 /**
- * Typed canonical role registry: the owner's static ranking (handoff specification §5), in the
+ * Typed canonical role registry: the owner's static ranking, in the
  * owner's order. It is the same on every machine. What a machine has installed, configured and
  * signed in to only filters the list at dispatch time; it never reorders it, so a host someone
  * lacks is skipped and everyone else keeps their place. Handoff harness names map to Friday's:

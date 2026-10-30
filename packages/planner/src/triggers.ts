@@ -28,6 +28,8 @@ export type BrainAction =
   | { kind: 'after_rejection'; goal_id: string; plan_id: string; version: number; note: string | null }
   | { kind: 'classify_role'; goal_id: string | null; task_id: string; decision_id: string }
   | { kind: 'escalate'; goal_id: string | null; task_id: string | null; reason: EscalationReason; detail: string }
+  /** Without a planner, a failed task goes back to its agent with verification's note (bounded by the failure limit). */
+  | { kind: 'rework'; goal_id: string; task_id: string; reason: string }
   | { kind: 'release_lost'; harness_id: string };
 
 export interface TriggerEvent {
@@ -85,7 +87,9 @@ export function failureAction(task_id: string, goal_id: string, f: TriggerFacts)
     };
   }
   if (!f.planner.available) {
-    return { kind: 'escalate', goal_id, task_id, reason: 'planner_unavailable', detail: f.planner.reason };
+    // No planner to revise the plan: the task goes back to its agent with verification's note, as
+    // `friday task rework` would; the failure limit above still hands it to a human in the end.
+    return { kind: 'rework', goal_id, task_id, reason: f.planner.reason };
   }
   return { kind: 'replan', goal_id, task_id, reason: 'verification failed' };
 }

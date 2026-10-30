@@ -63,6 +63,9 @@ describe('sensitive paths', () => {
     ['%LOCALAPPDATA%\\Friday\\projects\\x\\operator.token', 'read', 'friday.private'],
     ['backend/.env', 'read', 'secrets'],
     ['.env.local', 'read', 'secrets'],
+    ['.env.example', 'read', undefined],
+    ['config/.env.sample', 'read', undefined],
+    ['backend.env.template', 'read', undefined],
     ['certs/server.pem', 'read', 'secrets'],
     ['.git/config', 'read', 'git.internal'],
     ['.claude/settings.json', 'write', 'host.config'],
@@ -381,6 +384,7 @@ describe('evaluate', () => {
     const search = (patterns: string[], paths: string[] = []) =>
       evaluate({ ctx: WIN, task: null, action: { tool: 'Grep', kind: 'search', patterns, paths } });
     expect(search(['**/.env*']).decision).toBe('deny');
+    expect(search(['**/.env.example']).decision).toBe('allow');
     expect(search(['token'], ['.friday/run']).decision).toBe('deny');
     expect(search(['**/*.ts']).decision).toBe('allow');
   });
@@ -398,6 +402,10 @@ describe('evaluate', () => {
     expect(cmd('git push').decision).toBe('deny');
     expect(cmd('git push', { approved: (c, t) => c === 'shell.git.push' && t === 'git push' }).decision).toBe('allow');
     expect(cmd('cat .env').rule).toBe('sensitive.secrets');
+    expect(cmd('cat .env.local').rule).toBe('sensitive.secrets');
+    // A committed template documents the configuration; it holds no secret.
+    expect(cmd('cat .env.example').rule).not.toBe('sensitive.secrets');
+    expect(cmd('type backend.env.sample').rule).not.toBe('sensitive.secrets');
     expect(cmd('type .friday\\run\\daemon.json').rule).toBe('sensitive.friday.runtime');
     expect(cmd('Get-Content $env:LOCALAPPDATA\\Friday\\projects\\x\\bootstrap.token').rule).toBe(
       'sensitive.friday.private',

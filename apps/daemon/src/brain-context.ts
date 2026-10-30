@@ -1,6 +1,7 @@
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { closeSync, lstatSync, openSync, readdirSync, readSync } from 'node:fs';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import type { Redactor } from '@friday/events';
 import { canonicalize, sensitiveClassOf } from '@friday/policy';
 import type { ProjectRef } from '@friday/sdk';
@@ -10,17 +11,20 @@ const MAX_FILES = 400;
 const MAX_DOC_CHARS = 6000;
 const MAX_TOTAL = 60_000;
 
-function git(root: string, args: string[]): string | null {
+const execFileAsync = promisify(execFile);
+
+/** Asynchronous, so a slow git never holds the daemon's event loop; null when git fails. */
+async function git(root: string, args: string[]): Promise<string | null> {
   try {
     // Never take git's optional index lock: an agent may be committing in the same checkout (M4a).
-    return execFileSync('git', ['--no-optional-locks', '-C', root, ...args], {
+    const { stdout } = await execFileAsync('git', ['--no-optional-locks', '-C', root, ...args], {
       env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
       windowsHide: true,
       timeout: 10_000,
       maxBuffer: 8 * 1024 * 1024,
-    }).trimEnd();
+    });
+    return stdout.trimEnd();
   } catch {
     return null;
   }
@@ -91,7 +95,11 @@ export interface BrainContextOptions {
  * whole text passes the event redactor before it can leave the machine. The provider then marks
  * it as untrusted source material below Friday's own rules.
  */
-export function buildBrainContext(state: FridayState, project: ProjectRef, opts: BrainContextOptions): string {
+export async function buildBrainContext(
+  state: FridayState,
+  project: ProjectRef,
+  opts: BrainContextOptions,
+): Promise<string> {
   const root = project.root;
   const cfg = project.config;
   const parts: string[] = [`# Project "${project.name}" (${project.project_id})`];
@@ -99,7 +107,7 @@ export function buildBrainContext(state: FridayState, project: ProjectRef, opts:
 
   // The revision and recent commits are not here: they change with every commit and would make
   // the provider's cache of this block useless (plan M14.8); `buildRepositoryStatus` carries them.
-  const files = (git(root, ['ls-files']) ?? '').split('\n').filter(Boolean);
+  const files = ((await git(root, ['ls-files'])) ?? '').split('\n').filter(Boolean);
   if (files.length) {
     const shown = files.slice(0, MAX_FILES);
     parts.push(
@@ -218,9 +226,12 @@ export function buildIntentSources(project: ProjectRef, opts: BrainContextOption
  * commits (plan M14.8). Sent after the cached context, so a commit does not rebuild the cache;
  * source material like the rest, so it passes the redactor and is marked as such by the provider.
  */
-export function buildRepositoryStatus(root: string, redactor: { redactString(s: string): { value: string } }): string {
-  const head = git(root, ['rev-parse', '--short', 'HEAD']);
-  const log = git(root, ['log', '-8', '--format=%h %s']);
+export async function buildRepositoryStatus(
+  root: string,
+  redactor: { redactString(s: string): { value: string } },
+): Promise<string> {
+  const head = await git(root, ['rev-parse', '--short', 'HEAD']);
+  const log = head ? await git(root, ['log', '-8', '--format=%h %s']) : null;
   const text = head
     ? `## Repository\nHEAD ${head}\nRecent commits:\n${log ?? ''}`
     : '## Repository\nNo git history is available.';

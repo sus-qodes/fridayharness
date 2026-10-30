@@ -17,16 +17,16 @@ describe("the planner's context and the revision (plan M14.8)", () => {
     const td = await startTestDaemon(ws(), { git: true, brain: false });
     const { state, project } = { state: td.daemon.state, project: td.project };
     const opts = { redactor: state.redactor };
-    const before = buildBrainContext(state, project, opts);
-    const statusBefore = buildRepositoryStatus(project.root, state.redactor);
+    const before = await buildBrainContext(state, project, opts);
+    const statusBefore = await buildRepositoryStatus(project.root, state.redactor);
     expect(before).not.toMatch(/^HEAD /m);
     expect(before).not.toContain('Recent commits');
     expect(before).toContain('## Tracked files');
     expect(statusBefore).toMatch(/^## Repository\nHEAD [0-9a-f]{7,}\nRecent commits:\n/);
 
     await deterministicGit(project.root).run(['commit', '--allow-empty', '-q', '-m', 'an empty commit']);
-    const after = buildBrainContext(state, project, opts);
-    const statusAfter = buildRepositoryStatus(project.root, state.redactor);
+    const after = await buildBrainContext(state, project, opts);
+    const statusAfter = await buildRepositoryStatus(project.root, state.redactor);
     expect(after).toBe(before);
     expect(statusAfter).not.toBe(statusBefore);
     expect(statusAfter).toContain('an empty commit');

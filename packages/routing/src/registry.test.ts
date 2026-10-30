@@ -114,7 +114,7 @@ describe('the static role registry', () => {
         mcp_verified: true,
       },
       last_checked: '2026-10-21',
-      cost: { source: 'handoff specification §4 (2026-10-21)', observed_at: '2026-10-21' },
+      cost: { source: 'Friday registry cost table (2026-10-21)', observed_at: '2026-10-21' },
       benchmark: null,
     });
     // DeepSeek Harness has no adapter yet: it keeps its rank and is not dispatchable.

@@ -68,14 +68,28 @@ export class FakePlannerModel implements PlannerModel {
     return this.#queue.length;
   }
 
-  async complete(request: ModelRequest): Promise<ModelResponse> {
+  async complete(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
     this.requests.push(request);
     const text = `${request.context}\n${request.prompt}`;
     const i = this.#queue.findIndex((r) => r.purpose === request.purpose && (!r.match || text.includes(r.match)));
     if (i < 0)
       throw new ModelError('unavailable', `fake model has no scripted ${request.purpose} response for this request`);
     const [r] = this.#queue.splice(i, 1) as [FakeResponse];
-    if (r.delay_ms) await new Promise((res) => setTimeout(res, r.delay_ms));
+    // A slow response ends early when the caller aborts, as a real provider's would, with an
+    // outcome nobody knows (billed or not).
+    if (r.delay_ms) {
+      await new Promise<void>((res, rej) => {
+        const timer = setTimeout(res, r.delay_ms);
+        signal?.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(timer);
+            rej(new ModelError('timeout', 'the request was cancelled', false, undefined, { billed: 'unknown' }));
+          },
+          { once: true },
+        );
+      });
+    }
     if (r.error) {
       const billed = r.error.billed ?? 'no';
       throw new ModelError(r.error.code, r.error.message, r.error.retryable ?? false, undefined, {

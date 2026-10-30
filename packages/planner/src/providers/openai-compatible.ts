@@ -105,7 +105,9 @@ export function localOutputSchema(schema: unknown): unknown {
           )
         : localOutputSchema(v);
   }
-  if (out.type === 'object' || out.properties) out.additionalProperties = false;
+  // An object is closed where it declares its properties; a `oneOf`/`anyOf` holder declares none,
+  // and closing it would forbid every property of its branches.
+  if (out.properties || (out.type === 'object' && !out.oneOf && !out.anyOf)) out.additionalProperties = false;
   return out;
 }
 

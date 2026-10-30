@@ -489,3 +489,94 @@ describe('reservations end (review F08)', () => {
     expect(state.store.readByRef(PROJECT, 'task', task.task_id).at(-1)?.type).toBe('task.reservation_released');
   });
 });
+
+describe('without a planner (no model key)', () => {
+  it("sends a failed task back to its agent with verification's note, then asks a human at the limit", async () => {
+    const dev = register('dev-1', 'developer');
+    const goal = state.createGoal(PROJECT, human, { request: 'Add a VAT note to prices', plan: false });
+    const draft = parsePlanDraft({
+      objective: 'Show a VAT note',
+      summary: 'One step',
+      tasks: [
+        { key: 'note', summary: 'Add the note', acceptance_criteria: ['shown'], scope: { write: ['frontend/src/**'] } },
+      ],
+    });
+    if (!draft.ok) throw new Error(draft.errors.join('; '));
+    const v = state.proposePlan(PROJECT, human, goal.goal_id, proposalFromDraft(draft.value, { trigger: 'human' }));
+    state.approvePlan(PROJECT, human, v.plan_id, v.version);
+    const b = brain(null, { plannerUnavailable: 'no provider configured' });
+    await b.runOnce();
+    expect(byKey(goal.goal_id).note?.status).toBe('ASSIGNED');
+    accept(dev);
+    // First failure: reworked, not escalated; the task is READY again for the same agent.
+    finish(dev, byKey(goal.goal_id).note as TaskView, false);
+    const first = await b.runOnce();
+    expect(first.steps.map((s) => s.result).join('\n')).toMatch(
+      /reworked .* with verification's note \(failure 1 of 2/,
+    );
+    const reworked = byKey(goal.goal_id).note as TaskView;
+    expect(['READY', 'ASSIGNED']).toContain(reworked.status);
+    expect(pending()).toEqual([]);
+    expect(state.store.readSince(PROJECT, 0, { types: ['task.rework'] }).at(-1)?.payload).toMatchObject({
+      transition: { reason: expect.stringContaining('verification failed: failed (no planner to revise the plan') },
+    });
+    // Second failure reaches the limit: a human decides, as with a planner.
+    if (reworked.status === 'READY') await b.runOnce();
+    accept(dev);
+    finish(dev, byKey(goal.goal_id).note as TaskView, false);
+    await b.runOnce();
+    expect(pending()).toMatchObject([{ kind: 'repeated_verification_failures', task_id: reworked.task_id }]);
+  });
+
+  it('delegates a writing task while a read-only review task runs', async () => {
+    const dev = register('dev-1', 'developer');
+    const reviewer = register('rev-1', 'reviewer');
+    const goal = state.createGoal(PROJECT, human, { request: 'Review and fix', plan: false });
+    const draft = parsePlanDraft({
+      objective: 'Review and fix',
+      summary: 'Two steps',
+      tasks: [
+        {
+          key: 'review',
+          summary: 'Review the checkout',
+          kind: 'review',
+          role: 'reviewer',
+          acceptance_criteria: ['reviewed'],
+        },
+        { key: 'fix', summary: 'Fix the total', acceptance_criteria: ['fixed'], scope: { write: ['backend/src/**'] } },
+      ],
+    });
+    if (!draft.ok) throw new Error(draft.errors.join('; '));
+    const v = state.proposePlan(PROJECT, human, goal.goal_id, proposalFromDraft(draft.value, { trigger: 'human' }));
+    state.approvePlan(PROJECT, human, v.plan_id, v.version);
+    const b = brain(null, { plannerUnavailable: 'no provider configured' });
+    await b.runOnce();
+    const tasks = byKey(goal.goal_id);
+    expect(tasks.review?.status).toBe('ASSIGNED');
+    accept(reviewer);
+    await b.runOnce();
+    // The review holds no write scope: the fix is not waiting on it.
+    expect(byKey(goal.goal_id).fix?.status).toBe('ASSIGNED');
+    accept(dev);
+  });
+});
+
+describe('a model call aborted by a graceful stop', () => {
+  it('is recorded once, and the job waits as pending for the next start', async () => {
+    const goal = state.createGoal(PROJECT, human, { request: GOAL });
+    const slow = new FakePlannerModel([{ ...fixture('01-plan.json'), delay_ms: 2000 }]);
+    const b = brain(slow);
+    b.start();
+    await until(() => slow.requests.length === 1);
+    await b.stop();
+    const calls = state.q.modelCalls(PROJECT);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.status).not.toBe('ok');
+    expect(state.brainJobs(PROJECT, ['pending'])).toMatchObject([{ kind: 'plan', goal_id: goal.goal_id, attempts: 1 }]);
+    // The next start records nothing more for that call: the job simply runs again.
+    const again = brain(new FakePlannerModel([fixture('01-plan.json')]));
+    await again.runOnce();
+    expect(state.q.modelCalls(PROJECT).map((c) => c.status)).toEqual(['ok', calls[0]?.status]);
+    expect(state.q.planVersion(planOf(goal.goal_id), 1)?.status).toBe('PROPOSED');
+  });
+});

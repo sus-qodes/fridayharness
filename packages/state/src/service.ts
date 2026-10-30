@@ -4267,8 +4267,10 @@ export class FridayState {
     }
     // Every host whose sessions run Friday's hooks: a Gemini CLI or Antigravity session is never
     // taken for one whose failing hook blocks the call (plan B21).
+    // A spawned session is judged by its adapter on every call (ADR-0032 §4): the rule is about
+    // attached sessions, whose only guard is the hook.
     const fix = ENFORCING_FIX[h.vendor];
-    if (this.config.requireEnforcingHooks && fix && h.enforcement_status !== 'enforcing') {
+    if (this.config.requireEnforcingHooks && fix && h.attach_mode !== 'spawn' && h.enforcement_status !== 'enforcing') {
       return `this project requires hooks that block when they fail (security.require_enforcing_hooks), but this session is ${h.enforcement_status ?? 'unknown'}: ${h.enforcement_basis ?? 'no evidence'}. ${fix}`;
     }
     return null;
@@ -6882,7 +6884,27 @@ export class FridayState {
       { name: 'harness.capabilities', project_id: projectId, actor: { kind: 'harness', id: harnessId } },
       (ctx) => {
         const h = this.q.harness(harnessId);
-        this.moveHarness(ctx, h, h.status, 'capabilities', { capabilities });
+        // What the hooks route learned about this session's hooks is Friday's record, not the
+        // client's to replace: a declaration without it keeps it, and the level follows.
+        const kept = h.capabilities?.hook_evidence;
+        const merged =
+          kept !== undefined && capabilities.hook_evidence === undefined
+            ? { ...capabilities, hook_evidence: kept }
+            : capabilities;
+        const enforcement = achievedEnforcement({
+          vendor: h.vendor,
+          attach_mode: h.attach_mode,
+          claimed: h.enforcement_level,
+          hooks_seen: Boolean(h.hooks_seen_at),
+          host_version: h.version,
+          capabilities: merged,
+        });
+        this.moveHarness(ctx, h, h.status, 'capabilities', {
+          capabilities: merged,
+          enforcement_level: enforcement.level,
+          enforcement_status: enforcement.status,
+          enforcement_basis: enforcement.basis,
+        });
       },
     );
   }

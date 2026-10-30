@@ -43,6 +43,9 @@ const OWN_FOLDERS: readonly { glob: string[]; class: SensitiveClass }[] = [
   { glob: ['.git', '.git/**'], class: 'git.internal' },
 ];
 const SECRETS = ['**/.env', '**/.env.*', '**/*.pem', '**/id_rsa', '**/id_rsa.*', '**/id_ed25519', '**/id_ed25519.*'];
+/** Committed templates that document a project's configuration without holding a secret: readable. */
+const ENV_TEMPLATE = /(^|\/)\.env\.(example|sample|template)$/i;
+const isEnvTemplate = (p: string) => ENV_TEMPLATE.test(p.replaceAll('\\', '/'));
 const GIT_INTERNAL = ['.git/**'];
 
 /**
@@ -76,13 +79,13 @@ function classify(
   if (rel === null) {
     // Outside the project: only secrets are judged here; Claude Code itself prompts for outside reads.
     const base = absolute.replaceAll('\\', '/');
-    return matchesAny(base, SECRETS, windows) ? { class: 'secrets', path: absolute } : null;
+    return matchesAny(base, SECRETS, windows) && !isEnvTemplate(base) ? { class: 'secrets', path: absolute } : null;
   }
   // A directory is protected when anything inside it is (`.friday/run` as well as `.friday/run/x`).
   const forms = rel === '.' ? [rel] : [rel, `${rel}/x`];
   const any = (globs: readonly string[]) => forms.some((f) => matchesAny(f, globs, windows));
   if (any(RUNTIME)) return { class: 'friday.runtime', path: rel };
-  if (matchesAny(rel, SECRETS, windows)) return { class: 'secrets', path: rel };
+  if (matchesAny(rel, SECRETS, windows) && !isEnvTemplate(rel)) return { class: 'secrets', path: rel };
   if (any(GIT_INTERNAL)) return { class: 'git.internal', path: rel };
   if (op === 'write' && (any(HOST_CONFIG) || matchesAny(rel, ROOT_PROGRAMS, windows)))
     return { class: 'host.config', path: rel };
@@ -161,11 +164,12 @@ export function sensitivePattern(pattern: string, ctx: PathContext): SensitiveHi
     ['git.internal', GIT_INTERNAL],
   ] as const) {
     if (head && matchesAny(head.replace(/\/$/, '/x'), globs, ctx.windows ?? process.platform === 'win32')) {
+      if (cls === 'secrets' && isEnvTemplate(norm)) continue;
       return { class: cls, path: pattern };
     }
   }
   if (
-    /(^|\/)\.env(\.|$|\*)/.test(norm) ||
+    (/(^|\/)\.env(\.|$|\*)/.test(norm) && !isEnvTemplate(norm)) ||
     /\.pem$/.test(norm) ||
     /(^|\/)\.friday\/(run|logs|cache|sessions)\b/.test(norm)
   ) {
@@ -182,7 +186,11 @@ export function sensitiveInText(text: string, ctx: PathContext): SensitiveHit | 
   if (/\.friday\/(run|logs|cache|sessions)\b/i.test(t) || /\bproject\.db\b/i.test(t)) {
     return { class: 'friday.runtime', path: '.friday runtime files' };
   }
-  if (/(^|[\s"'=/(])\.env(\.[\w.-]+)?($|[\s"');|&])/i.test(t) || /\bid_(rsa|ed25519)\b/.test(t) || /\.pem\b/i.test(t)) {
+  if (
+    /(^|[\s"'=/(])\.env(?!\.(?:example|sample|template)\b)(\.[\w.-]+)?($|[\s"');|&])/i.test(t) ||
+    /\bid_(rsa|ed25519)\b/.test(t) ||
+    /\.pem\b/i.test(t)
+  ) {
     return { class: 'secrets', path: 'secret file' };
   }
   const into = INTO_OWN_FOLDER.exec(text);

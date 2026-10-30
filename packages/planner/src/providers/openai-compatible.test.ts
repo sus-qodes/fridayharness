@@ -388,3 +388,20 @@ describe('a local model through runPlanner', () => {
     expect(out.calls).toMatchObject([{ status: 'error', error_code: 'timeout', cost_usd: 0, cost_estimate_usd: null }]);
   });
 });
+
+describe('a schema with alternatives at the top', () => {
+  it('closes each branch, never the holder of the alternatives', () => {
+    const schema = localOutputSchema({
+      type: 'object',
+      oneOf: [
+        { required: ['status', 'roles'], properties: { status: { const: 'classified' }, roles: { type: 'array' } } },
+        {
+          required: ['status', 'questions'],
+          properties: { status: { const: 'clarification_required' }, questions: { type: 'array' } },
+        },
+      ],
+    }) as { additionalProperties?: boolean; oneOf: { additionalProperties?: boolean }[] };
+    expect(schema.additionalProperties).toBeUndefined();
+    expect(schema.oneOf.map((b) => b.additionalProperties)).toEqual([false, false]);
+  });
+});

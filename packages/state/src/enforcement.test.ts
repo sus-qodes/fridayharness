@@ -93,3 +93,71 @@ describe('OpenCode A/B enforcement', () => {
     ).toMatchObject({ level: 'L1', status: 'unverified' });
   });
 });
+
+describe('the rule that hooks must block when they fail (security.require_enforcing_hooks)', () => {
+  it('refuses an attached session whose hooks fail open, and accepts a spawned one, which its adapter judges', async () => {
+    const { openDatabase } = await import('@friday/db');
+    const { sequentialIds } = await import('@friday/core');
+    const { HarnessRegisterParams } = await import('@friday/protocol');
+    const { FridayState } = await import('./service.js');
+    const state = new FridayState({
+      db: openDatabase(':memory:'),
+      ids: sequentialIds(),
+      // Only the hooks rule is under test: the level requirement is lowered so it does not answer first.
+      config: { requireEnforcingHooks: true, enforcementRequired: 'L0' },
+    });
+    const PROJECT = 'proj_00000000000000000000000001';
+    state.ensureProject({ project_id: PROJECT, name: 'p', root_path: 'C:/demo/p' });
+    const reg = (key: string, attach_mode: 'attach' | 'spawn') =>
+      state.registerHarness(
+        PROJECT,
+        HarnessRegisterParams.parse({
+          protocol_version: '1.0',
+          harness_key: key,
+          vendor: 'gemini',
+          name: key,
+          version: '0.64.0',
+          attach_mode,
+          project_id: PROJECT,
+          capabilities: { task_start: attach_mode === 'spawn' },
+          agent: { agent_key: key, role: 'developer' },
+        }),
+      );
+    const spawned = reg('gemini:spawn', 'spawn');
+    expect(state.enforcementGap(state.q.harness(spawned.harness_id))).toBeNull();
+    const attached = reg('gemini:attach', 'attach');
+    expect(state.enforcementGap(state.q.harness(attached.harness_id))).toContain('security.require_enforcing_hooks');
+  });
+
+  it('keeps the hook evidence Friday recorded when a client declares its capabilities again', async () => {
+    const { openDatabase } = await import('@friday/db');
+    const { sequentialIds } = await import('@friday/core');
+    const { HarnessRegisterParams } = await import('@friday/protocol');
+    const { FridayState } = await import('./service.js');
+    const state = new FridayState({ db: openDatabase(':memory:'), ids: sequentialIds() });
+    const PROJECT = 'proj_00000000000000000000000001';
+    state.ensureProject({ project_id: PROJECT, name: 'p', root_path: 'C:/demo/p' });
+    const reg = state.registerHarness(
+      PROJECT,
+      HarnessRegisterParams.parse({
+        protocol_version: '1.0',
+        harness_key: 'cursor:1',
+        vendor: 'cursor',
+        name: 'cursor',
+        version: '3.24.0',
+        attach_mode: 'attach',
+        project_id: PROJECT,
+        capabilities: { hook_evidence: { hook_failure: 'fail-closed', host_version: '3.24.0' } },
+        agent: { agent_key: 'c-1', role: 'developer' },
+      }),
+    );
+    state.noteHookEvidence(PROJECT, reg.harness_id, { hook_failure: 'fail-closed', host_version: '3.24.0' });
+    const before = state.q.harness(reg.harness_id);
+    state.setCapabilities(PROJECT, reg.harness_id, { task_start: false, tools: ['x'] });
+    const after = state.q.harness(reg.harness_id);
+    expect(after.capabilities?.hook_evidence).toEqual(before.capabilities?.hook_evidence);
+    expect(after.capabilities?.tools).toEqual(['x']);
+    expect(after.enforcement_status).toBe(before.enforcement_status);
+    expect(after.enforcement_level).toBe(before.enforcement_level);
+  });
+});
