@@ -66,10 +66,14 @@ export function holdsContract(rendered: string): boolean {
 function titleOf(kind: string): string {
   const map: Record<string, string> = {
     'agent.identity': 'You',
+    'intent.project': 'Project intent: what the whole project is for',
+    'intent.goal': 'Goal intent: what this work is for',
+    'learnings.relevant': 'What the project has learned (checked)',
+    'memory.notes': 'Working notes (not checked)',
     'task.contract': 'Task',
     'task.acceptance': 'Acceptance criteria',
     'task.scope': 'Scope',
-    'task.plan': 'Goal, plan and decisions',
+    'task.plan': 'Plan and decisions',
     'task.progress': 'Progress so far',
     'repo.head': 'Repository',
     'repo.dirty': 'Uncommitted changes',
@@ -77,7 +81,6 @@ function titleOf(kind: string): string {
     'repo.history': 'History you asked for',
     'code.requested': 'What you asked for',
     'code.related': 'Related code',
-    'memory.relevant': 'What Friday remembers',
     'task.requirements': "The human's requirements",
     'request.note': 'About your request',
     'inbox.summary': 'Inbox',

@@ -412,9 +412,11 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
       name: 'friday_request_context',
       title: 'Request context',
       description:
-        'Ask Friday for context, with provenance: kind "task" for your task (contract, scope, git state, recent progress); "scope_files" for the files you may change and the code related to them; "file" for a file (query: its path); "history" for the commits of your scope (query: a path, else the scope); "decision" for recorded decisions with the task\'s context. scope_files, file and history are answered alone, without the task packet; symbol lookups are not supported.',
+        'Ask Friday for context, with provenance: kind "task" for your task (contract, scope, git state, recent progress); "scope_files" for the files you may change and the code related to them; "file" for a file (query: its path); "history" for the commits of your scope (query: a path, else the scope); "decision" for recorded decisions with the task\'s context; "learnings" for more of the project\'s checked learnings (query: a topic). scope_files, file and history are answered alone, without the task packet; symbol lookups are not supported.',
       shape: {
-        kind: z.enum(['task', 'scope_files', 'file', 'symbol', 'history', 'decision', 'freeform']).optional(),
+        kind: z
+          .enum(['task', 'scope_files', 'file', 'symbol', 'history', 'decision', 'learnings', 'freeform'])
+          .optional(),
         query: z.string().max(500).optional(),
         task_id: z.string().optional(),
         max_chars: z.number().int().min(500).max(20000).optional(),

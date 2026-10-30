@@ -114,9 +114,15 @@ interface Candidate {
   relies?: string[];
 }
 
-/** Sections in the order they are rendered. */
+/**
+ * Sections in the order they are rendered (ADR-0034 §5): who you are, what the project and the goal
+ * are for, the task, what the project has learned, the code, working notes, and the run's state.
+ * The stable layers come first, which also keeps a provider's prompt cache warm.
+ */
 const SECTION_ORDER = [
   'agent.identity',
+  'intent.project',
+  'intent.goal',
   'request.note',
   'task.contract',
   'task.acceptance',
@@ -124,19 +130,23 @@ const SECTION_ORDER = [
   'task.requirements',
   'task.plan',
   'task.progress',
+  'learnings.relevant',
   'repo.head',
   'repo.dirty',
   'repo.recent_commits',
   'repo.history',
   'code.requested',
   'code.related',
-  'memory.relevant',
+  'memory.notes',
   'inbox.summary',
   'tasks.claimable',
   'protocol.reminder',
 ];
 const SECTION_AUTHORITY: Record<string, Authority> = {
   'agent.identity': 'system',
+  'intent.project': 'human',
+  'intent.goal': 'human',
+  'learnings.relevant': 'memory',
   'request.note': 'system',
   'repo.history': 'git',
   'code.requested': 'git',
@@ -150,7 +160,7 @@ const SECTION_AUTHORITY: Record<string, Authority> = {
   'repo.dirty': 'git',
   'repo.recent_commits': 'git',
   'code.related': 'graph',
-  'memory.relevant': 'memory',
+  'memory.notes': 'memory',
   'inbox.summary': 'agent',
   'tasks.claimable': 'system',
   'protocol.reminder': 'system',
@@ -185,6 +195,60 @@ const tokens = (s: string) => Math.ceil(s.length / 4);
  */
 const COMPILE_TARGET_MS = 300;
 const MEMORY_PRIORITY: Record<string, number> = { 'human-approved': 2, verified: 3, system: 4, agent: 7 };
+
+/** The memory kinds a project learning may have (ADR-0034 §6). */
+const LEARNING_KINDS = [
+  'decision',
+  'architecture',
+  'constraint',
+  'convention',
+  'bug-pattern',
+  'dependency',
+  'operational-runbook',
+  'human-preference',
+  'learned-risk',
+] as const;
+/** At most this many learnings, in about this many characters, unless the agent asks for more. */
+const LEARNINGS_MAX = 8;
+const LEARNINGS_CHARS = 1500;
+const LEARNINGS_ASKED_MAX = 20;
+const LEARNINGS_ASKED_CHARS = 4000;
+
+/** Whether a memory is a checked project learning: project or team scope, verified, active, agreed. */
+function isLearning(m: SearchHit): boolean {
+  return (
+    (m.scope_type === 'project' || m.scope_type === 'team') &&
+    (LEARNING_KINDS as readonly string[]).includes(m.kind) &&
+    m.verification_status === 'verified' &&
+    m.status === 'active' &&
+    !m.needs_review
+  );
+}
+
+/** A path or glob up to its first wildcard, with forward slashes and no trailing slash. */
+const pathStem = (p: string) => {
+  const stem = p.replace(/\\/g, '/').split('*')[0] ?? '';
+  return (process.platform === 'win32' ? stem.toLowerCase() : stem).replace(/\/+$/, '');
+};
+
+/** The task scope entry a learning's path tag lies in or contains, if any. */
+function scopeMatch(tags: readonly string[], scope: readonly string[]): string | null {
+  for (const tag of tags) {
+    if (!tag.includes('/') && !tag.includes('*') && !tag.includes('.')) continue;
+    const t = pathStem(tag);
+    for (const entry of scope) {
+      const e = pathStem(entry);
+      if (!t || !e) continue;
+      if (t === e || t.startsWith(`${e}/`) || e.startsWith(`${t}/`)) return entry;
+    }
+  }
+  return null;
+}
+
+/** The lines of one intent list, the human's first and the planner's labelled. */
+function intentLines(label: string, own: readonly string[], inferred: readonly string[] = []): string[] {
+  return [...own.map((x) => `${label}: ${x}`), ...inferred.map((x) => `${label} (suggested by the planner): ${x}`)];
+}
 
 /**
  * Compiles a packet, or returns the cached one for an unchanged key (ADR-0022). Gathering awaits
@@ -406,6 +470,81 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
       rule: 'protected: identity',
     });
   }
+  // 1b. What the project and the goal are for (ADR-0034 §5): protected, the human's own authority.
+  if (!requestOnly) {
+    const intent = state.q.approvedProjectIntent(pid);
+    if (intent) {
+      const lines = [
+        `Project intent v${intent.version} (approved): ${intent.objective}`,
+        ...intent.constraints.map((i) => `Constraint: ${i.text}`),
+        ...intent.outcomes.map((i) => `Outcome: ${i.text}`),
+        ...intent.non_goals.map((i) => `Not a goal: ${i.text}`),
+        ...intent.definition_of_done.map((i) => `Done when: ${i.text}`),
+      ];
+      const text = lines.join('\n');
+      add({
+        section: 'intent.project',
+        line: text,
+        source: src({
+          source_id: `intent:v${intent.version}`,
+          source_type: 'task_record',
+          authority: 'human',
+          recency: intent.decided_at ?? intent.created_at,
+          relevance: 1,
+          relationship_distance: 1,
+          verification_status: 'verified',
+          selection_reason: `the project intent a human approved (v${intent.version})`,
+          content: text,
+        }),
+        priority: 1,
+        relevance: 1,
+        protected: true,
+        reason: `what the whole project is for (v${intent.version}, approved by ${intent.decided_by?.id ?? 'a human'})`,
+        rule: 'protected: project intent (ADR-0034)',
+      });
+    } else {
+      add({
+        section: 'intent.project',
+        line: 'No approved project intent yet: work from the goal and the task below.',
+        source: null,
+        priority: 1,
+        relevance: 1,
+        protected: true,
+        reason: 'no project intent has been approved',
+        rule: 'protected: project intent (ADR-0034)',
+      });
+    }
+    if (task && goal) {
+      const lines = [
+        `Goal ${goal.goal_id} (intent revision ${goal.intent_revision}): ${goal.objective ?? goal.request}`,
+        ...intentLines('Constraint', goal.constraints, goal.inferred_constraints),
+        ...intentLines('Outcome', goal.outcomes, goal.inferred_outcomes),
+        ...intentLines('Not a goal', goal.non_goals, goal.inferred_non_goals),
+        ...intentLines('Done when', goal.definition_of_done, goal.inferred_definition_of_done),
+      ];
+      const text = lines.join('\n');
+      add({
+        section: 'intent.goal',
+        line: text,
+        source: src({
+          source_id: `${goal.goal_id}:intent:${goal.intent_revision}`,
+          source_type: 'task_record',
+          authority: 'human',
+          recency: goal.updated_at,
+          relevance: 1,
+          relationship_distance: 1,
+          verification_status: 'verified',
+          selection_reason: `what the goal this task serves is for (revision ${goal.intent_revision})`,
+          content: text,
+        }),
+        priority: 1,
+        relevance: 1,
+        protected: true,
+        reason: `what this work is for (goal ${goal.goal_id}, revision ${goal.intent_revision})`,
+        rule: 'protected: goal intent (ADR-0034, review F07)',
+      });
+    }
+  }
   if (task && !requestOnly) {
     const taskSrc = (reason: string, content: string) =>
       src({
@@ -487,35 +626,9 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
     });
 
     if (goal) {
-      const reqs = [
-        ...goal.constraints.map((c) => `Constraint (from the human): ${c}`),
-        ...goal.outcomes.map((o) => `Expected outcome (from the human): ${o}`),
-      ];
-      if (reqs.length) {
-        const text = reqs.join('\n');
-        add({
-          section: 'task.requirements',
-          line: text,
-          source: src({
-            source_id: `${goal.goal_id}:requirements`,
-            source_type: 'task_record',
-            authority: 'human',
-            recency: goal.created_at,
-            relevance: 1,
-            relationship_distance: 1,
-            verification_status: 'verified',
-            selection_reason: "the human's constraints and expected outcomes for the goal",
-            content: text,
-          }),
-          priority: 1,
-          relevance: 1,
-          protected: true,
-          reason: "the human's requirements for the goal",
-          rule: 'protected: human requirements (review F07)',
-        });
-      }
+      // The goal's constraints and outcomes are in its intent above (ADR-0034 §5), not repeated here.
       const where = task.plan_key ? ` You do plan task "${task.plan_key}" of version ${task.plan_version}.` : '';
-      const line = `Goal ${goal.goal_id}: ${goal.objective ?? goal.request}.${where}`;
+      const line = `This task serves goal ${goal.goal_id}, whose intent is above.${where}`;
       add({
         section: 'task.plan',
         line,
@@ -834,6 +947,7 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
       ? { kind: 'agent', caller: { agent_id: agent.agent_id, harness_id: input.recipient.harness_id } }
       : { kind: 'human', actor };
   const decisions = request?.kind === 'decision';
+  const askedLearnings = request?.kind === 'learnings';
   const query =
     decisions && request?.query
       ? request.query
@@ -841,7 +955,26 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
         ? [task.summary, task.description ?? '', task.plan_key ?? ''].join(' ')
         : '';
   let memories: SearchHit[] = [];
+  let learningPool: SearchHit[] = [];
   if (!requestOnly) {
+    // Checked learnings first (ADR-0034 §6): a dedicated search, so working notes never crowd them out.
+    try {
+      const role = agent?.role ?? task?.role ?? '';
+      const scopeWords = [...(task?.scope?.write ?? []), ...(task?.scope?.read ?? [])].join(' ');
+      learningPool = state.memory
+        .search(pid, reader, {
+          query: askedLearnings && request?.query ? request.query : [query, role, scopeWords].join(' '),
+          kinds: [...LEARNING_KINDS],
+          limit: 60,
+        })
+        .filter(isLearning);
+      if (learningPool.length < LEARNINGS_MAX) {
+        const general = state.memory.search(pid, reader, { kinds: [...LEARNING_KINDS], limit: 60 }).filter(isLearning);
+        for (const g of general) if (!learningPool.some((m) => m.memory_id === g.memory_id)) learningPool.push(g);
+      }
+    } catch {
+      notes.push('learnings could not be searched');
+    }
     try {
       memories = state.memory.search(pid, reader, {
         query,
@@ -860,11 +993,66 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
       notes.push('memory could not be searched');
     }
   }
-  for (const m of memories) {
-    const conflict = m.contradicts.length ? ` (contradicts ${m.contradicts.join(', ')})` : '';
-    const line = `- [${m.authority}, ${m.kind}] ${m.subject}: ${m.content} (${m.memory_id})${conflict}`;
+  // The learnings shown: the best matches, a learning about the task's own paths ranked up.
+  const scopeEntries = [...(task?.scope?.write ?? []), ...(task?.scope?.read ?? [])];
+  const rankedLearnings = learningPool
+    .map((m) => ({ m, path: scopeMatch(m.tags, scopeEntries) }))
+    .sort((a, b) => b.m.score + (b.path ? 0.5 : 0) - (a.m.score + (a.path ? 0.5 : 0)));
+  const maxLearnings = askedLearnings ? LEARNINGS_ASKED_MAX : LEARNINGS_MAX;
+  const maxLearningChars = askedLearnings ? LEARNINGS_ASKED_CHARS : LEARNINGS_CHARS;
+  let learningChars = 0;
+  const shownLearnings = new Set<string>();
+  for (const { m, path } of rankedLearnings) {
+    if (shownLearnings.size >= maxLearnings) break;
+    const line = `- [${m.authority}, ${m.kind}] ${m.subject}: ${m.content} (${m.memory_id})`;
+    if (shownLearnings.size > 0 && learningChars + line.length > maxLearningChars) continue;
+    learningChars += line.length;
+    shownLearnings.add(m.memory_id);
+    const why = path ? `about ${path}, in this task's scope` : `a ${m.authority} ${m.kind} for the project`;
     add({
-      section: 'memory.relevant',
+      section: 'learnings.relevant',
+      line,
+      source: src({
+        source_id: m.memory_id,
+        source_type: 'memory',
+        authority: m.authority,
+        recency: m.updated_at,
+        relevance: Math.min(1, Math.max(0, m.score)),
+        relationship_distance: 1,
+        verification_status: 'verified',
+        selection_reason: why,
+        content: m.content,
+      }),
+      priority: MEMORY_PRIORITY[m.authority] ?? 3,
+      relevance: Math.min(1, Math.max(0, m.score + (path ? 0.5 : 0))),
+      protected: false,
+      reason: `a checked project learning: ${why}`,
+      rule: `learning (${m.authority}, ADR-0034 §6)`,
+    });
+  }
+  if (learningPool.length > shownLearnings.size) {
+    const more = learningPool.length - shownLearnings.size;
+    add({
+      section: 'learnings.relevant',
+      // A host without Friday's tools is never pointed at one it lacks (ADR-0032 §8).
+      line: hasFridayTools(state, input.recipient.harness_id)
+        ? `${more} more learning(s): friday_request_context with kind "learnings".`
+        : `${more} more learning(s) not shown here.`,
+      source: null,
+      priority: 3,
+      relevance: 0.5,
+      protected: false,
+      reason: 'how to ask for more learnings',
+      rule: 'guidance',
+    });
+  }
+  // Working notes: what is not a checked learning (an agent's own, a task's, a session's, unverified).
+  const learningIds = new Set(learningPool.map((m) => m.memory_id));
+  for (const m of memories.filter((x) => !learningIds.has(x.memory_id) && !isLearning(x))) {
+    const conflict = m.contradicts.length ? ` (contradicts ${m.contradicts.join(', ')})` : '';
+    const line = `- [${m.authority}, ${m.kind}, ${m.verification_status}] ${m.subject}: ${m.content} (${m.memory_id})${conflict}`;
+    add({
+      section: 'memory.notes',
       line,
       source: src({
         source_id: m.memory_id,
@@ -1106,7 +1294,8 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
   };
   const explanation = boundRecord(packet, full);
   const shownMemories = included
-    .filter((c) => c.section === 'memory.relevant' && c.source)
+    // Both memory layers count as use (ADR-0021 §6 reuse): checked learnings and working notes.
+    .filter((c) => (c.section === 'learnings.relevant' || c.section === 'memory.notes') && c.source)
     .map((c) => c.source?.source_id as string);
   // A grant is used when what it let through is delivered: the path named anywhere in the packet,
   // or a commit shown for that file. A file cut by the budget, withheld or missing spends nothing
@@ -1581,8 +1770,22 @@ async function cacheKey(
         }
       : null,
     goal: goal
-      ? { id: goal.goal_id, status: goal.status, plan: goal.plan_id, updated: goal.updated_at, decisions }
+      ? {
+          id: goal.goal_id,
+          status: goal.status,
+          plan: goal.plan_id,
+          updated: goal.updated_at,
+          intent: goal.intent_revision,
+          decisions,
+        }
       : null,
+    // What the project is for (ADR-0034 §9): approving a new version compiles a new packet.
+    intent: alone
+      ? null
+      : (() => {
+          const v = state.q.approvedProjectIntent(pid);
+          return v ? { version: v.version, hash: v.content_hash } : null;
+        })(),
     memory,
     inbox,
     claimable,

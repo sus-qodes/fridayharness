@@ -54,13 +54,15 @@ describe('friday context explain (M4 gate, Part 12 §13)', () => {
     expect(out).toContain('Files: none related through the code graph.');
     expect(out).toContain('task.scope');
     expect(out).not.toContain('infra/');
-    expect(out).toContain('memory.relevant');
+    // The human's project decision is a checked learning (ADR-0034 §6), next to the intent layer.
+    expect(out).toContain('learnings.relevant');
+    expect(out).toContain('intent.project');
     expect(out).toContain('Semantic fallback: off.');
 
     // The agent's own packet arrives with the claim, and it can remember and recall through Friday.
     const claim = await be.client.call('task.claim', { task_id: task.task_id });
     const packet = claim.context as ContextPacket;
-    expect(packet.sections.map((s) => s.kind)).toContain('memory.relevant');
+    expect(packet.sections.map((s) => s.kind)).toContain('learnings.relevant');
     expect(packet.sections.map((s) => s.kind)).not.toContain('code.related');
     // The files of the scope and the code related to them come on request, answered alone.
     const files = await be.client.requestContext({ task_id: task.task_id, kind: 'scope_files' });

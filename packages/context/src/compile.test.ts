@@ -170,7 +170,16 @@ describe('what a backend task receives (Part 12 §13)', () => {
     expect(kinds).toEqual(
       expect.arrayContaining(['agent.identity', 'code.requested', 'code.related', 'protocol.reminder']),
     );
-    for (const kind of ['task.contract', 'task.acceptance', 'task.scope', 'memory.relevant', 'inbox.summary'])
+    for (const kind of [
+      'task.contract',
+      'task.acceptance',
+      'task.scope',
+      'intent.project',
+      'intent.goal',
+      'learnings.relevant',
+      'memory.notes',
+      'inbox.summary',
+    ])
       expect(kinds).not.toContain(kind);
     expect(explanation.notes).toContain(
       "the request is answered alone: the task's own context is not repeated (ask with kind task)",
@@ -356,7 +365,8 @@ describe('cache and staleness', () => {
     );
     const remembered = await compile(taskId);
     expect(remembered.cached).toBe(false);
-    expect(section(remembered.packet, 'memory.relevant')).toContain('Every discount rule has a test.');
+    // A human's project convention is a checked learning (ADR-0034 §6).
+    expect(section(remembered.packet, 'learnings.relevant')).toContain('Every discount rule has a test.');
   });
 
   it('never reuses a packet for code identified only approximately, and says so (review F13)', async () => {
@@ -504,9 +514,16 @@ describe('memory precedence', () => {
       },
     ).memory;
     const { packet, explanation } = await compile(taskId);
-    const memory = section(packet, 'memory.relevant');
-    expect(memory.indexOf(decision.memory_id)).toBeLessThan(memory.indexOf(guess.memory_id));
-    expect(memory).toContain('[human-approved, decision]');
+    // The human's decision is a checked learning; the agent's guess stays an unchecked working note.
+    const learnings = section(packet, 'learnings.relevant');
+    const notes = section(packet, 'memory.notes');
+    expect(learnings).toContain(decision.memory_id);
+    expect(learnings).toContain('[human-approved, decision]');
+    expect(learnings).not.toContain(guess.memory_id);
+    expect(notes).toContain(guess.memory_id);
+    expect(notes).toContain('[agent, decision, unverified]');
+    const kinds = packet.sections.map((s) => s.kind);
+    expect(kinds.indexOf('learnings.relevant')).toBeLessThan(kinds.indexOf('memory.notes'));
     expect(explanation.memory_conflicts).toContainEqual({
       memory_id: guess.memory_id,
       contradicts: [decision.memory_id],
@@ -922,5 +939,163 @@ describe("the project's checks in a task packet (plan M14.6)", () => {
     expect(changed.cached).toBe(false);
     expect(changed.packet.context_id).not.toBe(first.packet.context_id);
     expect(section(changed.packet, 'task.acceptance')).toContain('- rules: node scripts/check.mjs');
+  });
+});
+
+describe('intent, learnings and notes as separate layers (ADR-0034 §5–§6)', () => {
+  /** A goal with intent, and one planned backend task of it reserved for be-1. */
+  const goalTask = (): { goalId: string; taskId: string } => {
+    const goal = state.createGoal(PROJECT, human, {
+      request: 'Discount codes at checkout',
+      constraints: ['Keep the public checkout API.'],
+      non_goals: ['No new npm packages.'],
+      definition_of_done: ['node --test passes.'],
+      plan: false,
+    });
+    const version = state.proposePlan(PROJECT, human, goal.goal_id, {
+      summary: 'one task',
+      rationale: '',
+      needs_human: null,
+      trigger: 'test',
+      tasks: [
+        {
+          key: 'discounts',
+          change: 'new',
+          task_id: null,
+          kind: 'implementation',
+          summary: 'Add discount codes to checkout',
+          description: null,
+          acceptance_criteria: ['node --test passes'],
+          depends_on: [],
+          scope: { write: ['backend/**'], read: [] },
+          role: 'backend',
+          priority: 'normal',
+          risk_level: 'low',
+          note: null,
+        },
+      ],
+    });
+    state.approvePlan(PROJECT, human, version.plan_id, version.version);
+    const task = state.q.goalTasks(PROJECT, goal.goal_id)[0];
+    if (!task) throw new Error('the approved plan did not materialize a task');
+    return { goalId: goal.goal_id, taskId: task.task_id };
+  };
+
+  it('renders project intent, goal intent, task, code and the reminder in that order', async () => {
+    state.intent.propose(PROJECT, human, {
+      objective: 'A small shop that never overcharges.',
+      constraints: ['Prices are integers in cents.'],
+      non_goals: ['Subscriptions.'],
+    });
+    state.intent.approve(PROJECT, human, 1);
+    const { goalId, taskId } = goalTask();
+    const { packet, explanation } = await compile(taskId);
+    const kinds = packet.sections.map((s) => s.kind);
+    const order = [
+      'agent.identity',
+      'intent.project',
+      'intent.goal',
+      'task.contract',
+      'repo.head',
+      'protocol.reminder',
+    ];
+    for (const k of order) expect(kinds, k).toContain(k);
+    const at = order.map((k) => kinds.indexOf(k));
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+
+    const project = packet.sections.find((s) => s.kind === 'intent.project');
+    expect(project?.authority).toBe('human');
+    expect(project?.content).toContain('Project intent v1 (approved): A small shop that never overcharges.');
+    expect(project?.content).toContain('Not a goal: Subscriptions.');
+    const goal = section(packet, 'intent.goal');
+    expect(goal).toContain(`Goal ${goalId} (intent revision 1)`);
+    expect(goal).toContain('Constraint: Keep the public checkout API.');
+    expect(goal).toContain('Not a goal: No new npm packages.');
+    expect(goal).toContain('Done when: node --test passes.');
+    // The goal's requirements are no longer repeated in the task layer.
+    expect(kinds).not.toContain('task.requirements');
+    expect(section(packet, 'task.plan')).toContain(`This task serves goal ${goalId}, whose intent is above.`);
+    // Both intent layers are protected and the explanation says why each is there.
+    const rules = explanation.included.map((i) => i.rule ?? '');
+    expect(rules).toContain('protected: project intent (ADR-0034)');
+    expect(rules).toContain('protected: goal intent (ADR-0034, review F07)');
+  });
+
+  it('says plainly when no project intent is approved, and never shows a waiting proposal', async () => {
+    state.intent.propose(PROJECT, human, { objective: 'A draft nobody approved.' });
+    const { packet } = await compile(backendTask());
+    expect(section(packet, 'intent.project')).toBe(
+      'No approved project intent yet: work from the goal and the task below.',
+    );
+    expect(JSON.stringify(packet)).not.toContain('A draft nobody approved.');
+  });
+
+  it('compiles a new packet for a newly approved intent or a goal intent edit, not for a proposal', async () => {
+    const { goalId, taskId } = goalTask();
+    await compile(taskId);
+    expect((await compile(taskId)).cached).toBe(true);
+    state.intent.propose(PROJECT, human, { objective: 'Never overcharge.' });
+    expect((await compile(taskId)).cached).toBe(true);
+    state.intent.approve(PROJECT, human, 1);
+    const approved = await compile(taskId);
+    expect(approved.cached).toBe(false);
+    expect(section(approved.packet, 'intent.project')).toContain('Never overcharge.');
+    state.intent.updateGoal(PROJECT, human, goalId, { non_goals: ['No refactors.'] });
+    const edited = await compile(taskId);
+    expect(edited.cached).toBe(false);
+    expect(section(edited.packet, 'intent.goal')).toContain('(intent revision 2)');
+    expect(section(edited.packet, 'intent.goal')).toContain('Not a goal: No refactors.');
+  });
+
+  it('shows at most eight checked learnings, ranks one about the task paths first, and offers the rest', async () => {
+    const H = { kind: 'human' as const, actor: human };
+    for (let i = 0; i < 10; i++) {
+      state.memory.record(PROJECT, H, {
+        scope_type: 'project',
+        kind: 'convention',
+        subject: `rule ${i}`,
+        content: `Project rule number ${i}.`,
+      });
+    }
+    const pathed = state.memory.record(PROJECT, H, {
+      scope_type: 'project',
+      kind: 'bug-pattern',
+      subject: 'checkout totals',
+      content: 'Round discounts down, never up.',
+      tags: ['backend/src/**'],
+    }).memory;
+    const taskId = backendTask();
+    const { packet, explanation } = await compile(taskId);
+    const learnings = section(packet, 'learnings.relevant');
+    const shown = learnings.split('\n').filter((l) => l.startsWith('- ['));
+    expect(shown.length).toBeLessThanOrEqual(8);
+    expect(shown[0]).toContain(pathed.memory_id);
+    // This spawned host has no Friday tools: it hears how many were left out, not of a tool it lacks.
+    expect(learnings).toContain('more learning(s) not shown here.');
+    expect(learnings).not.toContain('friday_request_context');
+    const source = packet.sections
+      .find((s) => s.kind === 'learnings.relevant')
+      ?.sources.find((x) => x.source_id === pathed.memory_id);
+    expect(source?.selection_reason).toContain('backend/**');
+    expect(explanation.included.some((i) => i.source_id === pathed.memory_id)).toBe(true);
+    // Asking for learnings answers with more of them, the task's context kept.
+    const more = await ask(taskId, { kind: 'learnings' });
+    const moreShown = section(more.packet, 'learnings.relevant')
+      .split('\n')
+      .filter((l) => l.startsWith('- ['));
+    expect(moreShown.length).toBe(11);
+    expect(more.packet.sections.map((s) => s.kind)).toContain('task.contract');
+  });
+
+  it('never shows an unchecked memory as a learning', async () => {
+    const taskId = backendTask();
+    state.memory.record(
+      PROJECT,
+      { kind: 'master_brain', actor: { kind: 'master_brain', id: 'master-brain' } },
+      { scope_type: 'project', kind: 'convention', subject: 'style', content: 'Planner guess: use tabs.' },
+    );
+    const { packet } = await compile(taskId);
+    expect(section(packet, 'learnings.relevant')).not.toContain('use tabs');
+    expect(section(packet, 'memory.notes')).toContain('[system, convention, unverified]');
   });
 });

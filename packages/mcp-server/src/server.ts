@@ -30,6 +30,66 @@ function taskMarkdown(t: TaskView): string {
 }
 
 /** The `friday` MCP server: 19 tools, resources and prompts (plan M1.9, memory tools M4d, operations M6c, peers and receipts M12.4). */
+
+interface IntentResource {
+  project: {
+    version: number;
+    objective: string;
+    constraints: { text: string }[];
+    outcomes: { text: string }[];
+    non_goals: { text: string }[];
+    definition_of_done: { text: string }[];
+  } | null;
+  goal: {
+    goal_id: string;
+    objective: string;
+    intent_revision: number;
+    constraints: string[];
+    outcomes: string[];
+    non_goals: string[];
+    definition_of_done: string[];
+    inferred_constraints: string[];
+    inferred_outcomes: string[];
+    inferred_non_goals: string[];
+    inferred_definition_of_done: string[];
+  } | null;
+}
+
+/** The project intent and the goal intent as an agent reads them (ADR-0034 §5). */
+export function intentMarkdown(r: IntentResource): string {
+  const out: string[] = ['# Project intent'];
+  if (r.project) {
+    out.push(`Version ${r.project.version} (approved by a human): ${r.project.objective}`);
+    for (const [label, items] of [
+      ['Constraint', r.project.constraints],
+      ['Outcome', r.project.outcomes],
+      ['Not a goal', r.project.non_goals],
+      ['Done when', r.project.definition_of_done],
+    ] as const) {
+      for (const i of items) out.push(`- ${label}: ${i.text}`);
+    }
+  } else {
+    out.push('No approved project intent yet.');
+  }
+  out.push('', '# Goal intent');
+  if (r.goal) {
+    const g = r.goal;
+    out.push(`Goal ${g.goal_id} (revision ${g.intent_revision}): ${g.objective}`);
+    for (const [label, own, inferred] of [
+      ['Constraint', g.constraints, g.inferred_constraints],
+      ['Outcome', g.outcomes, g.inferred_outcomes],
+      ['Not a goal', g.non_goals, g.inferred_non_goals],
+      ['Done when', g.definition_of_done, g.inferred_definition_of_done],
+    ] as const) {
+      for (const x of own) out.push(`- ${label}: ${x}`);
+      for (const x of inferred) out.push(`- ${label} (suggested by the planner): ${x}`);
+    }
+  } else {
+    out.push('You hold no task of a goal.');
+  }
+  return out.join('\n');
+}
+
 export function createFridayMcpServer(session: FridaySession): McpServer {
   const server = new McpServer(
     { name: 'friday', version: FRIDAY_VERSION },
@@ -155,6 +215,12 @@ export function createFridayMcpServer(session: FridaySession): McpServer {
       ];
       return md(uri, lines.join('\n'));
     },
+  );
+  server.registerResource(
+    'intent',
+    'friday://intent',
+    { title: 'What the project and your goal are for', mimeType: 'text/markdown' },
+    async (uri) => md(uri, intentMarkdown(await session.rest<IntentResource>('GET', '/me/intent'))),
   );
   server.registerResource(
     'inbox',

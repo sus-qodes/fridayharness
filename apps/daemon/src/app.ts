@@ -506,6 +506,36 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   });
 
   /**
+   * What the project and this session's goal are for (ADR-0034 §5): the approved project intent and
+   * the intent of the goal its current task serves. Read-only; a proposal waiting for a human is
+   * never shown to an agent.
+   */
+  app.get(`${P}/me/intent`, allow('harness'), (c) => {
+    const caller = callerFor(state, pid, c.get('auth').harness_id as string);
+    const me = state.q.agent(caller.agent_id);
+    const current = me.current_task_id ? state.q.findTask(pid, me.current_task_id) : undefined;
+    const goal = current?.goal_id ? state.q.findGoal(pid, current.goal_id) : undefined;
+    return c.json({
+      project: state.q.approvedProjectIntent(pid) ?? null,
+      goal: goal
+        ? {
+            goal_id: goal.goal_id,
+            objective: goal.objective ?? goal.request,
+            intent_revision: goal.intent_revision,
+            constraints: goal.constraints,
+            outcomes: goal.outcomes,
+            non_goals: goal.non_goals,
+            definition_of_done: goal.definition_of_done,
+            inferred_constraints: goal.inferred_constraints,
+            inferred_outcomes: goal.inferred_outcomes,
+            inferred_non_goals: goal.inferred_non_goals,
+            inferred_definition_of_done: goal.inferred_definition_of_done,
+          }
+        : null,
+    });
+  });
+
+  /**
    * The receipt of a message this session's agent sent (plan M12.4): whether each recipient has
    * it, read it or answered, so the sender need not send it again or ask the human. Only the
    * sender reads it; a receipt, like the message, grants nothing.
@@ -774,7 +804,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     const purpose = typeof body.purpose === 'string' ? body.purpose : 'request';
     // What is asked for beyond the task (review F17), as an agent's context request names it: a
     // kind, a query and paths; a request of another shape is ignored and the task packet compiled.
-    const kinds = ['task', 'scope_files', 'file', 'symbol', 'history', 'decision', 'freeform'];
+    const kinds = ['task', 'scope_files', 'file', 'symbol', 'history', 'decision', 'learnings', 'freeform'];
     const asked = body.request && typeof body.request === 'object' ? (body.request as Record<string, unknown>) : null;
     const request =
       asked && typeof asked.kind === 'string' && kinds.includes(asked.kind)

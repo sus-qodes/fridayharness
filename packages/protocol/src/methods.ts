@@ -210,7 +210,9 @@ export const ContextRequestParams = z.object({
   ...Base,
   task_id: z.string().optional(),
   run_id: z.string().optional(),
-  kind: z.enum(['task', 'scope_files', 'file', 'symbol', 'history', 'decision', 'freeform']).default('task'),
+  kind: z
+    .enum(['task', 'scope_files', 'file', 'symbol', 'history', 'decision', 'learnings', 'freeform'])
+    .default('task'),
   query: z.string().max(500).optional(),
   paths: z.array(z.string()).max(20).optional(),
   max_chars: z.number().int().min(500).max(20_000).default(8000),
