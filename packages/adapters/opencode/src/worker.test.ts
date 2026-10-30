@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OPENCODE_RULES, openCodeOutcome } from './worker.js';
+import { OPENCODE_CLOSING, OPENCODE_RULES, openCodeOutcome, openCodeWrites } from './worker.js';
 
 const assistant = (text: string, extra: Record<string, unknown> = {}) => ({
   info: {
@@ -65,8 +65,48 @@ describe('how an OpenCode session ended its work (plan M14.4)', () => {
     expect(r.final.summary).toBe('first');
   });
 
-  it('tells the session how to end, and nothing about tools it does not have', () => {
-    expect(OPENCODE_RULES).toContain('{"status":"completed","summary":"what you did"}');
+  it('reads BLOCKED: as a blocked answer, with what follows as the reason', () => {
+    expect(openCodeOutcome([assistant('BLOCKED: src/ is empty; what should it hold?')]).final).toEqual({
+      status: 'blocked',
+      summary: 'src/ is empty; what should it hold?',
+      blocked_reason: 'src/ is empty; what should it hold?',
+    });
+  });
+
+  it('tells the session to end in plain words, never in JSON, and nothing about tools it does not have', () => {
+    // A small model asked for a line of JSON wrote its tool calls as JSON text (LESSONS HX-40).
+    expect(OPENCODE_RULES).toContain('start your last message with BLOCKED:');
+    expect(`${OPENCODE_RULES}\n${OPENCODE_CLOSING}`).not.toMatch(/JSON|\{"status"/);
     expect(OPENCODE_RULES).not.toMatch(/friday_/);
+  });
+});
+
+describe('what a session changed (plan M14.4)', () => {
+  it("lists the session's completed writes and edits inside its folder, and nothing else", () => {
+    const cwd = process.platform === 'win32' ? 'C:/work/tree' : '/work/tree';
+    const tool = (name: string, status: string, filePath: unknown) => ({
+      type: 'tool',
+      tool: name,
+      state: { status, input: { filePath } },
+    });
+    const messages = [
+      { info: { role: 'user' }, parts: [tool('write', 'completed', 'src/user.ts')] },
+      {
+        info: { role: 'assistant' },
+        parts: [
+          tool('write', 'completed', 'src/a.ts'),
+          tool('edit', 'completed', `${cwd}/src/b.ts`),
+          tool('write', 'error', 'src/refused.ts'),
+          tool('read', 'completed', 'src/c.ts'),
+          tool('write', 'completed', '../outside.ts'),
+          { type: 'text', text: 'done' },
+        ],
+      },
+    ];
+    expect(openCodeWrites(messages, cwd)).toEqual([
+      { tool: 'write', path: 'src/a.ts' },
+      { tool: 'edit', path: 'src/b.ts' },
+    ]);
+    expect(openCodeWrites(undefined, cwd)).toEqual([]);
   });
 });

@@ -1220,13 +1220,17 @@ export function classifyCommand(
   command: string,
   autonomy: Partial<Record<CommandClass, Autonomy>> = {},
   shell?: Shell,
+  checks: readonly (readonly string[])[] = [],
 ): CommandClassification {
   const table = { ...DEFAULT_AUTONOMY, ...autonomy };
   // Classes that are never allowed cannot be relaxed by configuration.
   table['secrets.read'] = 'never';
   table['friday.internal'] = 'never';
   const segments = expandedSegments(command, 0, shell).map((text) => {
-    const c = classifySegment(text);
+    const known = classifySegment(text);
+    // Only a command no rule knows (a project's own script) becomes a test run by being a check: a
+    // check written as a deletion, a push or a fetch is judged as what it does.
+    const c = known === 'unknown' && isDeclaredCheck(text, checks) ? 'test.local' : known;
     // A method call runs what no rule knows: at least a human's decision.
     return { text, class: isCall(text) && RANK[table[c]] < RANK[table.unknown] ? ('unknown' as const) : c };
   });
@@ -1240,6 +1244,24 @@ export function classifyCommand(
   for (const s of segments) if (RANK[table[s.class]] > RANK[table[worst.class]]) worst = s;
   if (writes && RANK[table[worst.class]] < RANK.review) worst = { text: command, class: 'git.mutate' };
   return { class: worst.class, autonomy: table[worst.class], segments };
+}
+
+/**
+ * Whether a segment runs exactly one of the project's verification checks (`verification.checks`,
+ * plan M14.6): the same program and the same arguments, quotes, words that only pass a command on
+ * and trailing redirections aside. Friday runs these checks on every claim and its packet tells the
+ * agent to run them first; a check that runs a project's own script runs project code as a test run
+ * does, so it is judged as one. Anything else in the same command line is judged on its own, and a
+ * redirection still writes.
+ */
+function isDeclaredCheck(segment: string, checks: readonly (readonly string[])[]): boolean {
+  if (checks.length === 0) return false;
+  const tokens = tokensOf(afterPrefixes(segment).replace(TRAILING_REDIRECTS, '')).map(unquote);
+  return checks.some(
+    (argv) =>
+      argv.length === tokens.length &&
+      argv.every((a, i) => (i === 0 ? programName(a) === programName(tokens[0] ?? '') : a === tokens[i])),
+  );
 }
 
 /**

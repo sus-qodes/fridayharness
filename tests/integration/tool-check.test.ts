@@ -196,4 +196,27 @@ describe('tool.check', () => {
     expect(resume).toMatchObject({ task_id: t.task_id, run_id: start.run_id, session_ref: 'thread-0001' });
     await h.close();
   });
+
+  it("lets an agent run the project's own checks as test runs, and nothing else under their name (plan M14.6)", async () => {
+    const td = await startTestDaemon(ws(), {
+      git: true,
+      brain: false,
+      editConfig: (y) =>
+        y.replace(
+          '  checks: []\n',
+          ['  checks:', '    - name: rules', '      command: node', '      args: ["scripts/check.mjs"]', ''].join('\n'),
+        ),
+    });
+    const { h } = await running(td, 'cx-1', ['src/**']);
+    const command = (c: string) =>
+      h.client.call('tool.check', { tool: 'Bash', action: { kind: 'command', command: c } as never });
+    expect(await command('node scripts/check.mjs')).toMatchObject({ decision: 'allow', rule: 'command.test.local' });
+    expect(await command('node --test "**/test/*.test.ts" 2>&1 | tail -25; node scripts/check.mjs')).toMatchObject({
+      decision: 'allow',
+    });
+    // Another script, or the check with other arguments, is what it was: a human decides.
+    expect((await command('node scripts/check.mjs --fix')).decision).toBe('ask');
+    expect((await command('node scripts/deploy.mjs')).decision).toBe('ask');
+    await h.close();
+  });
 });

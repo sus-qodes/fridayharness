@@ -6,10 +6,10 @@
  * it and ends its server; a restarted worker resumes the run in a new session under the policy of
  * that moment; nothing an ended attempt still says is recorded. No model is called.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { OPENCODE_RULES, OpenCodeWorker } from '@friday/adapter-opencode';
+import { OPENCODE_CLOSING, OPENCODE_RULES, OpenCodeWorker } from '@friday/adapter-opencode';
 import type { TaskStartParams, TaskView } from '@friday/protocol';
 import { FakeClock, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -49,12 +49,20 @@ function dependencies(root: string): string {
 }
 
 /** An OpenCode worker for Friday, its server scripted: each prompt runs the next script of `prompts`. */
-function worker(td: TestDaemon, agent: string, prompts: Step[][], opts: { dir?: string; harnessKey?: string } = {}) {
+function worker(
+  td: TestDaemon,
+  agent: string,
+  prompts: Step[][],
+  opts: { dir?: string; harnessKey?: string; missPolls?: number } = {},
+) {
   const dir = opts.dir ?? path.join(ws().root, `opencode-${agent}`);
   mkdirSync(dir, { recursive: true });
   const log = path.join(dir, 'host.jsonl');
   const fixture = path.join(dir, 'fixture.json');
-  writeFileSync(fixture, JSON.stringify({ log, prompts, counter: path.join(dir, 'counter.txt') }));
+  writeFileSync(
+    fixture,
+    JSON.stringify({ log, prompts, counter: path.join(dir, 'counter.txt'), missPolls: opts.missPolls ?? 0 }),
+  );
   const w = new OpenCodeWorker({
     bootstrap: td.bootstrap,
     projectId: td.project.project_id,
@@ -146,6 +154,8 @@ describe('OpenCode checkpoint D: the worker lifecycle (plan M14.4)', () => {
     expect(prompts).toHaveLength(1);
     const text = String(prompts[0]?.text);
     expect(text.startsWith(OPENCODE_RULES)).toBe(true);
+    // The last line tells a small model to use its tools before it answers (LESSONS HX-40).
+    expect(text.endsWith(OPENCODE_CLOSING)).toBe(true);
     expect(text).toContain('<friday-context');
     expect(text).toContain('Add src/done.ts');
     // Each call was judged for this task and run: the write in scope happened, the one outside did not.
@@ -160,9 +170,13 @@ describe('OpenCode checkpoint D: the worker lifecycle (plan M14.4)', () => {
     const claim = claimOf(td, id) as {
       summary?: string;
       changed_paths?: string[];
+      discrepancies?: unknown[];
     };
     expect(claim.summary).toBe('added src/done.ts');
     expect(claim.changed_paths).toContain('src/done.ts');
+    // The session's completed write was observed before the claim named it.
+    expect(td.daemon.state.q.runs(id).at(-1)?.observed_paths).toContain('src/done.ts');
+    expect(claim.discrepancies).toEqual([]);
     expect(done.status).toBe('READY_FOR_VERIFICATION');
     // What the session cost, as the host counted it: nothing paid.
     expect(agentEvents(td, id, 'host.usage').map((u) => u.data)).toEqual([
@@ -185,10 +199,10 @@ describe('OpenCode checkpoint D: the worker lifecycle (plan M14.4)', () => {
     expect(o.worker.running(start.run_id)).toBe(false);
   });
 
-  it('reports a blocked answer as blocked, and an answer without JSON as a claim with its text', async () => {
+  it('reports a BLOCKED: answer as blocked, and any other answer as a claim with its text', async () => {
     const td = await startTestDaemon(ws(), { git: true, brain: false });
     const o = worker(td, 'oc-1', [
-      [{ answer: 'I cannot.\n{"status":"blocked","blocked_reason":"src/ is empty; what should it hold?"}' }],
+      [{ answer: 'BLOCKED: src/ is empty; what should it hold?' }],
       [{ answer: 'Done: nothing needed changing.' }],
     ]);
     await o.worker.start();
@@ -245,6 +259,34 @@ describe('OpenCode checkpoint D: the worker lifecycle (plan M14.4)', () => {
     expect(Boolean(claimOf(td, id))).toBe(false);
   });
 
+  it('keeps a session whose host misses a few polls while the model works (LESSONS HX-41)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const o = worker(td, 'oc-1', [[{ wait: 500 }, { answer: 'Nothing needed changing.' }]], { missPolls: 3 });
+    await o.worker.start();
+    const id = await assigned(td, 'oc-1', ['src/**']);
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the claim after the missed polls',
+    );
+    expect(o.entries().filter((e) => e.op === 'request' && e.path === '/session/status').length).toBeGreaterThan(3);
+  });
+
+  it('leaves no private profile behind when it is closed the moment a claim lands', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const o = worker(td, 'oc-1', [[{ answer: 'Nothing needed changing.' }]]);
+    await o.worker.start();
+    const id = await assigned(td, 'oc-1', ['src/**']);
+    await eventually(
+      () => status(td, id).status,
+      (s) => s === 'READY_FOR_VERIFICATION',
+      'the claim',
+    );
+    // The attempt may still be ending (its server stopping, its profile being removed): close waits.
+    await o.worker.close();
+    expect(readdirSync(o.dir).filter((n) => n.startsWith('attempt-'))).toEqual([]);
+  });
+
   it('drops what an ended attempt says late', async () => {
     const td = await startTestDaemon(ws(), { git: true, brain: false });
     // The session answers after a pause; the task is cancelled during it.
@@ -281,7 +323,7 @@ describe('OpenCode checkpoint D: the worker lifecycle (plan M14.4)', () => {
       [
         { call: { tool: 'write', args: { filePath: 'src/after.ts', content: 'after\n' } } },
         { call: { tool: 'write', args: { filePath: 'src/locked/x.ts', content: 'x\n' } } },
-        { answer: '{"status":"completed","summary":"finished after the restart"}' },
+        { answer: 'I finished the files after the restart.' },
       ],
     ];
     const first = worker(td, 'oc-1', prompts, { dir, harnessKey: 'opencode:restarting' });
@@ -336,7 +378,7 @@ describe('OpenCode checkpoint D: the worker lifecycle (plan M14.4)', () => {
       summary?: string;
       changed_paths?: string[];
     };
-    expect(claim.summary).toBe('finished after the restart');
+    expect(claim.summary).toBe('I finished the files after the restart.');
     expect(claim.changed_paths).toEqual(expect.arrayContaining(['src/after.ts', 'src/first.ts']));
     expect(claim.changed_paths).not.toContain('src/locked/x.ts');
   });

@@ -25,6 +25,9 @@ const messages = [];
 let working = false;
 let aborted = false;
 let nextCall = 0;
+let missedPolls = 0;
+// The tool parts of the answer being written, as OpenCode records them in the session.
+let toolParts = [];
 const server = createServer(async (req, res) => {
   const reply = (status, body) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
   if (req.headers.authorization !== 'Basic ' + Buffer.from('opencode:' + process.env.OPENCODE_SERVER_PASSWORD).toString('base64'))
@@ -59,6 +62,11 @@ const server = createServer(async (req, res) => {
     return reply(200, true);
   }
   if (fixture.prompts && session) {
+    // A host too busy to answer a few polls (the worker must not give the session up for them).
+    if (req.url === '/session/status' && missedPolls < (fixture.missPolls ?? 0)) {
+      missedPolls += 1;
+      return reply(503, { error: 'busy' });
+    }
     if (req.url === '/session/status') return reply(200, { [session.id]: { type: working ? 'busy' : 'idle' } });
     if (req.url === `/session/${session.id}/message` && req.method === 'GET') return reply(200, messages);
     if (req.url === `/session/${session.id}/prompt_async` && req.method === 'POST') {
@@ -103,8 +111,10 @@ async function call(c) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, String(output.args.content ?? ''));
     }
+    toolParts.push({ type: 'tool', callID: input.callID, tool: c.tool, state: { status: 'completed', input: output.args } });
     record({ op: 'tool', id: input.callID, decision: 'allow', args: output.args, t: Date.now() });
   } catch (error) {
+    toolParts.push({ type: 'tool', callID: input.callID, tool: c.tool, state: { status: 'error', input: output.args, error: String(error?.message ?? error) } });
     record({ op: 'tool', id: input.callID, decision: 'deny', args: output.args, reason: String(error?.message ?? error), t: Date.now() });
   }
 }
@@ -134,7 +144,7 @@ async function run(script) {
           cost: 0,
           tokens: { input: 120, output: 30, reasoning: 0, cache: { read: 0, write: 0 } },
         },
-        parts: [{ type: 'text', text: step.answer }],
+        parts: [...toolParts.splice(0), { type: 'text', text: step.answer }],
       });
     }
   }

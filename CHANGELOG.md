@@ -2,13 +2,19 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M14.5, is a small local model worth it (OpenCode checkpoint E)
+
+- **Measured on this machine:** three small task kinds of the fixture shop, done by OpenCode alone and under Friday on `qwen2.5:7b`, judged by the same hidden checks (`tests/scenarios/opencode-e.live.test.ts`). No task ended right: OpenCode alone ran out of its 20 minutes on one and changed nothing on another, and under Friday the model's edit broke the project's tests and verification refused it. A small local model is not worth sending tasks to on this processor; OpenCode stays experimental.
+
 ## Unreleased — M14.4, OpenCode as a worker (experimental)
 
-- **OpenCode takes Friday's tasks on a model on this machine:** `friday harness run opencode --model-url http://127.0.0.1:11434/v1 --model qwen2.5:7b` registers a worker (cost class free) that runs each attempt in its own controlled OpenCode server and session, with every call judged for that task and run. The task goes as one prompt with its packet; the last answer is the claim (a final line of JSON, else the text), with the worktree's changed paths and what the model calls cost. A cancellation stops the session with no call after it and ends its server; a restarted worker resumes its runs in a new session under the policy of that moment. It passes the eleven-case harness conformance suite against a scripted server. `harness run opencode` without the two flags is still the no-model preflight.
+- **OpenCode takes Friday's tasks on a model on this machine:** `friday harness run opencode --model-url http://127.0.0.1:11434/v1 --model qwen2.5:7b` registers a worker (cost class free) that runs each attempt in its own controlled OpenCode server and session, with every call judged for that task and run. The task goes as one prompt with its packet; the last answer is the claim (plain words; `BLOCKED: …` when it cannot finish), with the worktree's changed paths and what the model calls cost. A cancellation stops the session with no call after it and ends its server; a restarted worker resumes its runs in a new session under the policy of that moment. It passes the eleven-case harness conformance suite against a scripted server, and live on `qwen2.5:7b` a task reached its claim, a cancelled session made no call after the stop, and a lost worker's run resumed in a new session and claimed. The session's completed writes are reported as observed before the claim. `harness run opencode` without the two flags is still the no-model preflight.
+- **What the live runs fixed:** the final answer is plain words, since a small model asked for JSON wrote its tool calls as JSON text (LESSONS HX-40); one missed poll while the model takes every processor no longer ends an attempt (HX-41); closing the worker waits for attempts still ending, so no private profile is left (HX-42).
 
 ## Unreleased — M14.6, the packet names the project's checks
 
 - **An agent is told which checks will judge its claim:** every task packet's acceptance section names the checks Friday's verification runs for the task, with their commands (`Friday verifies a claim with these project checks; run them before you claim: - tests: node --test … - rules: node scripts/check.mjs`). An agent kept to its task's files no longer misses a project rule that only a check enforces. A change of the checks compiles a new packet. Token cost: one line per configured check in each task packet.
+- **Agents may run those checks:** a command that is exactly one of the project's checks, and that no other rule knows (a project's own script such as `node scripts/check.mjs`), is judged as a test run instead of asking a human. A check written as a deletion, a push or a fetch is still judged as what it does. On the trap goal, both of Friday's agents then ran the rule check before claiming and both tasks were right on the first try, in 46 s against 77 s (`docs/measurements/2026-10-19-benefit-trap.md`).
 
 ## Unreleased — M14.3, a goal where something goes wrong
 

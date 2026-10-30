@@ -9,7 +9,7 @@ import { type PluginSettings, policyPluginSource } from './plugin.js';
 export const OPENCODE_VERSION = '1.19.3';
 export const CONFIG_FILE = '.friday/harness/opencode/config.json';
 export const LEVEL_NOTE =
-  'L1 unverified (experimental): live before-tool refusals were recorded with a local model (checkpoint C); busy cancellation, recovery and the worker lifecycle are unverified';
+  'L1 unverified (experimental): live before-tool refusals (checkpoint C) and the worker lifecycle with busy cancellation and recovery (checkpoint D) were recorded with a local model; the plugin is not an OS sandbox';
 
 export interface ControlledProfile {
   dir: string;

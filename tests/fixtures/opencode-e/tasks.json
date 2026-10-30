@@ -1,0 +1,41 @@
+[
+  {
+    "key": "add-function",
+    "kind": "implementation",
+    "summary": "Shipping cost for an order",
+    "description": "Add backend/src/shipping.ts exporting `shippingCost(total: Money): Money`. An order of 50.00 or more in its currency (5000 minor units or more) ships free: { amount: 0, currency } in the order's currency. A smaller order pays 4.95: { amount: 495, currency }. Add backend/test/shipping.test.ts with node:test and node:assert/strict tests for an order under 50.00, for exactly 50.00 and for one above it. Import types from '../../shared/src/api.ts' with the .ts extension, as the existing files do. Run the project's tests with `node --test \"**/test/*.test.ts\"` and make them all pass.",
+    "scope": {
+      "write": [
+        "backend/src/shipping.ts",
+        "backend/test/shipping.test.ts"
+      ],
+      "read": []
+    }
+  },
+  {
+    "key": "fix-bug",
+    "kind": "implementation",
+    "summary": "Fix the percentage label",
+    "description": "percentLabel in frontend/src/percent.ts gives '13%' for 0.125 and '1%' for 0.005, but it must keep one decimal: '12.5%' and '0.5%', while 0.1 still gives '10%'. Fix it, and add a test for these cases to frontend/test/percent.test.ts, keeping the test that is there. Run the project's tests with `node --test \"**/test/*.test.ts\"` and make them all pass.",
+    "scope": {
+      "write": [
+        "frontend/src/percent.ts",
+        "frontend/test/percent.test.ts"
+      ],
+      "read": []
+    }
+  },
+  {
+    "key": "edit-existing",
+    "kind": "implementation",
+    "summary": "Refuse an unsupported currency at checkout",
+    "description": "In backend/src/checkout.service.ts, totalOf must refuse a currency other than EUR, USD and GBP: throw CheckoutError with the message 'unsupported currency XYZ', the item's currency code in place of XYZ. Add a test for it to backend/test/checkout.service.test.ts and keep the tests that are there. Run the project's tests with `node --test \"**/test/*.test.ts\"` and make them all pass.",
+    "scope": {
+      "write": [
+        "backend/src/checkout.service.ts",
+        "backend/test/checkout.service.test.ts"
+      ],
+      "read": []
+    }
+  }
+]

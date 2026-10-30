@@ -201,6 +201,8 @@ export function createToolJudge(deps: {
       otherWriters: action.kind === 'write' ? otherWriters(agent?.agent_id, root) : [],
       approved: (capability, target) => Boolean(approvalFor(capability, target)),
       autonomy: effective?.autonomy ?? (project.config.autonomy as Partial<Record<CommandClass, Autonomy>>),
+      // The project's own checks run as test runs (plan M14.6): the packet tells the agent to run them.
+      checks: project.config.verification.checks.map((c) => [c.command, ...(c.args ?? [])]),
       ...(effective ? { deny: effective.deny } : {}),
       ...(reservations ? { reservations } : {}),
       // Third-party MCP tools: the project's level for the server and tool (ADR-0030 §3).

@@ -15,6 +15,9 @@ import {
   verifyEffectiveConfig,
 } from './profile.js';
 
+/** Polls of a prompting session in a row that may go unanswered (about two minutes) before it counts as lost. */
+const POLL_MISSES = 8;
+
 export interface OpenCodeSpawnOptions {
   bootstrap: DaemonClient;
   projectId: string;
@@ -231,11 +234,28 @@ export class OpenCodeSpawnAdapter {
       model: { providerID: LOCAL_PROVIDER, modelID: model },
     });
     const end = Date.now() + timeoutMs;
+    let silent = 0;
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
-      const status = ((await this.#request('/session/status')) ?? {}) as Record<string, { type?: string }>;
-      const busy = (status[session]?.type ?? 'idle') !== 'idle';
-      const messages = (await this.messages(session)) as Message[];
+      let busy: boolean;
+      let messages: Message[];
+      try {
+        const status = ((await this.#request('/session/status')) ?? {}) as Record<string, { type?: string }>;
+        busy = (status[session]?.type ?? 'idle') !== 'idle';
+        messages = (await this.messages(session)) as Message[];
+        silent = 0;
+      } catch (e) {
+        if (this.#closed) throw e;
+        // While a model on this machine takes every processor, the host can miss one poll's time
+        // limit; the session is lost only when it stays silent for minutes (LESSONS HX-41).
+        silent += 1;
+        if (Date.now() >= end) {
+          await this.abort(session);
+          throw new Error('the model did not finish in time; the session was stopped');
+        }
+        if (silent >= POLL_MISSES) throw new Error(`OpenCode stopped answering (${(e as Error).message})`);
+        continue;
+      }
       const answer = messages
         .slice(before)
         .filter((m) => m.info?.role === 'assistant')

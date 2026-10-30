@@ -241,3 +241,38 @@ describe('the shell comes from the host tool', () => {
     expect(run('PowerShell', 'Write-Output "`n---`n"').decision).toBe('allow');
   });
 });
+
+describe("the project's own checks (plan M14.6)", () => {
+  const CHECKS = [
+    ['node', '--test', '**/test/*.test.ts'],
+    ['node', 'scripts/check.mjs'],
+  ];
+  const judged = (c: string, shell: 'posix' | 'powershell' = 'posix') => classifyCommand(c, {}, shell, CHECKS);
+
+  it('runs a declared check as a test run, and the same command without it as unknown', () => {
+    expect(judged('node scripts/check.mjs')).toMatchObject({ class: 'test.local', autonomy: 'auto' });
+    expect(posix('node scripts/check.mjs')).toMatchObject({ class: 'unknown', autonomy: 'review' });
+    expect(judged('node scripts/check.mjs 2>&1', 'powershell').class).toBe('test.local');
+    expect(judged('"C:/Program Files/nodejs/node.exe" scripts/check.mjs').class).toBe('test.local');
+    expect(judged("node 'scripts/check.mjs'").class).toBe('test.local');
+  });
+
+  it('matches the arguments exactly and still judges everything else on the line', () => {
+    expect(judged('node scripts/check.mjs --fix').class).toBe('unknown');
+    expect(judged('node scripts/other.mjs').class).toBe('unknown');
+    expect(judged('node --test "**/test/*.test.ts" 2>&1 | tail -25; node scripts/check.mjs')).toMatchObject({
+      class: 'test.local',
+      autonomy: 'auto',
+    });
+    expect(judged('node scripts/check.mjs; rm -rf src').class).toBe('fs.destructive');
+    // A "check" that deletes or pushes is judged as what it does, declared or not.
+    const hostile = [
+      ['rm', '-rf', 'src'],
+      ['git', 'push', '--force'],
+    ];
+    expect(classifyCommand('rm -rf src', {}, 'posix', hostile).class).toBe('fs.destructive');
+    expect(classifyCommand('git push --force', {}, 'posix', hostile).class).toBe('git.force');
+    // A redirection still writes, whatever runs.
+    expect(judged('node scripts/check.mjs > report.txt').autonomy).toBe('review');
+  });
+});

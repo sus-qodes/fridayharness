@@ -14,6 +14,7 @@
  *   FRIDAY_OPENCODE_LIVE=1, FRIDAY_OPENCODE_BIN, FRIDAY_OPENCODE_DEPS_DIR, FRIDAY_OPENCODE_MODEL_URL,
  *   FRIDAY_OPENCODE_MODEL as for checkpoint C (docs/integration/opencode.md), and
  *   FRIDAY_OPENCODE_D_OUT     a folder outside the repository for the results
+ *   FRIDAY_OPENCODE_D_SCENARIOS  which scenarios run, comma-separated (claim,cancel,resume)
  */
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -31,6 +32,8 @@ const DEPS = process.env.FRIDAY_OPENCODE_DEPS_DIR;
 const MODEL_URL = process.env.FRIDAY_OPENCODE_MODEL_URL ?? 'http://127.0.0.1:11434/v1';
 const MODEL = process.env.FRIDAY_OPENCODE_MODEL ?? 'qwen2.5:7b';
 const OUT = process.env.FRIDAY_OPENCODE_D_OUT;
+/** Which scenarios run (all three by default): claim, cancel, resume. */
+const SCENARIOS = (process.env.FRIDAY_OPENCODE_D_SCENARIOS ?? 'claim,cancel,resume').split(',').map((x) => x.trim());
 /** One task may take this long on a processor: the model reads OpenCode's whole prompt. */
 const TASK_MS = 20 * 60_000;
 
@@ -42,12 +45,13 @@ if (!LIVE || !OUT)
 const ws = useTestWorkspace();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function until<T>(fn: () => T, ok: (v: T) => boolean, ms: number): Promise<T | null> {
+/** Waits for a state; null past the deadline, or as soon as `over` says it can no longer come. */
+async function until<T>(fn: () => T, ok: (v: T) => boolean, ms: number, over: () => boolean = () => false) {
   const end = Date.now() + ms;
   for (;;) {
     const v = fn();
     if (ok(v)) return v;
-    if (Date.now() > end) return null;
+    if (Date.now() > end || over()) return null;
     await sleep(500);
   }
 }
@@ -60,7 +64,8 @@ describe.skipIf(!LIVE || !OUT)('OpenCode checkpoint D: the worker lifecycle with
       if (!OUT || !outsideRepository(OUT, REPO_ROOT))
         throw new Error('set FRIDAY_OPENCODE_D_OUT outside the repository');
       mkdirSync(OUT, { recursive: true });
-      const td: TestDaemon = await startTestDaemon(ws(), { git: true, brain: false });
+      // The daemon runs its own timer, so a worker that is gone is noticed once its lease runs out.
+      const td: TestDaemon = await startTestDaemon(ws(), { git: true, brain: false, tickMs: 500 });
       const pid = td.project.project_id;
       const profiles = path.join(ws().root, 'profiles');
       mkdirSync(profiles, { recursive: true });
@@ -128,130 +133,159 @@ describe.skipIf(!LIVE || !OUT)('OpenCode checkpoint D: the worker lifecycle with
         )?.working_directory ?? '';
 
       try {
-        // 1. A task from start to claim.
         const one = worker();
         await one.start();
-        const t1 = await create(
-          'Create src/greeting.ts',
-          "Create the file src/greeting.ts with exactly this one line: export const greeting = 'hello';",
-        );
-        const started1 = Date.now();
-        const end1 = await until(
-          () => task(t1).status,
-          (s) => ['READY_FOR_VERIFICATION', 'WAITING', 'FAILED', 'CANCELLED', 'HARNESS_LOST'].includes(s),
-          TASK_MS + 60_000,
-        );
-        const dir1 = workDir(one, t1);
-        results.claim = {
-          status: end1 ?? task(t1).status,
-          seconds: Math.round((Date.now() - started1) / 1000),
-          claim: claimOf(t1),
-          files: files(dir1),
-          decisions: decisions(t1),
-          usage: usage(t1),
-          verdict: end1 === 'READY_FOR_VERIFICATION' && files(dir1).includes('greeting.ts') ? 'passed' : 'failed',
-        };
-        save();
-
-        // 2. A busy session cancelled after its first allowed call.
-        const t2 = await create(
-          'Create five numbered files',
-          'Create five files, one at a time, each with one write: src/n1.ts containing export const n = 1; then src/n2.ts with export const n = 2; and so on up to src/n5.ts.',
-        );
-        const busy = await until(
-          () => decisions(t2).filter((d) => d.decision === 'allow').length,
-          (n) => n >= 1,
-          TASK_MS,
-        );
-        if (busy === null) results.cancel = { verdict: 'not tried', status: task(t2).status, decisions: decisions(t2) };
-        else {
-          const run2 = task(t2).current_run_id as string;
-          const dir2 = workDir(one, t2);
-          await td.operator.post(td.operator.projectPath(`/tasks/${t2}/cancel`), { reason: 'not wanted any more' });
-          await until(
-            () => one.running(run2),
-            (r) => !r,
-            60_000,
+        // 1. A task from start to claim.
+        if (SCENARIOS.includes('claim')) {
+          const t1 = await create(
+            'Create src/greeting.ts',
+            "Use the write tool to create the file src/greeting.ts with exactly this one line: export const greeting = 'hello';",
           );
-          const stoppedAt = new Date().toISOString();
-          const filesAtStop = files(dir2);
-          const callsAtStop = decisions(t2).length;
-          // A minute in which nothing may happen: no call, no file, no claim, no usage.
-          await sleep(60_000);
-          const after = decisions(t2).filter((d) => d.at > stoppedAt);
-          results.cancel = {
-            stopped_at: stoppedAt,
-            status: task(t2).status,
-            calls_at_stop: callsAtStop,
-            calls_after_stop: after,
-            files_at_stop: filesAtStop,
-            files_a_minute_later: files(dir2),
-            claim: claimOf(t2),
-            usage: usage(t2),
-            verdict:
-              task(t2).status === 'CANCELLED' &&
-              after.length === 0 &&
-              JSON.stringify(files(dir2)) === JSON.stringify(filesAtStop) &&
-              !claimOf(t2) &&
-              usage(t2).length === 0
-                ? 'passed'
-                : 'failed',
-          };
-        }
-        save();
-
-        // 3. The worker dies mid-task; a new one resumes the run in a new session.
-        const t3 = await create(
-          'Create three files',
-          'Create three files, one at a time: src/m1.ts containing export const m = 1; then src/m2.ts with export const m = 2; then src/m3.ts with export const m = 3.',
-        );
-        const working = await until(
-          () => decisions(t3).filter((d) => d.decision === 'allow').length,
-          (n) => n >= 1,
-          TASK_MS,
-        );
-        if (working === null)
-          results.resume = { verdict: 'not tried', status: task(t3).status, decisions: decisions(t3) };
-        else {
-          const run3 = task(t3).current_run_id as string;
-          const session1 = one.session(run3);
-          const dir3 = workDir(one, t3);
-          await one.crash();
-          const lost = await until(
-            () => task(t3).status,
-            (s) => s === 'HARNESS_LOST',
-            3 * 60_000,
-          );
-          const two = worker();
-          await two.start();
-          const resumed = await until(
-            () => two.received.find((m) => m.method === 'task.resume'),
-            (m) => Boolean(m),
-            2 * 60_000,
-          );
-          const end3 = await until(
-            () => task(t3).status,
-            (s) => ['READY_FOR_VERIFICATION', 'WAITING', 'FAILED', 'CANCELLED'].includes(s),
+          const started1 = Date.now();
+          const end1 = await until(
+            () => task(t1).status,
+            (s) => ['READY_FOR_VERIFICATION', 'WAITING', 'FAILED', 'CANCELLED', 'HARNESS_LOST'].includes(s),
             TASK_MS + 60_000,
           );
-          const runs = td.daemon.state.q.runs(t3);
-          results.resume = {
-            lost: lost !== null,
-            resumed: Boolean(resumed),
-            same_run: runs.at(-1)?.run_id === run3,
-            first_session: session1,
-            resumed_session: runs.at(-1)?.session_ref ?? null,
-            status: end3 ?? task(t3).status,
-            claim: claimOf(t3),
-            files: files(dir3),
-            decisions: decisions(t3),
-            usage: usage(t3),
-            verdict:
-              lost !== null && resumed && end3 === 'READY_FOR_VERIFICATION' && runs.at(-1)?.session_ref !== session1
-                ? 'passed'
-                : 'failed',
+          const dir1 = workDir(one, t1);
+          results.claim = {
+            status: end1 ?? task(t1).status,
+            seconds: Math.round((Date.now() - started1) / 1000),
+            claim: claimOf(t1),
+            files: files(dir1),
+            decisions: decisions(t1),
+            usage: usage(t1),
+            verdict: end1 === 'READY_FOR_VERIFICATION' && files(dir1).includes('greeting.ts') ? 'passed' : 'failed',
           };
-          await two.close();
+          save();
+        }
+
+        // 2. A busy session cancelled after its first allowed call.
+        if (SCENARIOS.includes('cancel')) {
+          const t2 = await create(
+            'Create five numbered files',
+            'Use the write tool five times, one file at a time: src/n1.ts containing export const n = 1; then src/n2.ts with export const n = 2; and so on up to src/n5.ts.',
+          );
+          const busy = await until(
+            () => decisions(t2).filter((d) => d.decision === 'allow').length,
+            (n) => n >= 1,
+            TASK_MS,
+            () => !['ASSIGNED', 'RUNNING'].includes(task(t2).status),
+          );
+          if (busy === null)
+            results.cancel = { verdict: 'not tried', status: task(t2).status, decisions: decisions(t2) };
+          else {
+            const run2 = task(t2).current_run_id as string;
+            const dir2 = workDir(one, t2);
+            await td.operator.post(td.operator.projectPath(`/tasks/${t2}/cancel`), { reason: 'not wanted any more' });
+            await until(
+              () => one.running(run2),
+              (r) => !r,
+              60_000,
+            );
+            const stoppedAt = new Date().toISOString();
+            const filesAtStop = files(dir2);
+            const callsAtStop = decisions(t2).length;
+            // A minute in which nothing may happen: no call, no file, no claim, no usage.
+            await sleep(60_000);
+            const after = decisions(t2).filter((d) => d.at > stoppedAt);
+            results.cancel = {
+              stopped_at: stoppedAt,
+              status: task(t2).status,
+              calls_at_stop: callsAtStop,
+              calls_after_stop: after,
+              files_at_stop: filesAtStop,
+              files_a_minute_later: files(dir2),
+              claim: claimOf(t2),
+              usage: usage(t2),
+              verdict:
+                task(t2).status === 'CANCELLED' &&
+                after.length === 0 &&
+                JSON.stringify(files(dir2)) === JSON.stringify(filesAtStop) &&
+                !claimOf(t2) &&
+                usage(t2).length === 0
+                  ? 'passed'
+                  : 'failed',
+            };
+          }
+          save();
+        }
+
+        // 3. The worker dies mid-task; a new one resumes the run in a new session.
+        if (SCENARIOS.includes('resume')) {
+          const t3 = await create(
+            'Create three files',
+            'Use the write tool three times, one file at a time: src/m1.ts containing export const m = 1; then src/m2.ts with export const m = 2; then src/m3.ts with export const m = 3.',
+          );
+          // The worker dies while its session works: after the session's first allowed call, or after
+          // two minutes of prompting, whichever comes first. The model need not have called a tool.
+          const prompting = await until(
+            () => task(t3).status === 'RUNNING' && Boolean(one.session(task(t3).current_run_id ?? '')),
+            Boolean,
+            5 * 60_000,
+            () => !['ASSIGNED', 'RUNNING'].includes(task(t3).status),
+          );
+          if (prompting)
+            await until(
+              () => decisions(t3).filter((d) => d.decision === 'allow').length,
+              (n) => n >= 1,
+              2 * 60_000,
+              () => !['ASSIGNED', 'RUNNING'].includes(task(t3).status),
+            );
+          const working = Boolean(prompting) && task(t3).status === 'RUNNING';
+          if (!working) results.resume = { verdict: 'not tried', status: task(t3).status, decisions: decisions(t3) };
+          else {
+            const run3 = task(t3).current_run_id as string;
+            const session1 = one.session(run3);
+            const dir3 = workDir(one, t3);
+            const filesAtCrash = files(dir3);
+            await one.crash();
+            const crashedAt = new Date().toISOString();
+            // Friday notices the worker is gone once its lease runs out (the daemon's own timer).
+            const lost = await until(
+              () => task(t3).status,
+              (s) => s === 'HARNESS_LOST',
+              3 * 60_000,
+            );
+            const two = worker();
+            await two.start();
+            const resumed = await until(
+              () => two.received.find((m) => m.method === 'task.resume'),
+              (m) => Boolean(m),
+              2 * 60_000,
+            );
+            const session2 = await until(
+              () => two.session(run3),
+              (s) => Boolean(s),
+              2 * 60_000,
+            );
+            const end3 = await until(
+              () => task(t3).status,
+              (s) => ['READY_FOR_VERIFICATION', 'WAITING', 'FAILED', 'CANCELLED'].includes(s),
+              TASK_MS + 60_000,
+            );
+            const runs = td.daemon.state.q.runs(t3);
+            results.resume = {
+              lost: lost !== null,
+              resumed: Boolean(resumed),
+              same_run: runs.at(-1)?.run_id === run3,
+              first_session: session1,
+              resumed_session: session2,
+              files_at_crash: filesAtCrash,
+              status: end3 ?? task(t3).status,
+              claim: claimOf(t3),
+              files: files(dir3),
+              decisions_before_crash: decisions(t3).filter((d) => d.at <= crashedAt),
+              decisions_after_resume: decisions(t3).filter((d) => d.at > crashedAt),
+              usage: usage(t3),
+              verdict:
+                lost !== null && resumed && session2 && session2 !== session1 && end3 === 'READY_FOR_VERIFICATION'
+                  ? 'passed'
+                  : 'failed',
+            };
+            await two.close();
+          }
+          save();
         }
         await one.close().catch(() => undefined);
       } finally {
@@ -259,9 +293,7 @@ describe.skipIf(!LIVE || !OUT)('OpenCode checkpoint D: the worker lifecycle with
         results.profiles_left = existsSync(profiles) ? readdirSync(profiles) : [];
         save();
       }
-      const verdicts = ['claim', 'cancel', 'resume'].map(
-        (k) => (results[k] as { verdict?: string } | undefined)?.verdict,
-      );
+      const verdicts = SCENARIOS.map((k) => (results[k] as { verdict?: string } | undefined)?.verdict);
       expect(verdicts.every((v) => v === 'passed' || v === 'not tried')).toBe(true);
       expect(results.profiles_left).toEqual([]);
     },

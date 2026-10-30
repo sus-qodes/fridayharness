@@ -75,6 +75,11 @@ export interface PolicyInput {
   approved?: (capability: string, target: string) => boolean;
   autonomy?: Partial<Record<CommandClass, Autonomy>>;
   /**
+   * The project's verification checks, each its program and arguments (plan M14.6): a command that
+   * is exactly one of them is judged as a test run.
+   */
+  checks?: readonly (readonly string[])[];
+  /**
    * Conflict-prone files (ADR-0025 §1): a write under a `required` pattern needs the task to hold
    * that pattern's reservation, which the write takes when it is free; `held` are the reservations
    * other tasks hold.
@@ -309,7 +314,7 @@ export function evaluate(input: PolicyInput): PolicyResult {
     // The host tool names the shell: Claude Code's Bash tool runs bash (Git Bash on Windows), its
     // PowerShell tool PowerShell; other hosts name it in the command's own wrapper (LESSONS D-45).
     const shell = action.tool === 'PowerShell' ? 'powershell' : action.tool === 'Bash' ? 'posix' : undefined;
-    const c = classifyCommand(action.command ?? '', input.autonomy, shell);
+    const c = classifyCommand(action.command ?? '', input.autonomy, shell, input.checks ?? []);
     const target = action.command ?? '';
     if (c.autonomy === 'never') {
       return r(

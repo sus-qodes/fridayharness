@@ -1,3 +1,4 @@
+import path from 'node:path';
 import {
   type Final,
   type GenericHarnessClient,
@@ -41,17 +42,29 @@ export interface OpenCodeWorkerOptions {
 
 /**
  * What Friday tells every OpenCode session it starts, before the task's own context. OpenCode has
- * none of Friday's tools, and a small local model has no structured output, so the final answer is
- * one line of JSON at the end of its last message.
+ * none of Friday's tools, and a small local model has no structured output; asked for a final line
+ * of JSON, one wrote its tool calls as JSON text too (LESSONS HX-40). So the final answer is plain
+ * words: a blocked one starts with `BLOCKED:`, anything else is a claim that Friday verifies.
  */
 export const OPENCODE_RULES = [
   "You are working on a task that Friday assigned. Friday runs this project: it decides what you may do and verifies your work with the project's own checks.",
   '',
   '- The task below is already yours: start on it right away.',
+  '- Do the work by calling your tools: change files with write or edit, and run commands with bash. A change exists only when a tool call made it; writing a call out as text changes nothing.',
   "- Work only in this folder, which is your task's own git worktree, and only within the task's scope below.",
-  "- Friday judges every tool call before it runs. A refused call is Friday's decision, not an error: do not get the same effect another way. Where the task can go on without it, go on; if it cannot, finish as blocked and say what you need.",
-  '- When you are done, end your last message with one line of JSON and nothing after it: {"status":"completed","summary":"what you did"}, or {"status":"blocked","blocked_reason":"what you need"}. Friday reads the files you changed from the worktree and verifies the work.',
+  "- Friday judges every tool call before it runs. A refused call is Friday's decision, not an error: do not get the same effect another way. Where the task can go on without it, go on.",
+  '- When you are done, say in a sentence or two what you did. If you cannot finish, start your last message with BLOCKED: and say what you need. Friday reads the files you changed from the worktree and verifies the work.',
 ].join('\n');
+
+/**
+ * The prompt's last line, after the task: a small model reads the end of a prompt best, and without
+ * it one answered without any tool call (LESSONS HX-40).
+ */
+export const OPENCODE_CLOSING =
+  'Now do the task by calling your tools. When the files are changed, say briefly what you did.';
+
+/** A last message that says the session could not finish, as the rules ask (`BLOCKED: …`). */
+const BLOCKED = /^\s*BLOCKED:\s*/i;
 
 interface Message {
   info?: {
@@ -61,7 +74,28 @@ interface Message {
     cost?: unknown;
     tokens?: { input?: unknown; output?: unknown; cache?: { read?: unknown; write?: unknown } };
   };
-  parts?: { type?: string; text?: unknown }[];
+  parts?: { type?: string; text?: unknown; tool?: unknown; state?: { status?: unknown; input?: unknown } }[];
+}
+
+/**
+ * The file changes a session's tools completed, as OpenCode recorded them: each `write` or `edit`
+ * that ended `completed`, with its path relative to the session's folder (a path outside it is left
+ * out). Friday records them as observed before the claim, as it records other hosts' changes.
+ */
+export function openCodeWrites(messages: unknown, cwd: string): { tool: string; path: string }[] {
+  const out: { tool: string; path: string }[] = [];
+  for (const m of (Array.isArray(messages) ? messages : []) as Message[]) {
+    if (m.info?.role !== 'assistant') continue;
+    for (const p of m.parts ?? []) {
+      if (p.type !== 'tool' || (p.tool !== 'write' && p.tool !== 'edit') || p.state?.status !== 'completed') continue;
+      const file = (p.state.input as { filePath?: unknown } | undefined)?.filePath;
+      if (typeof file !== 'string' || !file) continue;
+      const rel = path.relative(cwd, path.resolve(cwd, file));
+      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel))
+        out.push({ tool: p.tool, path: rel.split(path.sep).join('/') });
+    }
+  }
+  return out;
 }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -69,9 +103,10 @@ const add = (a: number | null, b: number | null) => (b === null ? a : (a ?? 0) +
 
 /**
  * How an OpenCode session ended its work, from its messages: the final answer of its last finished
- * assistant message (the last line of JSON with a status in its text, else the text as a summary),
- * and what the session's model calls cost, as the host counted them (`host.usage`; a count the host
- * did not give is null, never 0).
+ * assistant message (`BLOCKED: …` is blocked; a line of JSON with a status, which a model may still
+ * give, is read as such; any other text is a completion claim with the text as its summary), and
+ * what the session's model calls cost, as the host counted them (`host.usage`; a count the host did
+ * not give is null, never 0).
  */
 export function openCodeOutcome(messages: unknown): { final: Final; text: string; usage: Record<string, unknown> } {
   const list = (Array.isArray(messages) ? messages : []) as Message[];
@@ -85,7 +120,10 @@ export function openCodeOutcome(messages: unknown): { final: Final; text: string
   const json = [...text.matchAll(/\{[^{}]*"status"\s*:\s*"(?:completed|blocked)"[^{}]*\}/g)].at(-1)?.[0];
   const prose = json ? text.replace(json, '').trim() : text;
   let final = parseFinal(text, prose);
-  if (json) {
+  if (BLOCKED.test(text)) {
+    const why = text.replace(BLOCKED, '').trim();
+    final = { status: 'blocked', summary: why, blocked_reason: why };
+  } else if (json) {
     try {
       final = parseFinal(JSON.parse(json), prose);
     } catch {
@@ -143,6 +181,8 @@ export class OpenCodeWorker {
   /** Every instruction received from Friday, newest last (tests and logs). */
   readonly received: OutboundMessage[] = [];
   readonly #attempts = new Map<string, Attempt>();
+  /** Attempts being ended: closing waits for them, so nothing of theirs outlives the worker. */
+  readonly #ending = new Set<Promise<void>>();
   readonly #link: SpawnLink;
 
   constructor(private readonly opts: OpenCodeWorkerOptions) {
@@ -303,7 +343,7 @@ export class OpenCodeWorker {
         ? (p.note ??
           'The previous session of this task ended unexpectedly. The worktree keeps what it changed: continue the task where it left off.')
         : firstTaskMessage(p, holdsContract(packet));
-    const prompt = `${OPENCODE_RULES}\n\n${packet}\n\n${opening}`;
+    const prompt = [OPENCODE_RULES, packet, opening, OPENCODE_CLOSING].join('\n\n');
     let messages: unknown;
     try {
       messages = await a.host.submitPrompt(prompt, { timeoutMs: this.opts.turnTimeoutMs ?? 20 * 60_000 });
@@ -317,6 +357,9 @@ export class OpenCodeWorker {
     if (a.done || a.stopping) return;
     a.done = true;
     const { final, usage } = openCodeOutcome(messages);
+    // What the session's tools changed, observed before the claim names it (no discrepancy to explain).
+    for (const w of openCodeWrites(messages, a.cwd))
+      await this.#event(a, 'tool.completed', { tool: w.tool, changed_paths: [w.path] });
     const spent = { events: [{ event_type: 'host.usage', data: usage }] satisfies KeptEvent[] };
     const ids = { task_id: a.taskId, run_id: a.runId };
     if (final.status === 'blocked') {
@@ -387,8 +430,14 @@ export class OpenCodeWorker {
     if (!a) return;
     this.#attempts.delete(runId);
     a.stopping = true;
-    await a.host.close().catch((e: Error) => this.#log(`stopping ${a.taskId}'s session: ${e.message}`));
-    a.done = true;
+    const ending = a.host.close().catch((e: Error) => this.#log(`stopping ${a.taskId}'s session: ${e.message}`));
+    this.#ending.add(ending);
+    try {
+      await ending;
+    } finally {
+      this.#ending.delete(ending);
+      a.done = true;
+    }
   }
 
   /** Stops like a crashed process: nothing is told to Friday; the sessions end with it. */
@@ -396,6 +445,7 @@ export class OpenCodeWorker {
     await this.#link.crash();
     for (const a of this.#attempts.values()) a.done = true;
     await Promise.allSettled([...this.#attempts.keys()].map((id) => this.#end(id)));
+    await Promise.allSettled([...this.#ending]);
   }
 
   /** Comes back as the same harness and serves its runs again (`task.resume`). */
@@ -406,6 +456,8 @@ export class OpenCodeWorker {
   /** Ends every attempt and tells Friday this harness is leaving. */
   async close(reason = 'the OpenCode worker stopped'): Promise<void> {
     await Promise.allSettled([...this.#attempts.keys()].map((id) => this.#end(id)));
+    // An attempt that finished a moment ago may still be closing its server and removing its profile.
+    await Promise.allSettled([...this.#ending]);
     await this.#link.close(reason);
   }
 
