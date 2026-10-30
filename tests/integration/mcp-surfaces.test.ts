@@ -6,6 +6,7 @@
 import { cpSync } from 'node:fs';
 import path from 'node:path';
 import type { GenericHarnessClient } from '@friday/adapter-generic';
+import { createFridayTools, type FridaySession } from '@friday/mcp-server';
 import type { LearningProposalView, OperationResult, TaskStartParams, TaskView } from '@friday/protocol';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -65,6 +66,12 @@ async function agentOnTask(td: TestDaemon, summary: string, n: number) {
     'the task to run',
   );
   return { client: fake.client, task, run_id: start.run_id };
+}
+
+/** The attached-session tools over a registered client: what an MCP host's agent would call. */
+function toolsOver(client: GenericHarnessClient, me: Record<string, unknown> = {}) {
+  const session = { ready: async () => client, me: async () => me } as unknown as FridaySession;
+  return Object.fromEntries(createFridayTools(session).map((t) => [t.name, t]));
 }
 
 async function settle(client: GenericHarnessClient, r: OperationResult): Promise<OperationResult> {
@@ -144,6 +151,27 @@ describe('the code graph for an agent (ADR-0038 §2)', () => {
     await expect(be.client.call('graph.skeleton', { paths: ['a', 'b', 'c', 'd', 'e', 'f'] })).rejects.toThrow(
       /invalid params/,
     );
+
+    // The tools over the same answers (ADR-0038 §1): in words, bounded, the graph's version named.
+    const tools = toolsOver(be.client, { agent: { agent_key: 'be-1' }, current_task: task, claimable: [] });
+    const q = await tools.friday_graph_query?.handler({ name: 'totalOf' });
+    expect(q?.text).toContain('backend/src/checkout.service.ts:');
+    expect(q?.text).toContain('called or used by: backend/src/checkout.service.ts#checkout:');
+    expect(q?.text).toMatch(/\(code graph \S+\)$/);
+    const none = await tools.friday_graph_query?.handler({ name: 'noSuchThing' });
+    expect(none?.text).toContain('No symbol named noSuchThing');
+    await expect(tools.friday_graph_query?.handler({})).rejects.toThrow(/ask one question/);
+    const hits = await tools.friday_graph_query?.handler({ words: 'checkout', kind: 'file', limit: 3 });
+    expect(hits?.text).toMatch(/^- file /);
+    const b = await tools.friday_blast_radius?.handler({ symbols: ['backend/src/checkout.service.ts#totalOf'] });
+    expect(b?.text).toContain('Changed: backend/src/checkout.service.ts (totalOf)');
+    expect(b?.text).toMatch(/- 1 high: backend\/src\/checkout\.service\.ts#checkout via reference/);
+    const s = await tools.friday_skeleton_read?.handler({
+      paths: ['backend/src/checkout.service.ts', 'README.md'],
+      level: 2,
+    });
+    expect(s?.text).toContain('backend/src/checkout.service.ts (L2:');
+    expect(s?.text).toContain('README.md: not in the code graph');
   }, 120_000);
 });
 
@@ -190,6 +218,15 @@ describe('raw output and a lesson from a failure (ADR-0038 §3, §5)', () => {
     expect(cut.matched).toBe(52);
     expect(cut.truncated).toBe(true);
     expect(cut.text.split('\n')).toHaveLength(3);
+    // The tool says what it read and how to read on; the operation result names the artifact.
+    expect(done.artifact_ref).toBe(ref);
+    const tools = toolsOver(client);
+    const read = await tools.friday_ccr_retrieve?.handler({ artifact_ref: ref, find: 'error here', limit: 2 });
+    expect(read?.text).toMatch(
+      /^artifact:\S+ \(operation \S+ of \S+\): lines 1-\d+ of 52; 6 matched; more: ask again with offset \d+\.\n1: /,
+    );
+    const ran = await tools.friday_run_operation?.handler({ operation_run_id: done.operation_run_id, wait_s: 0 });
+    expect(ran?.text).toContain(`The whole output is kept as ${ref}.`);
 
     // Another agent, another task: not its output. Nothing references an unknown id either.
     const other = await FakeHarness.connect(td, { agentKey: 'backend-2', role: 'backend', mode: 'attach' });
@@ -251,15 +288,22 @@ describe('raw output and a lesson from a failure (ADR-0038 §3, §5)', () => {
       'migration 7 dropped a column',
     ]);
     expect(failed.code, failed.stderr).toBe(0);
-    const { proposal } = await be.client.call('learning.propose', {
-      kind: 'learned-risk',
+    // Through the tool: the task is the one reserved for this agent after the rework.
+    const tools = toolsOver(be.client, {
+      agent: { agent_key: 'be-1' },
+      current_task: null,
+      claimable: [{ task_id: task.task_id, reserved_for_agent_key: 'be-1' }],
+    });
+    const learnedFrom = await tools.friday_mem_learn_from_failure?.handler({
       subject: 'Migrations',
       content: 'Back up the dev database before running migrations.',
       paths: ['db/**'],
-      task_id: task.task_id,
-      from_failure: { kind: 'verification' },
     });
+    expect(learnedFrom?.text).toMatch(/^Proposed \S+ for the whole project, learned from verification ver_\S+ \(/);
+    expect(learnedFrom?.text).toContain('the failure itself promotes nothing');
+    const { proposal } = (learnedFrom?.structured ?? {}) as { proposal: LearningProposalView };
     expect(proposal.status).toBe('proposed');
+    expect(proposal.kind).toBe('learned-risk');
     expect(proposal.origin).toMatchObject({ kind: 'verification', id: expect.stringMatching(/^ver_/) });
     expect(proposal.origin?.detail).toContain('migration 7 dropped a column');
     // The failure promotes nothing: it waits for a human.

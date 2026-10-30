@@ -67,6 +67,7 @@ See the [build plan](docs/BUILD_PLAN.md) for the roadmap and milestone status.
 | [docs/policy.md](docs/policy.md) | The project's policy: what restricts at once, what needs your trust, policy files with deny rules and team scopes |
 | [docs/hosts.md](docs/hosts.md) | Wiring the coding tools on this machine to Friday: per project (`harness config`) and per machine (`friday hosts setup`, reversible) |
 | [docs/graph.md](docs/graph.md) | The code graph: files and symbols, the tree hash and the keyword index, and the questions asked of them (`friday graph …`) |
+| [docs/mcp-tools.md](docs/mcp-tools.md) | Friday's MCP tools: the 24 of an attached session, the five of a spawned one, and the handoff's names mapped onto them |
 | [docs/runbooks/recovery.md](docs/runbooks/recovery.md) | When a harness is lost or an attempt fails: what Friday does by itself, the recovery options, getting preserved work back |
 | [docs/master-brain.md](docs/master-brain.md) | Goals, plans and the Master Brain: turning planning on, approving, revisions, questions, costs |
 | [docs/routing.md](docs/routing.md) | Model routing: pins, hard constraints, the static role registry, measured evidence, what binds and what is advice |

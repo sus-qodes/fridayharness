@@ -3,6 +3,7 @@ import { type ContextPacket, FridayError, type InboxItem, type ResultOf, type Ta
 import { renderContextMarkdown } from '@friday/sdk';
 import { z } from 'zod';
 import type { FridaySession, MeView } from './session.js';
+import { createSurfaceTools } from './surfaces.js';
 
 export interface ToolResult {
   text: string;
@@ -39,13 +40,15 @@ function operationText(r: ResultOf<'operation.run'>): string {
     default: {
       const head = `${r.operation} ${r.status}${r.exit_code !== null ? ` (exit ${r.exit_code})` : ''}${r.duration_ms !== null ? ` in ${r.duration_ms} ms` : ''}${r.timed_out ? ', timed out' : ''}.`;
       const removed = r.redactions ? ` Friday removed ${r.redactions} occurrence(s) of secrets from the output.` : '';
+      // The whole output is kept (ADR-0038 §3): named here, read with friday_ccr_retrieve where the session has it.
+      const whole = r.artifact_ref ? ` The whole output is kept as ${r.artifact_ref}.` : '';
       const out = r.output
         ? `
 
 Output${r.output_truncated ? ' (the end)' : ''}:
 ${r.output}`
         : '';
-      return `${head}${removed}${out}`;
+      return `${head}${removed}${whole}${out}`;
     }
   }
 }
@@ -807,7 +810,7 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
       name: 'friday_run_operation',
       title: 'Run an operation that needs a secret',
       description:
-        'Friday never hands out secrets (API keys, tokens). For work that needs one, such as an integration test against a sandbox, the project declares operations that Friday runs for you with the secret, returning the outcome without it. No arguments: list them. name + reason: run one (if a human must approve it first, call again once approved). operation_run_id: wait for one still running.',
+        'Friday never hands out secrets (API keys, tokens). For work that needs one, such as an integration test against a sandbox, the project declares operations that Friday runs for you with the secret, returning the outcome without it. No arguments: list them. name + reason: run one (if a human must approve it first, call again once approved). operation_run_id: wait for one still running. The result carries the end of the output; the whole of it is kept as an artifact you can read with friday_ccr_retrieve.',
       shape: {
         name: z
           .string()
@@ -960,6 +963,8 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
         };
       },
     },
+    // The handoff's surfaces (ADR-0038 §1): the code graph, raw output, a lesson from a failure.
+    ...createSurfaceTools(session),
     {
       name: 'friday_session_bind',
       title: 'Link this session',

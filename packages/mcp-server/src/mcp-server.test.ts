@@ -27,11 +27,11 @@ describe('friday MCP server definition', () => {
     expect(SERVER_INSTRUCTIONS.indexOf('friday_whoami')).toBeLessThan(SERVER_INSTRUCTIONS.indexOf('friday_claim_done'));
   });
 
-  it('defines the 19 tools of plan Appendix 3 and M12.4, five of them always loaded', () => {
+  it('defines the 19 tools of plan Appendix 3 and M12.4 plus the five of ADR-0038, five always loaded', () => {
     const tools = createFridayTools({} as FridaySession);
     const names = tools.map((t) => t.name);
-    expect(names).toHaveLength(19);
-    expect(new Set(names).size).toBe(19);
+    expect(names).toHaveLength(24);
+    expect(new Set(names).size).toBe(24);
     expect(names.every((n) => /^friday_[a-z_]+$/.test(n))).toBe(true);
     expect(
       tools
@@ -56,6 +56,20 @@ describe('friday MCP server definition', () => {
     expect(byName.friday_message_receipt?.description).toContain(
       'A reply settles a request; an acknowledgement does not',
     );
+    // The handoff's surfaces (ADR-0038 §1): deferred, so a host that defers tools pays nothing until the first call.
+    for (const name of [
+      'friday_graph_query',
+      'friday_blast_radius',
+      'friday_skeleton_read',
+      'friday_ccr_retrieve',
+      'friday_mem_learn_from_failure',
+    ]) {
+      expect(byName[name]?.alwaysLoad, name).toBe(false);
+    }
+    for (const name of ['friday_graph_query', 'friday_blast_radius', 'friday_skeleton_read', 'friday_ccr_retrieve']) {
+      expect(byName[name]?.readOnly, name).toBe(true);
+    }
+    expect(byName.friday_mem_learn_from_failure?.readOnly).toBe(false);
   });
 });
 

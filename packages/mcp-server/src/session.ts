@@ -59,6 +59,8 @@ export interface MeView {
   claimable: TaskView[];
   /** A peek at the agent's inbox (ADR-0017): nothing reserved. */
   inbox: InboxItem[];
+  /** What this daemon can answer (ADR-0038 §2): a server lists only the tools that work here. */
+  capabilities?: { graph: boolean; artifacts: boolean };
 }
 
 /** Agent key: FRIDAY_AGENT, then the private agent.json written by `friday harness config`, then dev-1. */
@@ -94,8 +96,15 @@ export class FridaySession {
   #retry: NodeJS.Timeout | undefined;
   #starting: Promise<boolean> | undefined;
   #stopped = false;
+  #registered: (() => void)[] = [];
 
   constructor(readonly opts: SessionOptions) {}
+
+  /** Runs after each successful registration (and at once when already registered). */
+  onRegistered(fn: () => void): void {
+    this.#registered.push(fn);
+    if (this.client) fn();
+  }
 
   /** The host this server serves, as its registration and its session links name it. */
   get vendor(): SessionVendor {
@@ -172,6 +181,7 @@ export class FridaySession {
     this.log(
       `registered as ${this.registration.agent_key} (${this.registration.harness_id})${this.registration.shadow ? ' [shadow]' : ''}`,
     );
+    for (const fn of this.#registered) fn();
     client.startHeartbeat((e) => {
       if (
         isFridayError(e) &&

@@ -25,4 +25,12 @@ export {
   spawnedToolsRule,
   toolInputSchema,
 } from './spawned.js';
+export {
+  artifactText,
+  blastRadiusText,
+  createSurfaceTools,
+  graphQueryText,
+  SURFACE_TOOL_CAPABILITY,
+  skeletonText,
+} from './surfaces.js';
 export { createFridayTools, type FridayTool, type HostUi, type ToolResult } from './tools.js';

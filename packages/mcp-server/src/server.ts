@@ -1,10 +1,11 @@
 import type { ContextPacket, TaskView } from '@friday/protocol';
 import { isFridayError } from '@friday/protocol';
 import { FRIDAY_VERSION, renderContextMarkdown } from '@friday/sdk';
-import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, type RegisteredTool, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { SERVER_INSTRUCTIONS } from './instructions.js';
 import type { FridaySession } from './session.js';
+import { SURFACE_TOOL_CAPABILITY } from './surfaces.js';
 import { createFridayTools, type HostUi } from './tools.js';
 
 function errorResult(e: unknown) {
@@ -29,7 +30,7 @@ function taskMarkdown(t: TaskView): string {
     .join('\n\n');
 }
 
-/** The `friday` MCP server: 19 tools, resources and prompts (plan M1.9, memory tools M4d, operations M6c, peers and receipts M12.4). */
+/** The `friday` MCP server: 24 tools, resources and prompts (plan M1.9, memory tools M4d, operations M6c, peers and receipts M12.4, the handoff's surfaces ADR-0038). */
 
 interface IntentResource {
   project: {
@@ -129,8 +130,9 @@ export function createFridayMcpServer(session: FridaySession): McpServer {
       return decision === 'approve' || decision === 'reject' ? decision : null;
     },
   };
+  const registered = new Map<string, RegisteredTool>();
   for (const tool of createFridayTools(session, host)) {
-    server.registerTool(
+    const handle = server.registerTool(
       tool.name,
       {
         title: tool.title,
@@ -148,7 +150,25 @@ export function createFridayMcpServer(session: FridaySession): McpServer {
         }
       },
     );
+    registered.set(tool.name, handle);
   }
+  // A tool whose capability this daemon lacks is not listed (ADR-0038 §2): decided once the session
+  // is registered, from what the daemon says of itself; the host hears the list changed.
+  session.onRegistered(() => {
+    void session
+      .me()
+      .then((me) => {
+        const caps = me.capabilities;
+        if (!caps) return;
+        for (const [name, cap] of Object.entries(SURFACE_TOOL_CAPABILITY)) {
+          const t = registered.get(name);
+          if (!t) continue;
+          if (caps[cap] === false) t.disable();
+          else t.enable();
+        }
+      })
+      .catch(() => undefined);
+  });
 
   const json = (uri: URL, value: unknown) => ({
     contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(value, null, 2) }],
