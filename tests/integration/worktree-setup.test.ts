@@ -3,7 +3,7 @@
  * the policy's trust rule, with the outcome on the run's record and in the agent's start note.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { claudeCodeHooks } from '@friday/adapter-claude';
 import type { TaskStartParams, TaskView } from '@friday/protocol';
@@ -187,6 +187,29 @@ describe('dependencies in a fresh task worktree', () => {
       // The pnpmfile did not run: no marker in the worktree.
       expect(existsSync(path.join(start.working_directory, '.friday-pnpmfile-ran'))).toBe(false);
       expect(start.note).toBeNull();
+      // The installed tree went into the dependency cache.
+      expect(setup).toMatchObject({ cache: { from: 'install', files: expect.any(Number) } });
+
+      // A second task's worktree has the same lockfile: its tree comes from the cache, no install
+      // runs, and its links point into its own worktree.
+      const other = await FakeHarness.connect(td, { agentKey: 'be-2' });
+      const second = await take(td, other, 'be-2');
+      expect(second.start.working_directory).not.toBe(start.working_directory);
+      expect(second.setup).toMatchObject({
+        status: 'passed',
+        source: 'lockfile',
+        command: 'pnpm',
+        exit_code: null,
+        reason: 'ok',
+        cache: { key: (setup as { cache: { key: string } }).cache.key, from: 'cache' },
+      });
+      const tiny = path.join(second.start.working_directory, 'node_modules', 'tiny');
+      expect(existsSync(path.join(tiny, 'index.js'))).toBe(true);
+      expect(realpathSync.native(tiny).startsWith(realpathSync.native(second.start.working_directory))).toBe(true);
+      expect(second.start.note).toBeNull();
+      const shown = await cli(['--project', dir, 'task', 'inspect', second.task.task_id, '--events', '50']);
+      expect(shown.stdout).toContain('worktree ready; dependencies passed from the cache (pnpm');
+      await other.close();
       await fake.close();
     },
     180_000,

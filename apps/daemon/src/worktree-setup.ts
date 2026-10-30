@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { type ExecutionProfile, executeRun, type ProcessGroups, ProfileError, prepareRun } from '@friday/execution';
+import { type DependencyCache, dependencyCacheKey } from './dependency-cache.js';
 import type { Logger } from './log.js';
 import type { EffectivePolicy } from './policy.js';
 
@@ -15,9 +16,24 @@ import type { EffectivePolicy } from './policy.js';
  * plugins) that no flag stops, so its install waits for trust like a declared command (review
  * 2026-10-22, R10). Nothing is installed silently: the outcome is on the run's record, and an
  * agent whose dependencies could not be installed is told so when it starts.
+ *
+ * A lockfile install is paid once per lockfile: the installed tree goes into the dependency cache,
+ * and a later worktree with the same lockfile gets it back as hard links in seconds
+ * (`dependency-cache.ts`). The project's own command is not cached: what it produces is its own.
  */
 
 export type SetupStatus = 'passed' | 'failed' | 'skipped' | 'refused';
+
+/** The dependency cache's part in a lockfile install. */
+export interface SetupCacheRecord {
+  key: string;
+  /** `cache`: the tree was cloned from the cache, no install ran; `install`: installed, then stored. */
+  from: 'cache' | 'install';
+  /** Regular files cloned. */
+  files: number;
+  /** The clone's time (from the cache: the whole setup's; into it: added after the install). */
+  duration_ms: number;
+}
 
 /** What the setup did, as the run's record carries it (never a credential: the output is redacted). */
 export interface SetupOutcome {
@@ -32,6 +48,8 @@ export interface SetupOutcome {
   /** Why it was skipped or refused, or how it failed; `ok` when it passed. */
   reason: string;
   output_tail: string | null;
+  /** Null when the cache took no part (disabled, a declared command, a failed install or store). */
+  cache: SetupCacheRecord | null;
 }
 
 export interface SetupPlan {
@@ -40,6 +58,8 @@ export interface SetupPlan {
   args: string[];
   /** The package manager, for a detected install. */
   manager: string | null;
+  /** The lockfile the install was detected from. */
+  lockfile: string | null;
 }
 
 export type SetupDecision = SetupPlan | { skipped: string } | { refused: string };
@@ -123,7 +143,13 @@ export function planSetup(
   if (!opts.enabled) return { skipped: 'worktrees.setup.enabled is false' };
   if (existsSync(path.join(root, 'node_modules'))) return { skipped: 'node_modules is already there' };
   if (opts.declared) {
-    return { source: 'config', command: opts.declared.command, args: [...opts.declared.args], manager: null };
+    return {
+      source: 'config',
+      command: opts.declared.command,
+      args: [...opts.declared.args],
+      manager: null,
+      lockfile: null,
+    };
   }
   if (opts.held) {
     return { refused: `${opts.held.source} declares worktrees.setup.command, which ${opts.held.reason}` };
@@ -136,7 +162,13 @@ export function planSetup(
           refused: `${l.file} calls for ${l.manager}, and ${l.why}; it runs once this clone trusts the policy with worktrees.setup.allow_scripts: true (friday policy trust)`,
         };
       }
-      return { source: 'lockfile', command: l.manager, args: l.args(opts.allowScripts), manager: l.manager };
+      return {
+        source: 'lockfile',
+        command: l.manager,
+        args: l.args(opts.allowScripts),
+        manager: l.manager,
+        lockfile: l.file,
+      };
     }
   }
   return { skipped: `no lockfile (${LOCKFILE_NAMES.join(', ')})` };
@@ -145,13 +177,15 @@ export function planSetup(
 const OUTPUT_TAIL = 2000;
 
 export interface WorktreeSetupDeps {
-  settings: () => { enabled: boolean; timeout_s: number };
+  settings: () => { enabled: boolean; timeout_s: number; cache?: { enabled: boolean } };
   policy: () => EffectivePolicy;
   profile: () => ExecutionProfile;
   groups: ProcessGroups;
   logger: Logger;
   /** Removes credentials from what the install printed. */
   redact: (text: string) => string;
+  /** Installed trees kept per lockfile; without one, every worktree installs. */
+  cache?: DependencyCache;
 }
 
 /** Runs the setup a worktree calls for, in the execution profile, and reports what happened. */
@@ -178,6 +212,7 @@ export class WorktreeSetup {
       timed_out: false,
       duration_ms: null,
       output_tail: null,
+      cache: null,
     };
     if ('skipped' in decision) return { status: 'skipped', reason: decision.skipped, ...none };
     if ('refused' in decision) {
@@ -185,6 +220,34 @@ export class WorktreeSetup {
       return { status: 'refused', reason: decision.refused, ...none };
     }
     const base = { source: decision.source, command: decision.command, args: decision.args };
+    // A lockfile install the cache already holds is cloned in, and no install runs.
+    const cache = this.deps.cache;
+    const install =
+      cache && settings.cache?.enabled !== false && decision.manager && decision.lockfile
+        ? { manager: decision.manager, lockfile: decision.lockfile, scripts: policy.worktree_scripts }
+        : null;
+    const key = install
+      ? await dependencyCacheKey(worktree.path, install.manager, install.lockfile, install.scripts)
+      : null;
+    if (cache && key && (await cache.lookup(key))) {
+      try {
+        const stats = await cache.restore(key, worktree.path);
+        logger.info('task worktree dependencies restored from the cache', { ...ids, key, ...stats });
+        return {
+          status: 'passed',
+          ...base,
+          exit_code: null,
+          timed_out: false,
+          duration_ms: stats.duration_ms,
+          reason: 'ok',
+          output_tail: null,
+          cache: { key, from: 'cache', files: stats.files, duration_ms: stats.duration_ms },
+        };
+      } catch (e) {
+        // The half clone is gone (restore removes it): the install runs as if there were no entry.
+        logger.warn('dependency cache entry not restored; installing', { ...ids, key, reason: (e as Error).message });
+      }
+    }
     const group = this.deps.groups.create();
     try {
       const run = prepareRun(
@@ -219,10 +282,28 @@ export class WorktreeSetup {
               ? `${decision.command} could not start: ${out.spawn_error}`
               : `${decision.command} exited with ${out.exit_code ?? out.signal ?? 'an unknown status'}`,
         output_tail: tail,
+        cache: null,
       };
       const detail = { ...ids, status: result.status, duration_ms: out.duration_ms, reason: result.reason };
       if (out.passed) logger.info('task worktree dependencies installed', detail);
       else logger.warn('task worktree dependencies not installed', detail);
+      // The installed tree goes into the cache for the next worktree with this lockfile. A store
+      // that fails changes nothing for this worktree: it is installed.
+      if (out.passed && cache && key && install) {
+        try {
+          const stats = await cache.store(key, worktree.path, install);
+          if (stats) {
+            result.cache = { key, from: 'install', files: stats.files, duration_ms: stats.duration_ms };
+            logger.info('task worktree dependencies stored in the cache', { ...ids, key, ...stats });
+          }
+        } catch (e) {
+          logger.warn('task worktree dependencies not stored in the cache', {
+            ...ids,
+            key,
+            reason: (e as Error).message,
+          });
+        }
+      }
       return result;
     } catch (e) {
       const reason =
@@ -236,6 +317,7 @@ export class WorktreeSetup {
         duration_ms: null,
         reason,
         output_tail: null,
+        cache: null,
       };
     } finally {
       await group.close().catch(() => undefined);

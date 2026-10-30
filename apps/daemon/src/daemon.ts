@@ -36,6 +36,7 @@ import { type BrainHandle, createMasterBrain } from './brain.js';
 import { reloadingConfig } from './config-reload.js';
 import { type CompileInput, createContextService } from './context.js';
 import { ControlManager } from './control.js';
+import { DependencyCache, dependencyCacheDir } from './dependency-cache.js';
 import { profileCache } from './execution.js';
 import { GraphService } from './graph-service.js';
 import { IntegrationManager } from './integration.js';
@@ -417,9 +418,20 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     setup: (w, ids) => (worktreeSetup ? worktreeSetup.run(w, ids) : Promise.resolve(null)),
     setupFailure: () => project.config.worktrees.setup.on_failure,
   });
+  // Installed trees kept per lockfile beside the worktrees folder: a worktree whose lockfile was
+  // installed before gets the tree back as hard links instead of installing again.
+  const dependencyCache = new DependencyCache({
+    dir: dependencyCacheDir(workspaces.dir),
+    maxBytes: () => project.config.worktrees.setup.cache.max_mb * 1024 * 1024,
+    logger,
+  });
   // Checks and operations run in the execution profile of the effective policy (ADR-0029 §4).
   const stateRoot = path.dirname(path.dirname(privateDir));
-  const profileOf = profileCache({ forbiddenRoots: () => [project.root, workspaces.dir], stateDir: stateRoot, env });
+  const profileOf = profileCache({
+    forbiddenRoots: () => [project.root, workspaces.dir, dependencyCache.dir],
+    stateDir: stateRoot,
+    env,
+  });
   const profile = () => profileOf(currentPolicy());
   worktreeSetup = new WorktreeSetup({
     settings: () => project.config.worktrees.setup,
@@ -428,6 +440,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     groups,
     logger,
     redact: (text) => state.redactor.redactString(text).value,
+    cache: dependencyCache,
   });
   // A completed goal task's verified work goes to its goal branch before its worktree is released (ADR-0025).
   const integration = new IntegrationManager({ state, project, logger, workspaces, profile, groups });

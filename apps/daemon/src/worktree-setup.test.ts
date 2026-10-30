@@ -26,6 +26,7 @@ describe('planSetup', () => {
       command: 'pnpm',
       args: ['install', '--frozen-lockfile', '--prefer-offline', '--ignore-scripts', '--ignore-pnpmfile'],
       manager: 'pnpm',
+      lockfile: 'pnpm-lock.yaml',
     });
     // Scripts only when the policy trusted them.
     expect(planSetup(root, { ...base, allowScripts: true })).toMatchObject({
@@ -36,6 +37,7 @@ describe('planSetup', () => {
     expect(planSetup(root, base)).toMatchObject({
       command: 'npm',
       args: ['ci', '--prefer-offline', '--no-audit', '--no-fund', '--ignore-scripts'],
+      lockfile: 'package-lock.json',
     });
     rmSync(path.join(root, 'package-lock.json'));
     // Yarn reads executable code the repository selects, which no flag stops: trust first (review R10).
@@ -62,6 +64,7 @@ describe('planSetup', () => {
       command: 'node',
       args: ['scripts/setup.mjs'],
       manager: null,
+      lockfile: null,
     });
     const held = { source: 'config.yaml', reason: 'waits for "friday policy trust"' };
     expect(planSetup(root, { ...base, held })).toEqual({

@@ -389,6 +389,17 @@ export const FridayConfig = z
             timeout_s: z.number().int().min(10).max(3600).default(600),
             /** `warn`: the agent starts and is told; `fail`: the attempt is declined and a human decides. */
             on_failure: z.enum(['warn', 'fail']).default('warn'),
+            /**
+             * A lockfile install is paid once per lockfile: the installed tree is kept beside the
+             * worktrees folder and cloned as hard links into every later worktree with the same
+             * lockfile. `max_mb` bounds the cache; the least recently used trees go first.
+             */
+            cache: z
+              .object({
+                enabled: z.boolean().default(true),
+                max_mb: z.number().int().min(256).max(1_048_576).default(4096),
+              })
+              .prefault({}),
           })
           .prefault({}),
       })
@@ -648,6 +659,9 @@ verification:
 #       allow_scripts: false                # true: lifecycle scripts may run (loosening)
 #       timeout_s: 600
 #       on_failure: warn                    # warn: the agent starts and is told; fail: a human decides
+#       cache:                              # a lockfile install is paid once per lockfile, then cloned
+#         enabled: true
+#         max_mb: 4096
 
 # What "friday init" does once for a new project: build the code graph right away, so the Studio
 # and every agent start from a ready one (it then follows your changes). false: built on first use.

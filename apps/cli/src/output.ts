@@ -46,10 +46,17 @@ export function describeEvent(e: { type: string; payload: Record<string, unknown
     case 'run.paths_observed':
       return ((p.paths as string[]) ?? []).join(', ');
     case 'run.workspace_ready': {
-      const s = p.setup as { status?: string; command?: string | null; args?: string[]; reason?: string } | null;
+      const s = p.setup as {
+        status?: string;
+        command?: string | null;
+        args?: string[];
+        reason?: string;
+        cache?: { from?: string } | null;
+      } | null;
       if (!s) return `worktree ready at ${p.execution_root ?? ''}`;
       const cmd = s.command ? ` (${[s.command, ...(s.args ?? [])].join(' ')})` : '';
-      return `worktree ready; dependencies ${s.status}${cmd}${s.reason && s.reason !== 'ok' ? `: ${s.reason}` : ''}`;
+      const from = s.cache?.from === 'cache' ? ' from the cache' : '';
+      return `worktree ready; dependencies ${s.status}${from}${cmd}${s.reason && s.reason !== 'ok' ? `: ${s.reason}` : ''}`;
     }
     case 'command.rejected':
       return `${p.command} ${(p.error as { code?: string })?.code ?? ''} ${(p.error as { message?: string })?.message ?? ''}`;

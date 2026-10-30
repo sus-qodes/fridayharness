@@ -117,6 +117,8 @@ export interface WorkspaceSetupRecord {
   duration_ms: number | null;
   reason: string;
   output_tail: string | null;
+  /** The dependency cache's part: the tree came `from: 'cache'` (no install ran) or went into it after the `install`. */
+  cache?: { key: string; from: 'cache' | 'install'; files: number; duration_ms: number } | null;
 }
 
 /** What a `routing_blocked` error carries (review F01). */
