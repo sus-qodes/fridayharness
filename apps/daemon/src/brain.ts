@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   AnthropicPlannerModel,
   type BrainSettings,
+  ClaudeCodePlannerModel,
   DEFAULT_PLANNER_MODEL,
   FakePlannerModel,
   MasterBrain,
@@ -157,6 +158,8 @@ export function createMasterBrain(input: {
   env: NodeJS.ProcessEnv;
   logger: Logger;
   model?: PlannerModel | null;
+  /** The installed Claude Code and the environment it signs in with (`master_brain.provider: claude-code`); the CLI finds it. */
+  claudeCode?: { command: string; args?: readonly string[]; env?: NodeJS.ProcessEnv };
   /** The effective policy: whether plans are approved without a human comes from it (ADR-0028). */
   policy?: () => { auto_approve: boolean };
   /** The model routing would run on an agent's harness for a task (ADR-0031 §9). */
@@ -225,6 +228,21 @@ export function createMasterBrain(input: {
       // The config schema already refuses a host name; this catches an https or credentialed address.
       reason = (e as Error).message;
     }
+  } else if (started.provider === 'claude-code') {
+    // The installed Claude Code plans, signed in as it is on this machine: the CLI found it, or
+    // CLAUDE_CODE_BIN names it. Its login (a key or a subscription token) is in its environment.
+    const host = input.claudeCode ?? (env.CLAUDE_CODE_BIN?.trim() ? { command: env.CLAUDE_CODE_BIN.trim() } : null);
+    if (!host) {
+      reason =
+        'master_brain.provider is "claude-code" but Claude Code was not found (PATH, CLAUDE_CODE_BIN, the VS Code extension)';
+    } else {
+      model = new ClaudeCodePlannerModel({
+        command: host.command,
+        ...(host.args ? { args: host.args } : {}),
+        env: host.env ?? env,
+        effort: () => current().effort,
+      });
+    }
   } else {
     model = new KeyedAnthropicModel(env, {
       cacheTtl: provider.cache_ttl,
@@ -288,14 +306,17 @@ export function createMasterBrain(input: {
     status: () => {
       const pid = project.project_id;
       const remote = model?.remote ?? false;
+      // Through Claude Code the login is Claude Code's own (a key or a subscription): no key of Friday's.
+      const viaClaudeCode = started.provider === 'claude-code';
       const stored = hasSecret('anthropic', env);
-      const key: BrainStatus['key'] = !remote
-        ? 'not needed'
-        : stored
-          ? 'stored'
-          : env.ANTHROPIC_API_KEY?.trim()
-            ? 'environment'
-            : 'missing';
+      const key: BrainStatus['key'] =
+        !remote || viaClaudeCode
+          ? 'not needed'
+          : stored
+            ? 'stored'
+            : env.ANTHROPIC_API_KEY?.trim()
+              ? 'environment'
+              : 'missing';
       const dayStart = `${state.clock.now().slice(0, 10)}T00:00:00.000Z`;
       const consent = remotePolicy();
       const unavailable =
@@ -313,7 +334,8 @@ export function createMasterBrain(input: {
         remote,
         allow_remote: provider.allow_remote,
         approved_here: Boolean(providerApproval(project, providerName === 'none' ? 'anthropic' : providerName, env)),
-        endpoint: remote ? anthropicEndpoint(env) : local ? project.config.providers.local.base_url : null,
+        endpoint:
+          remote && !viaClaudeCode ? anthropicEndpoint(env) : local ? project.config.providers.local.base_url : null,
         ignored_base_url: local ? null : (provider.base_url ?? null),
         key,
         planner_available: !unavailable,

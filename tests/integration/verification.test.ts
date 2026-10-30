@@ -209,6 +209,30 @@ describe('verification at a recorded revision of the task checkout', () => {
     expect(d.verification.summary).toContain('no configured check applies to docs tasks');
   });
 
+  it('sets aside build and cache output that running the code left behind, instead of judging it against the scope', async () => {
+    const td = await project();
+    const done = await claimWork(td, {
+      agent: 'be-1',
+      files: {
+        'src/shared.mjs': 'export const shared = 2;\n',
+        // What the project's own checker and a type-check leave in the worktree.
+        '__pycache__/check.cpython-313.pyc': 'bytecode',
+        'tsconfig.tsbuildinfo': '{}',
+      },
+      claim: ['src/shared.mjs'],
+    });
+    const r = await verify(td, done.task.task_id);
+    expect(r.task.status).toBe('COMPLETED');
+    const diff = r.verification.checks.find((c) => c.name === 'friday.diff');
+    expect(diff?.status).toBe('PASSED');
+    expect(diff?.summary).toContain('1 changed file(s)');
+    expect(diff?.details?.findings?.find((f) => f.rule === 'diff.artifacts')).toMatchObject({
+      severity: 'info',
+      paths: ['__pycache__/check.cpython-313.pyc', 'tsconfig.tsbuildinfo'],
+    });
+    expect(diff?.details?.findings?.map((f) => f.rule)).not.toContain('diff.outside_scope');
+  });
+
   it('judges nothing when the code changes during verification, or when the daemon stops mid-way', async () => {
     const td = await project();
     const chore = await claimWork(td, {

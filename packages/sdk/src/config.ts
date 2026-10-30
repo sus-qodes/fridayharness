@@ -292,7 +292,11 @@ const MasterBrainConfig = z
      * named in `model`; `none`: plans are written by humans (`friday plan propose`); `fake`:
      * scripted answers for tests and demos.
      */
-    provider: z.enum(['anthropic', 'local', 'fake', 'none']).default('anthropic'),
+    /**
+     * `claude-code`: the installed Claude Code, headless, signed in as it is on this machine (an API
+     * key or a subscription): for a subscription, which cannot call the API directly.
+     */
+    provider: z.enum(['anthropic', 'claude-code', 'local', 'fake', 'none']).default('anthropic'),
     /** `auto` is the default planning model, claude-opus-5-5. Provider `local` needs the model's name on the server. */
     model: z.string().min(1).default('auto'),
     effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
@@ -685,7 +689,8 @@ setup:
 # project allows remote calls here AND you allowed it on your machine ("friday brain allow-remote");
 # store the key with "friday secrets set anthropic".
 master_brain:
-  provider: anthropic   # anthropic | local | fake | none (none: you write plans with "friday plan propose")
+  provider: anthropic   # anthropic | claude-code | local | fake | none (none: you write plans with "friday plan propose")
+                        # claude-code: the installed Claude Code plans, signed in as on this machine (a subscription works)
   model: auto           # claude-opus-5-5; for provider local, the model's name on your server (qwen2.5:7b)
   auto_approve: false   # a human approves each plan version with "friday plan approve"
 

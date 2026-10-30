@@ -28,6 +28,33 @@ const listed = <T>(items: T[]) => items.slice(0, MAX_LISTED);
 const more = (paths: string[]) => (paths.length > MAX_LISTED ? ` (and ${paths.length - MAX_LISTED} more)` : '');
 const show = (paths: string[]) => `${listed(paths).join(', ')}${more(paths)}`;
 
+/**
+ * Output that running, building or type-checking the code leaves behind, which a repository without
+ * an ignore rule for it shows as changed files: Python's bytecode caches, the caches of pytest, mypy
+ * and ruff, TypeScript's incremental build record, installed packages, Next.js and Turborepo output,
+ * a `.cache` folder. Such a path is not the task's change: judging it against the write scope refused
+ * correct work whose only "extra" change was `__pycache__/` from the project's own checker.
+ */
+const BUILD_ARTIFACTS: readonly RegExp[] = [
+  /(^|\/)__pycache__\//,
+  /\.pyc$/,
+  /\.pyo$/,
+  /(^|\/)\.pytest_cache\//,
+  /(^|\/)\.mypy_cache\//,
+  /(^|\/)\.ruff_cache\//,
+  /\.tsbuildinfo$/,
+  /(^|\/)node_modules\//,
+  /(^|\/)\.next\//,
+  /(^|\/)\.turbo\//,
+  /(^|\/)\.cache\//,
+];
+
+/** Whether a root-relative path (forward slashes) is build or cache output rather than the task's work. */
+export function isBuildArtifact(path: string): boolean {
+  const p = path.replaceAll('\\', '/');
+  return BUILD_ARTIFACTS.some((re) => re.test(p));
+}
+
 export interface DiffInput {
   changed: ChangedPath[];
   /** The task's write scope; empty or null: the task may not write. */

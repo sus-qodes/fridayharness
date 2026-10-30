@@ -9,6 +9,7 @@ import {
   checkReservations,
   checksVersion,
   type Finding,
+  isBuildArtifact,
   ownChanges,
   relatedTests,
   scanCredentials,
@@ -163,8 +164,12 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     // initialized after its last commit) must not fail the claim as changes to protected files. A
     // path the claim names or the hooks saw written counts whatever its age.
     const firstAccepted = firstAttemptAt(state.q.runs(taskId));
+    // Build and cache output that running the code left behind (`__pycache__/`, `*.tsbuildinfo`,
+    // `node_modules/`…) is not the task's work either: it is set aside and named, never judged
+    // against the scope.
+    const artifacts = since ? since.changes.filter((c) => isBuildArtifact(c.path)).map((c) => c.path) : [];
     const sinceChanges = since
-      ? since.changes.filter((c) => !preexisting(c, root, firstAccepted, observed, claimed))
+      ? since.changes.filter((c) => !isBuildArtifact(c.path) && !preexisting(c, root, firstAccepted, observed, claimed))
       : [];
     const changes = since
       ? ownChanges({ changed: sinceChanges, shared, observed, claimed, caseInsensitive: WINDOWS }).own
@@ -217,6 +222,14 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
             paths: [],
           },
         ];
+    if (artifacts.length) {
+      findings.push({
+        rule: 'diff.artifacts',
+        severity: 'info',
+        message: `${artifacts.length} build or cache file(s) left by running the code were set aside: ${artifacts.slice(0, 20).join(', ')}${artifacts.length > 20 ? ` (and ${artifacts.length - 20} more)` : ''}`,
+        paths: artifacts.slice(0, 20),
+      });
+    }
     if (before?.dirty) {
       findings.push({
         rule: 'diff.uncommitted',

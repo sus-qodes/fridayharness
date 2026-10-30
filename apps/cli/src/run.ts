@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { claudeEnvironment, detectClaudeCode } from '@friday/adapter-claude';
 import type { Daemon, DaemonOptions } from '@friday/daemon';
 
 /** The interface's built bundle, next to the CLI in the repository (plan M9 FD-04). */
@@ -24,12 +25,17 @@ export interface RunOptions {
 /** Starts the daemon in this process and keeps it running until a signal or `friday daemon stop`. */
 export async function runDaemon(opts: RunOptions): Promise<void> {
   const { createDaemon } = await import('@friday/daemon');
+  // The installed Claude Code, for a Master Brain that plans through it (`master_brain.provider:
+  // claude-code`): found as the spawn adapter finds it, run with the environment a spawned
+  // session gets (the user's login, nothing of a parent session).
+  const claude = detectClaudeCode();
   let daemon: Daemon;
   daemon = await createDaemon({
     projectRoot: opts.project ?? process.cwd(),
     logToConsole: true,
     ...(opts.port !== undefined ? { port: opts.port } : {}),
     ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
+    ...(claude ? { brain: { claudeCode: { command: claude.binary, env: claudeEnvironment() } } } : {}),
     extensions: daemonPlugins.extensions,
     ...(uiBundleDir() ? { uiDir: uiBundleDir() as string } : {}),
     ...(daemonPlugins.verify ? { verify: daemonPlugins.verify } : {}),

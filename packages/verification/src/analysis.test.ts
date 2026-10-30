@@ -7,6 +7,7 @@ import {
   analyzeDiff,
   checkReservations,
   type DiffInput,
+  isBuildArtifact,
   ownChanges,
   relatedTests,
   scanCredentials,
@@ -125,6 +126,38 @@ describe('diff analysis', () => {
     const [f] = analyzeDiff(base({ changed }));
     expect(f?.paths).toHaveLength(20);
     expect(f?.message).toContain('(and 5 more)');
+  });
+});
+
+describe('build artifacts', () => {
+  it('knows the output running, building or type-checking the code leaves behind', () => {
+    for (const p of [
+      '__pycache__/check.cpython-313.pyc',
+      'src/pkg/__pycache__/m.cpython-312.pyc',
+      'a/b.pyo',
+      '.pytest_cache/v/cache/nodeids',
+      '.mypy_cache/3.12/x.json',
+      '.ruff_cache/x',
+      'tsconfig.tsbuildinfo',
+      'packages/app/tsconfig.build.tsbuildinfo',
+      'node_modules/left-pad/index.js',
+      '.next/cache/x',
+      '.turbo/cache',
+      'web/.cache/x',
+      'win\\__pycache__\\x.pyc',
+    ]) {
+      expect(isBuildArtifact(p), p).toBe(true);
+    }
+    for (const p of [
+      'src/a.py',
+      'routing_result_1.json',
+      'cache/index.ts',
+      'next.config.js',
+      'docs/cache.md',
+      'pycache/x',
+    ]) {
+      expect(isBuildArtifact(p), p).toBe(false);
+    }
   });
 });
 

@@ -69,6 +69,11 @@ export {
   structuredOutputSchema,
   wrapProjectContext,
 } from './providers/anthropic.js';
+export {
+  ClaudeCodePlannerModel,
+  type ClaudeCodePlannerOptions,
+  usageFromClaude,
+} from './providers/claude-code.js';
 export { FakePlannerModel, type FakeResponse } from './providers/fake.js';
 export {
   DEFAULT_LOCAL_BASE_URL,

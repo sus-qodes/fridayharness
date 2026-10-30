@@ -69,6 +69,31 @@ The extension can contain the native Claude executable even if `claude` is absen
 
 Never configure Friday's hooks or MCP server inside Friday's source checkout. Use a temporary application project for the setup commands in those guides. A nested headless Claude process drops `CLAUDE*` and `MCP_CONNECTION_NONBLOCKING`; the adapter supplies its controlled environment. Never copy provider keys into a project host configuration.
 
+### CodeGraph for code navigation
+
+[CodeGraph](https://github.com/colbymchenry/codegraph) provides a local symbol and dependency index for navigating this checkout. Install it separately from the workspace dependencies:
+
+```powershell
+npm.cmd install --global @colbymchenry/codegraph@1.6.2
+codegraph.cmd install --target=codex --location=global --yes
+codegraph.cmd telemetry off
+codegraph.cmd init --yes
+codegraph.cmd status
+```
+
+Run the initialization and queries from the repository root. Restart Codex after installing its MCP connection. The installer also adds CodeGraph usage guidance to the user's Codex `AGENTS.md`. Its MCP server watches source changes and catches up when reconnecting; CLI-only workflows can run `codegraph.cmd sync` before querying.
+
+```powershell
+codegraph.cmd explore "How does the CLI submit work to the daemon?" --max-files 4
+codegraph.cmd callers buildApp --file apps/daemon/src/app.ts
+codegraph.cmd callees buildApp --file apps/daemon/src/app.ts
+codegraph.cmd impact buildApp --file apps/daemon/src/app.ts
+```
+
+Use `codegraph_explore` through MCP, or `codegraph.cmd explore` in the shell, before searching or reading code to understand its structure. The graph contains static relationships; confirm runtime behavior with the relevant implementation and focused checks when needed. The local database and runtime files are ignored by `.codegraph/.gitignore`. The root `codegraph.json` excludes release archives, the local pitch project and review reports; dependency and build directories are excluded by CodeGraph's defaults.
+
+On POSIX use `npm` and `codegraph` in these commands. This navigation tool is separate from Friday's own graph implementation and host hooks.
+
 ## 4. Environment and private files
 
 | Variable | Purpose | Default or rule |

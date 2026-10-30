@@ -84,7 +84,14 @@ export interface DaemonOptions {
    * The Master Brain (M2): false leaves it out; `model` replaces the configured provider (tests);
    * `autoStart: false` leaves it idle until `brain.runOnce()`.
    */
-  brain?: false | { model?: PlannerModel | null; autoStart?: boolean };
+  brain?:
+    | false
+    | {
+        model?: PlannerModel | null;
+        autoStart?: boolean;
+        /** The installed Claude Code and the environment it signs in with, for `master_brain.provider: claude-code` (the CLI finds it). */
+        claudeCode?: { command: string; args?: readonly string[]; env?: NodeJS.ProcessEnv };
+      };
   /** The interface's built bundle (`apps/ui/dist`), served at /ui/ (M9); `friday run` passes it. */
   uiDir?: string;
 }
@@ -598,6 +605,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
           policy: currentPolicy,
           modelFit: (task, agentId) => routing.fitFor(task, agentId),
           ...(opts.brain && opts.brain.model !== undefined ? { model: opts.brain.model } : {}),
+          ...(opts.brain && opts.brain.claudeCode ? { claudeCode: opts.brain.claudeCode } : {}),
         });
 
   let closing: Promise<void> | undefined;
