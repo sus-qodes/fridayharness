@@ -61,7 +61,9 @@ describe('friday start', () => {
       try {
         expect(first.code, first.stderr).toBe(0);
         const lines = first.stdout.trim().split('\n');
-        expect(lines.length).toBeLessThanOrEqual(3);
+        // Three lines, and one more while the project has no approved intent (ADR-0034 §2).
+        expect(lines.length).toBeLessThanOrEqual(4);
+        if (lines.length === 4) expect(lines[3]).toContain('friday intent');
         expect(lines[0]).toContain('Initialized Friday');
         expect(lines[1]).toContain('Started Friday hidden');
         const m = /(http:\/\/127\.0\.0\.1:\d+)\/ui\//.exec(first.stdout);

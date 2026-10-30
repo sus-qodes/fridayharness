@@ -41,10 +41,11 @@ describe('model routing', () => {
     const explained = await td.operator.get<{
       dry_run: { role: string | null; source: string; model: string | null; selected_rank: number | null };
     }>(td.operator.projectPath(`/routing/explain/${task.task_id}`));
+    // General coding uses the owner's backend ranking: Claude Sonnet in Claude Code first.
     expect(explained.dry_run).toMatchObject({
-      role: 'implementation',
+      role: 'backend_engineer',
       source: 'registry',
-      model: 'claude-opus-5-5',
+      model: 'claude-sonnet-5-5',
       selected_rank: 1,
     });
 
@@ -56,7 +57,8 @@ describe('model routing', () => {
     const docsExplain = await td.operator.get<{ dry_run: { role: string | null; model: string | null } }>(
       td.operator.projectPath(`/routing/explain/${docs.task_id}`),
     );
-    expect(docsExplain.dry_run).toMatchObject({ role: 'docs', model: 'claude-sonnet-5-5' });
+    // Docs use the owner's backend ranking too (2026-10-21).
+    expect(docsExplain.dry_run).toMatchObject({ role: 'backend_engineer', model: 'claude-sonnet-5-5' });
 
     await td.operator.post(td.operator.projectPath('/routing/pins'), {
       scope: 'kind',
@@ -102,10 +104,11 @@ describe('model routing', () => {
     // What was recorded (Part 12 §9): the model, the reason, the evidence and the fallback.
     const explained = await cli(['--project', dir, 'routing', 'explain', t1.task_id]);
     expect(explained.code, explained.stderr).toBe(0);
-    expect(explained.stdout).toContain('claude-opus-5-5 (registry, class implementation, binding)');
-    expect(explained.stdout).toContain('role: implementation (kind_fallback)');
+    // The host cannot run rank 1 (Sonnet), so the next rank it can run decides: Opus, rank 2.
+    expect(explained.stdout).toContain('claude-opus-5-5 (registry, class backend_engineer, binding)');
+    expect(explained.stdout).toContain('role: backend_engineer (kind_fallback)');
+    expect(explained.stdout).toContain('rank 2');
     expect(explained.stdout).toContain('fallback: a human');
-    expect(explained.stdout).toContain('excluded claude-sonnet-5-5: harness.cannot_run');
     // The adapter reports what actually ran.
     await fake.client.emitEvent({
       task_id: t1.task_id,
@@ -178,7 +181,8 @@ describe('model routing', () => {
     });
     expect((await cli(['--project', dir, 'verify', t2.task_id, '--result', 'passed'])).code).toBe(0);
     const models = await cli(['--project', dir, 'models']);
-    expect(models.stdout).toMatch(/claude-sonnet-5-5\s+docs\s+1\s+100%/);
+    // Outcomes are kept by the canonical role: docs use the owner's backend ranking.
+    expect(models.stdout).toMatch(/claude-sonnet-5-5\s+backend_engineer\s+1\s+100%/);
     const pins = await cli(['--project', dir, 'routing', 'pins']);
     expect(pins.stdout).toContain('model claude-haiku-5-5 for kind docs, by human:local-operator until');
   }, 120_000);

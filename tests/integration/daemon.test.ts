@@ -235,7 +235,8 @@ describe('event stream', () => {
       after.push(msg.event);
       resume.abort();
     }
-    expect(after).toEqual(['task.created']);
+    // Creating a task also records its role contract (R2): the event after task.created.
+    expect(after).toEqual(['task.role_resolved']);
   });
 });
 

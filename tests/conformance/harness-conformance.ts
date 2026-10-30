@@ -38,6 +38,11 @@ export interface ConformanceSubject {
   clock: FakeClock;
   /** Attaches a harness of the adapter under test (spawn mode, delivery loop running). */
   attach(opts?: { key?: string; agentKey?: string }): Promise<ConformanceHarness>;
+  /**
+   * The role of the tasks the suite creates, for a host the owner's static ranking (ADR-0031) lists
+   * only for some roles: Gemini CLI serves DevOps, not backend work. Unset: the task's kind decides.
+   */
+  taskRole?: string;
 }
 
 /** Waits for a state: 30 s, since a scripted host starting its work on a busy machine can take far longer than 5 s (LESSONS T-110). */
@@ -59,6 +64,7 @@ export function runHarnessConformance(name: string, makeSubject: () => Promise<C
     const createAssigned = async (s: ConformanceSubject, h: ConformanceHarness, agentKey = 'dev-1') => {
       const t = await s.td.operator.post<TaskView>(s.td.operator.projectPath('/tasks'), {
         summary: 'conformance task',
+        ...(s.taskRole ? { role: s.taskRole } : {}),
         ready: true,
       });
       await s.td.operator.post(s.td.operator.projectPath(`/tasks/${t.task_id}/assign`), { agent_key: agentKey });

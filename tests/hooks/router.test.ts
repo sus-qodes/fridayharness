@@ -95,9 +95,10 @@ async function mcpSession(
   return client;
 }
 
-async function createTask(td: TestDaemon, write: string[], agentKey = 'dev-1'): Promise<TaskView> {
+async function createTask(td: TestDaemon, write: string[], agentKey = 'dev-1', role?: string): Promise<TaskView> {
   return td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
     summary: `Task for ${agentKey}`,
+    ...(role ? { role } : {}),
     acceptance_criteria: ['tests pass'],
     scope: { write, read: [] },
     assign_agent_key: agentKey,
@@ -436,7 +437,8 @@ describe('Claude Code hook routes', () => {
     const one = await mcpSession(r.td, { pid: 1001, sessionId: 'sess-a', agentKey: 'dev-1' });
     const two = await mcpSession(r.td, { pid: 1002, sessionId: 'sess-b', agentKey: 'dev-2' });
     const taskA = await createTask(r.td, ['src/**'], 'dev-1');
-    await createTask(r.td, ['src/lib/**', 'docs/**'], 'dev-2');
+    // Code and docs together are ambiguous to role resolution (R2), so the test names the role.
+    await createTask(r.td, ['src/lib/**', 'docs/**'], 'dev-2', 'implementation');
     await one.claim({ next: true });
     await two.claim({ next: true });
     const asTwo = { claudePid: 1002 };

@@ -139,7 +139,7 @@ async function run(script) {
         info: {
           role: 'assistant',
           time: { created: now, completed: now },
-          modelID: 'qwen-fake',
+          modelID: 'z-ai/glm-5.3',
           providerID: 'friday-local',
           cost: 0,
           tokens: { input: 120, output: 30, reasoning: 0, cache: { read: 0, write: 0 } },

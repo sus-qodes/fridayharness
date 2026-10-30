@@ -257,9 +257,9 @@ describe('config.yaml read again while Friday runs', () => {
     expect((await explain()).dry_run).toMatchObject({
       source: 'registry',
       model: 'claude-sonnet-5-5',
-      role: 'docs',
+      role: 'backend_engineer',
       role_source: 'kind_fallback',
-      registry_version: '2026-10-21.3',
+      registry_version: '2026-10-21.4',
       selected_rank: 1,
       selected_harness: 'claude-code',
     });
@@ -284,17 +284,18 @@ describe('config.yaml read again while Friday runs', () => {
       source: 'none',
       model: null,
       blocked: true,
-      role: 'docs',
+      role: 'backend_engineer',
       role_source: 'kind_fallback',
-      registry_version: '2026-10-21.3',
-      selected_rank: 3,
+      registry_version: '2026-10-21.4',
+      // Appended after the owner's five backend ranks; it never reorders them.
+      selected_rank: 6,
       selected_harness: 'generic',
     });
     expect(enabled.reason).toContain('must hold');
     expect(enabled.candidates).toContainEqual(
       expect.objectContaining({
         model: 'local-coder',
-        reasons: ['registry.rank(3)', 'registry.harness(generic)'],
+        reasons: ['registry.rank(6)', 'registry.harness(generic)'],
       }),
     );
   });

@@ -3,7 +3,7 @@
 # The catalog records what Friday knows about a model: who provides it, which harnesses run it,
 # whether it is local, its price and provenance. It is not a routing guide: the static role registry
 # in src/role-registry.ts chooses the dispatch order. Prices are USD per million tokens.
-version: 2026-10-21.1
+version: 2026-10-21.2
 
 models:
   - id: claude-fable-5-1
@@ -30,7 +30,7 @@ models:
     notes: top tier; the most expensive
   - id: claude-opus-5-5
     provider: anthropic
-    vendors: [claude-code]
+    vendors: [claude-code, cursor]
     vision: true
     local: false
     context_tokens: 1000000
@@ -52,7 +52,7 @@ models:
     notes: high tier; Friday's default planner model
   - id: claude-sonnet-5-5
     provider: anthropic
-    vendors: [claude-code]
+    vendors: [claude-code, cursor]
     vision: true
     local: false
     context_tokens: 1000000
@@ -116,4 +116,91 @@ models:
       test_generation: 0.82
       review: 0.8
       security_analysis: 0.78
-    notes: Codex's configured model in the M3.5 spike; price unknown here, so cost does not rank it
+    notes: Codex's configured model in the M3.5 spike; in no role of the handoff ranking, kept for hosts that report it
+
+  # The handoff specification's models (§4, 2026-10-21), under the ids its registry uses for each
+  # harness. Prices are the specification's; its benchmark figures are noted, not verified here.
+  - id: anthropic/claude-haiku-5.5
+    provider: anthropic
+    vendors: [opencode]
+    vision: true
+    local: false
+    context_tokens: 200000
+    price: { input: 0.1, output: 0.5 }
+    cost_class: cheap
+    notes: Claude Haiku 5.5 through OpenRouter in OpenCode; sub-second role classification
+  - id: anthropic/claude-opus-5.5
+    provider: anthropic
+    vendors: [opencode]
+    vision: true
+    local: false
+    context_tokens: 1000000
+    price: { input: 4, output: 20 }
+    notes: Claude Opus 5.5 through OpenRouter in OpenCode (read-only plan agent mode in the handoff)
+  - id: openai/gpt-6-luna
+    provider: openai
+    vendors: [codex]
+    vision: true
+    local: false
+    context_tokens: 1050000
+    price: { input: 0.1, output: 0.5 }
+    cost_class: cheap
+    notes: high-speed classification and extraction; 1.05M context
+  - id: openai/gpt-6-astra
+    provider: openai
+    vendors: [codex]
+    vision: true
+    local: false
+    context_tokens: 1050000
+    price: { input: 10, output: 50 }
+    notes: "handoff: 59.6% Terminal-Bench 4.0, #2 Bug Hunt Bench"
+  - id: openai/gpt-6.1-sol
+    provider: openai
+    vendors: [codex]
+    vision: true
+    local: false
+    context_tokens: 1050000
+    price: { input: 2, output: 10 }
+    notes: "handoff: #3 Bug Hunt Bench at a fifth of Astra's cost"
+  - id: gemini-4-argon
+    provider: google
+    vendors: [cursor, gemini]
+    vision: true
+    local: false
+    context_tokens: 1000000
+    price: { input: 2, output: 10 }
+    notes: "handoff: #1 Vibe Code Bench for UI and frontend generation"
+  - id: gemini-3.8-flash
+    provider: google
+    vendors: [gemini]
+    vision: true
+    local: false
+    context_tokens: 1048576
+    price: { input: 0.75, output: 3.75 }
+    notes: "handoff: 89.4% Terminal-Bench 2.1; fast CLI and DevOps work"
+  - id: deepseek/deepseek-v4.1-flash-1017
+    provider: deepseek
+    vendors: [opencode, deepseek]
+    vision: false
+    local: false
+    context_tokens: 1000000
+    price: { input: 0.15, output: 0.6 }
+    cost_class: cheap
+    notes: DeepSeek V4.1 Flash; through OpenCode now, through DeepSeek Harness once its adapter exists
+  - id: deepseek-flash
+    provider: deepseek
+    vendors: [deepseek]
+    vision: false
+    local: false
+    context_tokens: 1000000
+    price: { input: 0.15, output: 0.6 }
+    cost_class: cheap
+    notes: DeepSeek V4.1 Flash as DeepSeek Harness names it; waits for that adapter
+  - id: z-ai/glm-5.3
+    provider: z-ai
+    vendors: [opencode]
+    vision: false
+    local: false
+    context_tokens: 1048576
+    price: { input: 1.4, output: 4.4 }
+    notes: "handoff: top-3 OpenRouter agentic coding model by volume"

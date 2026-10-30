@@ -652,7 +652,7 @@ describe('Master Brain', () => {
         purpose: 'role',
         output: {
           status: 'classified',
-          roles: [{ role: 'implementation', task_summary: 'split the change', depends_on: [], confidence: 0.95 }],
+          roles: [{ role: 'backend_engineer', task_summary: 'split the change', depends_on: [], confidence: 0.95 }],
           assumptions: [],
         },
       },
@@ -673,7 +673,7 @@ describe('Master Brain', () => {
 
     await b.runOnce();
     expect(state.q.task(PROJECT, blocked.task_id)).toMatchObject({
-      role: 'implementation',
+      role: 'backend_engineer',
       role_source: 'decision_model',
       role_confidence: 0.95,
     });
@@ -789,7 +789,7 @@ describe('Master Brain', () => {
       purpose: 'role' as const,
       output: {
         status: 'classified' as const,
-        roles: [{ role: 'implementation', task_summary: 'maybe', depends_on: [], confidence: 0.2 }],
+        roles: [{ role: 'backend_engineer', task_summary: 'maybe', depends_on: [], confidence: 0.2 }],
         assumptions: [],
       },
     };

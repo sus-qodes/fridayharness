@@ -12,6 +12,9 @@ import { FakeClock, useTestWorkspace } from '@friday/test-support';
 import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
 import { type ConformanceHarness, type ConformanceSubject, runHarnessConformance } from './harness-conformance.js';
 
+/** A model the owner's static ranking (ADR-0031) lists for OpenCode: GLM 5.3, backend rank 5. */
+const OPENCODE_MODEL = 'z-ai/glm-5.3';
+
 const ws = useTestWorkspace();
 const FAKE = fileURLToPath(new URL('../fixtures/opencode/fake-opencode.mjs', import.meta.url));
 let counter = 0;
@@ -106,7 +109,7 @@ async function subject(): Promise<ConformanceSubject> {
         harnessKey: opts.key ?? `opencode:conformance:${process.pid}:${counter}`,
         host: { command: process.execPath, args: [FAKE, '--fixture', fixture] },
         dependenciesDir: deps,
-        inference: { baseURL: 'http://127.0.0.1:9/v1', model: 'qwen-fake' },
+        inference: { baseURL: 'http://127.0.0.1:9/v1', model: OPENCODE_MODEL },
         workDir: dir,
         hostEnv: { ...process.env },
         ...(process.env.FRIDAY_TEST_DEBUG ? { log: (m: string) => console.error(`[opencode ${counter}] ${m}`) } : {}),

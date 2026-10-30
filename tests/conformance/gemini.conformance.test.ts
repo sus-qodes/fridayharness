@@ -104,6 +104,9 @@ interface GeminiConformanceSubject extends Omit<ConformanceSubject, 'attach'> {
   attach(opts?: { key?: string; agentKey?: string }): Promise<GeminiSubject>;
 }
 
+/** The owner's static ranking (ADR-0031) lists Gemini CLI first for DevOps and not for backend work. */
+const GEMINI_ROLE = 'devops';
+
 /**
  * A daemon for a project Friday configured for Gemini CLI, and a way to attach Gemini adapters
  * whose scripted hosts play `script`. With `git`, the project is a repository whose first commit
@@ -137,6 +140,7 @@ async function subject(
   return {
     td,
     clock,
+    taskRole: GEMINI_ROLE,
     attach: async (o = {}) => {
       counter += 1;
       const log = path.join(dir, `log-${counter}.jsonl`);
@@ -209,6 +213,7 @@ describe('harness conformance: Gemini CLI in spawn mode, what is particular to i
     const h = await s.attach({ agentKey: 'gm-1' });
     const pid = s.td.project.project_id;
     const t = await s.td.operator.post<TaskView>(s.td.operator.projectPath('/tasks'), {
+      role: GEMINI_ROLE,
       summary: 'write ok',
       scope: { write: ['src/**'], read: [] },
       ready: true,
@@ -334,6 +339,7 @@ describe('harness conformance: Gemini CLI in spawn mode, what is particular to i
     const h = await s.attach({ agentKey: 'gm-3' });
     const pid = s.td.project.project_id;
     const t = await s.td.operator.post<TaskView>(s.td.operator.projectPath('/tasks'), {
+      role: GEMINI_ROLE,
       summary: 'cart',
       scope: { write: ['src/**'], read: [] },
       ready: true,
@@ -410,6 +416,7 @@ describe('harness conformance: Gemini CLI in spawn mode, what is particular to i
     const h = await s.attach({ agentKey: 'gm-2' });
     const pid = s.td.project.project_id;
     const t = await s.td.operator.post<TaskView>(s.td.operator.projectPath('/tasks'), {
+      role: GEMINI_ROLE,
       summary: 'never starts',
       scope: { write: ['src/**'], read: [] },
       ready: true,
@@ -442,6 +449,7 @@ describe('harness conformance: Gemini CLI in spawn mode, what is particular to i
     const h = await s.attach({ agentKey: 'gm-4' });
     const pid = s.td.project.project_id;
     const t = await s.td.operator.post<TaskView>(s.td.operator.projectPath('/tasks'), {
+      role: GEMINI_ROLE,
       summary: 'kept settings',
       scope: { write: ['src/**'], read: [] },
       ready: true,

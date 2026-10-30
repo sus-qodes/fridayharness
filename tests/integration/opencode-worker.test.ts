@@ -16,6 +16,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli } from '../helpers/cli.js';
 import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
 
+/** A model the owner's static ranking (ADR-0031) lists for OpenCode: GLM 5.3, backend rank 5. */
+const OPENCODE_MODEL = 'z-ai/glm-5.3';
+
 const ws = useTestWorkspace();
 let saved: string | undefined;
 beforeEach(() => {
@@ -70,7 +73,7 @@ function worker(
     role: 'backend',
     host: { command: process.execPath, args: [FAKE, '--fixture', fixture] },
     dependenciesDir: existsSync(path.join(dir, 'deps')) ? path.join(dir, 'deps') : dependencies(dir),
-    inference: { baseURL: 'http://127.0.0.1:9/v1', model: 'qwen-fake' },
+    inference: { baseURL: 'http://127.0.0.1:9/v1', model: OPENCODE_MODEL },
     workDir: dir,
     hostEnv: { ...process.env },
     ...(opts.harnessKey ? { harnessKey: opts.harnessKey } : {}),
@@ -141,7 +144,7 @@ describe('OpenCode checkpoint D: the worker lifecycle (plan M14.4)', () => {
     await o.worker.start();
     const harness = td.daemon.state.q.findHarness(o.worker.harnessId);
     expect(harness).toMatchObject({ vendor: 'opencode', attach_mode: 'spawn', enforcement_level: 'L1' });
-    expect(harness?.capabilities).toMatchObject({ cost_class: 'free', models: ['qwen-fake'], task_start: true });
+    expect(harness?.capabilities).toMatchObject({ cost_class: 'free', models: [OPENCODE_MODEL], task_start: true });
     const id = await assigned(td, 'oc-1', ['src/**'], 'Add src/done.ts');
     const done = await eventually(
       () => status(td, id),
@@ -187,7 +190,7 @@ describe('OpenCode checkpoint D: the worker lifecycle (plan M14.4)', () => {
         cache_read_input_tokens: 0,
         cache_creation_input_tokens: 0,
         turns: 1,
-        model: 'qwen-fake',
+        model: OPENCODE_MODEL,
       },
     ]);
     // The attempt's server ended and its private profile is gone.

@@ -17,6 +17,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli, REPO_ROOT } from '../helpers/cli.js';
+import { TEST_HOST_MODELS } from '../helpers/fake-harness.js';
 import { decisionOf, hostEnv, runLauncher, toolHook } from '../helpers/hooks.js';
 
 const ws = useTestWorkspace();
@@ -119,6 +120,9 @@ async function createDiscountTask(shop: Shop): Promise<TaskView> {
     'frontend/src/pricing/**',
     '--scope-write',
     'frontend/test/**',
+    // Code and its tests together are ambiguous to role resolution (R2), so the task names its role.
+    '--role',
+    'frontend',
     '--scope-read',
     'frontend/**',
     '--scope-read',
@@ -355,6 +359,7 @@ describe('fixture-shop M1 demo', () => {
       attach_mode: 'attach',
       project_id: shop.daemon.project.project_id,
       agent_key: 'dev-1',
+      capabilities: { models: TEST_HOST_MODELS },
       // Stands in for an adapter with policy hooks; the project requires L1 (review F09).
       enforcement_level: 'L1',
     });

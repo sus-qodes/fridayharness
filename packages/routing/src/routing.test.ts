@@ -64,7 +64,7 @@ describe('decideRoute', () => {
     const d = decideRoute(base());
     expect(d).toMatchObject({
       mode: 'registry',
-      model: 'claude-opus-5-5',
+      model: 'claude-sonnet-5-5',
       source: 'registry',
       task_class: 'backend_engineer',
       role: 'backend_engineer',
@@ -75,9 +75,13 @@ describe('decideRoute', () => {
       binding: false,
     });
     expect(d.reason_codes).toContain('registry.rank');
-    expect(d.candidates[0]).toMatchObject({ model: 'claude-opus-5-5', score: 1, fit: 1, samples: 0 });
-    expect(d.fallback_chain).toEqual([
-      { model: 'claude-sonnet-5-5', reason: 'registry.rank.next' },
+    expect(d.candidates[0]).toMatchObject({ model: 'claude-sonnet-5-5', score: 1, fit: 1, samples: 0 });
+    // Claude Code holds no other backend rank: after it, only a human.
+    expect(d.fallback_chain).toEqual([{ model: null, reason: 'human' }]);
+    // A host that can run more of the role's models falls back to the next rank it can run.
+    const generic = decideRoute(base({ vendor: 'generic', harness_models: ['claude-opus-5-5', 'claude-sonnet-5-5'] }));
+    expect(generic.fallback_chain).toEqual([
+      { model: 'claude-opus-5-5', reason: 'registry.rank.next' },
       { model: null, reason: 'human' },
     ]);
   });
@@ -87,7 +91,7 @@ describe('decideRoute', () => {
       blocked: false,
       role: 'implementation',
       role_source: 'kind_fallback',
-      model: 'claude-opus-5-5',
+      model: 'claude-sonnet-5-5',
     });
     expect(decideRoute(base({ task: { ...base().task, role: 'designer' } }))).toMatchObject({
       blocked: true,
@@ -125,7 +129,7 @@ describe('decideRoute', () => {
         task: { ...base().task, kind: 'analysis', role: null, scope: { write: ['src/**'], read: [] } },
       }),
     );
-    expect(source).toMatchObject({ role: 'implementation', role_source: 'path_fallback', model: 'claude-opus-5-5' });
+    expect(source).toMatchObject({ role: 'implementation', role_source: 'path_fallback', model: 'claude-sonnet-5-5' });
   });
 
   it('blocks a persisted proposed DAG or a blocked role resolution instead of guessing', () => {
@@ -230,8 +234,14 @@ describe('decideRoute', () => {
     const d = decideRoute(base({ model_control: 'set', pins: [pin({ model: 'claude-haiku-5-5' })] }));
     expect(d).toMatchObject({ model: 'claude-haiku-5-5', source: 'pin', binding: true, pin_id: 'pin_1' });
     const codex = decideRoute(base({ vendor: 'codex', model_control: 'set' }));
-    expect(codex).toMatchObject({ model: 'gpt-5.6-luna', selected_rank: 2, source: 'registry' });
-    expect(codex.excluded).toContainEqual({ model: 'claude-opus-5-5', reason: 'registry.harness.claude-code' });
+    expect(codex).toMatchObject({ model: 'openai/gpt-6.1-sol', selected_rank: 4, source: 'registry' });
+    expect(codex.excluded).toContainEqual({ model: 'claude-sonnet-5-5', reason: 'registry.harness.claude-code' });
+    // A host the owner's ranking does not list for a role gets none of its work; its place in other
+    // roles is unchanged (Gemini CLI is first for DevOps).
+    const gemini = decideRoute(base({ vendor: 'gemini' }));
+    expect(gemini).toMatchObject({ blocked: true, reason_codes: ['registry.none_eligible'] });
+    const devops = decideRoute(base({ vendor: 'gemini', task: { ...base().task, role: 'devops' } }));
+    expect(devops).toMatchObject({ model: 'gemini-3.8-flash', selected_rank: 1, selected_harness: 'gemini' });
   });
 
   it("follows a human's pin over everything else, and never silently replaces it", () => {

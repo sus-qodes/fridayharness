@@ -1,20 +1,26 @@
 {
-  "version": "2026-10-21.3",
+  "version": "2026-10-21.4",
   "aliases": {
     "classifier": "decision_router",
     "router": "decision_router",
     "architect": "system_architect",
     "system-architect": "system_architect",
     "architecture": "system_architect",
+    "research": "system_architect",
+    "investigate": "system_architect",
     "backend": "backend_engineer",
     "backend-engineer": "backend_engineer",
+    "implementation": "backend_engineer",
+    "developer": "backend_engineer",
+    "dev": "backend_engineer",
+    "engineer": "backend_engineer",
+    "docs": "backend_engineer",
+    "documentation": "backend_engineer",
+    "doc": "backend_engineer",
     "frontend": "frontend_engineer",
     "frontend-engineer": "frontend_engineer",
     "ui": "frontend_engineer",
     "web": "frontend_engineer",
-    "developer": "implementation",
-    "dev": "implementation",
-    "engineer": "implementation",
     "qa": "qa_and_debugging",
     "test": "qa_and_debugging",
     "tester": "qa_and_debugging",
@@ -26,14 +32,12 @@
     "infrastructure": "devops_and_terminal",
     "infra": "devops_and_terminal",
     "terminal": "devops_and_terminal",
+    "chore": "devops_and_terminal",
+    "maintenance": "devops_and_terminal",
     "review": "code_reviewer_and_security",
     "reviewer": "code_reviewer_and_security",
     "security": "code_reviewer_and_security",
-    "security-reviewer": "code_reviewer_and_security",
-    "documentation": "docs",
-    "doc": "docs",
-    "maintenance": "chore",
-    "investigate": "research"
+    "security-reviewer": "code_reviewer_and_security"
   },
   "roles": {
     "decision_router": {
@@ -42,8 +46,8 @@
       "candidates": [
         {
           "rank": 1,
-          "model": "claude-haiku-5-5",
-          "harness": "claude-code",
+          "model": "anthropic/claude-haiku-5.5",
+          "harness": "opencode",
           "declared_dispatchable": true,
           "reason_if_unavailable": null,
           "requirements": {
@@ -55,15 +59,15 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         },
         {
           "rank": 2,
-          "model": "claude-sonnet-5-5",
-          "harness": "claude-code",
+          "model": "openai/gpt-6-luna",
+          "harness": "codex",
           "declared_dispatchable": true,
           "reason_if_unavailable": null,
           "requirements": {
@@ -75,8 +79,28 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 3,
+          "model": "deepseek/deepseek-v4.1-flash-1017",
+          "harness": "deepseek",
+          "declared_dispatchable": false,
+          "reason_if_unavailable": "adapter_not_implemented",
+          "requirements": {
+            "mcp_required": false,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": false
+          },
+          "last_checked": null,
+          "cost": {
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         }
@@ -84,7 +108,7 @@
     },
     "system_architect": {
       "role": "system_architect",
-      "description": "Bounds system architecture, interfaces, trade-offs and migration plans.",
+      "description": "Bounds system architecture, interfaces, trade-offs and migration plans; investigates code.",
       "candidates": [
         {
           "rank": 1,
@@ -101,8 +125,8 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         },
@@ -121,14 +145,14 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         },
         {
           "rank": 3,
-          "model": "gpt-5.6-luna",
+          "model": "openai/gpt-6-astra",
           "harness": "codex",
           "declared_dispatchable": true,
           "reason_if_unavailable": null,
@@ -141,8 +165,28 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 4,
+          "model": "anthropic/claude-opus-5.5",
+          "harness": "opencode",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         }
@@ -150,50 +194,10 @@
     },
     "backend_engineer": {
       "role": "backend_engineer",
-      "description": "Changes server, API, data-path and backend library code, with its tests.",
+      "description": "Changes server, API, data-path, library and general application code, with its tests and docs.",
       "candidates": [
         {
           "rank": 1,
-          "model": "claude-opus-5-5",
-          "harness": "claude-code",
-          "declared_dispatchable": true,
-          "reason_if_unavailable": null,
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": "2026-10-21",
-          "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
-          },
-          "benchmark": null
-        },
-        {
-          "rank": 2,
-          "model": "gpt-5.6-luna",
-          "harness": "codex",
-          "declared_dispatchable": true,
-          "reason_if_unavailable": null,
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": "2026-10-21",
-          "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
-          },
-          "benchmark": null
-        },
-        {
-          "rank": 3,
           "model": "claude-sonnet-5-5",
           "harness": "claude-code",
           "declared_dispatchable": true,
@@ -207,8 +211,88 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 2,
+          "model": "claude-opus-5-5",
+          "harness": "cursor",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 3,
+          "model": "deepseek-flash",
+          "harness": "deepseek",
+          "declared_dispatchable": false,
+          "reason_if_unavailable": "adapter_not_implemented",
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": null,
+          "cost": {
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 4,
+          "model": "openai/gpt-6.1-sol",
+          "harness": "codex",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 5,
+          "model": "z-ai/glm-5.3",
+          "harness": "opencode",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         }
@@ -220,6 +304,66 @@
       "candidates": [
         {
           "rank": 1,
+          "model": "gemini-4-argon",
+          "harness": "cursor",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 2,
+          "model": "claude-sonnet-5-5",
+          "harness": "cursor",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 3,
+          "model": "gemini-4-argon",
+          "harness": "gemini",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 4,
           "model": "claude-opus-5-5",
           "harness": "claude-code",
           "declared_dispatchable": true,
@@ -233,48 +377,8 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
-          },
-          "benchmark": null
-        },
-        {
-          "rank": 2,
-          "model": "claude-sonnet-5-5",
-          "harness": "claude-code",
-          "declared_dispatchable": true,
-          "reason_if_unavailable": null,
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": "2026-10-21",
-          "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
-          },
-          "benchmark": null
-        },
-        {
-          "rank": 3,
-          "model": "gpt-5.6-luna",
-          "harness": "codex",
-          "declared_dispatchable": true,
-          "reason_if_unavailable": null,
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": "2026-10-21",
-          "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         }
@@ -299,34 +403,14 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         },
         {
           "rank": 2,
-          "model": "claude-haiku-5-5",
-          "harness": "claude-code",
-          "declared_dispatchable": true,
-          "reason_if_unavailable": null,
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": "2026-10-21",
-          "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
-          },
-          "benchmark": null
-        },
-        {
-          "rank": 3,
-          "model": "gpt-5.6-luna",
+          "model": "openai/gpt-6.1-sol",
           "harness": "codex",
           "declared_dispatchable": true,
           "reason_if_unavailable": null,
@@ -339,21 +423,15 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
-        }
-      ]
-    },
-    "devops_and_terminal": {
-      "role": "devops_and_terminal",
-      "description": "Changes build, CI, deployment, environment and terminal automation.",
-      "candidates": [
+        },
         {
-          "rank": 1,
-          "model": "claude-sonnet-5-5",
-          "harness": "claude-code",
+          "rank": 3,
+          "model": "openai/gpt-6-astra",
+          "harness": "codex",
           "declared_dispatchable": true,
           "reason_if_unavailable": null,
           "requirements": {
@@ -365,13 +443,79 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 4,
+          "model": "deepseek-flash",
+          "harness": "deepseek",
+          "declared_dispatchable": false,
+          "reason_if_unavailable": "adapter_not_implemented",
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": null,
+          "cost": {
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
+          },
+          "benchmark": null
+        }
+      ]
+    },
+    "devops_and_terminal": {
+      "role": "devops_and_terminal",
+      "description": "Changes build, CI, deployment, environment, configuration and terminal automation.",
+      "candidates": [
+        {
+          "rank": 1,
+          "model": "gemini-3.8-flash",
+          "harness": "gemini",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         },
         {
           "rank": 2,
+          "model": "openai/gpt-6.1-sol",
+          "harness": "codex",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-10-21",
+          "cost": {
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
+          },
+          "benchmark": null
+        },
+        {
+          "rank": 3,
           "model": "claude-opus-5-5",
           "harness": "claude-code",
           "declared_dispatchable": true,
@@ -385,15 +529,15 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         },
         {
-          "rank": 3,
-          "model": "gpt-5.6-luna",
-          "harness": "codex",
+          "rank": 4,
+          "model": "deepseek/deepseek-v4.1-flash-1017",
+          "harness": "opencode",
           "declared_dispatchable": true,
           "reason_if_unavailable": null,
           "requirements": {
@@ -405,8 +549,8 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         }
@@ -431,15 +575,15 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         },
         {
           "rank": 2,
-          "model": "claude-fable-5-1",
-          "harness": "claude-code",
+          "model": "claude-sonnet-5-5",
+          "harness": "cursor",
           "declared_dispatchable": true,
           "reason_if_unavailable": null,
           "requirements": {
@@ -451,15 +595,15 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         },
         {
           "rank": 3,
-          "model": "gpt-5.6-luna",
-          "harness": "codex",
+          "model": "gemini-4-argon",
+          "harness": "gemini",
           "declared_dispatchable": true,
           "reason_if_unavailable": null,
           "requirements": {
@@ -471,15 +615,15 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         },
         {
           "rank": 4,
-          "model": "claude-sonnet-5-5",
-          "harness": "claude-code",
+          "model": "z-ai/glm-5.3",
+          "harness": "opencode",
           "declared_dispatchable": true,
           "reason_if_unavailable": null,
           "requirements": {
@@ -491,229 +635,8 @@
           },
           "last_checked": "2026-10-21",
           "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
-          },
-          "benchmark": null
-        }
-      ]
-    },
-    "implementation": {
-      "role": "implementation",
-      "description": "Changes cross-cutting application or library source code and tests.",
-      "candidates": [
-        {
-          "rank": 1,
-          "model": "claude-opus-5-5",
-          "harness": "claude-code",
-          "declared_dispatchable": true,
-          "reason_if_unavailable": null,
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": "2026-10-21",
-          "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
-          },
-          "benchmark": null
-        },
-        {
-          "rank": 2,
-          "model": "gpt-5.6-luna",
-          "harness": "codex",
-          "declared_dispatchable": true,
-          "reason_if_unavailable": null,
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": "2026-10-21",
-          "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
-          },
-          "benchmark": null
-        },
-        {
-          "rank": 3,
-          "model": "future-implementation-model",
-          "harness": "future-harness",
-          "declared_dispatchable": false,
-          "reason_if_unavailable": "adapter_not_verified",
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": null,
-          "cost": null,
-          "benchmark": null
-        }
-      ]
-    },
-    "research": {
-      "role": "research",
-      "description": "Navigates the repository and produces bounded technical findings.",
-      "candidates": [
-        {
-          "rank": 1,
-          "model": "claude-opus-5-5",
-          "harness": "claude-code",
-          "declared_dispatchable": true,
-          "reason_if_unavailable": null,
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": "2026-10-21",
-          "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
-          },
-          "benchmark": null
-        },
-        {
-          "rank": 2,
-          "model": "claude-sonnet-5-5",
-          "harness": "claude-code",
-          "declared_dispatchable": true,
-          "reason_if_unavailable": null,
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": "2026-10-21",
-          "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
-          },
-          "benchmark": null
-        },
-        {
-          "rank": 3,
-          "model": "gpt-5.6-luna",
-          "harness": "codex",
-          "declared_dispatchable": true,
-          "reason_if_unavailable": null,
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": "2026-10-21",
-          "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
-          },
-          "benchmark": null
-        }
-      ]
-    },
-    "docs": {
-      "role": "docs",
-      "description": "Writes or updates project documentation.",
-      "candidates": [
-        {
-          "rank": 1,
-          "model": "claude-sonnet-5-5",
-          "harness": "claude-code",
-          "declared_dispatchable": true,
-          "reason_if_unavailable": null,
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": "2026-10-21",
-          "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
-          },
-          "benchmark": null
-        },
-        {
-          "rank": 2,
-          "model": "claude-haiku-5-5",
-          "harness": "claude-code",
-          "declared_dispatchable": true,
-          "reason_if_unavailable": null,
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": "2026-10-21",
-          "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
-          },
-          "benchmark": null
-        }
-      ]
-    },
-    "chore": {
-      "role": "chore",
-      "description": "Performs small mechanical maintenance changes.",
-      "candidates": [
-        {
-          "rank": 1,
-          "model": "claude-haiku-5-5",
-          "harness": "claude-code",
-          "declared_dispatchable": true,
-          "reason_if_unavailable": null,
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": "2026-10-21",
-          "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
-          },
-          "benchmark": null
-        },
-        {
-          "rank": 2,
-          "model": "claude-sonnet-5-5",
-          "harness": "claude-code",
-          "declared_dispatchable": true,
-          "reason_if_unavailable": null,
-          "requirements": {
-            "mcp_required": true,
-            "auth_required": true,
-            "host_verified": true,
-            "model_verified": true,
-            "mcp_verified": true
-          },
-          "last_checked": "2026-10-21",
-          "cost": {
-            "source": "model-guide.yaml",
-            "observed_at": "2026-10-20"
+            "source": "handoff specification §4 (2026-10-21)",
+            "observed_at": "2026-10-21"
           },
           "benchmark": null
         }

@@ -5,6 +5,7 @@ import type { ControlResult, TaskView } from '@friday/protocol';
 import { useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
 import { startTestDaemon } from '../helpers/daemon.js';
+import { TEST_HOST_MODELS } from '../helpers/fake-harness.js';
 import { attachedSession, codeOf, NO_WORKTREES, nextMessage, noMessage, raw, spawnedSession } from '../helpers/ui.js';
 
 /** Pause, resume and halt by effect (docs/frontend/PLAN.md §5.5, FD-09). */
@@ -143,7 +144,7 @@ async function registerOnly(td: Awaited<ReturnType<typeof startTestDaemon>>) {
     adapter_version: '0.1.0',
     attach_mode: 'spawn',
     project_id: td.project.project_id,
-    capabilities: { task_start: true, task_cancel: true, hooks: true },
+    capabilities: { task_start: true, task_cancel: true, hooks: true, models: TEST_HOST_MODELS },
     agent_key: 'sp-9',
     role: 'developer',
     enforcement_level: 'L1',

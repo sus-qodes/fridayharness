@@ -60,13 +60,13 @@ describe('cost classes in the registry (plan M13.3)', () => {
 });
 
 function withImplementationCandidate(candidate: RoleRegistryCandidate): RoleRegistry {
-  const definition = ROLE_REGISTRY_SOURCE.roles.implementation;
-  if (!definition) throw new Error('implementation role missing');
+  const definition = ROLE_REGISTRY_SOURCE.roles.backend_engineer;
+  if (!definition) throw new Error('backend_engineer role missing');
   return {
     ...ROLE_REGISTRY_SOURCE,
     roles: {
       ...ROLE_REGISTRY_SOURCE.roles,
-      implementation: { ...definition, candidates: [candidate] },
+      backend_engineer: { ...definition, candidates: [candidate] },
     },
   };
 }
@@ -83,14 +83,27 @@ describe('the static role registry', () => {
       'qa_and_debugging',
       'devops_and_terminal',
       'code_reviewer_and_security',
-      'implementation',
-      'research',
-      'docs',
-      'chore',
     ]);
-    expect(ROLE_REGISTRY_SOURCE.roles.implementation?.candidates[0]).toMatchObject({
+    // The owner's ranking (handoff §5), in the owner's order, with the handoff's harnesses.
+    const order = (role: string) =>
+      ROLE_REGISTRY_SOURCE.roles[role]?.candidates.map((c) => [c.rank, c.model, c.harness, c.declared_dispatchable]);
+    expect(order('backend_engineer')).toEqual([
+      [1, 'claude-sonnet-5-5', 'claude-code', true],
+      [2, 'claude-opus-5-5', 'cursor', true],
+      [3, 'deepseek-flash', 'deepseek', false],
+      [4, 'openai/gpt-6.1-sol', 'codex', true],
+      [5, 'z-ai/glm-5.3', 'opencode', true],
+    ]);
+    expect(order('frontend_engineer')).toEqual([
+      [1, 'gemini-4-argon', 'cursor', true],
+      [2, 'claude-sonnet-5-5', 'cursor', true],
+      [3, 'gemini-4-argon', 'gemini', true],
+      [4, 'claude-opus-5-5', 'claude-code', true],
+    ]);
+    expect(order('devops_and_terminal')?.[0]).toEqual([1, 'gemini-3.8-flash', 'gemini', true]);
+    expect(ROLE_REGISTRY_SOURCE.roles.backend_engineer?.candidates[0]).toMatchObject({
       rank: 1,
-      model: 'claude-opus-5-5',
+      model: 'claude-sonnet-5-5',
       harness: 'claude-code',
       declared_dispatchable: true,
       requirements: {
@@ -101,12 +114,13 @@ describe('the static role registry', () => {
         mcp_verified: true,
       },
       last_checked: '2026-10-21',
-      cost: { source: 'model-guide.yaml', observed_at: '2026-10-20' },
+      cost: { source: 'handoff specification §4 (2026-10-21)', observed_at: '2026-10-21' },
       benchmark: null,
     });
-    expect(ROLE_REGISTRY_SOURCE.roles.implementation?.candidates.at(-1)).toMatchObject({
+    // DeepSeek Harness has no adapter yet: it keeps its rank and is not dispatchable.
+    expect(ROLE_REGISTRY_SOURCE.roles.backend_engineer?.candidates[2]).toMatchObject({
       declared_dispatchable: false,
-      reason_if_unavailable: 'adapter_not_verified',
+      reason_if_unavailable: 'adapter_not_implemented',
     });
     expect(ROLE_REGISTRY_SOURCE.roles.decision_router?.candidates[0]).toMatchObject({
       requirements: { mcp_required: false, mcp_verified: false },
@@ -117,7 +131,12 @@ describe('the static role registry', () => {
     expect(canonicalRole('QA')).toBe('qa_and_debugging');
     expect(canonicalRole('security')).toBe('code_reviewer_and_security');
     expect(canonicalRole('review')).toBe('code_reviewer_and_security');
-    expect(canonicalRole('documentation')).toBe('docs');
+    // Friday's own task kinds use the owner's rankings (2026-10-21).
+    expect(canonicalRole('implementation')).toBe('backend_engineer');
+    expect(canonicalRole('docs')).toBe('backend_engineer');
+    expect(canonicalRole('documentation')).toBe('backend_engineer');
+    expect(canonicalRole('research')).toBe('system_architect');
+    expect(canonicalRole('chore')).toBe('devops_and_terminal');
     expect(canonicalRole('designer')).toBeNull();
     // Decision output uses canonical names; aliases are input spellings.
     expect(roleRegistryRoles()).toContain('qa_and_debugging');
@@ -135,7 +154,7 @@ describe('the static role registry', () => {
       backend: [{ model: 'local-coder', harness: 'generic' }],
     });
     expect(extended.roles.backend_engineer?.candidates.at(-1)).toEqual({
-      rank: 4,
+      rank: 6,
       model: 'local-coder',
       harness: 'generic',
       declared_dispatchable: true,
@@ -164,7 +183,7 @@ describe('the static role registry', () => {
     expect(() =>
       validateRoleRegistry(
         withProjectRoleCandidates(ROLE_REGISTRY_SOURCE, {
-          implementation: [{ rank: 1, model: 'local-coder', harness: 'generic' }],
+          backend_engineer: [{ rank: 1, model: 'local-coder', harness: 'generic' }],
         }),
         loadModelCatalog().models,
       ),
@@ -173,8 +192,8 @@ describe('the static role registry', () => {
 });
 
 describe('static registry validation', () => {
-  const first = ROLE_REGISTRY_SOURCE.roles.implementation?.candidates[0];
-  if (!first) throw new Error('implementation candidate missing');
+  const first = ROLE_REGISTRY_SOURCE.roles.backend_engineer?.candidates[0];
+  if (!first) throw new Error('backend_engineer candidate missing');
 
   it('rejects dispatchable candidates with an unknown model, harness or missing requirements', () => {
     expect(() =>
@@ -217,11 +236,14 @@ describe('static registry validation', () => {
         loadModelCatalog().models,
       ),
     ).toThrow(/collides/);
-    const docs = ROLE_REGISTRY_SOURCE.roles.docs;
-    if (!docs) throw new Error('docs role missing');
+    const qa = ROLE_REGISTRY_SOURCE.roles.qa_and_debugging;
+    if (!qa) throw new Error('qa_and_debugging role missing');
     expect(() =>
       validateRoleRegistry(
-        { ...ROLE_REGISTRY_SOURCE, roles: { ...ROLE_REGISTRY_SOURCE.roles, docs: { ...docs, candidates: [] } } },
+        {
+          ...ROLE_REGISTRY_SOURCE,
+          roles: { ...ROLE_REGISTRY_SOURCE.roles, qa_and_debugging: { ...qa, candidates: [] } },
+        },
         loadModelCatalog().models,
       ),
     ).toThrow(/no candidates/);

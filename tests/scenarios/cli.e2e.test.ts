@@ -11,6 +11,7 @@ import { DaemonClient, loadProject } from '@friday/sdk';
 import { deterministicGit, useTestWorkspace, waitForExit } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli, spawnFridayRun } from '../helpers/cli.js';
+import { TEST_HOST_MODELS } from '../helpers/fake-harness.js';
 
 const ws = useTestWorkspace();
 let savedStateDir: string | undefined;
@@ -75,6 +76,7 @@ describe('friday CLI end to end', () => {
       attach_mode: 'attach',
       project_id: ref.project_id,
       agent_key: 'dev-1',
+      capabilities: { models: TEST_HOST_MODELS },
       // Stands in for an adapter with policy hooks; the project requires L1 (review F09).
       enforcement_level: 'L1',
     });

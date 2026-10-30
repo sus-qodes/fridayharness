@@ -5,6 +5,7 @@ import type { TaskView, UiLoginCode, UiSession } from '@friday/protocol';
 import type { TestWorkspace } from '@friday/test-support';
 import { expect } from 'vitest';
 import type { TestDaemon } from './daemon.js';
+import { TEST_HOST_MODELS } from './fake-harness.js';
 import { decisionOf, postHook, toolHook } from './hooks.js';
 
 /** Helpers for the interface's daemon routes (docs/frontend/PLAN.md §5). */
@@ -152,7 +153,12 @@ export async function spawnedSession(
     adapter_version: '0.1.0',
     attach_mode: 'spawn',
     project_id: td.project.project_id,
-    capabilities: { task_start: true, task_cancel: true, ...(opts.hooks ? { hooks: true } : {}) },
+    capabilities: {
+      task_start: true,
+      task_cancel: true,
+      models: TEST_HOST_MODELS,
+      ...(opts.hooks ? { hooks: true } : {}),
+    },
     agent_key: agentKey,
     role: 'developer',
     enforcement_level: 'L1',

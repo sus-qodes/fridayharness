@@ -3,6 +3,12 @@ import { CURRENT_PROTOCOL_VERSION, type OutboundMessage } from '@friday/protocol
 import type { ConformanceHarness } from '../conformance/harness-conformance.js';
 import type { TestDaemon } from './daemon.js';
 
+/**
+ * The models a scripted generic host says it can run. The static role registry dispatches only to
+ * a model the harness declares (ADR-0031): a generic host that names none never gets work.
+ */
+export const TEST_HOST_MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'gpt-5.6-luna'];
+
 export interface FakeHarnessOptions {
   key?: string;
   agentKey?: string;
@@ -61,6 +67,8 @@ export class FakeHarness implements ConformanceHarness {
         task_cancel: true,
         context_request: true,
         reconnect: true,
+        // A generic host states the models it can run; Friday never assumes them.
+        models: TEST_HOST_MODELS,
       },
       ...(opts.agentKey ? { agent_key: opts.agentKey } : {}),
       ...(opts.role ? { role: opts.role } : {}),

@@ -350,6 +350,22 @@ describe('what the launcher sends for another host', () => {
 });
 
 describe('every host, with the daemon', () => {
+  /**
+   * The owner's static ranking (ADR-0031) lists Gemini CLI for DevOps, not backend work, and does
+   * not list Antigravity at all. These tests are about each host's hooks, so each host takes a task
+   * of a role it can serve, and Antigravity is added through the project's own extension, which is
+   * appended after Friday's ranks and never reorders them.
+   */
+  const ROLES: Record<string, string | undefined> = { gemini: 'devops' };
+  const ANTIGRAVITY_EXTENSION = [
+    'routing:',
+    '  models:',
+    '    - { id: antigravity-test-model, vendors: [antigravity] }',
+    '  role_candidates:',
+    '    backend_engineer:',
+    '      - { model: antigravity-test-model, harness: antigravity }',
+  ].join('\n');
+
   /** One attached session per host, each holding a task of its own scope (one live writer per area). */
   async function sessions(td: TestDaemon) {
     const pid = td.project.project_id;
@@ -392,6 +408,7 @@ describe('every host, with the daemon', () => {
       }
       const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
         summary: `Work for ${vendor}`,
+        ...(ROLES[vendor] ? { role: ROLES[vendor] } : {}),
         scope: { write: [`src/${vendor}/**`], read: [] },
         assign_agent_key: `dev-${vendor}`,
       });
@@ -402,7 +419,11 @@ describe('every host, with the daemon', () => {
   }
 
   it('reaches the same judgment for each host’s call as for Claude Code’s, and links each session by its own id', async () => {
-    const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
+    const td = await startTestDaemon(ws(), {
+      git: true,
+      extensions: [claudeCodeHooks()],
+      extraConfig: ANTIGRAVITY_EXTENSION,
+    });
     const w = ws();
     const s = await sessions(td);
     const pid = td.project.project_id;
@@ -495,7 +516,11 @@ describe('every host, with the daemon', () => {
   });
 
   it('gives each host its context at session start, asks through a pending approval where the hook cannot ask, and nudges a stop once', async () => {
-    const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
+    const td = await startTestDaemon(ws(), {
+      git: true,
+      extensions: [claudeCodeHooks()],
+      extraConfig: ANTIGRAVITY_EXTENSION,
+    });
     const w = ws();
     const s = await sessions(td);
     const cursorStart = (await run(w, 'cursor', 'sessionStart')).json?.additional_context;
