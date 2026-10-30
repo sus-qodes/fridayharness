@@ -169,6 +169,7 @@ function applyRouting(routing: RoutingService, cfg: FridayConfig): void {
     low_confidence: r.low_confidence,
     min_samples: r.min_samples,
     sensitive: r.sensitive,
+    profile_preferences: r.profile_preferences,
   } satisfies RoutingSettings);
   routing.models.splice(0, routing.models.length, ...routingRegistry(cfg));
 }

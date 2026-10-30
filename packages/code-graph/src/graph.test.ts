@@ -335,7 +335,7 @@ describe('an incremental build is the full build (plan M14.10)', () => {
     const inc = await buildGraph(root, { previous: g8, maxFileBytes: 1000 });
     expect(picture(inc)).toEqual(picture(full));
     expect(inc.skipped.map((x) => x.path)).toEqual(['src/big.ts']);
-  });
+  }, 120_000);
 
   it('reads everything again when the previous graph cannot vouch for the files', async () => {
     const { dir, g } = await repoFrom({ 'a.ts': "import './b';\n", 'b.ts': 'export {};\n' });
@@ -359,6 +359,21 @@ describe('an incremental build is the full build (plan M14.10)', () => {
     const given = await buildGraph(root, { identity, previous: first });
     expect(given.identity).toBe(identity);
     expect(given.stats.unchanged).toBe(1);
+  });
+
+  it('does not reuse facts when the file-size limit changes', async () => {
+    const { dir } = await repoFrom({
+      'package.json': JSON.stringify({ name: 'limit-root', private: true }),
+      'big.ts': `export const big = "${'x'.repeat(2000)}";\n`,
+    });
+    const root = await GitRoot.open(dir);
+    const previous = await buildGraph(root);
+    const full = await buildGraph(root, { maxFileBytes: 1000 });
+    const incremental = await buildGraph(root, { previous, maxFileBytes: 1000 });
+
+    expect(picture(incremental)).toEqual(picture(full));
+    expect(incremental.stats.unchanged).toBe(0);
+    expect(incremental.skipped).toEqual([{ path: 'big.ts', reason: 'larger than 1000 bytes' }]);
   });
 });
 

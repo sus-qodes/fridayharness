@@ -51,8 +51,10 @@ describe('fixture-shop', () => {
       encoding: 'utf8',
       windowsHide: true,
     });
-    expect(out).toMatch(/ℹ fail 0/);
-    expect(out).toMatch(/ℹ pass [1-9]/);
+    // Node's TAP summary uses the Unicode `ℹ` form on some releases and the comment `#` form on
+    // others; both report the same verification result.
+    expect(out).toMatch(/(?:ℹ|#) fail 0/);
+    expect(out).toMatch(/(?:ℹ|#) pass [1-9]/);
   });
 
   it('friday fixture init creates a ready project with its own id and a clean tree', async () => {

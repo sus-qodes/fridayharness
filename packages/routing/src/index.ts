@@ -7,5 +7,6 @@ export const PACKAGE_NAME = '@friday/routing';
 
 export * from './decide.js';
 export * from './laya.js';
+export * from './profiles.js';
 export * from './registry.js';
 export * from './requirements.js';

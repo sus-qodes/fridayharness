@@ -47,6 +47,7 @@ export class RoutingService {
       low_confidence: r.low_confidence,
       min_samples: r.min_samples,
       sensitive: r.sensitive,
+      profile_preferences: r.profile_preferences,
     };
   }
 
@@ -76,7 +77,14 @@ export class RoutingService {
   }
 
   private input(
-    task: { task_id: string; kind: string; role: string | null },
+    task: {
+      task_id: string;
+      kind: string;
+      role: string | null;
+      summary: string;
+      risk_level: 'low' | 'medium' | 'high' | null;
+      scope: { write: readonly string[]; read: readonly string[] } | null;
+    },
     harness: HarnessRecord | null,
   ): RouteInput {
     const caps = (harness?.capabilities ?? {}) as { models?: unknown; model_control?: unknown };
@@ -90,6 +98,7 @@ export class RoutingService {
       observed_model: harness?.observed_model ?? null,
       models: this.models,
       guide: guide.classes,
+      profiles: guide.profiles,
       guide_version: this.guideVersion,
       settings: this.settings,
       pins: this.pins(),
@@ -101,7 +110,7 @@ export class RoutingService {
 
   /** The router the state calls for every new run (ADR-0031 §6). */
   readonly router: RunRouter = ({ task, harness, agent }) => {
-    const decision = decideRoute(this.input({ task_id: task.task_id, kind: task.kind, role: agent.role }, harness));
+    const decision = decideRoute(this.input({ ...task, role: agent.role }, harness));
     if (decision.model === null && decision.source === 'none') {
       this.deps.logger.info('routing chose no model', { task_id: task.task_id, reason: decision.reason });
     }
@@ -119,7 +128,7 @@ export class RoutingService {
     const agent = this.deps.state.q.findAgent(agentId);
     const harness = agent?.harness_id ? this.deps.state.q.findHarness(agent.harness_id) : undefined;
     if (!agent || !harness) return null;
-    const d = decideRoute(this.input({ task_id: task.task_id, kind: task.kind, role: agent.role }, harness));
+    const d = decideRoute(this.input({ ...task, role: agent.role }, harness));
     // The agent's cost class (plan M13.3): as its harness declared it, else its model's.
     const declared = CostClass.safeParse((harness.capabilities as { cost_class?: unknown } | null)?.cost_class);
     // An agent whose route blocks the task has no class for it: it cannot take it (review of M13).
@@ -140,8 +149,6 @@ export class RoutingService {
     const task = this.deps.state.q.task(this.pid, taskId);
     const run = task.current_run_id ? this.deps.state.q.findRun(task.current_run_id) : undefined;
     const agent = run ? this.deps.state.q.findAgent(run.agent_id) : undefined;
-    return decideRoute(
-      this.input({ task_id: task.task_id, kind: task.kind, role: agent?.role ?? task.role ?? null }, null),
-    );
+    return decideRoute(this.input({ ...task, role: agent?.role ?? task.role ?? null }, null));
   }
 }

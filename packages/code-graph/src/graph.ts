@@ -70,6 +70,8 @@ export class CodeGraph {
     readonly stats: GraphStats,
     /** Each parsed file's facts, so the next build of this root can keep the unchanged ones. */
     readonly facts: ReadonlyMap<string, FileFacts> = new Map(),
+    /** The size limit used when this graph decided whether to read or skip a file. */
+    readonly maxFileBytes = 1024 * 1024,
   ) {
     this.version = identity.version;
     for (const e of edges) {
@@ -176,7 +178,8 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
   const identity = opts.identity ?? (await root.identity());
   const listed = await root.files();
   const files = new Set(listed);
-  const changed = opts.previous ? await changedSince(root, opts.previous, identity) : null;
+  const changed =
+    opts.previous && opts.previous.maxFileBytes === maxBytes ? await changedSince(root, opts.previous, identity) : null;
   const facts = new Map<string, ImportFact[]>();
   const fileFacts = new Map<string, FileFacts>();
   const skipped: { path: string; reason: string }[] = [];
@@ -309,5 +312,6 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
     skipped,
     { files: nodes.size, parsed, cached, unchanged, edges: tally, contracts: byTarget.size, ms: Date.now() - started },
     fileFacts,
+    maxBytes,
   );
 }

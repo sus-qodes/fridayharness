@@ -1,3 +1,4 @@
+import { classifyRoutingProfile, type RoutingProfile } from './profiles.js';
 import type { GuideClass, ModelRecord } from './registry.js';
 import { REQUIREMENTS_VERSION, type Requirements, requirementsFor } from './requirements.js';
 
@@ -24,6 +25,8 @@ export interface RoutingSettings {
   min_samples: number;
   /** Task kinds and roles whose work is secret-sensitive: only a human-pinned model. */
   sensitive: { kinds: string[]; roles: string[] };
+  /** Project overrides for the shipped profile preferences. */
+  profile_preferences: Readonly<Record<string, GuideClass>>;
 }
 
 export const DEFAULT_ROUTING: RoutingSettings = {
@@ -35,6 +38,7 @@ export const DEFAULT_ROUTING: RoutingSettings = {
   low_confidence: 'score',
   min_samples: 5,
   sensitive: { kinds: [], roles: [] },
+  profile_preferences: {},
 };
 
 /** A human's routing policy (spec Part 12 §11): a model or a mode for a scope, with its source and expiry. */
@@ -71,7 +75,14 @@ export interface LayaAnswer {
 }
 
 export interface RouteInput {
-  task: { task_id: string; kind: string; role: string | null };
+  task: {
+    task_id: string;
+    kind: string;
+    role: string | null;
+    summary: string;
+    risk_level: 'low' | 'medium' | 'high' | null | undefined;
+    scope: { write: readonly string[]; read: readonly string[] } | null | undefined;
+  };
   /** The vendor of the harness that will run it; null for a dry run over every model. */
   vendor: string | null;
   /** The models the harness says it can run; null: the registry's vendors decide. */
@@ -85,6 +96,7 @@ export interface RouteInput {
   observed_model?: string | null;
   models: readonly ModelRecord[];
   guide: Readonly<Record<string, GuideClass>>;
+  profiles?: Readonly<Record<string, GuideClass>>;
   guide_version: string;
   settings: RoutingSettings;
   /** Active pins (not expired, not revoked). */
@@ -114,6 +126,8 @@ export interface Candidate {
 export interface RoutingDecision {
   mode: RoutingMode;
   task_class: string;
+  profile: RoutingProfile;
+  profile_reasons: string[];
   model: string | null;
   /** The harness applies it (true) or may ignore it (false). */
   binding: boolean;
@@ -141,7 +155,10 @@ const round = (n: number) => Math.round(n * 1000) / 1000;
 const SPECIFICITY: Record<RoutingPin['scope'], number> = { task: 3, role: 2, kind: 1, project: 0 };
 
 /** The pins that apply to a task, most specific first. */
-export function applicablePins(pins: readonly RoutingPin[], task: RouteInput['task']): RoutingPin[] {
+export function applicablePins(
+  pins: readonly RoutingPin[],
+  task: Pick<RouteInput['task'], 'task_id' | 'kind' | 'role'>,
+): RoutingPin[] {
   return pins
     .filter(
       (p) =>
@@ -170,6 +187,8 @@ function fitOf(m: ModelRecord, req: Requirements): { fit: number; known: boolean
 export function decideRoute(input: RouteInput): RoutingDecision {
   const { task, settings } = input;
   const req = requirementsFor(task.kind);
+  const classification = classifyRoutingProfile(task);
+  const profile = classification.profile;
   const pins = applicablePins(input.pins, task);
   const pinModel = pins.find((p) => p.model);
   const pinMode = pins.find((p) => p.mode);
@@ -177,6 +196,16 @@ export function decideRoute(input: RouteInput): RoutingDecision {
   const roleClass = task.role ? `role:${task.role}` : null;
   const task_class = roleClass && input.guide[roleClass] ? roleClass : task.kind;
   const guide = input.guide[task_class] ?? input.guide[task.kind];
+  const profileGuide = settings.profile_preferences[profile] ?? input.profiles?.[profile];
+  const preference: GuideClass | undefined =
+    guide || profileGuide
+      ? {
+          preferred: profileGuide?.preferred.length ? profileGuide.preferred : (guide?.preferred ?? []),
+          fallback: profileGuide?.fallback.length ? profileGuide.fallback : (guide?.fallback ?? []),
+          avoid: [...new Set([...(guide?.avoid ?? []), ...(profileGuide?.avoid ?? [])])],
+          notes: profileGuide?.notes ?? guide?.notes ?? null,
+        }
+      : undefined;
   const sensitive =
     settings.sensitive.kinds.includes(task.kind) ||
     (task.role !== null && settings.sensitive.roles.includes(task.role)) ||
@@ -251,6 +280,8 @@ export function decideRoute(input: RouteInput): RoutingDecision {
   ): RoutingDecision => ({
     mode,
     task_class,
+    profile,
+    profile_reasons: classification.reasons,
     model,
     binding: model !== null && binding,
     blocked: false,
@@ -333,6 +364,12 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     codes.push('manual.none');
     return blocked('manual routing: no model is pinned or set as routing.default_model');
   }
+  if (profile === 'ambiguous') {
+    codes.push('profile.ambiguous');
+    return blocked(
+      `ambiguous task profile (${classification.reasons.join('; ')}); provide a summary and bounded scope, or a human pin decides`,
+    );
+  }
   if (!runnable.length && !constraints.length) {
     // Nothing to judge: the harness declares no models and runs none Friday knows (a generic host).
     codes.push('harness.models_unknown');
@@ -340,9 +377,12 @@ export function decideRoute(input: RouteInput): RoutingDecision {
   }
 
   // The guide's avoid list; scores for the rest.
-  for (const m of eligible.filter((x) => guide?.avoid.includes(x.id)))
-    excluded.push({ model: m.id, reason: 'guide.avoid' });
-  eligible = eligible.filter((m) => !guide?.avoid.includes(m.id));
+  for (const m of eligible.filter((x) => preference?.avoid.includes(x.id)))
+    excluded.push({
+      model: m.id,
+      reason: profileGuide?.avoid.includes(m.id) ? `profile.${profile}.avoid` : 'guide.avoid',
+    });
+  eligible = eligible.filter((m) => !preference?.avoid.includes(m.id));
   if (!eligible.length) {
     codes.push('none.eligible');
     return blocked('no eligible model can run this task here; a human decides');
@@ -383,10 +423,10 @@ export function decideRoute(input: RouteInput): RoutingDecision {
           : settings.optimize === 'latency'
             ? quality - 0.3 * l
             : quality - 0.1 * c * (0.5 + req.cost_sensitivity) - 0.05 * l * (0.5 + req.latency_sensitivity);
-    const rank = guide?.preferred.indexOf(m.id) ?? -1;
+    const rank = preference?.preferred.indexOf(m.id) ?? -1;
     if (rank >= 0 && rank < 3) {
-      score += 0.03 - 0.01 * rank;
-      reasons.push(`guide.preferred(${rank + 1})`);
+      score += profileGuide ? 0.2 - 0.05 * rank : 0.03 - 0.01 * rank;
+      reasons.push(`${profileGuide ? `profile.${profile}` : 'guide'}.preferred(${rank + 1})`);
     }
     return {
       model: m.id,
@@ -409,11 +449,11 @@ export function decideRoute(input: RouteInput): RoutingDecision {
   if (best !== top) codes.push('cheaper.within_delta');
   const strongest = [...candidates].sort((a, b) => b.fit - a.fit || a.model.localeCompare(b.model))[0] as Candidate;
   const chainFor = (chosen: string) => [
-    ...(guide?.fallback ?? [])
+    ...(preference?.fallback ?? [])
       .filter((id) => id !== chosen && candidates.some((c) => c.model === id))
-      .map((id) => ({ model: id, reason: 'guide.fallback' })),
+      .map((id) => ({ model: id, reason: profileGuide ? `profile.${profile}.fallback` : 'guide.fallback' })),
     ...candidates
-      .filter((c) => c.model !== chosen && !(guide?.fallback ?? []).includes(c.model))
+      .filter((c) => c.model !== chosen && !(preference?.fallback ?? []).includes(c.model))
       .slice(0, 2)
       .map((c) => ({ model: c.model, reason: 'score.next' })),
     { model: null, reason: 'human' },
@@ -424,12 +464,16 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     `fit ${c.fit}${c.pass_rate !== null ? `, ${Math.round(c.pass_rate * 100)}% verified in ${c.samples} ${task_class} task(s)` : `, no measured outcomes yet (${c.samples} of ${settings.min_samples})`}`;
 
   if (mode === 'policy') {
-    const preferred = guide?.preferred.find((id) => candidates.some((c) => c.model === id));
+    const preferred = preference?.preferred.find((id) => candidates.some((c) => c.model === id));
     if (preferred) {
-      codes.push('guide.preferred');
-      return scored(preferred, 'guide', `${preferred}, the guide's preference for ${task_class} tasks`);
+      codes.push(profileGuide ? 'profile.preferred' : 'guide.preferred');
+      return scored(
+        preferred,
+        profileGuide ? 'guide' : 'guide',
+        `${preferred}, the ${profileGuide ? `${profile} profile's` : "guide's"} preference for ${task_class} tasks`,
+      );
     }
-    const fallback = guide?.fallback.find((id) => candidates.some((c) => c.model === id));
+    const fallback = preference?.fallback.find((id) => candidates.some((c) => c.model === id));
     if (fallback) {
       codes.push('guide.fallback');
       return scored(fallback, 'fallback', `${fallback}, the guide's fallback for ${task_class} tasks`);

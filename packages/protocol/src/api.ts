@@ -214,6 +214,8 @@ export const RoutingDecisionView = z.object({
   harness_id: z.string().nullable(),
   mode: z.string(),
   task_class: z.string(),
+  profile: z.enum(['trivial', 'short', 'medium', 'large', 'high-risk', 'ambiguous']).default('ambiguous'),
+  profile_reasons: z.array(z.string()).default([]),
   model: z.string().nullable(),
   binding: z.boolean(),
   source: z.string(),

@@ -5,7 +5,7 @@ import { FridayError } from '@friday/protocol';
 interface RootGraph {
   root: Promise<GitRoot>;
   latest?: CodeGraph;
-  building?: Promise<CodeGraph>;
+  building?: { promise: Promise<CodeGraph> };
 }
 
 /**
@@ -17,7 +17,9 @@ export class GraphService {
   #cache: FactsCache | undefined;
   readonly #roots = new Map<string, RootGraph>();
 
-  constructor(private readonly opts: { root: string; cacheDir: string; maxRoots?: number }) {}
+  constructor(
+    private readonly opts: { root: string; cacheDir: string; maxRoots?: number; build?: typeof buildGraph },
+  ) {}
 
   private cache(): FactsCache {
     this.#cache ??= openFactsCache(this.opts.cacheDir);
@@ -52,20 +54,34 @@ export class GraphService {
     const git = await e.root;
     const identity = known ?? (await git.identity());
     if (e.latest?.version === identity.version && identity.basis === 'content') return e.latest;
+    // If another caller is already building, wait for it and then re-read the current identity. The
+    // checkout may have changed while that build ran; returning the in-flight graph to a newer
+    // caller would expose a stale graph until the next request (review M14.10 race).
+    if (e.building) {
+      await e.building.promise;
+      return this.graph(root);
+    }
     // The last graph of this checkout is the starting point: files git says are unchanged keep
     // their facts, and only the changed ones are read again (ADR-0020, amendment of 2026-10-20).
     const previous = e.latest;
-    e.building ??= buildGraph(git, { cache: this.cache(), identity, ...(previous ? { previous } : {}) }).finally(() => {
-      e.building = undefined;
+    const promise = (this.opts.build ?? buildGraph)(git, {
+      cache: this.cache(),
+      identity,
+      ...(previous ? { previous } : {}),
     });
-    e.latest = await e.building;
-    return e.latest;
+    e.building = { promise };
+    try {
+      e.latest = await promise;
+      return e.latest;
+    } finally {
+      if (e.building?.promise === promise) e.building = undefined;
+    }
   }
 
   /** Forgets every parsed file and builds the main checkout's graph again (`friday graph reindex`). */
   async reindex(): Promise<CodeGraph> {
     for (const e of this.#roots.values()) {
-      if (e.building) await e.building.catch(() => undefined);
+      if (e.building) await e.building.promise.catch(() => undefined);
       e.latest = undefined;
     }
     this.cache().clear();

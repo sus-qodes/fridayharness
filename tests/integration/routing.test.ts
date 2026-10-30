@@ -29,6 +29,73 @@ const inspect = (td: TestDaemon, id: string) =>
   td.operator.get<{ task: TaskView; runs: RunView[] }>(td.operator.projectPath(`/tasks/${id}`));
 
 describe('model routing', () => {
+  it('passes task facts into deterministic profiles and preserves a pin over the profile default', async () => {
+    const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
+    const cases = [
+      {
+        expected: 'short',
+        summary: 'Fix one file',
+        risk_level: 'low' as const,
+        scope: { write: ['src/a.ts'], read: [] },
+      },
+      {
+        expected: 'medium',
+        summary: 'Update related modules',
+        risk_level: 'low' as const,
+        scope: { write: ['src/a.ts', 'src/b.ts', 'src/c.ts'], read: [] },
+      },
+      {
+        expected: 'large',
+        summary: 'Refactor the source tree',
+        risk_level: 'low' as const,
+        scope: { write: ['src/**'], read: [] },
+      },
+      {
+        expected: 'high-risk',
+        summary: 'Change payment authorization',
+        risk_level: 'high' as const,
+        scope: { write: ['src/payments.ts'], read: [] },
+      },
+      { expected: 'ambiguous', summary: 'Needs clarification', risk_level: 'low' as const, scope: null },
+    ];
+    for (const [index, facts] of cases.entries()) {
+      const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+        summary: facts.summary,
+        kind: 'implementation',
+        risk_level: facts.risk_level,
+        scope: facts.scope ?? undefined,
+      });
+      const explained = await td.operator.get<{ dry_run: { profile: string; blocked: boolean } }>(
+        td.operator.projectPath(`/routing/explain/${task.task_id}`),
+      );
+      expect(explained.dry_run, `case ${index}`).toMatchObject({
+        profile: facts.expected,
+        blocked: facts.expected === 'ambiguous',
+      });
+    }
+
+    await td.operator.post(td.operator.projectPath('/routing/pins'), {
+      scope: 'kind',
+      target: 'implementation',
+      model: 'claude-opus-5-5',
+      mode: null,
+      sensitive: false,
+      needs_vision: false,
+      until: null,
+      note: 'human precedence test',
+    });
+    const pinned = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Fix one file',
+      kind: 'implementation',
+      risk_level: 'low',
+      scope: { write: ['src/pinned.ts'], read: [] },
+    });
+    const explained = await td.operator.get<{ dry_run: { model: string | null; profile: string; source: string } }>(
+      td.operator.projectPath(`/routing/explain/${pinned.task_id}`),
+    );
+    expect(explained.dry_run).toMatchObject({ model: 'claude-opus-5-5', profile: 'short', source: 'pin' });
+  }, 120_000);
+
   it('binds a harness that applies models, advises one that does not, and follows a human pin', async () => {
     const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
     const dir = ws().projectDir;
@@ -50,6 +117,7 @@ describe('model routing', () => {
     const explained = await cli(['--project', dir, 'routing', 'explain', t1.task_id]);
     expect(explained.code, explained.stderr).toBe(0);
     expect(explained.stdout).toContain('claude-opus-5-5 (score, mode hybrid, class implementation, binding)');
+    expect(explained.stdout).toContain('profile: large (scope contains a glob pattern)');
     expect(explained.stdout).toContain('no measured outcomes yet');
     expect(explained.stdout).toContain('fallback: claude-haiku-5-5 -> a human');
     expect(explained.stdout).toContain('excluded claude-sonnet-5-5: harness.cannot_run');

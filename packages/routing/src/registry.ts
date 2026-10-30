@@ -77,6 +77,7 @@ const GuideFile = z
     version: z.string().min(1),
     models: z.array(ModelRecordInput),
     classes: z.record(z.string(), GuideClass),
+    profiles: z.record(z.string(), GuideClass).default({}),
   })
   .strict();
 
@@ -84,6 +85,7 @@ export interface ModelGuide {
   version: string;
   models: ModelRecord[];
   classes: Record<string, GuideClass>;
+  profiles: Record<string, GuideClass>;
 }
 
 let cached: ModelGuide | undefined;
@@ -97,6 +99,7 @@ export function loadGuide(): ModelGuide {
     version: parsed.version,
     models: parsed.models.map((m) => ({ ...m, source: 'seed' as const })),
     classes: parsed.classes,
+    profiles: parsed.profiles,
   };
   return cached;
 }

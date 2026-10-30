@@ -3,7 +3,7 @@
 # Scores are PRIORS on a 0-1 scale (spec Part 08 §3: "scores are evidence, not truths"). They come from
 # each model's tier and price, not from measurement: Friday replaces them with measured outcomes per
 # task class once there are enough samples (routing.min_samples). Prices are USD per million tokens.
-version: 2026-10-14.1
+version: 2026-10-20.1
 
 models:
   - id: claude-fable-5-1
@@ -150,3 +150,36 @@ classes:
     fallback: [claude-sonnet-5-5]
     avoid: []
     notes: small mechanical changes
+
+# Explicit task-shape defaults. Project config may override any profile under routing.profile_preferences.
+profiles:
+  trivial:
+    preferred: [claude-haiku-5-5, claude-sonnet-5-5, gpt-5.6-luna]
+    fallback: [claude-sonnet-5-5, claude-opus-5-5]
+    avoid: []
+    notes: cheap capable models for tiny mechanical work
+  short:
+    preferred: [claude-sonnet-5-5, claude-haiku-5-5, gpt-5.6-luna]
+    fallback: [claude-haiku-5-5, claude-opus-5-5]
+    avoid: []
+    notes: one or two bounded concrete paths
+  medium:
+    preferred: [claude-sonnet-5-5, claude-opus-5-5, gpt-5.6-luna]
+    fallback: [claude-opus-5-5, claude-haiku-5-5]
+    avoid: []
+    notes: several bounded concrete paths
+  large:
+    preferred: [claude-opus-5-5, claude-sonnet-5-5, gpt-5.6-luna]
+    fallback: [claude-sonnet-5-5]
+    avoid: []
+    notes: broad globs or many concrete paths
+  high-risk:
+    preferred: [claude-opus-5-5, claude-sonnet-5-5]
+    fallback: [claude-sonnet-5-5]
+    avoid: [claude-haiku-5-5]
+    notes: high-risk work excludes Haiku by default
+  ambiguous:
+    preferred: []
+    fallback: []
+    avoid: []
+    notes: autonomous routing is blocked until facts are supplied or a human pins a model

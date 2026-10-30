@@ -33,6 +33,7 @@ function decisionLines(
 ): string[] {
   const lines = [
     `${d.model ?? 'no model'} (${d.source}, mode ${d.mode}, class ${d.task_class}${d.binding ? ', binding' : ''})`,
+    `  profile: ${d.profile} (${d.profile_reasons.join('; ') || 'no additional facts'})`,
     `  ${d.reason}`,
   ];
   if (d.constraints.length) lines.push(`  constraints: ${d.constraints.join(', ')}`);

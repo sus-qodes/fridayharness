@@ -15,12 +15,20 @@ import {
 
 const guide = loadGuide();
 const base = (extra: Partial<RouteInput> = {}): RouteInput => ({
-  task: { task_id: 'task_1', kind: 'implementation', role: 'backend' },
+  task: {
+    task_id: 'task_1',
+    kind: 'implementation',
+    role: 'backend',
+    summary: 'Fix the checkout calculation',
+    risk_level: 'low',
+    scope: { write: ['src/checkout.ts'], read: [] },
+  },
   vendor: 'claude-code',
   harness_models: null,
   model_control: 'none',
   models: guide.models,
   guide: guide.classes,
+  profiles: guide.profiles,
   guide_version: guide.version,
   settings: DEFAULT_ROUTING,
   pins: [],
@@ -61,6 +69,7 @@ describe('decideRoute', () => {
   it('routes by the requirement-weighted fit among the models the harness can run, as advice for an attached host', () => {
     const d = decideRoute(base());
     expect(d.mode).toBe('hybrid');
+    expect(d.profile).toBe('short');
     expect(d.model).toMatch(/^claude-/);
     expect(d.source).toBe('score');
     expect(d.binding).toBe(false);
@@ -72,6 +81,67 @@ describe('decideRoute', () => {
     expect(decideRoute(base({ model_control: 'set' })).binding).toBe(true);
     // A dry run (no harness yet) considers every model.
     expect(decideRoute(base({ vendor: null })).candidates.map((c) => c.model)).toContain('gpt-5.6-luna');
+  });
+
+  it.each([
+    ['trivial', { kind: 'chore', summary: 'Rename a local variable', scope: { write: ['src/a.ts'], read: [] } }],
+    ['short', { kind: 'implementation', summary: 'Fix one file', scope: { write: ['src/a.ts'], read: [] } }],
+    [
+      'medium',
+      {
+        kind: 'implementation',
+        summary: 'Update several related files',
+        scope: { write: ['a.ts', 'b.ts', 'c.ts'], read: [] },
+      },
+    ],
+    ['large', { kind: 'implementation', summary: 'Refactor the source tree', scope: { write: ['src/**'], read: [] } }],
+    [
+      'high-risk',
+      {
+        kind: 'implementation',
+        summary: 'Update payment authorization',
+        risk_level: 'high',
+        scope: { write: ['src/payments.ts'], read: [] },
+      },
+    ],
+    ['ambiguous', { kind: 'implementation', summary: '', scope: null }],
+  ] as const)('classifies %s tasks and exposes the reasons', (profile, facts) => {
+    const d = decideRoute(base({ task: { ...base().task, ...facts } }));
+    expect(d.profile).toBe(profile);
+    expect(d.profile_reasons.length).toBeGreaterThan(0);
+    if (profile === 'ambiguous') expect(d.blocked).toBe(true);
+    if (profile === 'high-risk') {
+      expect(d.excluded).toContainEqual({ model: 'claude-haiku-5-5', reason: 'profile.high-risk.avoid' });
+    }
+  });
+
+  it('uses profile defaults for ordinary work while a human pin still wins', () => {
+    const ordinary = decideRoute(base({ model_control: 'set' }));
+    expect(ordinary.model).toBe('claude-sonnet-5-5');
+    const projectOverride = decideRoute(
+      base({
+        model_control: 'set',
+        settings: {
+          ...DEFAULT_ROUTING,
+          profile_preferences: {
+            short: {
+              preferred: ['claude-haiku-5-5'],
+              fallback: ['claude-sonnet-5-5'],
+              avoid: [],
+              notes: 'project override',
+            },
+          },
+        },
+      }),
+    );
+    expect(projectOverride.model).toBe('claude-haiku-5-5');
+    const pinned = decideRoute(
+      base({
+        model_control: 'set',
+        pins: [pin({ scope: 'task', target: 'task_1', model: 'claude-opus-5-5' })],
+      }),
+    );
+    expect(pinned).toMatchObject({ model: 'claude-opus-5-5', source: 'pin', profile: 'short' });
   });
 
   it("follows a human's pin over everything else, and never silently replaces it (Part 12 §11)", () => {
@@ -205,10 +275,20 @@ describe('decideRoute', () => {
 
   it("uses the guide in policy mode, its avoid list in every mode, and manual mode's default", () => {
     expect(decideRoute(base({ settings: { ...DEFAULT_ROUTING, mode: 'policy' } }))).toMatchObject({
-      model: 'claude-opus-5-5',
+      model: 'claude-sonnet-5-5',
       source: 'guide',
     });
-    const review = decideRoute(base({ task: { task_id: 'task_2', kind: 'review', role: null } }));
+    const review = decideRoute(
+      base({
+        task: {
+          ...base().task,
+          task_id: 'task_2',
+          kind: 'review',
+          role: null,
+          summary: 'Review the change',
+        },
+      }),
+    );
     expect(review.excluded).toContainEqual({ model: 'claude-haiku-5-5', reason: 'guide.avoid' });
     const manual = { ...DEFAULT_ROUTING, mode: 'manual' as const };
     expect(decideRoute(base({ settings: manual }))).toMatchObject({ model: null, reason_codes: ['manual.none'] });

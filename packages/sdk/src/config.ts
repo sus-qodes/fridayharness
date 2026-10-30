@@ -150,6 +150,20 @@ export const RoutingSettings = z
       .object({ kinds: z.array(z.string()).default([]), roles: z.array(z.string()).default([]) })
       .strict()
       .prefault({}),
+    /** Optional project overrides for the shipped trivial/short/medium/large/high-risk profiles. */
+    profile_preferences: z
+      .record(
+        z.string(),
+        z
+          .object({
+            preferred: z.array(z.string()).default([]),
+            fallback: z.array(z.string()).default([]),
+            avoid: z.array(z.string()).default([]),
+            notes: z.string().nullable().default(null),
+          })
+          .strict(),
+      )
+      .default({}),
     /** Models the project adds to Friday's registry, or replaces by id. */
     models: z.array(z.record(z.string(), z.unknown())).max(100).default([]),
     /**
