@@ -50,10 +50,9 @@ describe('friday context explain (M4 gate, Part 12 §13)', () => {
     const explained = await cli(['--project', dir, 'context', 'explain', task.task_id]);
     expect(explained.code, explained.stderr).toBe(0);
     const out = explained.stdout;
-    expect(out).toMatch(/Files \(\d+\):/);
-    expect(out).toMatch(/backend\/src\/checkout\.service\.ts\n\s+reason: in your write scope/);
-    expect(out).toMatch(/shared\/src\/api\.ts\n\s+reason: .*shared contract used by backend, frontend/);
-    expect(out).toMatch(/frontend\/src\/api-client\.ts\n\s+reason: uses the shared contract shared\/src\/api\.ts/);
+    // The first packet names the task's scope and the project's memory, no list of files (plan M14.7).
+    expect(out).toContain('Files: none related through the code graph.');
+    expect(out).toContain('task.scope');
     expect(out).not.toContain('infra/');
     expect(out).toContain('memory.relevant');
     expect(out).toContain('Semantic fallback: off.');
@@ -61,7 +60,16 @@ describe('friday context explain (M4 gate, Part 12 §13)', () => {
     // The agent's own packet arrives with the claim, and it can remember and recall through Friday.
     const claim = await be.client.call('task.claim', { task_id: task.task_id });
     const packet = claim.context as ContextPacket;
-    expect(packet.sections.map((s) => s.kind)).toEqual(expect.arrayContaining(['code.related', 'memory.relevant']));
+    expect(packet.sections.map((s) => s.kind)).toContain('memory.relevant');
+    expect(packet.sections.map((s) => s.kind)).not.toContain('code.related');
+    // The files of the scope and the code related to them come on request, answered alone.
+    const files = await be.client.requestContext({ task_id: task.task_id, kind: 'scope_files' });
+    const related = files.sections.find((s) => s.kind === 'code.related')?.content ?? '';
+    expect(related).toContain('backend/src/checkout.service.ts — in your write scope');
+    expect(related).toMatch(/shared\/src\/api\.ts — .*shared contract used by backend, frontend/);
+    expect(related).toMatch(/frontend\/src\/api-client\.ts — uses the shared contract shared\/src\/api\.ts/);
+    expect(JSON.stringify(files)).not.toContain('infra/');
+    expect(files.sections.map((s) => s.kind)).not.toContain('task.contract');
     const fresh = await td.operator.get<ContextPacket>(td.operator.projectPath(`/context/${packet.context_id}`));
     expect(fresh.staleness.is_stale).toBe(false);
     const remembered = await be.client.call('memory.record', {

@@ -29,7 +29,7 @@ export type SpawnedAgentTool = (typeof SPAWNED_AGENT_TOOLS)[number];
 const SPAWNED_FORM: Record<SpawnedAgentTool, { description: string; shape: z.ZodRawShape; rule: string }> = {
   friday_request_context: {
     description:
-      'More context about your task from Friday: kind "file" (query: the path), "scope_files", "history", "decision" or "task".',
+      'More context from Friday, answered alone: kind "scope_files" (the files you may change and the code related to them), "file" (query: the path), "history", "decision" or "task".',
     shape: {
       kind: z.enum(['task', 'scope_files', 'file', 'history', 'decision']).optional(),
       query: z.string().optional(),

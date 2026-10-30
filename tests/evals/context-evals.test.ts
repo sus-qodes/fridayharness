@@ -47,6 +47,11 @@ const EVAL_SET = path.join(REPO_ROOT, 'tests', 'evals', 'context-evals.json');
 const RECORD = path.join(ARTIFACTS_DIR, 'context-evals.json');
 const PROJECT = 'proj_0000000000000000000000ev';
 const BENCH = process.env.FRIDAY_TEST_BENCH === '1';
+/**
+ * What is scored: the first packet (the default), which since plan M14.7 names no related files,
+ * or the answer to a request (`FRIDAY_EVAL_REQUEST=scope_files`), where the related files are.
+ */
+const EVAL_REQUEST = process.env.FRIDAY_EVAL_REQUEST;
 /** What `friday_task_claim` delivers (the compiler's default) and what the SessionStart hook delivers. */
 const CLAIM_BUDGET = 20_000;
 const SESSION_START_BUDGET = 9000;
@@ -187,7 +192,14 @@ describe.skipIf(!BENCH)('the context evals on a clean checkout of this repositor
       try {
         const { packet, explanation } = await compileContext(
           deps,
-          { recipient, task_id: taskId, purpose: `${purpose}:${mode}`, max_chars: maxChars, overflow: 'raise' },
+          {
+            recipient,
+            task_id: taskId,
+            purpose: `${purpose}:${mode}`,
+            max_chars: maxChars,
+            overflow: 'raise',
+            ...(EVAL_REQUEST ? { request: { kind: EVAL_REQUEST } } : {}),
+          },
           actor,
         );
         const rendered = renderContextMarkdown(packet, RENDER_CAP);

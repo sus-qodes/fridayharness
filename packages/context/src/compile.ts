@@ -274,6 +274,13 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
   const task: TaskView | undefined = input.task_id ? state.q.findTask(pid, input.task_id) : undefined;
   const agent = input.recipient.kind === 'agent' ? state.q.findAgent(input.recipient.id) : undefined;
   const goal: GoalView | undefined = task?.goal_id ? state.q.findGoal(pid, task.goal_id) : undefined;
+  // A request for one kind of material (a file, the scope's files, history, a symbol) is answered
+  // with that material alone (plan M14.7): the task's own packet is not sent again with it. A
+  // request for decisions keeps the task's context, since the memory search reads it.
+  const request = input.request ?? null;
+  const requestOnly = Boolean(
+    request && ['file', 'scope_files', 'history', 'symbol', 'freeform'].includes(request.kind),
+  );
 
   let t = performance.now();
   // Everything that reads code reads the recipient's execution root (ADR-0014 §5, ADR-0023).
@@ -396,7 +403,7 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
       rule: 'protected: identity',
     });
   }
-  if (task) {
+  if (task && !requestOnly) {
     const taskSrc = (reason: string, content: string) =>
       src({
         source_id: task.task_id,
@@ -458,10 +465,13 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
         rule: 'protected: verification checks',
       });
     }
+    // What the task may change, and no list of what it may read (plan M14.7): a file named here
+    // gets opened whether the task needs it or not, which cost more than it helped when measured.
+    // The read scope still bounds what Friday gathers on request.
     const scope = task.scope
-      ? `write: ${task.scope.write.join(', ') || '(none)'}\nread: ${task.scope.read.join(', ') || '(any in project)'}`
+      ? `write: ${task.scope.write.join(', ') || '(none)'}`
       : 'No scope declared: edits are not restricted by task scope, but sensitive paths are always protected.';
-    const scopeText = `${scope}\nAlways off-limits: .friday/ runtime files, .git/, .claude/, .mcp.json, secrets (.env*, *.pem), Friday's private state directory.`;
+    const scopeText = `${scope}\nAlways off-limits: .friday/ runtime files, .git/, .claude/, .mcp.json, secrets (.env*, *.pem), Friday's private state directory.\nOpen files only when you need them; do not explore broadly before starting work.`;
     add({
       section: 'task.scope',
       line: scopeText,
@@ -655,11 +665,16 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
       rule: 'git state (priority 0)',
     });
     dirtyPaths = identity.paths;
-    const shown = dirtyPaths.filter((p) => {
-      if (readable(p)) return true;
-      withheld += 1;
-      return false;
-    });
+    // A request for one thing is answered with that thing: the working tree's changes are in the
+    // task packet. The recent history of the scope left the first packet too (plan M14.7): it is
+    // answered on request (kind "history").
+    const shown = requestOnly
+      ? []
+      : dirtyPaths.filter((p) => {
+          if (readable(p)) return true;
+          withheld += 1;
+          return false;
+        });
     for (const p of shown.slice(0, 30)) {
       add({
         section: 'repo.dirty',
@@ -673,26 +688,6 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
       });
     }
     if (shown.length > 30) notes.push(`${shown.length - 30} more uncommitted paths are not listed`);
-    if (task?.scope?.write.length && identity.head) {
-      const log = await readableLog(
-        task.scope.write.map((g) => `:(glob)${g}`),
-        5,
-      );
-      for (const c of log) {
-        const line = `${c.short} ${c.subject}`;
-        add({
-          section: 'repo.recent_commits',
-          line,
-          source: gitSrc('recent history of the files in scope', line, 2),
-          priority: 0,
-          relevance: 0.6,
-          protected: false,
-          reason: 'recent history in your scope',
-          rule: 'git state (priority 0)',
-          relies: c.relies,
-        });
-      }
-    }
   } else {
     const line = 'git is not available for this project';
     add({
@@ -708,11 +703,13 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
   }
   lap('git', t);
 
-  // 4. Graph relationships.
+  // 4. Graph relationships: not in the first packet (plan M14.7), where every file named got
+  // opened whether the task needed it or not; answered with the scope's files on request (kind
+  // "scope_files"), with the same permissions.
   t = performance.now();
   const unsupportedEdges: ContextExplanation['unsupported_edges'] = [];
   let related = 0;
-  if (task?.scope?.write.length) {
+  if (task?.scope?.write.length && request?.kind === 'scope_files') {
     const graph = await deps.graph(root, identity).catch(() => null);
     if (!graph) notes.push('the code graph is not available; no related files were gathered');
     else {
@@ -732,8 +729,9 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
 
   // 4b. What the recipient asked for (review F17), within the same permission and budget.
   t = performance.now();
-  const request = input.request ?? null;
   if (request && request.kind !== 'task') {
+    if (requestOnly)
+      notes.push("the request is answered alone: the task's own context is not repeated (ask with kind task)");
     const asked = (request.paths ?? []).map((p) => p.replaceAll('\\', '/').replace(/^\.\//, ''));
     const fileRef = (rel: string, reason: string, content: string) =>
       src({
@@ -856,19 +854,24 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
         ? [task.summary, task.description ?? '', task.plan_key ?? ''].join(' ')
         : '';
   let memories: SearchHit[] = [];
-  try {
-    memories = state.memory.search(pid, reader, {
-      query,
-      limit: task || decisions ? 10 : 5,
-      ...(decisions ? { kinds: ['decision', 'constraint', 'convention'] } : {}),
-    });
-    if (task && memories.length < 3) {
-      // Project decisions and constraints apply even when no word matches.
-      const general = state.memory.search(pid, reader, { kinds: ['decision', 'constraint', 'convention'], limit: 5 });
-      for (const g of general) if (!memories.some((m) => m.memory_id === g.memory_id)) memories.push(g);
+  if (!requestOnly) {
+    try {
+      memories = state.memory.search(pid, reader, {
+        query,
+        limit: task || decisions ? 10 : 5,
+        ...(decisions ? { kinds: ['decision', 'constraint', 'convention'] } : {}),
+      });
+      if (task && memories.length < 3) {
+        // Project decisions and constraints apply even when no word matches.
+        const general = state.memory.search(pid, reader, {
+          kinds: ['decision', 'constraint', 'convention'],
+          limit: 5,
+        });
+        for (const g of general) if (!memories.some((m) => m.memory_id === g.memory_id)) memories.push(g);
+      }
+    } catch {
+      notes.push('memory could not be searched');
     }
-  } catch {
-    notes.push('memory could not be searched');
   }
   for (const m of memories) {
     const conflict = m.contradicts.length ? ` (contradicts ${m.contradicts.join(', ')})` : '';
@@ -910,7 +913,7 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
   lap('memory', t);
 
   // 6. Recent relevant events: what waits in the inbox.
-  if (agent) {
+  if (agent && !requestOnly) {
     const inbox = state.peekInbox(pid, agent.agent_id, 5);
     for (const m of inbox.items) {
       const urgent = m.priority === 'urgent' || m.blocking;
@@ -995,7 +998,7 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
   // 7. Semantic fallback: disabled by design until M9.
   const semantic = { enabled: project.config.context.semantic_fallback === true, results: 0 };
   // 8. Nothing related found for a task that changes code: a human or the Master Brain should look.
-  const escalate = Boolean(task?.scope?.write.length) && related === 0;
+  const escalate = request?.kind === 'scope_files' && Boolean(task?.scope?.write.length) && related === 0;
   if (escalate) notes.push("nothing in the code graph relates to the task's write scope");
 
   // Budget (ADR-0022 §6, review F12): the packet as it is delivered, JSON with its sources, fits

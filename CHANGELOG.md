@@ -2,6 +2,17 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M14.7, a minimal first packet
+
+- **The first packet of a session names no files:** it carries who the agent is, the task, its criteria, the checks that will judge it, what it may change (`write:`) and one line against exploring broadly, with the project's memory and, for a rework, the handoff summary. The read-scope list, the related code and the recent commits left it: when measured, every file named got opened whether the task needed it or not, at 40% more cost and no gain in correctness.
+- **A context request is answered alone:** `friday_request_context` with `scope_files` (the files the task may change and the code the graph relates to them), `file`, `history` or `symbol` returns that material and nothing of the task packet; `task` and `decision` are as before. `friday context explain` of a task shows the packet as the agent got it.
+- **`friday context explain <task> --files`** shows what an agent's `scope_files` request is answered with: the files the task may change and the code related to them, with each file's reason. Without the flag, the command explains the packet the agent was given, which names no files.
+- The context evals (`FRIDAY_TEST_BENCH=1`) score the first packet by default; `FRIDAY_EVAL_REQUEST=scope_files` scores the request that now holds the related files.
+
+## Unreleased — the exploration measurement
+
+- **Measured on a large repository** (`tests/scenarios/exploration.live.test.ts`, 20 Haiku sessions on clones of Friday itself): a plain Claude Code session spends 8 to 11% of its input on searches and reads of files it never changes, so a better map of the code can save a tenth of a session at most; Friday's full packet made sessions 40% dearer, because its file lists get read; a minimal packet (the task, its criteria, its write scope, one line against exploring) was as right as the full one, 20% cheaper, with 60% fewer reads of unchanged files. Record: `docs/measurements/2026-10-20-exploration.md`. The graph-query tool and mandatory workflow proposed for worker IDEs are not built: measured, not worth it.
+
 ## Unreleased — M14.5, is a small local model worth it (OpenCode checkpoint E)
 
 - **Measured on this machine:** three small task kinds of the fixture shop, done by OpenCode alone and under Friday on `qwen2.5:7b`, judged by the same hidden checks (`tests/scenarios/opencode-e.live.test.ts`). No task ended right: OpenCode alone ran out of its 20 minutes on one and changed nothing on another, and under Friday the model's edit broke the project's tests and verification refused it. A small local model is not worth sending tasks to on this processor; OpenCode stays experimental.

@@ -102,22 +102,30 @@ const compile = (taskId: string, extra: { max_chars?: number; purpose?: string }
     { kind: 'agent', id: agent.agent_id },
   );
 
+/** A request for one kind of material, answered alone (plan M14.7). */
+const ask = (
+  taskId: string,
+  request: { kind: string; query?: string; paths?: string[] },
+  extra: { max_chars?: number; purpose?: string } = {},
+) =>
+  compileContext(
+    deps,
+    {
+      recipient: { kind: 'agent', id: agent.agent_id, harness_id: agent.harness_id },
+      task_id: taskId,
+      purpose: extra.purpose ?? `request:${request.kind}`,
+      request,
+      ...(extra.max_chars ? { max_chars: extra.max_chars } : {}),
+    },
+    { kind: 'agent', id: agent.agent_id },
+  );
+
 const section = (packet: { sections: { kind: string; content: string }[] }, kind: string) =>
   packet.sections.find((s) => s.kind === kind)?.content ?? '';
 
 describe('what a backend task receives (Part 12 §13)', () => {
-  it('gets the shared contract, the frontend that consumes it and the tests, never the infra config', async () => {
+  it('gets its task, what it may change and one line against exploring, and no list of files (plan M14.7)', async () => {
     const { packet, explanation } = await compile(backendTask());
-    const related = section(packet, 'code.related');
-    expect(related).toContain('backend/src/checkout.service.ts — in your write scope');
-    expect(related).toMatch(/shared\/src\/api\.ts — .*shared contract used by backend, frontend/);
-    expect(related).toMatch(/frontend\/src\/api-client\.ts — uses the shared contract shared\/src\/api\.ts/);
-    expect(related).toContain('backend/test/checkout.service.test.ts — in your write scope; a test');
-    expect(JSON.stringify(packet)).not.toContain('infra/');
-    expect(packet.source_version).toMatch(/^[0-9a-f]{40}$/);
-    expect(explanation.included.find((i) => i.source_id === 'frontend/src/api-client.ts')).toMatchObject({
-      rule: 'graph exact, distance 2 (priority 3)',
-    });
     for (const kind of [
       'agent.identity',
       'task.contract',
@@ -128,11 +136,47 @@ describe('what a backend task receives (Part 12 §13)', () => {
     ]) {
       expect(packet.sections.map((s) => s.kind)).toContain(kind);
     }
+    const scope = section(packet, 'task.scope');
+    expect(scope).toContain('write: backend/**');
+    expect(scope).not.toContain('read:');
+    expect(scope).toContain('Open files only when you need them; do not explore broadly before starting work.');
+    // The files the graph relates to the task are not named: a file named gets opened whether the
+    // task needs it or not, which cost more than it helped when measured.
+    expect(packet.sections.map((s) => s.kind)).not.toContain('code.related');
+    expect(packet.sections.map((s) => s.kind)).not.toContain('repo.recent_commits');
+    expect(JSON.stringify(packet)).not.toContain('shared/src/api.ts');
+    expect(JSON.stringify(packet)).not.toContain('infra/');
+    expect(packet.source_version).toMatch(/^[0-9a-f]{40}$/);
     expect(explanation.semantic_fallback).toEqual({ enabled: false, results: 0 });
   });
 
+  it('gets the shared contract, the frontend that consumes it and the tests on request, never the infra config', async () => {
+    const taskId = backendTask();
+    const { packet, explanation } = await ask(taskId, { kind: 'scope_files' });
+    // The request is answered alone: the scope's files and the code related to them, no task packet.
+    expect(section(packet, 'code.requested')).toContain('- backend/src/checkout.service.ts');
+    const related = section(packet, 'code.related');
+    expect(related).toContain('backend/src/checkout.service.ts — in your write scope');
+    expect(related).toMatch(/shared\/src\/api\.ts — .*shared contract used by backend, frontend/);
+    expect(related).toMatch(/frontend\/src\/api-client\.ts — uses the shared contract shared\/src\/api\.ts/);
+    expect(related).toContain('backend/test/checkout.service.test.ts — in your write scope; a test');
+    expect(JSON.stringify(packet)).not.toContain('infra/');
+    expect(explanation.included.find((i) => i.source_id === 'frontend/src/api-client.ts')).toMatchObject({
+      rule: 'graph exact, distance 2 (priority 3)',
+    });
+    const kinds = packet.sections.map((s) => s.kind);
+    expect(kinds).toEqual(
+      expect.arrayContaining(['agent.identity', 'code.requested', 'code.related', 'protocol.reminder']),
+    );
+    for (const kind of ['task.contract', 'task.acceptance', 'task.scope', 'memory.relevant', 'inbox.summary'])
+      expect(kinds).not.toContain(kind);
+    expect(explanation.notes).toContain(
+      "the request is answered alone: the task's own context is not repeated (ask with kind task)",
+    );
+  });
+
   it('never gathers, or names, a file the task may not read', async () => {
-    const { packet, explanation } = await compile(backendTask(['backend/**', 'shared/**']));
+    const { packet, explanation } = await ask(backendTask(['backend/**', 'shared/**']), { kind: 'scope_files' });
     expect(section(packet, 'code.related')).toContain('shared/src/api.ts');
     expect(JSON.stringify(packet)).not.toContain('frontend/');
     expect(JSON.stringify(explanation)).not.toContain('frontend/');
@@ -143,7 +187,8 @@ describe('what a backend task receives (Part 12 §13)', () => {
     let policy: ContextPolicy = { version: 'v1', deny: { read: [] }, teams: {} };
     deps.policy = () => policy;
     const taskId = backendTask();
-    const first = await compile(taskId);
+    const related = (purpose?: string) => ask(taskId, { kind: 'scope_files' }, purpose ? { purpose } : {});
+    const first = await related();
     expect(section(first.packet, 'code.related')).toContain('frontend/src/api-client.ts');
 
     // The project keeps the frontend from agents: the stored packet no longer stands, and the next
@@ -153,7 +198,7 @@ describe('what a backend task receives (Part 12 §13)', () => {
       is_stale: true,
       reason: expect.stringContaining('policy'),
     });
-    const second = await compile(taskId);
+    const second = await related();
     expect(second.cached).toBe(false);
     expect(second.packet.source_version).toBe(first.packet.source_version);
     expect(JSON.stringify(second.packet)).not.toContain('frontend/');
@@ -166,14 +211,14 @@ describe('what a backend task receives (Part 12 §13)', () => {
       deny: { read: [] },
       teams: { backend: [{ source: 'teams.yaml', write: ['backend/**'], read: ['shared/**'] }] },
     };
-    const third = await compile(taskId);
+    const third = await related();
     expect(section(third.packet, 'code.related')).toContain('shared/src/api.ts');
     expect(JSON.stringify(third.packet)).not.toContain('frontend/');
 
     // An exact path a human approved for this task is shown anyway; its grant is part of the key.
     policy = { version: 'v4', deny: { read: ['frontend/**'] }, teams: {} };
     deps.readGrants = () => [{ approval_id: 'apr_1', target: 'frontend/src/api-client.ts' }];
-    const granted = await compile(taskId);
+    const granted = await related();
     expect(granted.cached).toBe(false);
     expect(section(granted.packet, 'code.related')).toContain('frontend/src/api-client.ts');
     expect(section(granted.packet, 'code.related')).not.toContain('frontend/src/format-price.ts');
@@ -191,7 +236,7 @@ describe('what a backend task receives (Part 12 §13)', () => {
       }
       return g;
     };
-    const raced = await compile(taskId, { purpose: 'race' });
+    const raced = await related('race');
     expect(raced.explanation.policy_version).toBe('v6');
     expect(JSON.stringify(raced.packet)).not.toContain('frontend/');
   });
@@ -200,16 +245,21 @@ describe('what a backend task receives (Part 12 §13)', () => {
 describe('budget', () => {
   it('keeps every protected section and cuts the rest by rank', async () => {
     const taskId = backendTask();
-    state.memory.record(
-      PROJECT,
-      { kind: 'human', actor: human },
-      {
-        scope_type: 'project',
-        kind: 'decision',
-        subject: 'money',
-        content: 'Money is integer minor units with an ISO-4217 currency.',
-      },
-    );
+    // Enough memories that the budget cannot hold them all beside the protected sections.
+    for (const [subject, content] of [
+      ['money', 'Money is integer minor units with an ISO-4217 currency.'],
+      ['contract', 'The frontend reaches the backend only through shared/src/api.ts.'],
+      ['tests', 'Every pricing rule has a test beside it.'],
+      ['errors', 'Checkout errors are CheckoutError, never a bare Error.'],
+      ['naming', 'Files are named after the thing they export, in kebab case.'],
+      ['currency', 'Only EUR, USD and GBP are accepted at checkout.'],
+    ]) {
+      state.memory.record(
+        PROJECT,
+        { kind: 'human', actor: human },
+        { scope_type: 'project', kind: 'decision', subject: subject as string, content: content as string },
+      );
+    }
     const { packet, explanation } = await compile(taskId, { max_chars: 4500 });
     for (const kind of [
       'agent.identity',
@@ -502,14 +552,15 @@ describe('authority at delivery (review M7.1 R02, R06)', () => {
 
   it('delivers nothing gathered under a grant, a policy or a task that changed meanwhile (R02)', async () => {
     const taskId = backendTask();
-    const graphOf = deps.graph;
+    // The git read runs in every compile, after the authority is captured: the moment "meanwhile".
+    const gitOf = deps.git;
     // A: the human's exact-path grant is withdrawn while sources are gathered; the policy stays.
     writeFileSync(path.join(dir, client), '// REVOKED_GRANT_CONTENT\nexport {};\n');
     deps.policy = () => ({ version: 'v1', deny: { read: ['frontend/**'] }, teams: {} });
     let grants = [{ approval_id: 'apr_r02', target: client }];
     deps.readGrants = () => grants;
-    deps.graph = async (root) => {
-      const g = await graphOf(root);
+    deps.git = async (root) => {
+      const g = await gitOf(root);
       grants = [];
       return g;
     };
@@ -525,22 +576,22 @@ describe('authority at delivery (review M7.1 R02, R06)', () => {
     let n = 1;
     let policy: ContextPolicy = { version: 'c1', deny: { read: [] }, teams: {} };
     deps.policy = () => policy;
-    deps.graph = async (root) => {
-      const g = await graphOf(root);
+    deps.git = async (root) => {
+      const g = await gitOf(root);
       n += 1;
       policy = { version: `c${n}`, deny: { read: n >= 4 ? ['frontend/**'] : [] }, teams: {} };
       return g;
     };
     await expect(ask(taskId, { kind: 'file', paths: [client] })).rejects.toThrow(/kept changing/);
-    deps.graph = graphOf;
+    deps.git = gitOf;
     const calm = await ask(taskId, { kind: 'file', paths: [client] });
     expect(JSON.stringify(calm.packet)).not.toContain('CHURN_DENIED_CONTENT');
 
     // C: the task is cancelled while its packet is compiled: the packet shows the task as it is.
     deps.policy = undefined;
     let cancelled = false;
-    deps.graph = async (root) => {
-      const g = await graphOf(root);
+    deps.git = async (root) => {
+      const g = await gitOf(root);
       if (!cancelled) {
         cancelled = true;
         state.cancelTask(PROJECT, human, taskId, 'no longer needed');
@@ -549,7 +600,7 @@ describe('authority at delivery (review M7.1 R02, R06)', () => {
     };
     const late = await compile(taskId, { purpose: 'during-cancel' });
     expect(section(late.packet, 'task.contract')).toContain('CANCELLED');
-    deps.graph = graphOf;
+    deps.git = gitOf;
   });
 
   it('history names only commits that change a file the recipient may read (R06)', async () => {
@@ -592,7 +643,11 @@ describe('authority at delivery (review M7.1 R02, R06)', () => {
       // committer's text, about whatever it changed.
       expect(section(asked.packet, 'repo.history'), policy.version).toContain('READABLE_HISTORY_MARKER');
       expect(section(asked.packet, 'repo.history'), policy.version).toContain('MIXED_HISTORY_MARKER');
-      expect(section(recent.packet, 'repo.recent_commits'), policy.version).toContain('READABLE_HISTORY_MARKER');
+      // The first packet carries no recent history (plan M14.7): it is asked for.
+      expect(
+        recent.packet.sections.map((s) => s.kind),
+        policy.version,
+      ).not.toContain('repo.recent_commits');
     }
   });
 });

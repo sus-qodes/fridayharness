@@ -355,7 +355,8 @@ describe('the joined scenario (M7 review §5)', () => {
     const body = (p: ContextPacket) => p.sections.map((s) => s.content).join('\n');
     expect(packetA.task_id).toBe(ids.api);
     expect(packetB.task_id).toBe(ids.ui);
-    expect(body(packetA)).toContain('Raise a to 2');
+    // A request for a file is answered alone (plan M14.7): the file, not the task packet again.
+    expect(packetA.sections.map((s) => s.kind)).not.toContain('task.contract');
     expect(body(packetA)).toContain('export const a = 1;');
     expect(body(packetB)).toContain('export const b = 1;');
     for (const p of [packetA, packetB]) expect(JSON.stringify(p).length).toBeLessThanOrEqual(6000);

@@ -403,11 +403,15 @@ describe('the MVP demonstration (Part 12 §18)', () => {
     expect(new Set([front, back, checkoutOf(ids['discount-docs'])]).size).toBe(3);
     expect(checkoutOf(ids['discount-contract'])).toBe(front);
 
-    // 7. Each agent's own compiled context: what its task touches, and what depends on it.
+    // 7. Each agent's own compiled context names its task, and on request what its task touches and
+    // what depends on it (plan M14.7: the first packet names no files).
     for (const key of ['discount-service', 'discount-contract'] as const) {
       const explained = await friday('context', 'explain', ids[key]);
       expect(explained.code, explained.stderr).toBe(0);
-      expect(explained.stdout).toContain('shared/src/api.ts');
+      expect(explained.stdout).toContain('Files: none related through the code graph.');
+      const files = await friday('context', 'explain', ids[key], '--files');
+      expect(files.code, files.stderr).toBe(0);
+      expect(files.stdout).toContain('shared/src/api.ts');
     }
     // Codex got its packet as its thread's instructions, in its own worktree; Claude Code with its claim.
     const thread = codex.entries().find((e) => e.request === 'thread/start')?.params as {

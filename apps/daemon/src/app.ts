@@ -770,6 +770,20 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     const taskId = typeof body.task_id === 'string' ? body.task_id : undefined;
     const maxChars = typeof body.max_chars === 'number' ? body.max_chars : undefined;
     const purpose = typeof body.purpose === 'string' ? body.purpose : 'request';
+    // What is asked for beyond the task (review F17), as an agent's context request names it: a
+    // kind, a query and paths; a request of another shape is ignored and the task packet compiled.
+    const kinds = ['task', 'scope_files', 'file', 'symbol', 'history', 'decision', 'freeform'];
+    const asked = body.request && typeof body.request === 'object' ? (body.request as Record<string, unknown>) : null;
+    const request =
+      asked && typeof asked.kind === 'string' && kinds.includes(asked.kind)
+        ? {
+            kind: asked.kind,
+            ...(typeof asked.query === 'string' ? { query: asked.query.slice(0, 500) } : {}),
+            ...(Array.isArray(asked.paths)
+              ? { paths: asked.paths.filter((p): p is string => typeof p === 'string').slice(0, 50) }
+              : {}),
+          }
+        : undefined;
     if (auth.token_class === 'harness' && auth.harness_id) {
       const caller = callerFor(state, pid, auth.harness_id);
       const packet = await compile(
@@ -777,6 +791,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
           recipient: { kind: 'agent', id: caller.agent_id, harness_id: auth.harness_id },
           task_id: taskId ?? state.q.agent(caller.agent_id).current_task_id ?? undefined,
           purpose,
+          ...(request ? { request } : {}),
           // A size the caller asked for is kept, or the answer says what fits (review F12).
           ...(maxChars ? { max_chars: maxChars, overflow: 'refuse' as const } : {}),
         },
@@ -791,6 +806,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
           recipient: { kind: 'human', id: recipientId },
           task_id: taskId,
           purpose,
+          ...(request ? { request } : {}),
           ...(maxChars ? { max_chars: maxChars, overflow: 'refuse' as const } : {}),
         },
         HUMAN,
