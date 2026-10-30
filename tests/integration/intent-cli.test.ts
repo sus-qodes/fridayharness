@@ -39,7 +39,20 @@ describe('friday intent', () => {
   it('drafts from the README, takes your edit, and counts only once you approve', async () => {
     const td = await startTestDaemon(ws(), {
       git: true,
-      brain: { model: new FakePlannerModel([{ purpose: 'intent', output: DRAFT }]), autoStart: false },
+      brain: {
+        model: new FakePlannerModel([
+          { purpose: 'intent', output: DRAFT },
+          {
+            purpose: 'intent',
+            output: {
+              ...DRAFT,
+              non_goals: [{ text: 'No hosted service.', from_paths: ['your feedback'] }],
+              outcomes: [{ text: 'Teachers see what their classes studied.', from_paths: ['your feedback'] }],
+            },
+          },
+        ]),
+        autoStart: false,
+      },
     });
     const dir = ws().projectDir;
     const state = () => td.operator.get<IntentState>(td.operator.projectPath('/intent'));
@@ -66,17 +79,31 @@ describe('friday intent', () => {
     const same = await cli(['--project', dir, 'intent', 'edit', '--non-goal', 'No hosted service.']);
     expect(same.stdout).toContain('Nothing changed');
 
+    // Tell Friday what to change: the waiting proposal is revised into a new version, and a line
+    // the feedback added says it came from the feedback.
+    const revised = await cli(['--project', dir, 'intent', 'draft', '--feedback', 'It is for teachers too.']);
+    expect(revised.code, revised.stderr).toBe(0);
+    expect(revised.stdout).toContain('Project intent v3  proposed  (drafted by Friday');
+    expect(revised.stdout).toContain('Teachers see what their classes studied. (Friday, from your feedback)');
+    expect(revised.stdout).toContain('friday intent draft --feedback');
+    const v3 = (await state()).proposed;
+    expect(v3?.version).toBe(3);
+    const badFrom = await cli(['--project', dir, 'intent', 'draft', '--from', '2']);
+    expect(badFrom.code).toBe(2);
+    expect(badFrom.stderr).toContain('--from needs --feedback');
+
     const approved = await cli(['--project', dir, 'intent', 'approve', '--note', 'right']);
     expect(approved.code, approved.stderr).toBe(0);
-    expect(approved.stdout).toContain('Approved project intent v2.');
+    expect(approved.stdout).toContain('Approved project intent v3.');
     const s = await state();
-    expect(s.approved?.version).toBe(2);
+    expect(s.approved?.version).toBe(3);
     expect(s.proposed).toBeNull();
 
     const history = await cli(['--project', dir, '--json', 'intent', 'history']);
     const { versions } = JSON.parse(history.stdout) as { versions: ProjectIntentView[] };
     expect(versions.map((v) => [v.version, v.status])).toEqual([
-      [2, 'approved'],
+      [3, 'approved'],
+      [2, 'superseded'],
       [1, 'superseded'],
     ]);
 

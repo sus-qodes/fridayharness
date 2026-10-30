@@ -154,3 +154,68 @@ describe('Master Brain intent draft (ADR-0034 §2)', () => {
     expect(state.q.projectIntents(PROJECT)).toEqual([]);
   });
 });
+
+describe("revising the intent from the human's feedback", () => {
+  const REVISED = {
+    ...DRAFT,
+    objective: 'A distraction-free study platform for students and their teachers.',
+    outcomes: [...DRAFT.outcomes, { text: 'Teachers see what their classes studied.', from_paths: ['your feedback'] }],
+  };
+
+  it('shows the model the current proposal and the feedback, and the new version replaces it', async () => {
+    const { brain: b, model } = brain([
+      { purpose: 'intent', output: DRAFT },
+      { purpose: 'intent', output: REVISED },
+    ]);
+    expect(await b.requestIntentDraft()).toBe('proposed project intent v1');
+    const result = await b.requestIntentDraft({
+      feedback: 'It is for teachers too: they see what their classes studied.',
+    });
+    expect(result).toBe('proposed project intent v2 (revised from v1 with your feedback)');
+    const req = model?.requests[1];
+    expect(req?.instructions).toContain('Revise the current intent as the human asks');
+    expect(req?.prompt).toContain('The current intent:');
+    expect(req?.prompt).toContain('"objective": "A distraction-free study platform for students."');
+    expect(req?.prompt).toContain("The human's feedback:\nIt is for teachers too");
+    expect(req?.context).toContain('## README.md');
+    const v2 = state.q.proposedProjectIntent(PROJECT);
+    expect(v2?.version).toBe(2);
+    expect(v2?.outcomes[1]).toMatchObject({
+      text: 'Teachers see what their classes studied.',
+      from_paths: ['your feedback'],
+    });
+    expect(state.q.projectIntent(PROJECT, 1).status).toBe('superseded');
+    expect(state.q.modelCalls(PROJECT, { limit: 10 })).toHaveLength(2);
+  });
+
+  it('revises the approved intent when no proposal waits, or the version named', async () => {
+    state.intent.propose(PROJECT, human, { objective: 'Mine.' });
+    state.intent.approve(PROJECT, human, 1);
+    // The second revision differs from the first: a proposal with the same content is not a new version.
+    const { brain: b } = brain([
+      { purpose: 'intent', output: REVISED },
+      { purpose: 'intent', output: { ...REVISED, objective: 'For students, teachers and parents.' } },
+    ]);
+    expect(await b.requestIntentDraft({ feedback: 'Add the teachers.' })).toBe(
+      'proposed project intent v2 (revised from v1 with your feedback)',
+    );
+    expect(state.q.approvedProjectIntent(PROJECT)?.version).toBe(1);
+    expect(state.q.proposedProjectIntent(PROJECT)?.version).toBe(2);
+    expect(await b.requestIntentDraft({ feedback: 'From the first one.', from: 1 })).toBe(
+      'proposed project intent v3 (revised from v1 with your feedback)',
+    );
+    expect(await b.requestIntentDraft({ feedback: 'x', from: 9 })).toBe(
+      'skipped: there is no project intent v9 to revise',
+    );
+  });
+
+  it('says so when there is nothing to revise, and refuses a line citing an unknown source', async () => {
+    const { brain: b } = brain([{ purpose: 'intent', output: REVISED }]);
+    expect(await b.requestIntentDraft({ feedback: 'Add the teachers.' })).toBe(
+      'skipped: nothing to revise: no project intent exists yet (ask for a draft first)',
+    );
+    // Without a revision, "your feedback" is not a document the draft may cite.
+    expect(parseIntentDraft(REVISED, ['README.md', 'docs/ROADMAP.md']).ok).toBe(false);
+    expect(parseIntentDraft(REVISED, ['README.md', 'docs/ROADMAP.md', 'your feedback']).ok).toBe(true);
+  });
+});

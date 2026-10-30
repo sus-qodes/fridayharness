@@ -77,6 +77,7 @@ function titleOf(kind: string): string {
     'task.plan': 'Plan and decisions',
     'task.progress': 'Progress so far',
     'repo.head': 'Repository',
+    'repo.shape': 'Repository shape',
     'repo.history': 'History you asked for',
     'code.requested': 'What you asked for',
     'code.related': 'Related code',

@@ -29,7 +29,10 @@ export { diffPlanVersions, type PlanDiff, type PlanVersionTask } from './diff.js
 export { buildEscalation, type Escalation, type EscalationDetails, type EscalationReason } from './escalate.js';
 export {
   draftProjectIntent,
+  FEEDBACK_SOURCE,
   INTENT_DRAFTER_PROMPT_VERSION,
+  INTENT_FEEDBACK_MAX_CHARS,
+  type IntentRevision,
   type IntentSource,
   type ProjectIntentDraft,
   parseIntentDraft,

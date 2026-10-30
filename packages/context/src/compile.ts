@@ -140,6 +140,7 @@ const SECTION_ORDER = [
   'task.progress',
   'learnings.relevant',
   'repo.head',
+  'repo.shape',
   'repo.history',
   'code.requested',
   'code.related',
@@ -163,6 +164,7 @@ const SECTION_AUTHORITY: Record<string, Authority> = {
   'task.plan': 'human',
   'task.progress': 'agent',
   'repo.head': 'git',
+  'repo.shape': 'graph',
   'code.related': 'graph',
   'memory.notes': 'memory',
   'inbox.summary': 'agent',
@@ -802,6 +804,38 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
     });
   }
   lap('git', t);
+
+  // 3b. The shape of the repository, from the code graph: which languages and areas it has, how
+  // many files cross areas, where the tests are. Folders and counts only, no file names, so the
+  // host opens nothing because of it; a task packet only, and only when a graph exists.
+  if (git && identity && task && !requestOnly) {
+    t = performance.now();
+    const shapeGraph = await deps.graph(root, identity).catch(() => null);
+    // Under the recipient's read rule: an area the recipient may not read is not counted.
+    const shape = shapeGraph ? repositoryShape(shapeGraph, readable) : null;
+    if (shape) {
+      add({
+        section: 'repo.shape',
+        line: shape,
+        source: src({
+          source_id: `graph:${shapeGraph?.version ?? identity.version}`,
+          source_type: 'graph',
+          authority: 'graph',
+          relevance: 1,
+          relationship_distance: 1,
+          verification_status: 'verified',
+          selection_reason: 'where things are, from the code graph',
+          content: shape,
+        }),
+        priority: 0,
+        relevance: 1,
+        protected: true,
+        reason: 'the languages, areas and tests of the repository',
+        rule: 'protected: repository shape',
+      });
+    }
+    lap('shape', t);
+  }
 
   // 4. Graph relationships: not in the first packet (plan M14.7), where every file named got
   // opened whether the task needed it or not; answered with the scope's files on request (kind
@@ -1503,6 +1537,78 @@ export function executionRootOf(deps: ContextDeps, input: CompileInput, task: Ta
 
 /** At most this much of a requested file goes into a packet (review F17). */
 const EXCERPT_LINES = 80;
+/** The repository shape never exceeds this; the areas list is cut first. */
+export const SHAPE_MAX_CHARS = 600;
+const SHAPE_MAX_AREAS = 8;
+
+const count = (n: number) => n.toLocaleString('en-US');
+
+/**
+ * The repository's shape in a few lines (`repo.shape`): languages, the areas (packages or
+ * top-level folders) by size, how many files other areas import, and where the tests are.
+ * Folders and counts only: it names no file. Null for a graph without files.
+ */
+export function repositoryShape(graph: CodeGraph, readable: (path: string) => boolean = () => true): string | null {
+  const nodes = [...graph.nodes.values()].filter((n) => readable(n.path));
+  if (!nodes.length) return null;
+  const languages = new Map<string, number>();
+  const areas = new Map<string, { files: number; tests: number }>();
+  const testRoots = new Map<string, number>();
+  let tests = 0;
+  let contracts = 0;
+  for (const n of nodes) {
+    languages.set(n.language, (languages.get(n.language) ?? 0) + 1);
+    let a = areas.get(n.area);
+    if (!a) {
+      a = { files: 0, tests: 0 };
+      areas.set(n.area, a);
+    }
+    a.files += 1;
+    if (n.test) {
+      a.tests += 1;
+      tests += 1;
+      const top = n.path.includes('/') ? `${n.path.split('/')[0]}/` : '.';
+      testRoots.set(top, (testRoots.get(top) ?? 0) + 1);
+    }
+    if (n.contract) contracts += 1;
+  }
+  const lines: string[] = [];
+  lines.push(
+    `Languages: ${[...languages]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([l, n]) => `${l} ${count(n)} file${n === 1 ? '' : 's'}`)
+      .join(', ')}`,
+  );
+  const byArea = [...areas].sort((a, b) => b[1].files - a[1].files || a[0].localeCompare(b[0]));
+  const shown = byArea.slice(0, SHAPE_MAX_AREAS);
+  const more = byArea.length - shown.length;
+  lines.push(
+    `Areas (files/tests): ${shown.map(([a, c]) => `${a} ${count(c.files)}/${count(c.tests)}`).join(', ')}${more > 0 ? ` and ${count(more)} more` : ''}`,
+  );
+  if (contracts > 0) {
+    lines.push(`Shared contracts: ${count(contracts)} file${contracts === 1 ? '' : 's'} other areas import`);
+  }
+  if (tests > 0) {
+    const roots = [...testRoots].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 4);
+    lines.push(`Tests: ${count(tests)} test file${tests === 1 ? '' : 's'}, under ${roots.map(([r]) => r).join(', ')}`);
+  } else {
+    lines.push('Tests: none the graph recognizes');
+  }
+  let text = lines.join('\n');
+  // Cut the areas list, never the other lines, until the whole fits.
+  let keep = shown.length;
+  while (text.length > SHAPE_MAX_CHARS && keep > 1) {
+    keep -= 1;
+    const rest = byArea.length - keep;
+    lines[1] = `Areas (files/tests): ${byArea
+      .slice(0, keep)
+      .map(([a, c]) => `${a} ${count(c.files)}/${count(c.tests)}`)
+      .join(', ')} and ${count(rest)} more`;
+    text = lines.join('\n');
+  }
+  return text.length > SHAPE_MAX_CHARS ? `${text.slice(0, SHAPE_MAX_CHARS - 1)}…` : text;
+}
+
 const EXCERPT_CHARS = 3000;
 
 /**

@@ -125,11 +125,28 @@ export function registerIntentCommands(program: Command, g: () => GlobalOptions)
     .command('draft')
     .description('ask Friday to draft the project intent from your README and docs; you approve it after')
     .option('--force', 'draft even while another proposal waits (it replaces that proposal)')
-    .action(async (o: { force?: boolean }) => {
+    .option(
+      '--feedback <text>',
+      'tell Friday what to change in the waiting proposal (or the approved intent); it drafts a new version from that',
+    )
+    .option(
+      '--from <version>',
+      'with --feedback: the version to revise (default: the waiting proposal, else the approved one)',
+    )
+    .action(async (o: { force?: boolean; feedback?: string; from?: string }) => {
+      if (o.from !== undefined && !o.feedback) throw new UsageError('--from needs --feedback');
+      const from = o.from === undefined ? undefined : Number(o.from);
+      if (from !== undefined && !(Number.isInteger(from) && from > 0)) {
+        throw new UsageError(`--from: not a version: ${o.from}`);
+      }
       const { client } = operator(g());
       const r = await client.post<{ result: string; proposed: ProjectIntentView | null }>(
         client.projectPath('/intent/draft'),
-        { force: Boolean(o.force) },
+        {
+          force: Boolean(o.force),
+          ...(o.feedback ? { feedback: o.feedback } : {}),
+          ...(from !== undefined ? { from } : {}),
+        },
         { timeoutMs: 600_000 },
       );
       out(g(), r, () => {
@@ -137,7 +154,7 @@ export function registerIntentCommands(program: Command, g: () => GlobalOptions)
           return [
             renderIntent(r.proposed),
             '',
-            'Approve it: friday intent approve   change it first: friday intent edit ...   reject: friday intent reject',
+            'Approve it: friday intent approve   change it first: friday intent draft --feedback "..." (or friday intent edit ...)   reject: friday intent reject',
           ].join('\n');
         }
         return [

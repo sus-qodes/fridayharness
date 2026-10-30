@@ -17,5 +17,7 @@ export {
   executionRootOf,
   packetStaleness,
   RECORD_LIMIT_BYTES,
+  repositoryShape,
+  SHAPE_MAX_CHARS,
 } from './compile.js';
 export { createReadFilter, type ReadFilter, type ReadFilterInput, type ReadGrant } from './read-filter.js';

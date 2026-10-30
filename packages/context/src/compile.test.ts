@@ -12,7 +12,7 @@ import { type Actor, FridayError, HarnessRegisterParams } from '@friday/protocol
 import { FridayState } from '@friday/state';
 import { deterministicGit, FakeClock, useTestWorkspace } from '@friday/test-support';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { HANDOFF_MAX_CHARS } from './compile.js';
+import { HANDOFF_MAX_CHARS, repositoryShape, SHAPE_MAX_CHARS } from './compile.js';
 import {
   boundRecord,
   ContextCache,
@@ -122,6 +122,55 @@ const ask = (
 
 const section = (packet: { sections: { kind: string; content: string }[] }, kind: string) =>
   packet.sections.find((s) => s.kind === kind)?.content ?? '';
+
+describe('the repository shape (repo.shape)', () => {
+  it('says the languages, the areas and where the tests are, naming no file, after the repository line', async () => {
+    const { packet, explanation } = await compile(backendTask());
+    const shape = packet.sections.find((s) => s.kind === 'repo.shape');
+    expect(shape?.authority).toBe('graph');
+    const text = shape?.content ?? '';
+    expect(text).toMatch(/^Languages: typescript \d+ files/);
+    // Areas by size: frontend (4 files), backend (3), shared (2); infra holds no source file.
+    expect(text).toMatch(/\nAreas \(files\/tests\): frontend 4\/2, backend 3\/1, shared 2\/1\n/);
+    expect(text).toContain('\nShared contracts: 1 file other areas import');
+    expect(text).toMatch(/\nTests: \d+ test files, under /);
+    expect(text).not.toMatch(/\.(ts|js|json)\b/);
+    expect(text.length).toBeLessThanOrEqual(SHAPE_MAX_CHARS);
+    const kinds = packet.sections.map((s) => s.kind);
+    expect(kinds.indexOf('repo.shape')).toBe(kinds.indexOf('repo.head') + 1);
+    expect(explanation.included.find((i) => i.source_id?.startsWith('graph:'))).toMatchObject({
+      rule: 'protected: repository shape',
+    });
+  });
+
+  it('is left out of an answer to a request, and of a packet without a graph', async () => {
+    const taskId = backendTask();
+    const answer = await ask(taskId, { kind: 'scope_files' });
+    expect(answer.packet.sections.map((s) => s.kind)).not.toContain('repo.shape');
+    const graph = deps.graph;
+    deps.graph = async () => null;
+    try {
+      const { packet } = await compile(taskId);
+      expect(packet.sections.map((s) => s.kind)).toContain('repo.head');
+      expect(packet.sections.map((s) => s.kind)).not.toContain('repo.shape');
+    } finally {
+      deps.graph = graph;
+    }
+  });
+
+  it('cuts the areas list, never the other lines, to stay within its size', () => {
+    const nodes = new Map<string, { path: string; language: 'typescript'; test: boolean; area: string; external: string[] }>();
+    for (let i = 0; i < 40; i += 1) {
+      const area = `packages/a-rather-long-package-name-${i}`;
+      nodes.set(`${area}/src/index.ts`, { path: `${area}/src/index.ts`, language: 'typescript', test: false, area, external: [] });
+      nodes.set(`${area}/src/index.test.ts`, { path: `${area}/src/index.test.ts`, language: 'typescript', test: true, area, external: [] });
+    }
+    const text = repositoryShape({ nodes } as unknown as Parameters<typeof repositoryShape>[0]) as string;
+    expect(text.length).toBeLessThanOrEqual(SHAPE_MAX_CHARS);
+    expect(text).toMatch(/^Languages: typescript 80 files\nAreas \(files\/tests\): packages\/a-rather-long-package-name-0 2\/1, .* and \d+ more\nTests: 40 test files, under packages\/$/);
+    expect(repositoryShape({ nodes: new Map() } as unknown as Parameters<typeof repositoryShape>[0])).toBeNull();
+  });
+});
 
 describe('what a backend task receives (Part 12 §13)', () => {
   it('gets its task, what it may change and one line against exploring, and no list of files (plan M14.7)', async () => {

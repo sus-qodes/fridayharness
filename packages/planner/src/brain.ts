@@ -12,7 +12,12 @@ import type { BrainJob, BrainJobInput, FridayState } from '@friday/state';
 import { consolidatePlan } from './consolidate.js';
 import { type DelegationCandidate, delegate } from './delegate.js';
 import { buildEscalation, type EscalationReason } from './escalate.js';
-import { draftProjectIntent, INTENT_DRAFTER_PROMPT_VERSION, type IntentSource } from './intent-drafter.js';
+import {
+  draftProjectIntent,
+  INTENT_DRAFTER_PROMPT_VERSION,
+  type IntentRevision,
+  type IntentSource,
+} from './intent-drafter.js';
 import {
   type ParseResult,
   type PlannerCall,
@@ -232,8 +237,11 @@ export class MasterBrain {
    * through the same lane, consent, budget and call records as planning; the draft is only a
    * proposal until a human approves it. `force` drafts even while another proposal waits.
    */
-  requestIntentDraft(opts: { force?: boolean; reason?: string } = {}): Promise<string> {
+  requestIntentDraft(
+    opts: { force?: boolean; reason?: string; feedback?: string | null; from?: number | null } = {},
+  ): Promise<string> {
     const { state, projectId } = this.#deps;
+    const feedback = opts.feedback?.trim() || null;
     const [id] = state.enqueueBrainJobs(
       projectId,
       [
@@ -241,8 +249,13 @@ export class MasterBrain {
           kind: 'intent',
           goal_id: null,
           task_id: null,
-          reason: opts.reason ?? 'a human asked for a draft of the project intent',
-          payload: { force: Boolean(opts.force) },
+          reason:
+            opts.reason ??
+            (feedback
+              ? 'a human asked for the project intent to be revised from their feedback'
+              : 'a human asked for a draft of the project intent'),
+          // A revision replaces the proposal it starts from, so it is always forced.
+          payload: { force: Boolean(opts.force) || feedback !== null, feedback, from: opts.from ?? null },
           dedupe_key: `intent:${state.ids.next('job')}`,
           source_sequence: state.store.head(projectId),
         },
@@ -940,7 +953,35 @@ export class MasterBrain {
       };
     }
     const sources = this.#deps.intentSources?.() ?? [];
-    if (!sources.length) {
+    // A revision starts from the version named, else the proposal waiting, else the approved intent.
+    const feedback = typeof job.payload.feedback === 'string' ? job.payload.feedback.trim() : '';
+    let revise: IntentRevision | undefined;
+    if (feedback) {
+      const from = typeof job.payload.from === 'number' ? job.payload.from : null;
+      const base = from
+        ? state.q.projectIntents(projectId).find((v) => v.version === from)
+        : (waiting ?? state.q.approvedProjectIntent(projectId));
+      if (!base) {
+        return {
+          status: 'done',
+          result: from
+            ? `skipped: there is no project intent v${from} to revise`
+            : 'skipped: nothing to revise: no project intent exists yet (ask for a draft first)',
+        };
+      }
+      const lines = (items: { text: string; from_paths: string[] }[]) =>
+        items.map((i) => ({ text: i.text, from_paths: i.from_paths }));
+      revise = {
+        current: {
+          objective: base.objective,
+          constraints: lines(base.constraints),
+          outcomes: lines(base.outcomes),
+          non_goals: lines(base.non_goals),
+          definition_of_done: lines(base.definition_of_done),
+        },
+        feedback,
+      };
+    } else if (!sources.length) {
       return { status: 'done', result: 'skipped: the repository has no README or docs to draft from' };
     }
     const policy = this.#policy(model);
@@ -953,6 +994,7 @@ export class MasterBrain {
       {
         onCall: (request) => this.#markCalling(job, model, request, policy),
         outbound: (request) => redactRequest(request, state.redactor),
+        ...(revise ? { revise } : {}),
       },
     );
     this.#recordCalls(outcome.calls, null, null);
@@ -962,7 +1004,12 @@ export class MasterBrain {
       return { status: 'done', result: `failed: ${detail}` };
     }
     const v = state.intent.propose(projectId, MASTER_BRAIN, outcome.draft, { idempotency_key: `intent:${job.job_id}` });
-    return { status: 'done', result: `proposed project intent v${v.version}` };
+    return {
+      status: 'done',
+      result: revise
+        ? `proposed project intent v${v.version} (revised from v${(job.payload.from as number | null) ?? (waiting ?? state.q.approvedProjectIntent(projectId))?.version ?? '?'} with your feedback)`
+        : `proposed project intent v${v.version}`,
+    };
   }
 
   async #plan(job: BrainJob, goalId: string, feedback: string | null, force: boolean): Promise<JobOutcome> {

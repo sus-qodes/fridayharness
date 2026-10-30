@@ -1,6 +1,7 @@
 import {
   diffPlanVersions,
   existingTasks,
+  INTENT_FEEDBACK_MAX_CHARS,
   type PlanVersionTask,
   parsePlanDraft,
   parseReplanDraft,
@@ -256,7 +257,20 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
    */
   app.post(`${P}/intent/draft`, op, async (c) => {
     const body = await json(c);
-    const opts = { force: body.force === true };
+    // `feedback` revises the waiting proposal (or `from`, or the approved intent) from what the
+    // human says is wrong; one bounded model call, like the draft itself.
+    if (body.feedback !== undefined && typeof body.feedback !== 'string')
+      throw new FridayError('invalid_request', 'feedback must be a string');
+    const feedback = typeof body.feedback === 'string' ? body.feedback.trim() : '';
+    if (feedback.length > INTENT_FEEDBACK_MAX_CHARS)
+      throw new FridayError('invalid_request', `feedback: at most ${INTENT_FEEDBACK_MAX_CHARS} characters`);
+    if (body.from !== undefined && !(Number.isInteger(body.from) && (body.from as number) > 0))
+      throw new FridayError('invalid_request', 'from must be a positive intent version');
+    const opts = {
+      force: body.force === true,
+      ...(feedback ? { feedback } : {}),
+      ...(typeof body.from === 'number' ? { from: body.from } : {}),
+    };
     if (body.wait === false) {
       void brain()
         .brain.requestIntentDraft({ ...opts, reason: 'no project intent yet when Friday started' })

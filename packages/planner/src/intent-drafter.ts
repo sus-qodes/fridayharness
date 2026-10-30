@@ -2,7 +2,14 @@ import { PROJECT_INTENT_MAX_CHARS, ProjectIntentProposeRequest } from '@friday/p
 import { type ParseResult, type PlannerOutcome, runPlanner } from './model.js';
 import type { ModelRequest, PlannerModel } from './providers/types.js';
 
-export const INTENT_DRAFTER_PROMPT_VERSION = 'intent-drafter-1';
+export const INTENT_DRAFTER_PROMPT_VERSION = 'intent-drafter-2';
+
+/**
+ * The one source a revised line may cite besides the documents: the human's feedback. A line
+ * that came from it says so, so a reader can tell a document's claim from an instruction.
+ */
+export const FEEDBACK_SOURCE = 'your feedback';
+export const INTENT_FEEDBACK_MAX_CHARS = 2000;
 
 /** One repository document the draft may draw on, already bounded and redacted by the caller. */
 export interface IntentSource {
@@ -37,15 +44,36 @@ const SYSTEM = [
   'Return only the requested JSON shape.',
 ].join(' ');
 
-const INSTRUCTIONS = [
-  'Draft the intent of the whole project:',
+const SHAPE = [
   '- objective: one or two sentences on what the project is for and for whom;',
   '- constraints: what must always hold or must never happen;',
   '- outcomes: what success looks like for the people using it;',
   '- non_goals: what the project deliberately does not do;',
   '- definition_of_done: the quality bar work must meet (for example builds, tests, lint).',
   `At most 12 short lines per list; the whole intent within ${PROJECT_INTENT_MAX_CHARS} characters.`,
+];
+
+const INSTRUCTIONS = ['Draft the intent of the whole project:', ...SHAPE].join('\n');
+
+const REVISE_INSTRUCTIONS = [
+  'Revise the current intent as the human asks:',
+  ...SHAPE,
+  'Apply the feedback exactly; keep every line the feedback does not touch; never drop a list the feedback does not mention.',
+  `A line the feedback adds or changes cites "${FEEDBACK_SOURCE}" in from_paths; every other line keeps its documents.`,
 ].join('\n');
+
+/** The intent a revision starts from: the lines of a version, without their provenance. */
+export interface IntentRevision {
+  current: {
+    objective: string;
+    constraints: { text: string; from_paths: string[] }[];
+    outcomes: { text: string; from_paths: string[] }[];
+    non_goals: { text: string; from_paths: string[] }[];
+    definition_of_done: { text: string; from_paths: string[] }[];
+  };
+  /** What the human wants changed, at most `INTENT_FEEDBACK_MAX_CHARS` characters. */
+  feedback: string;
+}
 
 /**
  * Checks a draft the way the state will (the same schema and size cap), and that every line cites
@@ -92,9 +120,13 @@ export async function draftProjectIntent(
   opts: {
     onCall?: (request: ModelRequest) => void;
     outbound?: (request: ModelRequest) => ModelRequest;
+    /** Revise an existing intent from the human's feedback instead of drafting one from nothing. */
+    revise?: IntentRevision;
   } = {},
 ): Promise<PlannerOutcome<ProjectIntentDraft>> {
   const paths = sources.map((s) => s.path);
+  const revise = opts.revise;
+  const citable = revise ? [...paths, FEEDBACK_SOURCE] : paths;
   return runPlanner(
     model,
     {
@@ -102,8 +134,14 @@ export async function draftProjectIntent(
       model: settings.model,
       system: SYSTEM,
       context: sources.map((s) => `## ${s.path}\n${s.text}`).join('\n\n'),
-      instructions: INSTRUCTIONS,
-      prompt: `Documents you may cite: ${paths.join(', ')}`,
+      instructions: revise ? REVISE_INSTRUCTIONS : INSTRUCTIONS,
+      prompt: revise
+        ? [
+            `Documents you may cite: ${paths.join(', ')}`,
+            `The current intent:\n${JSON.stringify(revise.current, null, 2)}`,
+            `The human's feedback:\n${revise.feedback}`,
+          ].join('\n\n')
+        : `Documents you may cite: ${paths.join(', ')}`,
       schema: {
         type: 'object',
         required: ['objective', ...LISTS],
@@ -115,7 +153,7 @@ export async function draftProjectIntent(
       schemaName: 'friday_project_intent',
       maxTokens: settings.maxTokens,
     },
-    (output) => parseIntentDraft(output, paths),
+    (output) => parseIntentDraft(output, citable),
     policy,
     { promptVersion: INTENT_DRAFTER_PROMPT_VERSION, ...(signal ? { signal } : {}), ...opts },
   );
