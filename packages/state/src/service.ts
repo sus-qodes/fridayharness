@@ -56,6 +56,7 @@ import {
   TaskCreateRequest,
   type TaskRoleDecisionView,
   type TaskScope,
+  type TaskSplitResult,
   type TaskStartParams,
   type TaskStatus,
   type TaskView,
@@ -1633,6 +1634,210 @@ export class FridayState {
         },
       );
     }
+  }
+
+  /**
+   * A human approves a stored multi-role proposal by splitting the task (ADR-0035 §5): one task per
+   * proposed role, in dependency order, each with the proposal's summary for that role and the
+   * original's kind, scope, acceptance criteria, priority, risk and goal; the roles' `depends_on`
+   * become task dependencies. The original is cancelled as split, and whatever depended on it now
+   * depends on the split's last tasks. A task of a goal is split through a plan revision this same
+   * approval approves, so the planner stays the one authority for a goal's tasks (ADR-0013), and its
+   * parts carry the plan's role; a standalone task's parts carry the human's. Neither asks the
+   * classifier again.
+   */
+  splitTask(projectId: string, actor: Actor, taskId: string, note: string | null = null): TaskSplitResult {
+    if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human splits a task');
+    const task = this.q.task(projectId, taskId);
+    const decision = this.q.latestTaskRoleDecision(projectId, taskId);
+    if (!decision || decision.status !== 'proposed' || decision.roles.length < 2) {
+      throw new FridayError(
+        'invalid_request',
+        `no multi-role proposal waits for approval on ${taskId}${decision ? ` (its latest role decision is ${decision.status})` : ''}`,
+      );
+    }
+    if (!['PROPOSED', 'READY', 'ASSIGNED', 'WAITING'].includes(task.status)) {
+      throw new FridayError(
+        'invalid_state_transition',
+        `task ${taskId} is ${task.status}; only a task whose work has not started is split`,
+      );
+    }
+    const parts = this.splitParts(task, decision);
+    if (task.goal_id) {
+      const goal = this.q.goal(projectId, task.goal_id);
+      const active = goal.plan_id ? this.q.latestPlanVersion(goal.plan_id, ['ACTIVE']) : undefined;
+      const scope = task.scope ?? { write: [], read: [] };
+      const common = {
+        kind: task.kind,
+        acceptance_criteria: task.acceptance_criteria,
+        scope,
+        priority: task.priority,
+        risk_level: task.risk_level,
+      };
+      const plan = this.proposePlan(projectId, actor, task.goal_id, {
+        summary: `Split ${taskId} by role: ${parts.map((p) => p.role).join(', ')}`,
+        rationale: `${actor.id} approved the multi-role proposal ${decision.decision_id}${note ? `: ${note}` : ''}`,
+        needs_human: null,
+        trigger: `task split: ${taskId}`,
+        base_version: active?.version ?? null,
+        tasks: [
+          {
+            ...common,
+            key: task.plan_key ?? taskId,
+            change: 'drop',
+            task_id: taskId,
+            summary: task.summary,
+            description: task.description,
+            depends_on: [],
+            role: task.role ?? (parts[0]?.role as string),
+            note: `split into ${parts.map((p) => p.key).join(', ')}`,
+          },
+          ...parts.map((p) => ({
+            ...common,
+            key: p.key,
+            change: 'new' as const,
+            task_id: null,
+            summary: p.summary,
+            description: p.description,
+            depends_on: [...p.depends_on_keys, ...task.dependencies],
+            role: p.role,
+            note: `from the split of ${taskId}`,
+          })),
+        ],
+      });
+      const approval = this.approvePlan(projectId, actor, plan.plan_id, plan.version, note ?? undefined);
+      this.exec({ name: 'task.split', project_id: projectId, actor, params: { taskId, note } }, (ctx) =>
+        this.finishSplit(ctx, projectId, task, decision, approval.created, {
+          plan_id: plan.plan_id,
+          version: plan.version,
+        }),
+      );
+      return {
+        original: this.q.task(projectId, taskId),
+        subtasks: approval.created.map((t) => this.q.task(projectId, t.task_id)),
+        plan: approval.plan,
+      };
+    }
+    return this.exec({ name: 'task.split', project_id: projectId, actor, params: { taskId, note } }, (ctx) => {
+      const idOfKey = new Map<string, string>();
+      const created: TaskView[] = [];
+      for (const p of parts) {
+        const task_id = this.ids.next('task');
+        idOfKey.set(p.key, task_id);
+        const dependencies = [...p.depends_on_keys.map((k) => idOfKey.get(k) as string), ...task.dependencies];
+        ctx.emit({
+          type: 'task.created',
+          payload: {
+            task: {
+              task_id,
+              role: p.role,
+              kind: task.kind,
+              summary: p.summary,
+              description: p.description,
+              acceptance_criteria: task.acceptance_criteria,
+              priority: task.priority,
+              risk_level: task.risk_level,
+              scope: task.scope,
+              dependencies,
+              reserved_for_agent_key: null,
+              reserved_by: null,
+              reserved_until: null,
+              created_by: actor,
+            },
+          },
+          refs: [{ kind: 'task', id: task_id }],
+        });
+        this.resolveTaskRoleWithin(ctx, task_id, 'human', p.role);
+        let part = this.q.task(projectId, task_id);
+        // The original was already offered to agents: so is each part whose prerequisites are done.
+        if (task.status !== 'PROPOSED' && this.q.openDependencies(task_id).length === 0) {
+          part = this.moveTask(ctx, part, 'task.ready');
+        }
+        created.push(part);
+      }
+      this.finishSplit(ctx, projectId, task, decision, created, null);
+      return {
+        original: this.q.task(projectId, taskId),
+        subtasks: created.map((t) => this.q.task(projectId, t.task_id)),
+        plan: null,
+      };
+    });
+  }
+
+  /** The proposal's roles as the parts of a split, keyed uniquely and in dependency order. */
+  private splitParts(
+    task: TaskView,
+    decision: TaskRoleDecisionView,
+  ): { key: string; role: string; summary: string; description: string; depends_on_keys: string[] }[] {
+    const counts = new Map<string, number>();
+    const keyed = decision.roles.map((r) => {
+      const n = (counts.get(r.role) ?? 0) + 1;
+      counts.set(r.role, n);
+      return { ...r, key: n === 1 ? r.role : `${r.role}-${n}` };
+    });
+    const keys = new Set(keyed.map((k) => k.key));
+    for (const k of keyed) {
+      for (const d of k.depends_on) {
+        if (!keys.has(d)) {
+          throw new FridayError(
+            'invalid_request',
+            `the proposal's ${k.role} depends on "${d}", which names no role of the proposal`,
+          );
+        }
+      }
+    }
+    const order: typeof keyed = [];
+    const done = new Set<string>();
+    while (order.length < keyed.length) {
+      const next = keyed.find((k) => !done.has(k.key) && k.depends_on.every((d) => done.has(d)));
+      if (!next) throw new FridayError('invalid_request', "the proposal's dependencies form a cycle");
+      done.add(next.key);
+      order.push(next);
+    }
+    const description = `Split from ${task.task_id} (${task.summary}).${task.description ? `\n\n${task.description}` : ''}`;
+    return order.map((k) => ({
+      key: k.key,
+      role: k.role,
+      summary: k.task_summary,
+      description,
+      depends_on_keys: k.depends_on,
+    }));
+  }
+
+  /**
+   * The end of a split: whatever depended on the original now depends on the split's last parts
+   * (those nothing else in the split depends on), a standalone original is cancelled as split (a
+   * plan revision dropped a goal task already), and the split is on record.
+   */
+  private finishSplit(
+    ctx: CommandContext,
+    projectId: string,
+    task: TaskView,
+    decision: TaskRoleDecisionView,
+    subtasks: readonly TaskView[],
+    plan: { plan_id: string; version: number } | null,
+  ): void {
+    const ids = subtasks.map((t) => t.task_id);
+    const inner = new Set(subtasks.flatMap((t) => this.q.dependencies(t.task_id)));
+    const leaves = ids.filter((id) => !inner.has(id));
+    for (const dependent of this.q.dependents(task.task_id)) {
+      const next = [...new Set([...this.q.dependencies(dependent).filter((d) => d !== task.task_id), ...leaves])];
+      ctx.emit({
+        type: 'task.dependencies_changed',
+        payload: {
+          task_id: dependent,
+          dependencies: next,
+          reason: `${task.task_id} was split into ${ids.join(', ')}`,
+        },
+        refs: [{ kind: 'task', id: dependent }],
+      });
+    }
+    if (!plan) this.cancelWithin(ctx, projectId, task.task_id, `split into ${ids.join(', ')}`);
+    ctx.emit({
+      type: 'task.split',
+      payload: { task_id: task.task_id, decision_id: decision.decision_id, subtasks: ids, plan },
+      refs: [{ kind: 'task', id: task.task_id }, ...ids.map((id) => ({ kind: 'task' as const, id }))],
+    });
   }
 
   /** A human deliberately replaces an existing task's stored role contract (R2). */

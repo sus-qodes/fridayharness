@@ -177,5 +177,8 @@ export const EVENT_TYPES = [
   // ADR-0035: what Friday observed of a host and model on this machine, and what withdrew it.
   'readiness.recorded',
   'readiness.invalidated',
+  // ADR-0035 §5: a multi-role proposal approved by splitting the task; what depended on it re-pointed.
+  'task.split',
+  'task.dependencies_changed',
 ] as const;
 export type KnownEventType = (typeof EVENT_TYPES)[number];

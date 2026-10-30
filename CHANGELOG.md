@@ -2,6 +2,10 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — Phase 2.3, a multi-role proposal is approved by splitting the task (ADR-0035 §5)
+
+- **`friday task split <task>`:** a human approves the classifier's multi-role proposal by splitting the task into one task per role, in dependency order; each part carries the proposal's summary for its role and the original's kind, scope, acceptance criteria, priority, risk and goal, and the roles' `depends_on` become task dependencies. The original is cancelled as split, naming its parts, and whatever depended on it now depends on the split's last parts (`task.dependencies_changed`). A standalone task's parts carry a `human` role and are READY when the original was; a task of a goal is split through a plan revision the same approval approves, so the planner stays the one authority for a goal's tasks and the parts carry the plan's role. Neither asks the classifier again. Route: `POST tasks/:tid/split`; event: `task.split`.
+
 ## Unreleased — Phase 2.2, a host that fails is benched and the work moves down the ranking (ADR-0035)
 
 - **Host failures have a kind:** an agent error may say why the host failed (`failure: { kind, retry_after_s? }`: `start`, `auth`, `rate_limit`, `transport`, `timeout`, `runtime_unavailable`). The Claude Code and Codex adapters classify what they can recognize (not signed in, rate limited with the wait the host asked for, a host that could not launch, a process that died mid-turn); a turn the host ended with an error of its own stays a work failure. Friday classifies what it sees itself: a decline before work started is `start`, a `task.start` never acknowledged is `timeout`, a session that did not come back within the reconnect window is `transport`.

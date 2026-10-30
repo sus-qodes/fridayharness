@@ -928,6 +928,20 @@ export const PlanVersionView = z.object({
 });
 export type PlanVersionView = z.infer<typeof PlanVersionView>;
 
+/** `POST tasks/:tid/split` (ADR-0035 §5): a human approves a stored multi-role proposal by splitting the task. */
+export const TaskSplitRequest = z.object({ note: z.string().trim().max(500).optional() });
+export type TaskSplitRequest = z.input<typeof TaskSplitRequest>;
+
+export const TaskSplitResult = z.object({
+  /** The task that was split: cancelled, with the reason naming its parts. */
+  original: TaskView,
+  /** One task per proposed role, in dependency order. */
+  subtasks: z.array(TaskView),
+  /** The plan revision the split went through, for a task of a goal; null for a standalone task. */
+  plan: PlanVersionView.nullable(),
+});
+export type TaskSplitResult = z.infer<typeof TaskSplitResult>;
+
 export const PlanDecisionRequest = z.object({ note: z.string().max(2000).optional() });
 export type PlanDecisionRequest = z.input<typeof PlanDecisionRequest>;
 

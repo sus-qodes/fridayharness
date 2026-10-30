@@ -12,6 +12,7 @@ import {
   TaskActionRequest,
   TaskCreateRequest,
   TaskRoleAssignRequest,
+  TaskSplitRequest,
   type TaskStatus,
   TaskStatus as TaskStatusEnum,
   type TokenClass,
@@ -644,6 +645,11 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.post(`${P}/tasks/:tid/role`, allow(...OPERATOR), async (c) => {
     const body = TaskRoleAssignRequest.parse(await json(c));
     return c.json({ task: state.assignTaskRole(pid, HUMAN, c.req.param('tid'), body.role) });
+  });
+  // A human approves a multi-role proposal by splitting the task into one task per role (ADR-0035 §5).
+  app.post(`${P}/tasks/:tid/split`, allow(...OPERATOR), async (c) => {
+    const body = TaskSplitRequest.parse(await json(c));
+    return c.json(state.splitTask(pid, HUMAN, c.req.param('tid'), body.note ?? null));
   });
 
   app.post(`${P}/tasks/:tid/verify`, allow(...OPERATOR), async (c) => {

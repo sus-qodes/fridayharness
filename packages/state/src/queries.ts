@@ -239,6 +239,14 @@ export class Queries {
       .map((r) => r.id);
   }
 
+  /** The tasks that depend on this one. */
+  dependents(taskId: string): string[] {
+    return this.db
+      .prepare('SELECT task_id AS id FROM task_dependencies WHERE depends_on_task_id = ? ORDER BY task_id')
+      .all<{ id: string }>(taskId)
+      .map((r) => r.id);
+  }
+
   findRun(runId: string): RunView | undefined {
     const row = this.db.prepare('SELECT * FROM task_runs WHERE run_id = ?').get<RunRow>(runId);
     return row ? toRunView(row) : undefined;

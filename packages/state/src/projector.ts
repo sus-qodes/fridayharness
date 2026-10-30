@@ -695,6 +695,15 @@ export class StateProjector implements Projector {
         }
         return;
       }
+      case 'task.dependencies_changed': {
+        // What a task depends on, replaced whole (ADR-0035 §5: a split re-points its dependents).
+        this.db.prepare('DELETE FROM task_dependencies WHERE task_id = ?').run(str(p.task_id));
+        const dep = this.db.prepare(
+          'INSERT INTO task_dependencies (task_id, depends_on_task_id, project_id) VALUES (?, ?, ?)',
+        );
+        for (const d of p.dependencies as unknown[]) dep.run(str(p.task_id), str(d), e.project_id);
+        return;
+      }
       case 'readiness.invalidated':
         for (const id of p.evidence_ids as unknown[]) {
           this.db

@@ -297,6 +297,22 @@ describe('model routing', () => {
     expect(proposalText.stdout).toContain('frontend_engineer');
     expect(proposalText.stdout).toContain('backend_engineer after frontend_engineer');
 
+    // A human approves the proposal by splitting the task (ADR-0035 §5): one linked task per role.
+    const split = await cli(['--project', dir, 'task', 'split', ambiguous.task_id, '--note', 'ship both']);
+    expect(split.code, split.stderr).toBe(0);
+    expect(split.stdout).toContain(`${ambiguous.task_id}  CANCELLED (split into 2 tasks)`);
+    const { tasks: all } = await td.operator.get<{ tasks: TaskView[] }>(td.operator.projectPath('/tasks'));
+    const parts = all
+      .filter((t) => t.description?.startsWith(`Split from ${ambiguous.task_id}`))
+      .sort((a, b) => a.dependencies.length - b.dependencies.length);
+    expect(parts.map((t) => [t.role, t.role_source, t.summary, t.dependencies.length])).toEqual([
+      ['frontend_engineer', 'human', 'Build the page', 0],
+      ['backend_engineer', 'human', 'Build the API', 1],
+    ]);
+    expect((await inspect(td, ambiguous.task_id)).task.status).toBe('CANCELLED');
+    const partExplain = await explained(parts[0]?.task_id as string);
+    expect(partExplain.role_decision).toMatchObject({ status: 'resolved', source: 'human', role: 'frontend_engineer' });
+
     // A plan role is the contract from the moment the plan is approved.
     const goal = await td.operator.post<{ goal_id: string }>(td.operator.projectPath('/goals'), {
       request: 'A checkout page',

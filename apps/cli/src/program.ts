@@ -6,6 +6,7 @@ import type {
   DomainEvent,
   HarnessView,
   RunView,
+  TaskSplitResult,
   TaskView,
   UiSnapshot,
   VerificationView,
@@ -411,6 +412,30 @@ export function buildProgram(): Command {
       const { client } = operator(g());
       const res = await client.post<{ task: TaskView }>(client.projectPath(`/tasks/${id}/role`), { role });
       out(g(), res.task, () => `${res.task.task_id}  role ${res.task.role} (${res.task.role_source})`);
+    });
+  task
+    .command('split <task>')
+    .description(
+      'approve a multi-role proposal: one linked task per role, in dependency order; the original is cancelled as split',
+    )
+    .option('--note <text>', 'why')
+    .action(async (id: string, o: { note?: string }) => {
+      const { client } = operator(g());
+      const r = await client.post<TaskSplitResult>(
+        client.projectPath(`/tasks/${id}/split`),
+        o.note ? { note: o.note } : {},
+      );
+      out(g(), r, () =>
+        [
+          `${r.original.task_id}  ${r.original.status} (split into ${r.subtasks.length} tasks)`,
+          ...(r.plan ? [`plan ${r.plan.plan_id} v${r.plan.version} approved: the goal's tasks changed`] : []),
+          table(
+            ['TASK', 'ROLE', 'STATUS', 'AFTER', 'SUMMARY'],
+            r.subtasks.map((t) => [t.task_id, t.role ?? '-', t.status, t.dependencies.join(' ') || '-', t.summary]),
+            { maxWidth: 60 },
+          ),
+        ].join('\n'),
+      );
     });
   task
     .command('assign <task>')
