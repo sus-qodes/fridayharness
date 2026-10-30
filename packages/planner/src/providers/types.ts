@@ -19,7 +19,7 @@ export const ZERO_USAGE: ModelUsage = {
 };
 
 export interface ModelRequest {
-  purpose: 'plan' | 'replan' | 'role';
+  purpose: 'plan' | 'replan' | 'role' | 'intent';
   model: string;
   /** Friday's rules, the same for every call (trusted). */
   system: string;

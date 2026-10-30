@@ -177,6 +177,13 @@ function renderGoal(d: GoalDetail): string {
   if (g.objective) lines.push(`  objective: ${g.objective}`);
   for (const c of g.constraints) lines.push(`  constraint: ${c}`);
   for (const o of g.outcomes) lines.push(`  outcome: ${o}`);
+  for (const n of g.non_goals ?? []) lines.push(`  non-goal: ${n}`);
+  for (const d of g.definition_of_done ?? []) lines.push(`  done when: ${d}`);
+  for (const c of g.inferred_constraints ?? []) lines.push(`  constraint (planner): ${c}`);
+  for (const o of g.inferred_outcomes ?? []) lines.push(`  outcome (planner): ${o}`);
+  for (const n of g.inferred_non_goals ?? []) lines.push(`  non-goal (planner): ${n}`);
+  for (const d of g.inferred_definition_of_done ?? []) lines.push(`  done when (planner): ${d}`);
+  if ((g.intent_revision ?? 1) > 1) lines.push(`  intent revision: ${g.intent_revision}`);
   if (d.versions.length) {
     lines.push(`  versions: ${d.versions.map((v) => `v${v.version} ${v.status}`).join(', ')}`);
   }
@@ -289,6 +296,8 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
     .description('create a goal; the Master Brain proposes a plan for you to approve')
     .option('--constraint <text>', 'a constraint the plan must respect (repeatable)', collect, [])
     .option('--outcome <text>', 'an outcome you expect (repeatable)', collect, [])
+    .option('--non-goal <text>', 'something this goal must not do or include (repeatable)', collect, [])
+    .option('--done <text>', 'what "done" means for this goal (repeatable)', collect, [])
     .addOption(new Option('--priority <priority>').choices(['low', 'normal', 'high', 'urgent']).default('normal'))
     .option('--no-plan', 'do not ask the Master Brain; you will write the plan ("friday plan propose")')
     .option('--wait <seconds>', 'wait this long for the proposal', (v) => Number.parseInt(v, 10), 120)
@@ -296,13 +305,23 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
     .action(
       async (
         request: string[],
-        o: { constraint: string[]; outcome: string[]; priority: string; plan: boolean; wait: number | false },
+        o: {
+          constraint: string[];
+          outcome: string[];
+          nonGoal: string[];
+          done: string[];
+          priority: string;
+          plan: boolean;
+          wait: number | false;
+        },
       ) => {
         const { client } = operator(g());
         const created = await client.post<GoalView>(client.projectPath('/goals'), {
           request: request.join(' '),
           constraints: o.constraint,
           outcomes: o.outcome,
+          non_goals: o.nonGoal,
+          definition_of_done: o.done,
           priority: o.priority,
           plan: o.plan,
         });
@@ -330,6 +349,61 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
       const d = await goalDetail(client, await resolveGoal(client, goalId));
       out(g(), d, () => renderGoal(d));
     });
+  goal
+    .command('edit [goal]')
+    .description('change what a goal is for; each list you give replaces that list (--clear <list> empties one)')
+    .option('--objective <text>', 'the objective')
+    .option('--constraint <text>', 'a constraint (repeatable)', collect, [])
+    .option('--outcome <text>', 'an expected outcome (repeatable)', collect, [])
+    .option('--non-goal <text>', 'a non-goal (repeatable)', collect, [])
+    .option('--done <text>', 'a definition-of-done item (repeatable)', collect, [])
+    .addOption(
+      new Option('--clear <list>', 'empty a list (repeatable)')
+        .choices(['constraints', 'outcomes', 'non-goals', 'done'])
+        .argParser(collect)
+        .default([]),
+    )
+    .action(
+      async (
+        goalId: string | undefined,
+        o: {
+          objective?: string;
+          constraint: string[];
+          outcome: string[];
+          nonGoal: string[];
+          done: string[];
+          clear: string[];
+        },
+      ) => {
+        const { client } = operator(g());
+        const id = await resolveGoal(client, goalId);
+        const pick = (given: string[], list: string) =>
+          given.length ? given : o.clear.includes(list) ? [] : undefined;
+        const body = Object.fromEntries(
+          Object.entries({
+            objective: o.objective,
+            constraints: pick(o.constraint, 'constraints'),
+            outcomes: pick(o.outcome, 'outcomes'),
+            non_goals: pick(o.nonGoal, 'non-goals'),
+            definition_of_done: pick(o.done, 'done'),
+          }).filter(([, v]) => v !== undefined),
+        );
+        if (!Object.keys(body).length) {
+          throw new UsageError('nothing to change: give --objective, a list option or --clear <list>');
+        }
+        const before = await goalDetail(client, id);
+        await client.post<GoalView>(client.projectPath(`/goals/${id}/intent`), body);
+        const d = await goalDetail(client, id);
+        out(g(), d, () =>
+          [
+            d.goal.intent_revision === before.goal.intent_revision
+              ? 'Nothing changed: the goal already says this.'
+              : `Intent revision ${d.goal.intent_revision}.`,
+            renderGoal(d),
+          ].join('\n'),
+        );
+      },
+    );
   goal
     .command('replan [goal]')
     .description('ask the Master Brain for a new proposal now')

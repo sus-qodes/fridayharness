@@ -16,7 +16,7 @@ import {
  * whose purpose matches and whose `match` text (if any) appears in the request. Never remote.
  */
 export interface FakeResponse {
-  purpose: 'plan' | 'replan' | 'role';
+  purpose: 'plan' | 'replan' | 'role' | 'intent';
   /** Only used when this text appears in the context or prompt. */
   match?: string;
   output?: unknown;

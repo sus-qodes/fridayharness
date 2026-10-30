@@ -37,6 +37,7 @@ const outcome = (over: Partial<StartOutcome> = {}): StartOutcome => ({
   opened: 'browser',
   desktop: null,
   note: null,
+  intent: null,
   ...over,
 });
 
@@ -75,6 +76,15 @@ describe('friday start (plan M12.5)', () => {
     const printed = startLines(outcome({ opened: null }));
     expect(printed.at(-1)).toContain('friday ui');
     for (const lines of [full, again, noApp, printed]) expect(lines.length).toBeLessThanOrEqual(3);
+  });
+
+  it('adds one line about the project intent only when it needs you (ADR-0034 §2)', () => {
+    expect(startLines(outcome({ intent: 'approved' }))).toHaveLength(2);
+    expect(startLines(outcome({ intent: null }))).toHaveLength(2);
+    expect(startLines(outcome({ intent: 'drafting' })).at(-1)).toContain('drafting what this project is for');
+    expect(startLines(outcome({ intent: 'proposed' })).at(-1)).toContain('waiting for your approval: friday intent');
+    expect(startLines(outcome({ intent: 'none' })).at(-1)).toContain('friday intent ask');
+    expect(startLines(outcome({ initialized: true, started: true, intent: 'drafting' }))).toHaveLength(4);
   });
 
   it('looks for the desktop shell where it is set, built or installed, and takes the first that exists', () => {

@@ -34,6 +34,11 @@ export interface StartOutcome {
   desktop: string | null;
   /** Why nothing was opened although something was asked for. */
   note: string | null;
+  /**
+   * The project intent (ADR-0034 §2): approved, waiting for you, being drafted now because there
+   * was none and a Master Brain can draft it, or none; null when Friday could not tell.
+   */
+  intent: 'approved' | 'proposed' | 'drafting' | 'none' | null;
 }
 
 export const DESKTOP_MISSING =
@@ -161,6 +166,7 @@ export async function start(g: GlobalOptions, o: StartOptions): Promise<StartOut
     opened: null,
     desktop: null,
     note: null,
+    intent: await intentAtStart(root),
   };
   if (o.desktop) {
     const exe = findDesktopApp(desktopCandidates());
@@ -184,7 +190,30 @@ export async function start(g: GlobalOptions, o: StartOptions): Promise<StartOut
   return outcome;
 }
 
-/** What `friday start` did: two lines, three when it also initialized the project. */
+/**
+ * Without any project intent, asks the Master Brain for a draft in the background when one can
+ * run (ADR-0034 §2): the usual consent and budget rules apply, and nothing reaches an agent until
+ * a human approves it. Never fails the start.
+ */
+async function intentAtStart(root: string): Promise<StartOutcome['intent']> {
+  try {
+    const { client } = operator({ project: root });
+    const s = await client.get<{ approved: unknown; proposed: unknown }>(client.projectPath('/intent'));
+    if (s.approved) return 'approved';
+    if (s.proposed) return 'proposed';
+    const brain = await client.get<{ planner_available?: boolean }>(client.projectPath('/brain'));
+    if (!brain.planner_available) return 'none';
+    await client.post(client.projectPath('/intent/draft'), { wait: false });
+    return 'drafting';
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What `friday start` did: two lines, three when it also initialized the project, and one more
+ * when the project intent needs the human (ADR-0034 §2).
+ */
 export function startLines(r: StartOutcome): string[] {
   const lines: string[] = [];
   if (r.initialized) {
@@ -201,6 +230,13 @@ export function startLines(r: StartOutcome): string[] {
   else if (r.opened === 'desktop') lines.push(`Opened the desktop app: ${r.desktop}`);
   else if (r.note) lines.push(`${r.note} The Studio is at ${r.studio}; "friday ui" signs your browser in.`);
   else lines.push(`The Studio is at ${r.studio}; "friday ui" opens it signed in.`);
+  if (r.intent === 'drafting') {
+    lines.push('Friday is drafting what this project is for from your README; review it with: friday intent');
+  } else if (r.intent === 'proposed') {
+    lines.push('A project intent is waiting for your approval: friday intent');
+  } else if (r.intent === 'none') {
+    lines.push('No project intent yet; tell Friday what the project is for: friday intent ask');
+  }
   return lines;
 }
 

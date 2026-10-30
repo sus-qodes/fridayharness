@@ -11,10 +11,12 @@ import {
   type Actor,
   FridayError,
   GoalCreateRequest,
+  GoalIntentUpdateRequest,
   type ModelCallView,
   PlanDecisionRequest,
   type PlanTaskView,
   type PlanVersionView,
+  ProjectIntentProposeRequest,
   type TokenClass,
 } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
@@ -195,6 +197,74 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
       proposal = proposalFromDraft(r.value, { trigger });
     }
     return c.json(withLive(state.proposePlan(pid, human, goalId, proposal)), 201);
+  });
+
+  /** A human edits what the goal is for (ADR-0034 §3); an unchanged edit records nothing. */
+  app.post(`${P}/goals/:gid/intent`, op, async (c) => {
+    const body = await json(c);
+    return c.json(state.intent.updateGoal(pid, human, c.req.param('gid'), GoalIntentUpdateRequest.parse(body)));
+  });
+
+  // ---- project intent (ADR-0034 §1–§2) ---------------------------------------------------------
+
+  const intentVersion = (v: string | undefined): number => {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1) throw new FridayError('invalid_request', `not a version: ${v}`);
+    return n;
+  };
+  const noteOf = (body: Record<string, unknown>) =>
+    typeof body.note === 'string' && body.note.trim() ? body.note.trim() : undefined;
+
+  /** The intent that counts and the proposal waiting for a human, either of which may be null. */
+  app.get(`${P}/intent`, op, (c) =>
+    c.json({
+      approved: state.q.approvedProjectIntent(pid) ?? null,
+      proposed: state.q.proposedProjectIntent(pid) ?? null,
+    }),
+  );
+
+  app.get(`${P}/intent/versions`, op, (c) => c.json({ versions: state.q.projectIntents(pid) }));
+
+  app.get(`${P}/intent/versions/:v`, op, (c) => c.json(state.q.projectIntent(pid, intentVersion(c.req.param('v')))));
+
+  /** A human proposes (or answers the questions for) a version; it still needs an approval. */
+  app.post(`${P}/intent`, op, async (c) => {
+    const body = await json(c);
+    const key = c.req.header('idempotency-key');
+    const v = state.intent.propose(
+      pid,
+      human,
+      ProjectIntentProposeRequest.parse(body),
+      key ? { idempotency_key: key } : {},
+    );
+    return c.json(v, 201);
+  });
+
+  app.post(`${P}/intent/versions/:v/approve`, op, async (c) => {
+    const body = await json(c);
+    return c.json(state.intent.approve(pid, human, intentVersion(c.req.param('v')), noteOf(body)));
+  });
+
+  app.post(`${P}/intent/versions/:v/reject`, op, async (c) => {
+    const body = await json(c);
+    return c.json(state.intent.reject(pid, human, intentVersion(c.req.param('v')), noteOf(body)));
+  });
+
+  /**
+   * Asks the Master Brain for a draft. By default waits for the model call and answers with the
+   * outcome; `wait: false` queues it and answers at once (`friday start` uses that).
+   */
+  app.post(`${P}/intent/draft`, op, async (c) => {
+    const body = await json(c);
+    const opts = { force: body.force === true };
+    if (body.wait === false) {
+      void brain()
+        .brain.requestIntentDraft({ ...opts, reason: 'no project intent yet when Friday started' })
+        .catch(() => undefined);
+      return c.json({ queued: true }, 202);
+    }
+    const result = await brain().brain.requestIntentDraft(opts);
+    return c.json({ result, proposed: state.q.proposedProjectIntent(pid) ?? null });
   });
 
   // ---- plans -----------------------------------------------------------------------------------

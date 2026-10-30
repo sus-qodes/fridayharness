@@ -12,6 +12,7 @@ import type { BrainJob, BrainJobInput, FridayState } from '@friday/state';
 import { consolidatePlan } from './consolidate.js';
 import { type DelegationCandidate, delegate } from './delegate.js';
 import { buildEscalation, type EscalationReason } from './escalate.js';
+import { draftProjectIntent, INTENT_DRAFTER_PROMPT_VERSION, type IntentSource } from './intent-drafter.js';
 import {
   type ParseResult,
   type PlannerCall,
@@ -75,6 +76,8 @@ export interface BrainDeps {
   projectContext: () => string;
   /** The revision and recent commits, sent after the cached context (plan M14.8). */
   repositoryStatus?: () => string;
+  /** The bounded, redacted documents a project-intent draft may draw on (ADR-0034 §2). */
+  intentSources?: () => IntentSource[];
   log?: (level: 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void;
   /** Waits before retrying a job whose action failed; the last failure escalates (tests shorten them). */
   retryDelaysMs?: number[];
@@ -109,7 +112,7 @@ export interface BrainReport {
 }
 
 const PRIORITY: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
-const MODEL_JOBS = new Set(['plan', 'replan', 'role']);
+const MODEL_JOBS = new Set(['plan', 'replan', 'role', 'intent']);
 const COORDINATION = new Set(['ready_dependents', 'check_goal', 'delegate', 'release_lost']);
 const DEFAULT_RETRY_MS = [1000, 5000, 30_000];
 /** A role-classifier provider failure a retry cannot fix; the task keeps its existing human question. */
@@ -211,6 +214,33 @@ export class MasterBrain {
           reason: note ? `a human asked: ${note}` : 'a human asked for a new proposal',
           payload: { force: true, note: note ?? null },
           dedupe_key: `replan:${goalId}:human:${state.ids.next('job')}`,
+          source_sequence: state.store.head(projectId),
+        },
+      ],
+      state.q.brainCursor(projectId),
+    );
+    const done = new Promise<string>((resolve) => this.#waiters.set(id as string, resolve));
+    this.#kickPlanning();
+    return done;
+  }
+
+  /**
+   * A human asks for a draft of the project intent (`friday intent draft`, ADR-0034 §2). It goes
+   * through the same lane, consent, budget and call records as planning; the draft is only a
+   * proposal until a human approves it. `force` drafts even while another proposal waits.
+   */
+  requestIntentDraft(opts: { force?: boolean; reason?: string } = {}): Promise<string> {
+    const { state, projectId } = this.#deps;
+    const [id] = state.enqueueBrainJobs(
+      projectId,
+      [
+        {
+          kind: 'intent',
+          goal_id: null,
+          task_id: null,
+          reason: opts.reason ?? 'a human asked for a draft of the project intent',
+          payload: { force: Boolean(opts.force) },
+          dedupe_key: `intent:${state.ids.next('job')}`,
           source_sequence: state.store.head(projectId),
         },
       ],
@@ -464,13 +494,16 @@ export class MasterBrain {
     this.#recovered = true;
     const { state, projectId } = this.#deps;
     for (const job of state.brainJobs(projectId, ['calling'])) {
-      const purpose = job.kind === 'plan' ? 'plan' : job.kind === 'role' ? 'role' : 'replan';
+      const purpose =
+        job.kind === 'plan' ? 'plan' : job.kind === 'role' ? 'role' : job.kind === 'intent' ? 'intent' : 'replan';
       const promptVersion =
         job.kind === 'plan'
           ? PROMPT_VERSIONS.plan
           : job.kind === 'role'
             ? ROLE_CLASSIFIER_PROMPT_VERSION
-            : PROMPT_VERSIONS.replan;
+            : job.kind === 'intent'
+              ? INTENT_DRAFTER_PROMPT_VERSION
+              : PROMPT_VERSIONS.replan;
       this.#recordCalls(
         [
           {
@@ -645,6 +678,7 @@ export class MasterBrain {
 
   async #runModelJob(job: BrainJob): Promise<JobOutcome> {
     if (job.kind === 'role') return this.#classifyRole(job);
+    if (job.kind === 'intent') return this.#draftIntent(job);
     const goalId = job.goal_id as string;
     if (job.kind === 'plan') return this.#plan(job, goalId, null, false);
     const blocker = this.#blocker(job);
@@ -845,6 +879,50 @@ export class MasterBrain {
       };
     }
     return { status: 'done', result: `resolved ${taskId} as ${outcome.draft.roles[0]?.role ?? 'a role'}` };
+  }
+
+  /**
+   * Drafts the project intent from the repository's documents and records it as a proposal under
+   * the Master Brain's name. A failed or unusable draft ends the job with the reason: the human who
+   * asked is waiting for the answer and can ask again or answer the questions instead.
+   */
+  async #draftIntent(job: BrainJob): Promise<JobOutcome> {
+    const { state, projectId, settings } = this.#deps;
+    const waiting = state.q.proposedProjectIntent(projectId);
+    if (waiting && !job.payload.force) {
+      return { status: 'done', result: `skipped: project intent v${waiting.version} is waiting for a decision` };
+    }
+    const model = this.#deps.model;
+    if (!model) {
+      return {
+        status: 'done',
+        result: `skipped: no planner is configured (${this.#deps.plannerUnavailable ?? 'none'})`,
+      };
+    }
+    const sources = this.#deps.intentSources?.() ?? [];
+    if (!sources.length) {
+      return { status: 'done', result: 'skipped: the repository has no README or docs to draft from' };
+    }
+    const policy = this.#policy(model);
+    const outcome = await draftProjectIntent(
+      model,
+      sources,
+      policy,
+      { model: settings.model, maxTokens: settings.maxTokens },
+      this.#abort.signal,
+      {
+        onCall: (request) => this.#markCalling(job, model, request, policy),
+        outbound: (request) => redactRequest(request, state.redactor),
+      },
+    );
+    this.#recordCalls(outcome.calls, null, null);
+    if (!outcome.ok) {
+      if (this.#closed && outcome.reason === 'provider') return { status: 'retry', result: 'interrupted by shutdown' };
+      const detail = outcome.errors.length ? `${outcome.message}: ${outcome.errors.join('; ')}` : outcome.message;
+      return { status: 'done', result: `failed: ${detail}` };
+    }
+    const v = state.intent.propose(projectId, MASTER_BRAIN, outcome.draft, { idempotency_key: `intent:${job.job_id}` });
+    return { status: 'done', result: `proposed project intent v${v.version}` };
   }
 
   async #plan(job: BrainJob, goalId: string, feedback: string | null, force: boolean): Promise<JobOutcome> {

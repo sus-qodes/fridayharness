@@ -28,6 +28,13 @@ export {
 export { diffPlanVersions, type PlanDiff, type PlanVersionTask } from './diff.js';
 export { buildEscalation, type Escalation, type EscalationDetails, type EscalationReason } from './escalate.js';
 export {
+  draftProjectIntent,
+  INTENT_DRAFTER_PROMPT_VERSION,
+  type IntentSource,
+  type ProjectIntentDraft,
+  parseIntentDraft,
+} from './intent-drafter.js';
+export {
   budgetedCost,
   formatIssues,
   type ParseResult,

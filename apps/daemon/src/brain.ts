@@ -23,7 +23,7 @@ import {
   stateDir,
 } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
-import { buildBrainContext, buildRepositoryStatus } from './brain-context.js';
+import { buildBrainContext, buildIntentSources, buildRepositoryStatus } from './brain-context.js';
 import type { Logger } from './log.js';
 
 /** Where the user's Anthropic key may be sent: an endpoint chosen on this machine, else the default (review F03). */
@@ -276,6 +276,7 @@ export function createMasterBrain(input: {
         },
       }),
     repositoryStatus: () => buildRepositoryStatus(project.root, state.redactor),
+    intentSources: () => buildIntentSources(project, { redactor: state.redactor, stateDir: stateDir(env) }),
     log: (level, message, data) => logger[level](message, data ?? {}),
     // The daemon's recovery preserves and fences lost attempts before reassigning them (ADR-0026).
     lostWork: 'external',

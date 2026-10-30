@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { closeSync, lstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, lstatSync, openSync, readdirSync, readSync } from 'node:fs';
 import path from 'node:path';
 import type { Redactor } from '@friday/events';
 import { canonicalize, sensitiveClassOf } from '@friday/policy';
@@ -144,6 +144,73 @@ export function buildBrainContext(state: FridayState, project: ProjectRef, opts:
   const joined = parts.join('\n\n');
   const bounded = joined.length > MAX_TOTAL ? `${joined.slice(0, MAX_TOTAL)}\n…(truncated)` : joined;
   return opts.redactor.redactString(bounded).value;
+}
+
+const INTENT_README = ['README.md', 'README.markdown', 'README.txt', 'README'];
+const INTENT_MAX_DOCS = 8;
+const INTENT_DOC_CHARS = 1500;
+const INTENT_TOTAL = 20_000;
+
+/** A document's headings and its opening, which is where a project says what it is for. */
+function outline(text: string, max: number): string {
+  const lines = text.split(/\r?\n/);
+  const headings = lines.filter((l) => /^#{1,3}\s/.test(l));
+  const opening = lines.slice(0, 40).join('\n');
+  const joined = `${opening}\n${headings.filter((h) => !opening.includes(h)).join('\n')}`.trim();
+  return joined.length > max ? `${joined.slice(0, max)}\n…(truncated)` : joined;
+}
+
+/**
+ * The documents a project-intent draft may draw on (ADR-0034 §2): the README, the outline of each
+ * top-level `docs/*.md` (at most eight, by name) and the manifest's description. Read through the
+ * same boundary as the planning context (inside the project, never protected files), bounded and
+ * redacted; the draft must cite these paths and no others.
+ */
+export function buildIntentSources(project: ProjectRef, opts: BrainContextOptions): { path: string; text: string }[] {
+  const root = project.root;
+  const out: { path: string; text: string }[] = [];
+  const sources: ContextSource[] = [];
+  const add = (rel: string, shape: (text: string) => string) => {
+    const { text, source } = doc(root, rel, opts.stateDir);
+    if (source.reason !== 'absent') sources.push(source);
+    if (text?.trim()) out.push({ path: rel, text: shape(text) });
+  };
+  const readme = INTENT_README.find((r) => {
+    try {
+      return lstatSync(path.join(root, r)).isFile();
+    } catch {
+      return false;
+    }
+  });
+  if (readme) add(readme, (t) => t);
+  let docs: string[] = [];
+  try {
+    docs = readdirSync(path.join(root, 'docs'))
+      .filter((f) => f.toLowerCase().endsWith('.md'))
+      .sort()
+      .slice(0, INTENT_MAX_DOCS);
+  } catch {
+    // No docs directory.
+  }
+  for (const f of docs) add(`docs/${f}`, (t) => outline(t, INTENT_DOC_CHARS));
+  add('package.json', (t) => {
+    try {
+      const m = JSON.parse(t) as { name?: unknown; description?: unknown; keywords?: unknown };
+      return JSON.stringify({ name: m.name ?? null, description: m.description ?? null, keywords: m.keywords ?? [] });
+    } catch {
+      return '';
+    }
+  });
+  opts.onSources?.(sources);
+  let total = 0;
+  const bounded: { path: string; text: string }[] = [];
+  for (const s of out.filter((s) => s.text && s.text !== '{"name":null,"description":null,"keywords":[]}')) {
+    if (total >= INTENT_TOTAL) break;
+    const text = s.text.slice(0, INTENT_TOTAL - total);
+    total += text.length;
+    bounded.push({ path: s.path, text: opts.redactor.redactString(text).value });
+  }
+  return bounded;
 }
 
 /**

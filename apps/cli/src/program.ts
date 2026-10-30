@@ -19,6 +19,7 @@ import { doctor, renderDoctor } from './doctor.js';
 import { registerGoalCommands, renderEscalation } from './goals.js';
 import { registerGraphCommands } from './graph.js';
 import { registerIntegrationCommands } from './integrations.js';
+import { registerIntentCommands } from './intent.js';
 import { registerMemoryCommands } from './memory.js';
 import { registerMessageCommands } from './messages.js';
 import { openTarget, runningDaemon, startDetached } from './open-link.js';
@@ -134,6 +135,7 @@ export function buildProgram(): Command {
           '  .friday/.gitignore  (commit this; it keeps runtime files out of git)',
           ...shortcuts.map((f) => `  shortcut: ${f}`),
           shortcuts.length ? 'Next: double-click the shortcut' : 'Next: friday start (or friday shortcut)',
+          'Then tell Friday what the project is for: friday intent draft (or friday intent ask)',
         ].join('\n'),
       );
     });
@@ -841,6 +843,7 @@ export function buildProgram(): Command {
     });
 
   registerGoalCommands(program, g);
+  registerIntentCommands(program, g);
   registerMessageCommands(program, g);
   registerGraphCommands(program, g);
   registerContextCommands(program, g);
