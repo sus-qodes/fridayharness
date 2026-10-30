@@ -21,6 +21,7 @@ import {
   planGemini,
   SPAWN_DENIED_TOOLS,
 } from '@friday/adapter-gemini';
+import { SPAWNED_AGENT_TOOLS } from '@friday/mcp-server';
 import type { OutboundMessage, TaskStartParams, TaskView, UsageReport } from '@friday/protocol';
 import { FakeClock, type TestWorkspace, useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
@@ -363,14 +364,8 @@ describe('harness conformance: Gemini CLI in spawn mode, what is particular to i
       'the claim',
     );
     const calls = h.entries().filter((e) => e.mcp) as { mcp: string; tools: string[]; result: { isError?: boolean } }[];
-    // The attempt's server holds exactly the five tools of a spawned agent, and they work.
-    expect([...(calls[0]?.tools ?? [])].sort()).toEqual([
-      'friday_communicate',
-      'friday_remember',
-      'friday_request_context',
-      'friday_request_permission',
-      'friday_run_operation',
-    ]);
+    // The attempt's server holds exactly the spawned set of Friday's tools, and they work.
+    expect([...(calls[0]?.tools ?? [])].sort()).toEqual([...SPAWNED_AGENT_TOOLS].sort());
     expect(calls.map((c) => [c.mcp, Boolean(c.result?.isError)])).toEqual([
       ['friday_request_context', false],
       ['friday_communicate', false],

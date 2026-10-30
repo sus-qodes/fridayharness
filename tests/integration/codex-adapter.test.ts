@@ -283,7 +283,9 @@ describe('the Codex adapter', () => {
     // The model Friday routed the run to is applied, and the host's report of it is recorded.
     const routed = (c.adapter.received.find((m) => m.method === 'task.start')?.params as TaskStartParams | undefined)
       ?.model;
-    expect(started.model).toBe(routed ?? undefined);
+    // The thread is given the host's own name for the model (no provider prefix: the live check of
+    // 2026-10-22), and the host's report of it is recorded under the registry's name.
+    expect(started.model).toBe(routed?.replace(/^openai\//, '') ?? undefined);
     expect(observed).toEqual([
       [routed ?? 'gpt-fake', 'reported'],
       ['gpt-fake-mini', 'rerouted'],

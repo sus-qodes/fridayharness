@@ -64,7 +64,7 @@ type Arm = 'plain' | 'packet' | 'minimal' | 'slim';
 const ARMS = (process.env.FRIDAY_EXPLORE_ARMS ?? 'plain,packet,minimal').split(',') as Arm[];
 const RUNS = Number(process.env.FRIDAY_EXPLORE_RUNS ?? 2);
 /** What the slim packet leaves out: the files the graph relates to the task, and recent commits. */
-const SLIM_DROPS = ['code.related', 'repo.recent_commits'];
+const SLIM_DROPS = ['code.related'];
 const TURNS = Number(process.env.FRIDAY_EXPLORE_TURNS ?? 12);
 const SESSION_MS = 20 * 60_000;
 const CAP_USD = 0.5;

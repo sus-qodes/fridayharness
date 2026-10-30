@@ -10,20 +10,24 @@
         "pnpm --filter @friday/mcp-server test passes"
       ],
       "scope": {
-        "write": ["packages/mcp-server/src/tools.ts", "tests/mcp/friday-mcp.test.ts", "docs/messaging.md"],
+        "write": [
+          "packages/mcp-server/src/tools.ts",
+          "tests/mcp/friday-mcp.test.ts",
+          "docs/segments/S05-state-knowledge.md"
+        ],
         "read": [
           "packages/mcp-server/**",
           "packages/protocol/**",
           "packages/sdk/**",
           "tests/mcp/**",
           "tests/helpers/**",
-          "docs/messaging.md"
+          "docs/segments/S05-state-knowledge.md"
         ]
       },
       "required": [
         "packages/mcp-server/src/tools.ts",
         "packages/protocol/src/methods.ts",
-        "docs/messaging.md",
+        "docs/segments/S05-state-knowledge.md",
         "tests/mcp/friday-mcp.test.ts"
       ],
       "forbidden": ["apps/**", "packages/planner/**", "packages/state/**"]
@@ -34,14 +38,14 @@
       "description": "The per-delivery table of `friday messages show` gets a summary line with how many deliveries ended dead (delivered too often without an acknowledgement) and how many expired.",
       "acceptance_criteria": ["friday messages show prints the summary line", "pnpm --filter @friday/cli test passes"],
       "scope": {
-        "write": ["apps/cli/src/messages.ts", "docs/messaging.md"],
-        "read": ["apps/cli/**", "packages/protocol/**", "docs/messaging.md"]
+        "write": ["apps/cli/src/messages.ts", "docs/segments/S05-state-knowledge.md"],
+        "read": ["apps/cli/**", "packages/protocol/**", "docs/segments/S05-state-knowledge.md"]
       },
       "required": [
         "apps/cli/src/messages.ts",
         "apps/cli/src/output.ts",
         "packages/protocol/src/api.ts",
-        "docs/messaging.md"
+        "docs/segments/S05-state-knowledge.md"
       ],
       "forbidden": ["apps/ui/**", "apps/desktop/**", "packages/planner/**", "packages/state/**"]
     },
@@ -81,12 +85,16 @@
         "pnpm --filter @friday/policy test passes"
       ],
       "scope": {
-        "write": ["packages/policy/src/project-policy.ts", "packages/policy/src/paths.ts", "docs/policy.md"],
+        "write": [
+          "packages/policy/src/project-policy.ts",
+          "packages/policy/src/paths.ts",
+          "docs/segments/S06-policy-execution.md"
+        ],
         "read": [
           "packages/policy/**",
           "apps/daemon/src/policy.ts",
           "packages/adapters/claude/src/hooks/**",
-          "docs/policy.md"
+          "docs/segments/S06-policy-execution.md"
         ]
       },
       "required": [
@@ -94,7 +102,7 @@
         "packages/policy/src/paths.ts",
         "apps/daemon/src/policy.ts",
         "packages/adapters/claude/src/hooks/router.ts",
-        "docs/policy.md"
+        "docs/segments/S06-policy-execution.md"
       ],
       "forbidden": ["apps/ui/**", "apps/desktop/**", "packages/planner/**", "packages/state/**"]
     },
@@ -107,13 +115,13 @@
         "the integration suite's daemon tests pass"
       ],
       "scope": {
-        "write": ["apps/daemon/src/app.ts", "packages/mcp-server/src/session.ts", "docs/protocol/README.md"],
+        "write": ["apps/daemon/src/app.ts", "packages/mcp-server/src/session.ts", "docs/reference/protocol.md"],
         "read": [
           "apps/daemon/**",
           "packages/mcp-server/**",
           "packages/state/**",
           "packages/protocol/**",
-          "docs/protocol/**"
+          "docs/reference/protocol.md"
         ]
       },
       "required": [
@@ -121,7 +129,7 @@
         "apps/daemon/src/rpc.ts",
         "packages/state/src/queries.ts",
         "packages/mcp-server/src/session.ts",
-        "docs/protocol/README.md"
+        "docs/reference/protocol.md"
       ],
       "forbidden": ["apps/ui/**", "apps/desktop/**", "packages/planner/**"]
     },
@@ -131,12 +139,12 @@
       "description": "The usage table's READS W/R column is followed by the whole-file share as a percentage, null-safe: an attempt whose host reads Friday does not see shows a dash.",
       "acceptance_criteria": ["friday usage shows the percentage", "tests/integration/usage.test.ts passes"],
       "scope": {
-        "write": ["apps/cli/src/usage.ts", "docs/measurements/README.md"],
+        "write": ["apps/cli/src/usage.ts", "docs/TESTING.md"],
         "read": [
           "apps/cli/**",
           "packages/state/src/usage.ts",
           "packages/protocol/**",
-          "docs/measurements/**",
+          "docs/TESTING.md",
           "tests/integration/usage.test.ts"
         ]
       },
@@ -144,7 +152,7 @@
         "apps/cli/src/usage.ts",
         "packages/state/src/usage.ts",
         "packages/protocol/src/api.ts",
-        "docs/measurements/README.md",
+        "docs/TESTING.md",
         "tests/integration/usage.test.ts"
       ],
       "forbidden": ["apps/ui/**", "apps/desktop/**", "packages/planner/**"]
@@ -179,14 +187,14 @@
       ],
       "scope": {
         "write": ["packages/code-graph/src/**"],
-        "read": ["packages/code-graph/**", "docs/decisions/ADR-0020-code-graph.md"]
+        "read": ["packages/code-graph/**", "docs/segments/S08-code-graph.md"]
       },
       "required": [
         "packages/code-graph/src/extract.ts",
         "packages/code-graph/src/resolve.ts",
         "packages/code-graph/src/graph.ts",
         "packages/code-graph/src/languages.ts",
-        "docs/decisions/ADR-0020-code-graph.md"
+        "docs/segments/S08-code-graph.md"
       ],
       "forbidden": ["apps/**", "packages/planner/**", "packages/state/**"]
     },
@@ -197,13 +205,13 @@
       "acceptance_criteria": ["the identity's counts are tested", "pnpm --filter @friday/git test passes"],
       "scope": {
         "write": ["packages/git/src/root.ts"],
-        "read": ["packages/git/**", "packages/context/src/compile.ts", "docs/decisions/ADR-0019-source-identity.md"]
+        "read": ["packages/git/**", "packages/context/src/compile.ts", "docs/segments/S07-git-verification-recovery.md"]
       },
       "required": [
         "packages/git/src/root.ts",
         "packages/git/src/status.ts",
         "packages/context/src/compile.ts",
-        "docs/decisions/ADR-0019-source-identity.md"
+        "docs/segments/S07-git-verification-recovery.md"
       ],
       "forbidden": ["apps/**", "packages/planner/**", "packages/state/**"]
     },
@@ -232,13 +240,18 @@
       "acceptance_criteria": ["tests/hooks/router.test.ts covers the count", "the hook fixtures still pass"],
       "scope": {
         "write": ["packages/adapters/claude/src/hooks/router.ts"],
-        "read": ["packages/adapters/claude/**", "packages/state/src/service.ts", "docs/messaging.md", "tests/hooks/**"]
+        "read": [
+          "packages/adapters/claude/**",
+          "packages/state/src/service.ts",
+          "docs/segments/S05-state-knowledge.md",
+          "tests/hooks/**"
+        ]
       },
       "required": [
         "packages/adapters/claude/src/hooks/router.ts",
         "packages/adapters/claude/src/hooks/types.ts",
         "packages/state/src/service.ts",
-        "docs/messaging.md",
+        "docs/segments/S05-state-knowledge.md",
         "tests/hooks/router.test.ts"
       ],
       "forbidden": ["apps/ui/**", "apps/desktop/**", "packages/planner/**"]
@@ -252,20 +265,14 @@
         "pnpm --filter @friday/state test passes"
       ],
       "scope": {
-        "write": ["packages/state/src/service.ts", "docs/messaging.md"],
-        "read": [
-          "packages/state/**",
-          "packages/protocol/**",
-          "docs/messaging.md",
-          "docs/decisions/ADR-0017-agent-messaging.md"
-        ]
+        "write": ["packages/state/src/service.ts", "docs/segments/S05-state-knowledge.md"],
+        "read": ["packages/state/**", "packages/protocol/**", "docs/segments/S05-state-knowledge.md"]
       },
       "required": [
         "packages/state/src/service.ts",
         "packages/state/src/queries.ts",
         "packages/protocol/src/envelope.ts",
-        "docs/messaging.md",
-        "docs/decisions/ADR-0017-agent-messaging.md"
+        "docs/segments/S05-state-knowledge.md"
       ],
       "forbidden": ["apps/**", "packages/code-graph/**", "packages/planner/**"]
     },
@@ -278,14 +285,14 @@
         "pnpm --filter @friday/sdk test passes"
       ],
       "scope": {
-        "write": ["packages/sdk/src/config.ts", "docs/master-brain.md"],
-        "read": ["packages/sdk/**", "docs/master-brain.md"]
+        "write": ["packages/sdk/src/config.ts", "docs/segments/S11-master-brain.md"],
+        "read": ["packages/sdk/**", "docs/segments/S11-master-brain.md"]
       },
       "required": [
         "packages/sdk/src/config.ts",
         "packages/sdk/src/provider-trust.ts",
         "packages/sdk/src/sdk.test.ts",
-        "docs/master-brain.md"
+        "docs/segments/S11-master-brain.md"
       ],
       "forbidden": ["apps/**", "packages/code-graph/**", "packages/planner/**"]
     },
@@ -304,14 +311,14 @@
           "apps/daemon/src/verify.ts",
           "apps/daemon/src/execution.ts",
           "packages/policy/src/paths.ts",
-          "docs/decisions/ADR-0024-revision-bound-verification.md"
+          "docs/segments/S07-git-verification-recovery.md"
         ]
       },
       "required": [
         "packages/verification/src/analysis.ts",
         "apps/daemon/src/verify.ts",
         "packages/policy/src/paths.ts",
-        "docs/decisions/ADR-0024-revision-bound-verification.md"
+        "docs/segments/S07-git-verification-recovery.md"
       ],
       "forbidden": ["apps/ui/**", "apps/desktop/**", "packages/planner/**"]
     },
@@ -325,14 +332,14 @@
       ],
       "scope": {
         "write": ["packages/execution/src/runner.ts", "packages/execution/src/profile.ts"],
-        "read": ["packages/execution/**", "apps/daemon/src/operations.ts", "docs/security/model.md"]
+        "read": ["packages/execution/**", "apps/daemon/src/operations.ts", "docs/SECURITY.md"]
       },
       "required": [
         "packages/execution/src/runner.ts",
         "packages/execution/src/profile.ts",
         "packages/execution/src/sanitize.ts",
         "apps/daemon/src/operations.ts",
-        "docs/security/model.md"
+        "docs/SECURITY.md"
       ],
       "forbidden": ["apps/ui/**", "apps/desktop/**", "packages/planner/**"]
     },

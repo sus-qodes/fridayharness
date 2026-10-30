@@ -1,5 +1,5 @@
 /**
- * Tool coverage contract (plan M1.12, Appendix 9, docs/security/model.md §4): every Claude Code tool
+ * Tool coverage contract (docs/SECURITY.md §4): every Claude Code tool
  * is either intercepted by the PreToolUse matcher or listed as not intercepted, and every intercepted
  * tool that can name a protected location is denied for every sensitive class.
  */
@@ -163,7 +163,7 @@ describe('Claude Code tool coverage', () => {
     const manifest = JSON.parse(readFileSync(path.join(HOOK_FIXTURES, 'manifest.json'), 'utf8')) as {
       builtin_tools: string[];
     };
-    const doc = readFileSync(path.join(REPO_ROOT, 'docs', 'security', 'model.md'), 'utf8');
+    const doc = readFileSync(path.join(REPO_ROOT, 'docs', 'SECURITY.md'), 'utf8');
     const section = doc.slice(doc.indexOf('## 4.'), doc.indexOf('## 5.'));
     expect(section.length).toBeGreaterThan(100);
     const missing = manifest.builtin_tools.filter((t) => !matched.includes(t) && !section.includes(`\`${t}\``));

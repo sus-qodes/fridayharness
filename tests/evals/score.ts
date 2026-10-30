@@ -115,11 +115,11 @@ export function relatedFiles(packet: ContextPacket): string[] {
 
 /**
  * Whether the packet names the file where an agent would read it: the related-code or requested-code
- * sections, or a dirty or history line. Protected sections (the task contract, the scope) are not
+ * sections, or a requested history line. Protected sections (the task contract, the scope) are not
  * counted, so a scope glob that spells out a file does not count as retrieval.
  */
 function named(packet: ContextPacket, file: string): boolean {
-  const where = ['code.related', 'code.requested', 'repo.dirty', 'repo.recent_commits', 'repo.history'];
+  const where = ['code.related', 'code.requested', 'repo.history'];
   return where.some((kind) => sectionText(packet, kind).includes(file));
 }
 
@@ -152,14 +152,7 @@ export function scoreTask(
   const included = explanation.included;
   const text = JSON.stringify(packet);
   // Every file the packet names where an agent reads file names, plus every included source.
-  const namedPaths = new Set<string>([
-    ...included.map((s) => s.source_id),
-    ...relatedFiles(packet),
-    ...sectionText(packet, 'repo.dirty')
-      .split('\n')
-      .map((l) => l.replace(/^- /, ''))
-      .filter(Boolean),
-  ]);
+  const namedPaths = new Set<string>([...included.map((s) => s.source_id), ...relatedFiles(packet)]);
   const protectedHits = new Set<string>();
   const scopeHits = new Set<string>();
   for (const p of namedPaths) {
@@ -169,9 +162,7 @@ export function scoreTask(
   for (const literal of checkout.neverInText) if (literal && text.includes(literal)) protectedHits.add(literal);
   const json = text.length;
   const budget = packet.budget.chars ?? explanation.budget.chars;
-  const deterministic = included.length
-    ? (included.length - explanation.semantic_fallback.results) / included.length
-    : 1;
+  const deterministic = 1;
   return {
     id: task.id,
     summary: task.summary,
