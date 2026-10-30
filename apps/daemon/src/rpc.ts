@@ -32,7 +32,7 @@ import {
 } from '@friday/protocol';
 import { type ProjectRef, policyVersion } from '@friday/sdk';
 import type { Caller, FridayState } from '@friday/state';
-import type { CompileInput } from './context.js';
+import type { CompileInput, RecipientReadFilter } from './context.js';
 import { type GraphService, query as graphQuery } from './graph-service.js';
 import type { OperationManager } from './operations.js';
 import type { ToolJudge } from './tool-policy.js';
@@ -69,6 +69,8 @@ export interface RpcDeps {
   judgeTool?: ToolJudge;
   /** The code graphs of the project's checkouts (ADR-0038 §2); absent in a daemon without one. */
   graph?: GraphService;
+  /** The recipient's read permission for a graph answer (review 2026-10-22 R1). */
+  readFilter?: (recipient: { agent_id: string; harness_id: string }) => RecipientReadFilter;
 }
 
 /** The most an artifact read answers with (ADR-0038 §3). */
@@ -90,9 +92,14 @@ function executionRootOf(deps: RpcDeps, c: Caller): string {
   return worktree?.path ?? project.root;
 }
 
-/** The code graph of the caller's checkout (ADR-0038 §2). */
-async function graphFor(deps: RpcDeps, c: Caller): Promise<CodeGraph> {
+/**
+ * The code graph of the caller's checkout (ADR-0038 §2), with the caller's read permission judged
+ * after the graph work, under the policy as it is then (review 2026-10-22 R1): every path an
+ * answer names passes `readable`, and a file the caller may not read is withheld, never named.
+ */
+async function graphFor(deps: RpcDeps, c: Caller): Promise<{ g: CodeGraph; readable: (p: string) => boolean }> {
   if (!deps.graph) throw new FridayError('capability_unsupported', 'this daemon has no code graph');
+  if (!deps.readFilter) throw new FridayError('capability_unsupported', 'this daemon judges no reads');
   const root = executionRootOf(deps, c);
   let identity: SourceIdentity | null = null;
   try {
@@ -100,8 +107,15 @@ async function graphFor(deps: RpcDeps, c: Caller): Promise<CodeGraph> {
   } catch {
     // outside git: the service identifies the checkout itself
   }
-  return deps.graph.graph(root, identity);
+  const g = await deps.graph.graph(root, identity);
+  const filter = deps.readFilter({ agent_id: c.agent_id, harness_id: c.harness_id });
+  return { g, readable: filter.readable };
 }
+
+type EdgeLike = { from: { path: string }; to: { path: string } | null };
+/** Edges whose both ends the caller may read; a reference into or out of a withheld file is withheld. */
+const readableEdges = <E extends EdgeLike>(edges: E[], readable: (p: string) => boolean): E[] =>
+  edges.filter((e) => readable(e.from.path) && (e.to === null || readable(e.to.path)));
 
 const cleanPath = (p: string) => p.replace(/\\/g, '/').replace(/^\.\//, '');
 
@@ -771,54 +785,91 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
     case 'graph.query': {
       const p = METHODS[method].params.parse(raw);
       const c = caller();
-      const g = await graphFor(deps, c);
+      const { g, readable } = await graphFor(deps, c);
       if (p.name) {
         const found = lookupSymbol(g, p.name, {
           ...(p.in_path ? { path: cleanPath(p.in_path) } : {}),
           ...(p.prefix ? { prefix: cleanPath(p.prefix) } : {}),
           limit: p.limit,
         });
-        return { version: g.version, asked: 'symbol', symbol: found };
+        // A match in a withheld file is withheld whole; a shown match names only readable edges and tests.
+        const matches = found.matches
+          .filter((m) => readable(m.symbol.path))
+          .map((m) => ({
+            ...m,
+            callers: readableEdges(m.callers, readable),
+            callees: readableEdges(m.callees, readable),
+            tests: m.tests.filter(readable),
+          }));
+        return {
+          version: g.version,
+          asked: 'symbol',
+          symbol: { ...found, matches, name_references: readableEdges(found.name_references, readable) },
+        };
       }
       if (p.path) {
-        const { version: _v, ...file } = graphQuery(g, p.path, p.depth);
-        return { version: g.version, asked: 'file', file };
+        const rel = cleanPath(p.path);
+        if (!readable(rel)) throw new FridayError('permission_denied', `${rel} is not a file you may read`);
+        const { version: _v, ...file } = graphQuery(g, rel, p.depth);
+        return {
+          version: g.version,
+          asked: 'file',
+          file: {
+            ...file,
+            dependencies: file.dependencies.filter((e) => e.to === null || readable(e.to)),
+            consumers: file.consumers.filter((e) => readable(e.from)),
+            tests: file.tests.filter(readable),
+            neighbourhood: file.neighbourhood.filter((n) => readable(n.path)),
+          },
+        };
       }
       const hits = await (deps.graph as GraphService).search(p.words as string, {
         limit: p.limit,
         root: g.root,
         ...(p.kind ? { kind: p.kind } : {}),
       });
-      return { version: g.version, asked: 'search', hits };
+      return { version: g.version, asked: 'search', hits: hits.filter((h) => readable(h.path)) };
     }
     case 'graph.blast_radius': {
       const p = METHODS[method].params.parse(raw);
-      const g = await graphFor(deps, caller());
+      const { g, readable } = await graphFor(deps, caller());
       const symbols = p.symbols
         .map((s) => {
           const at = s.lastIndexOf('#');
           return at > 0 ? { path: cleanPath(s.slice(0, at)), symbol: s.slice(at + 1) } : null;
         })
-        .filter((x): x is { path: string; symbol: string } => x !== null);
+        .filter((x): x is { path: string; symbol: string } => x !== null && readable(x.path));
       const paths = p.paths.map(cleanPath);
-      const seeds = p.diff ? [...new Set([...paths, ...g.identity.paths])] : paths;
+      const seeds = (p.diff ? [...new Set([...paths, ...g.identity.paths])] : paths).filter(readable);
       if (!seeds.length && !symbols.length) {
-        throw new FridayError('invalid_request', 'the working tree has no changed file to seed the blast radius with');
+        throw new FridayError(
+          p.paths.length || p.symbols.length ? 'permission_denied' : 'invalid_request',
+          p.paths.length || p.symbols.length
+            ? 'none of the seeds is a file you may read'
+            : 'the working tree has no changed file to seed the blast radius with',
+        );
       }
+      const found = blastRadius(g, { paths: seeds, symbols }, { depth: p.depth, includeNameMatches: p.names });
       return {
         version: g.version,
-        ...blastRadius(g, { paths: seeds, symbols }, { depth: p.depth, includeNameMatches: p.names }),
+        ...found,
+        affected: found.affected.filter((a) => readable(a.path)),
       };
     }
     case 'graph.skeleton': {
       const p = METHODS[method].params.parse(raw);
-      const g = await graphFor(deps, caller());
+      const { g, readable } = await graphFor(deps, caller());
       const files: ResultOf<'graph.skeleton'>['files'] = [];
       const missing: ResultOf<'graph.skeleton'>['missing'] = [];
       for (const raw of p.paths) {
         const rel = cleanPath(raw);
+        if (!readable(rel)) {
+          missing.push({ path: rel, reason: 'not a file you may read' });
+          continue;
+        }
         const sk = await skeletonOf(g, g.root, rel, p.level);
-        if (sk) files.push(sk);
+        // The text is redacted as a file excerpt in a packet is.
+        if (sk) files.push({ ...sk, text: state.redactor.redactString(sk.text).value });
         else
           missing.push({
             path: rel,

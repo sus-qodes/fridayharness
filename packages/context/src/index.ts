@@ -14,6 +14,8 @@ export {
   type ContextPolicy,
   type ContextProject,
   compileContext,
+  executionRootOf,
   packetStaleness,
   RECORD_LIMIT_BYTES,
 } from './compile.js';
+export { createReadFilter, type ReadFilter, type ReadFilterInput, type ReadGrant } from './read-filter.js';

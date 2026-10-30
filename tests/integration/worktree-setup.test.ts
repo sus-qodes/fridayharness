@@ -162,13 +162,17 @@ describe('dependencies in a fresh task worktree', () => {
         'vendor/tiny/package.json':
           '{"name":"tiny","version":"1.0.0","scripts":{"postinstall":"node -e \\"process.exit(9)\\""}}\n',
         'vendor/tiny/index.js': 'module.exports = 1;\n',
+        // Repository code pnpm would load before installing anything (review 2026-10-22, R10).
+        '.pnpmfile.cjs': "require('fs').writeFileSync('.friday-pnpmfile-ran', 'x');\nmodule.exports = { hooks: {} };\n",
       });
-      const lock = spawnSync('pnpm', ['install', '--lockfile-only', '--ignore-scripts'], {
+      const lock = spawnSync('pnpm', ['install', '--lockfile-only', '--ignore-scripts', '--ignore-pnpmfile'], {
         cwd: dir,
         shell: true,
         encoding: 'utf8',
       });
       expect(lock.status, lock.stderr).toBe(0);
+      // The lockfile step itself kept the hook out, so the commit carries no marker.
+      expect(existsSync(path.join(dir, '.friday-pnpmfile-ran'))).toBe(false);
       await deterministicGit(dir, { startEpoch: 1_767_225_800 }).commitAll('lockfile');
       const fake = await FakeHarness.connect(td, { agentKey: 'be-1' });
       const { start, setup } = await take(td, fake, 'be-1');
@@ -177,9 +181,11 @@ describe('dependencies in a fresh task worktree', () => {
         status: 'passed',
         source: 'lockfile',
         command: 'pnpm',
-        args: ['install', '--frozen-lockfile', '--prefer-offline', '--ignore-scripts'],
+        args: ['install', '--frozen-lockfile', '--prefer-offline', '--ignore-scripts', '--ignore-pnpmfile'],
       });
       expect(existsSync(path.join(start.working_directory, 'node_modules', 'tiny', 'index.js'))).toBe(true);
+      // The pnpmfile did not run: no marker in the worktree.
+      expect(existsSync(path.join(start.working_directory, '.friday-pnpmfile-ran'))).toBe(false);
       expect(start.note).toBeNull();
       await fake.close();
     },

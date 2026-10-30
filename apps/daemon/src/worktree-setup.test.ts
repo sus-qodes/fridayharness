@@ -24,7 +24,7 @@ describe('planSetup', () => {
     expect(planSetup(root, base)).toEqual({
       source: 'lockfile',
       command: 'pnpm',
-      args: ['install', '--frozen-lockfile', '--prefer-offline', '--ignore-scripts'],
+      args: ['install', '--frozen-lockfile', '--prefer-offline', '--ignore-scripts', '--ignore-pnpmfile'],
       manager: 'pnpm',
     });
     // Scripts only when the policy trusted them.
@@ -38,10 +38,12 @@ describe('planSetup', () => {
       args: ['ci', '--prefer-offline', '--no-audit', '--no-fund', '--ignore-scripts'],
     });
     rmSync(path.join(root, 'package-lock.json'));
+    // Yarn reads executable code the repository selects, which no flag stops: trust first (review R10).
     writeFileSync(path.join(root, 'yarn.lock'), '');
-    expect(planSetup(root, base)).toMatchObject({
+    expect(planSetup(root, base)).toMatchObject({ refused: expect.stringContaining('yarn-path') });
+    expect(planSetup(root, { ...base, allowScripts: true })).toMatchObject({
       command: 'yarn',
-      args: ['install', '--frozen-lockfile', '--ignore-scripts'],
+      args: ['install', '--frozen-lockfile'],
     });
     rmSync(path.join(root, 'yarn.lock'));
     writeFileSync(path.join(root, 'bun.lock'), '');

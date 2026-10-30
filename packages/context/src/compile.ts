@@ -10,7 +10,7 @@ import {
   symbolKey,
 } from '@friday/code-graph';
 import type { GitRoot, SourceIdentity } from '@friday/git';
-import { canonicalize, matchesAny, type PathContext, readKeptFromAgents, sensitiveClassOf } from '@friday/policy';
+import { matchesAny } from '@friday/policy';
 import {
   type Actor,
   type ContextExplanation,
@@ -24,6 +24,7 @@ import {
 } from '@friday/protocol';
 import { type FridayState, type MemoryActor, type SearchHit, stableStringify } from '@friday/state';
 import type { ContextCache } from './cache.js';
+import { createReadFilter } from './read-filter.js';
 
 /** The project as the compiler needs it. */
 export interface ContextProject {
@@ -377,52 +378,20 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
   if (hit) return { ...hit, cached: true, key, authority, uses: [], memories: [] };
 
   const now = state.clock.now();
-  const pathCtx: PathContext = {
-    projectRoot: root,
-    mainRoot: project.root,
-    ...(deps.stateDir ? { stateDir: deps.stateDir } : {}),
-  };
   let withheld = 0;
-  const declaredRead = task?.scope?.read?.length ? [...task.scope.read, ...task.scope.write] : null;
-  const fold = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
-  const grantFor = new Map(grants.map((g) => [fold(g.target), g]));
-  // The team scopes of the agent's role that name reads narrow what is gathered, as the task's own
-  // read scope does (ADR-0028); `deny.read` is a permission, the same rule the hooks apply.
-  const teamLayers = (agent?.role && policy?.teams[agent.role]) || [];
   const forAgents = input.recipient.kind !== 'human';
-  const allowedAs = (p: string, useGrants = true) => {
-    const approved = (x: string) => useGrants && grantFor.has(fold(x));
-    if (sensitiveClassOf(p, pathCtx, 'read')) return false;
-    if (forAgents && policy && readKeptFromAgents(p, policy.deny.read, approved)) return false;
-    if (approved(p)) return true;
-    if (declaredRead && !matchesAny(p, declaredRead)) return false;
-    for (const layer of teamLayers) {
-      if (layer.read.length && !matchesAny(p, [...layer.read, ...layer.write])) return false;
-    }
-    return true;
-  };
-  const judged = new Map<string, boolean>();
-  /** Paths readable only because a human granted them, with the grant: showing one spends it (review M7.1 R01). */
-  const relied = new Map<string, { approval_id: string; target: string }>();
-  /**
-   * Permission first (ADR-0022 §3, review F02): never gather what the recipient may not read. A
-   * path behind a link is judged by its real target too, which must stay in the checkout (B19).
-   */
-  const readable = (p: string) => {
-    let ok = judged.get(p);
-    if (ok === undefined) {
-      ok = allowedAs(p);
-      const c = ok ? canonicalize(p, pathCtx) : null;
-      const target = c?.linked ? c.realRelative : p;
-      if (c?.linked) ok = target !== null && allowedAs(target);
-      judged.set(p, ok);
-      if (ok && grantFor.size && !(allowedAs(p, false) && (target === null || allowedAs(target, false)))) {
-        const g = grantFor.get(fold(p)) ?? (target ? grantFor.get(fold(target)) : undefined);
-        if (g) relied.set(fold(p), g);
-      }
-    }
-    return ok;
-  };
+  // Permission first (ADR-0022 §3, review F02): never gather what the recipient may not read. The
+  // one rule every projection of code applies (`createReadFilter`; review 2026-10-22 R1).
+  const { readable, relied, fold } = createReadFilter({
+    root,
+    mainRoot: project.root,
+    stateDir: deps.stateDir,
+    policy,
+    task,
+    role: agent?.role,
+    forAgents,
+    grants,
+  });
 
   /**
    * Commits within `paths` that change a file the recipient may read (review M7.1 R06): one that

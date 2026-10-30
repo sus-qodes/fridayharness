@@ -9,8 +9,11 @@ import type { EffectivePolicy } from './policy.js';
  * large trial lost its harness while the agent waited for an approval to install them, so Friday
  * installs them itself before the agent starts, in the execution profile, under the policy's trust
  * rule: the project's own command, or lifecycle scripts, run only once this clone trusted the
- * policy (ADR-0028); a lockfile install with scripts ignored runs project code of no kind, so it
- * runs by default. Nothing is installed silently: the outcome is on the run's record, and an
+ * policy (ADR-0028); a lockfile install runs by default only where the package manager can be told
+ * to run no code the repository selects: pnpm with scripts and the pnpmfile ignored, npm and bun
+ * with scripts ignored. Yarn reads executable code from the repository (`yarn-path`, `yarnPath`,
+ * plugins) that no flag stops, so its install waits for trust like a declared command (review
+ * 2026-10-22, R10). Nothing is installed silently: the outcome is on the run's record, and an
  * agent whose dependencies could not be installed is told so when it starts.
  */
 
@@ -41,37 +44,62 @@ export interface SetupPlan {
 
 export type SetupDecision = SetupPlan | { skipped: string } | { refused: string };
 
-/** The lockfiles Friday recognizes, with the install each one calls for (frozen, offline first). */
-const LOCKFILES: { file: string; manager: string; args: (scripts: boolean) => string[] }[] = [
+/**
+ * The lockfiles Friday recognizes, with the install each one calls for (frozen, offline first).
+ * `untrusted` says what the install does on a clone that has not trusted the policy: the flags that
+ * keep repository code out, or a refusal when the manager has none.
+ */
+const LOCKFILES: {
+  file: string;
+  manager: string;
+  args: (scripts: boolean) => string[];
+  untrusted: 'flags' | 'refuse';
+  /** Why the manager cannot run untrusted (shown in the refusal). */
+  why?: string;
+}[] = [
   {
     file: 'pnpm-lock.yaml',
     manager: 'pnpm',
-    args: (s) => ['install', '--frozen-lockfile', '--prefer-offline', ...(s ? [] : ['--ignore-scripts'])],
+    // `--ignore-pnpmfile`: the repository's `.pnpmfile.cjs` (or the one its `.npmrc` names) is
+    // JavaScript pnpm would load before anything else; `--ignore-scripts` alone leaves it in.
+    args: (s) => [
+      'install',
+      '--frozen-lockfile',
+      '--prefer-offline',
+      ...(s ? [] : ['--ignore-scripts', '--ignore-pnpmfile']),
+    ],
+    untrusted: 'flags',
   },
   {
     file: 'package-lock.json',
     manager: 'npm',
     args: (s) => ['ci', '--prefer-offline', '--no-audit', '--no-fund', ...(s ? [] : ['--ignore-scripts'])],
+    untrusted: 'flags',
   },
   {
     file: 'npm-shrinkwrap.json',
     manager: 'npm',
     args: (s) => ['ci', '--prefer-offline', '--no-audit', '--no-fund', ...(s ? [] : ['--ignore-scripts'])],
+    untrusted: 'flags',
   },
   {
     file: 'yarn.lock',
     manager: 'yarn',
     args: (s) => ['install', '--frozen-lockfile', ...(s ? [] : ['--ignore-scripts'])],
+    untrusted: 'refuse',
+    why: 'Yarn runs code the repository selects (.yarnrc yarn-path, .yarnrc.yml yarnPath and plugins), which --ignore-scripts does not stop',
   },
   {
     file: 'bun.lock',
     manager: 'bun',
     args: (s) => ['install', '--frozen-lockfile', ...(s ? [] : ['--ignore-scripts'])],
+    untrusted: 'flags',
   },
   {
     file: 'bun.lockb',
     manager: 'bun',
     args: (s) => ['install', '--frozen-lockfile', ...(s ? [] : ['--ignore-scripts'])],
+    untrusted: 'flags',
   },
 ];
 
@@ -103,6 +131,11 @@ export function planSetup(
   if (!existsSync(path.join(root, 'package.json'))) return { skipped: 'no package.json' };
   for (const l of LOCKFILES) {
     if (existsSync(path.join(root, l.file))) {
+      if (!opts.allowScripts && l.untrusted === 'refuse') {
+        return {
+          refused: `${l.file} calls for ${l.manager}, and ${l.why}; it runs once this clone trusts the policy with worktrees.setup.allow_scripts: true (friday policy trust)`,
+        };
+      }
       return { source: 'lockfile', command: l.manager, args: l.args(opts.allowScripts), manager: l.manager };
     }
   }

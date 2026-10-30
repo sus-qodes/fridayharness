@@ -14,6 +14,8 @@ import type { GraphService } from './graph-service.js';
 
 export type { CompileInput } from '@friday/context';
 
+import { createReadFilter, executionRootOf } from '@friday/context';
+
 /** The task states of an active attempt, in which read grants count. */
 const ACTIVE = new Set(['ASSIGNED', 'RUNNING', 'WAITING']);
 
@@ -21,8 +23,22 @@ const ACTIVE = new Set(['ASSIGNED', 'RUNNING', 'WAITING']);
  * The context compiler of the daemon (ADR-0022) over the project's execution root: the main
  * checkout until M5 (ADR-0014). Packets are cached by their key and explained.
  */
+/** What an agent may read of a checkout, judged as the compiler judges it (review 2026-10-22 R1). */
+export interface RecipientReadFilter {
+  /** The recipient's execution root, where the paths are relative to. */
+  root: string;
+  readable: (relativePath: string) => boolean;
+}
+
 export interface ContextService {
   compile(input: CompileInput, actor: Actor): Promise<ContextPacket>;
+  /**
+   * The read permission of an agent for a graph answer (ADR-0038 §2): the task's and team's read
+   * scopes, `deny.read` and the protected locations, under the policy as it is now. A human's read
+   * grant opens a file through `friday_request_context`, not through the graph, so no grant counts
+   * here and none is spent.
+   */
+  readFilter(recipient: { agent_id: string; harness_id: string }): RecipientReadFilter;
   /** The stored packet with a fresh staleness verdict. */
   packet(contextId: string): Promise<ContextPacket | undefined>;
   explanation(contextId: string): ContextExplanation | undefined;
@@ -75,6 +91,29 @@ export function createContextService(opts: {
   return {
     async compile(input, actor) {
       return (await compileContext(deps, input, actor)).packet;
+    },
+    readFilter(recipient) {
+      const agent = opts.state.q.findAgent(recipient.agent_id);
+      const task = agent?.current_task_id
+        ? opts.state.q.findTask(opts.project.project_id, agent.current_task_id)
+        : undefined;
+      const input: CompileInput = {
+        recipient: { kind: 'agent', id: recipient.agent_id, harness_id: recipient.harness_id },
+        purpose: 'graph',
+        ...(task ? { task_id: task.task_id } : {}),
+      };
+      const root = executionRootOf(deps, input, task);
+      const { readable } = createReadFilter({
+        root,
+        mainRoot: opts.project.root,
+        stateDir: opts.stateDir,
+        policy: opts.policy?.() ?? null,
+        task,
+        role: agent?.role,
+        forAgents: true,
+        grants: [],
+      });
+      return { root, readable };
     },
     async packet(id) {
       const packet = opts.state.q.contextPacket(id);

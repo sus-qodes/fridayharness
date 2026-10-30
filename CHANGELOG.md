@@ -2,6 +2,14 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — review of 2026-10-22, R1: graph answers under the recipient's read permission
+
+- **One read rule for every projection of code:** the context compiler's permission check (the task's and team's read scopes, `deny.read`, the protected locations, a link judged by its target) is now `createReadFilter` in `@friday/context`, and the daemon's `graph.query`, `graph.blast_radius` and `graph.skeleton` apply it to the caller, judged after the graph work under the policy as it is then. A symbol in a withheld file is withheld whole; a shown symbol names only readable callers, callees and tests; a file query of a withheld file is `permission_denied`; a search never lists one; a blast radius never names one and a withheld seed is no seed; a skeleton of one comes back as "not a file you may read", and skeleton text is redacted as a packet excerpt is. A human's read grant opens a file through `friday_request_context`, never through the graph, so none is spent there (review R1, reproduced with a sentinel in `.claude/hidden.ts` and a `deny.read` on the frontend).
+
+## Unreleased — review of 2026-10-22, R10: no repository code in an untrusted worktree install
+
+- **pnpm installs pass `--ignore-pnpmfile`** beside `--ignore-scripts` on a clone that has not trusted the policy: pnpm loads the repository's `.pnpmfile.cjs` before installing anything, which `--ignore-scripts` alone left in (`docs/reviews/2026-10-22-main-merge-review.md`, R10, reproduced with a marker-writing hook). **Yarn installs wait for trust:** a `.yarnrc` `yarn-path` or a `.yarnrc.yml` `yarnPath` or `plugins` entry runs JavaScript from the repository and no flag stops it, so a `yarn.lock` is refused with the reason until `allow_scripts: true` is trusted. npm and bun keep `--ignore-scripts`. The policy guide says what each manager's flags keep out, instead of claiming no project code runs.
+
 ## Unreleased — the live host checks of 2026-10-22, and two fixes they found
 
 - **Checked live on this machine** (`docs/measurements/2026-10-22-live-hosts.md`): `friday setup` and `friday hosts setup` wired Claude Code 2.1.306, Codex 0.162.1, Gemini CLI 0.65.0 and OpenCode 2.1.2; every doctor ran with the daemon up; Claude Code (attached, headless, haiku) and Codex (spawn mode, unelevated Windows sandbox) each did a small task that verification passed. Gemini CLI refuses the owner's consumer account itself; OpenCode 2.1.2 is refused by the profile pinned to 1.19.3; Antigravity is configured and doctored (no headless mode); Cursor and DeepSeek are not installed here.

@@ -3,7 +3,7 @@
  * registered agent for its own checkout, an agent reads the raw output of its own work and nobody
  * else's, and a lesson learned from a failure carries the failure Friday recorded.
  */
-import { cpSync, readFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { GenericHarnessClient } from '@friday/adapter-generic';
 import { createFridayTools, type FridaySession } from '@friday/mcp-server';
@@ -455,5 +455,83 @@ describe('symbolic patching (ADR-0039)', () => {
       body: 'function nothing() {}',
     });
     expect(refusedSaid?.text).toMatch(/^Not patched: no declaration named nothing/);
+  }, 120_000);
+});
+
+describe('the code graph answers under the recipient’s read permission (review 2026-10-22, R1)', () => {
+  it('withholds files the task may not read from every graph answer, and protected ones', async () => {
+    const td = await startTestDaemon(ws(), { git: true });
+    const dir = ws().projectDir;
+    for (const part of ['backend', 'frontend', 'shared', 'infra', 'tsconfig.json']) {
+      cpSync(path.join(REPO_ROOT, 'tests', 'fixtures', 'fixture-shop', part), path.join(dir, part), {
+        recursive: true,
+      });
+    }
+    // A tracked file in a protected location, with a sentinel no answer may carry.
+    mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    writeFileSync(path.join(dir, '.claude', 'hidden.ts'), "export const hiddenSentinel = 'REVIEW-SENTINEL-R1';\n");
+    await deterministicGit(dir).commitAll('fixture-shop with a hidden file');
+    // The project keeps the frontend from agents.
+    mkdirSync(path.join(ws().fridayDir, 'policies'), { recursive: true });
+    writeFileSync(path.join(ws().fridayDir, 'policies', 'private.yaml'), 'deny:\n  read: ["frontend/**"]\n');
+    await td.operator.post(td.operator.projectPath('/policy/reload'), {});
+    const be = await FakeHarness.connect(td, { agentKey: 'be-1', role: 'backend', mode: 'attach' });
+    const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Add discount codes to checkout',
+      // A declared read scope (ADR-0028): what it does not name is withheld, `.claude/hidden.ts` included.
+      scope: { write: ['backend/**'], read: ['shared/**'] },
+      assign_agent_key: 'be-1',
+    });
+    await be.client.call('task.claim', { task_id: task.task_id });
+    const sentinel = 'REVIEW-SENTINEL-R1';
+
+    // A symbol in a withheld file: no match, no name-only reference into it.
+    const sym = await be.client.call('graph.query', { name: 'formatPrice' });
+    expect(sym.symbol?.matches).toEqual([]);
+    expect(JSON.stringify(sym)).not.toContain('frontend/');
+    const hidden = await be.client.call('graph.query', { name: 'hiddenSentinel' });
+    expect(hidden.symbol?.matches).toEqual([]);
+    // A readable symbol's edges and tests never name a withheld file.
+    const money = await be.client.call('graph.query', { name: 'Money' });
+    expect(money.symbol?.matches.length).toBeGreaterThan(0);
+    expect(JSON.stringify(money)).not.toContain('frontend/');
+    // A file the agent may not read is refused as such; a readable one lists only readable neighbours.
+    await expect(be.client.call('graph.query', { path: 'frontend/src/api-client.ts' })).rejects.toThrow(
+      /not a file you may read/,
+    );
+    await expect(be.client.call('graph.query', { path: '.claude/hidden.ts' })).rejects.toThrow(
+      /not a file you may read/,
+    );
+    const api = await be.client.call('graph.query', { path: 'shared/src/api.ts', depth: 2 });
+    expect(api.file?.consumers.length).toBeGreaterThan(0);
+    expect(JSON.stringify(api)).not.toContain('frontend/');
+    // Words: no hit in a withheld file.
+    const words = await be.client.call('graph.query', { words: 'price checkout hidden', limit: 50 });
+    expect(JSON.stringify(words)).not.toContain('frontend/');
+    expect(JSON.stringify(words)).not.toContain('hidden');
+    // A blast radius never names a withheld file, and a seed the agent may not read is no seed.
+    const blast = await be.client.call('graph.blast_radius', { paths: ['shared/src/api.ts'], depth: 3 });
+    expect(blast.affected.length).toBeGreaterThan(0);
+    expect(JSON.stringify(blast)).not.toContain('frontend/');
+    await expect(be.client.call('graph.blast_radius', { paths: ['frontend/src/api-client.ts'] })).rejects.toThrow(
+      /none of the seeds is a file you may read/,
+    );
+    // A skeleton of a withheld file is named back, never shown; the sentinel reaches no answer.
+    const sk = await be.client.call('graph.skeleton', {
+      paths: ['frontend/src/format-price.ts', '.claude/hidden.ts', 'backend/src/checkout.service.ts'],
+    });
+    expect(sk.files.map((f) => f.path)).toEqual(['backend/src/checkout.service.ts']);
+    expect(sk.missing.map((m) => [m.path, m.reason])).toEqual([
+      ['frontend/src/format-price.ts', 'not a file you may read'],
+      ['.claude/hidden.ts', 'not a file you may read'],
+    ]);
+    expect(JSON.stringify(sk)).not.toContain(sentinel);
+    // The same request through the context compiler withholds the same files.
+    const packet = await be.client.requestContext({
+      task_id: task.task_id,
+      kind: 'file',
+      paths: ['.claude/hidden.ts'],
+    });
+    expect(JSON.stringify(packet)).not.toContain(sentinel);
   }, 120_000);
 });

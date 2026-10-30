@@ -953,6 +953,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
           ...(deps.operations ? { operations: deps.operations } : {}),
           ...(deps.judgeTool ? { judgeTool: deps.judgeTool } : {}),
           ...(deps.graph ? { graph: deps.graph } : {}),
+          readFilter: (recipient) => deps.context.readFilter(recipient),
         },
         c.get('auth'),
         body,
