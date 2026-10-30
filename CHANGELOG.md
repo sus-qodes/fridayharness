@@ -2,6 +2,18 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M14.10, the code graph builds from its last build
+
+- **A rebuild reads only what git cannot vouch for:** the graph of a checkout starts from the last graph of that checkout and keeps a file's facts unread when its content is unchanged: with the same HEAD, when it was dirty at neither build; across commits, when the commits do not differ in it. Every edge is still resolved from scratch, so a new file, a deleted one, a changed `exports` map or a tsconfig that appeared reach every importer. An approximate identity (too many dirty files to hash) or a different checkout reads everything, as before. Measured: a rebuild after one edit takes a quarter to a third of a warm full build on this repository, a quarter on a 200-file monorepo; the two graphs are equal in every node, edge, skipped file and contract (`docs/measurements/2026-10-20-incremental-graph.md`).
+- `friday graph` says how many files were kept from the last graph, beside the parsed and cached counts. The daemon reads a checkout's identity once per rebuild, not twice.
+
+## Unreleased — M14.9, the code graph reads the workspace's configuration
+
+- **A package's whole `exports` map is followed:** `@shop/db/schema`, `@shop/api/modules/*` and the like resolve to their files, with the conditions Friday reads (`development`, `import`, `types`, `default`, `require`, `node`) and Node's longest-prefix rule for patterns. A subpath the map does not export, a key set to `null`, a key with none of those conditions and a target outside the package are still unsupported edges, each saying why. A package without an exports map exposes its files by path.
+- **Build outputs lead to their sources, where the package says so:** an export that names `./dist/src/schema.d.ts` resolves to `src/schema.ts` when the package's `tsconfig.build.json` (else `tsconfig.json`) declares both `outDir` and `rootDir`. Without them the edge stays unsupported, and its reason names the tsconfig and the missing field. Nothing assumes `src`.
+- **tsconfig `paths` resolve as TypeScript applies them:** the nearest `tsconfig.json` above a file governs it, `baseUrl` and relative `extends` are honoured, targets are tried in order, and paths come before workspace packages. A path whose targets name no file is unsupported, with the mapping in its reason.
+- Every edge this adds is `inferred`, with the declaration behind it in its reason; `graph explain` and `scope_files` show it. Measured on a monorepo that exports `dist`: 126 unsupported edges of 574 became 0, and 12 shared contracts appeared where none was found; the graph build takes 5 to 35 ms more. Record: `docs/measurements/2026-10-20-workspace-resolution.md`.
+
 ## Unreleased — M14.8, the cheap fixes of the core audit
 
 - **A file asked for through `friday_request_context` now arrives:** the tool sends the path it was given as the request's path (it sent it as a query the compiler never read, so every file request answered "names no paths"). `history` takes a path the same way.

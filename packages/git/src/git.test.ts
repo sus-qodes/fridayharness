@@ -157,6 +157,22 @@ describe('the dirty-content identity', () => {
   });
 });
 
+describe('what changed between two commits', () => {
+  it('names added, changed and deleted paths, both paths of a rename, and nothing for one commit', async () => {
+    const { dir, g } = await repo();
+    const first = await g.run(['rev-parse', 'HEAD']);
+    writeFileSync(path.join(dir, 'a.txt'), 'alpha beta\n');
+    writeFileSync(path.join(dir, 'c.txt'), 'gamma\n');
+    await g.run(['mv', 'src/b.ts', 'src/renamed.ts']);
+    await g.commitAll('second');
+    const second = await g.run(['rev-parse', 'HEAD']);
+    const root = await GitRoot.open(dir);
+    expect((await root.changedBetween(first, second)).sort()).toEqual(['a.txt', 'c.txt', 'src/b.ts', 'src/renamed.ts']);
+    expect(await root.changedBetween(second, first)).toHaveLength(4);
+    expect(await root.changedBetween(second, second)).toEqual([]);
+  });
+});
+
 describe('reading never writes', () => {
   it('leaves the index untouched even when its stat data is stale', async () => {
     const { dir, g } = await repo();

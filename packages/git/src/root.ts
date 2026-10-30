@@ -468,6 +468,16 @@ export class GitRoot {
     return this.parseNumstat(raw).filter((d) => changed.has(d.path) || (d.origPath && changed.has(d.origPath)));
   }
 
+  /**
+   * Paths whose content differs between two commits (added, deleted or changed; a rename is its two
+   * paths). Plumbing, so the index is left alone.
+   */
+  async changedBetween(from: string, to: string): Promise<string[]> {
+    if (from === to) return [];
+    const raw = (await this.git(['diff-tree', '-r', '--name-only', '--no-renames', '-z', from, to])).stdout;
+    return [...new Set(raw.split('\0').filter(Boolean))];
+  }
+
   private parseNumstat(raw: string): DiffEntry[] {
     const tokens = raw.split('\0');
     const out: DiffEntry[] = [];

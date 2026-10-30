@@ -52,7 +52,10 @@ export class GraphService {
     const git = await e.root;
     const identity = known ?? (await git.identity());
     if (e.latest?.version === identity.version && identity.basis === 'content') return e.latest;
-    e.building ??= buildGraph(git, { cache: this.cache() }).finally(() => {
+    // The last graph of this checkout is the starting point: files git says are unchanged keep
+    // their facts, and only the changed ones are read again (ADR-0020, amendment of 2026-10-20).
+    const previous = e.latest;
+    e.building ??= buildGraph(git, { cache: this.cache(), identity, ...(previous ? { previous } : {}) }).finally(() => {
       e.building = undefined;
     });
     e.latest = await e.building;

@@ -19,6 +19,7 @@ interface Summary {
     files: number;
     parsed: number;
     cached: number;
+    unchanged?: number;
     edges: Record<string, number>;
     contracts: number;
     ms: number;
@@ -42,7 +43,7 @@ const how = (e: Edge) =>
 
 function renderSummary(s: Summary): string {
   return [
-    `Code graph at ${s.version}: ${s.stats.files} files, ${s.stats.edges.exact ?? 0} exact, ${s.stats.edges.inferred ?? 0} inferred and ${s.stats.edges.unsupported ?? 0} unsupported edges (built in ${s.stats.ms} ms; ${s.stats.parsed} parsed, ${s.stats.cached} from cache).`,
+    `Code graph at ${s.version}: ${s.stats.files} files, ${s.stats.edges.exact ?? 0} exact, ${s.stats.edges.inferred ?? 0} inferred and ${s.stats.edges.unsupported ?? 0} unsupported edges (built in ${s.stats.ms} ms; ${s.stats.parsed} parsed, ${s.stats.cached} from cache, ${s.stats.unchanged ?? 0} kept from the last graph).`,
     s.contracts.length
       ? `Shared contracts:\n${table(
           ['FILE', 'AREA', 'USED BY'],

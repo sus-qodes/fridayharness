@@ -12,6 +12,7 @@ export {
   type BuildOptions,
   buildGraph,
   CodeGraph,
+  type FileFacts,
   type GraphEdge,
   type GraphNode,
   type GraphStats,
@@ -19,12 +20,19 @@ export {
 } from './graph.js';
 export { LANGUAGES, type LanguageId, type LanguageSpec, languageOf } from './languages.js';
 export {
+  type BuildLayout,
   type Certainty,
+  CONDITIONS,
+  type ExportEntry,
   firstFile,
+  matchPattern,
+  type PathAliases,
   type Resolution,
   Resolver,
-  readAliases,
+  readExports,
+  readTsconfigPaths,
   readWorkspacePackages,
+  sourceOfOutput,
   stripJsonComments,
   type WorkspacePackage,
 } from './resolve.js';

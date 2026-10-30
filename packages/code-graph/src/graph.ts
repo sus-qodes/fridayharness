@@ -2,11 +2,11 @@ import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { setImmediate as nextTurn } from 'node:timers/promises';
-import type { GitRoot } from '@friday/git';
+import type { GitRoot, SourceIdentity } from '@friday/git';
 import { type FactsCache, memoryFactsCache } from './cache.js';
 import { extractImports, type ImportFact, type ImportKind } from './extract.js';
 import { type LanguageId, languageOf, withTree } from './languages.js';
-import { type Certainty, Resolver, readAliases, readWorkspacePackages } from './resolve.js';
+import { type Certainty, Resolver, readTsconfigPaths, readWorkspacePackages } from './resolve.js';
 
 export interface GraphNode {
   path: string;
@@ -35,6 +35,8 @@ export interface GraphStats {
   files: number;
   parsed: number;
   cached: number;
+  /** Files carried over from the previous graph without being read: git said their content was unchanged. */
+  unchanged: number;
   edges: Record<Certainty, number>;
   contracts: number;
   ms: number;
@@ -44,20 +46,32 @@ const TEST_PATH = /(^|\/)(test|tests|__tests__)\//;
 const TEST_NAME = /\.(test|spec)\.[cm]?[jt]sx?$/;
 export const isTestPath = (p: string) => TEST_PATH.test(p) || TEST_NAME.test(p);
 
+/** What was read of one file: the sha256 of its bytes, its language and its import facts. */
+export interface FileFacts {
+  sha: string;
+  language: LanguageId;
+  facts: ImportFact[];
+}
+
 /** A file-level graph of one execution root at one source version (ADR-0020). */
 export class CodeGraph {
   private readonly incoming = new Map<string, GraphEdge[]>();
   private readonly outgoing = new Map<string, GraphEdge[]>();
+  /** `identity().version` of the root when the graph was built. */
+  readonly version: string;
 
   constructor(
     readonly root: string,
-    /** `identity().version` of the root when the graph was built. */
-    readonly version: string,
+    /** The root's identity when the graph was built; the next build starts from it. */
+    readonly identity: SourceIdentity,
     readonly nodes: Map<string, GraphNode>,
     readonly edges: GraphEdge[],
     readonly skipped: { path: string; reason: string }[],
     readonly stats: GraphStats,
+    /** Each parsed file's facts, so the next build of this root can keep the unchanged ones. */
+    readonly facts: ReadonlyMap<string, FileFacts> = new Map(),
   ) {
+    this.version = identity.version;
     for (const e of edges) {
       push(this.outgoing, e.from, e);
       if (e.to) push(this.incoming, e.to, e);
@@ -127,6 +141,31 @@ export interface BuildOptions {
   maxFileBytes?: number;
   /** Yield to the event loop after this many files. Default 25. */
   yieldEvery?: number;
+  /** The root's identity, when the caller just read it; read here otherwise. */
+  identity?: SourceIdentity;
+  /**
+   * The last graph of the same root. Files whose content git says is unchanged since it was
+   * built keep their facts unread; the rest are read as usual. Every edge is resolved anew.
+   */
+  previous?: CodeGraph;
+}
+
+/**
+ * The files whose content may differ from the previous graph's, or null when that cannot be
+ * known and everything must be read. A file not in the set has the same content as before: with
+ * the same HEAD, only a file dirty then or dirty now can differ; across commits, also a file the
+ * two commits differ in. Both identities must be content-based (ADR-0019 §3).
+ */
+async function changedSince(root: GitRoot, previous: CodeGraph, identity: SourceIdentity): Promise<Set<string> | null> {
+  const before = previous.identity;
+  if (previous.root !== root.root) return null;
+  if (before.basis !== 'content' || identity.basis !== 'content') return null;
+  if (!before.head || !identity.head) return null;
+  const changed = new Set<string>([...before.paths, ...identity.paths]);
+  if (before.head !== identity.head) {
+    for (const p of await root.changedBetween(before.head, identity.head)) changed.add(p);
+  }
+  return changed;
 }
 
 /** Builds the graph of an execution root as it is now (ADR-0020 §6). */
@@ -134,19 +173,30 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
   const started = Date.now();
   const cache = opts.cache ?? memoryFactsCache();
   const maxBytes = opts.maxFileBytes ?? 1024 * 1024;
-  const identity = await root.identity();
+  const identity = opts.identity ?? (await root.identity());
   const listed = await root.files();
   const files = new Set(listed);
+  const changed = opts.previous ? await changedSince(root, opts.previous, identity) : null;
   const facts = new Map<string, ImportFact[]>();
+  const fileFacts = new Map<string, FileFacts>();
   const skipped: { path: string; reason: string }[] = [];
   const fresh: { sha: string; language: string; facts: ImportFact[] }[] = [];
   const languages = new Map<string, LanguageId>();
   let parsed = 0;
   let cached = 0;
+  let unchanged = 0;
   let count = 0;
   for (const rel of listed) {
     const lang = languageOf(rel);
     if (!lang) continue;
+    const kept = changed && !changed.has(rel) ? opts.previous?.facts.get(rel) : undefined;
+    if (kept) {
+      unchanged += 1;
+      facts.set(rel, kept.facts);
+      fileFacts.set(rel, kept);
+      languages.set(rel, kept.language);
+      continue;
+    }
     if (++count % (opts.yieldEvery ?? 25) === 0) await nextTurn();
     const abs = path.join(root.root, rel);
     let bytes: Buffer;
@@ -178,12 +228,13 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
       fresh.push({ sha, language: lang.id, facts: found });
     }
     facts.set(rel, found);
+    fileFacts.set(rel, { sha, language: lang.id, facts: found });
     languages.set(rel, lang.id);
   }
   cache.putAll(fresh);
 
   const packages = await readWorkspacePackages(root.root, files);
-  const resolver = new Resolver(files, packages, await readAliases(root.root));
+  const resolver = new Resolver(files, packages, await readTsconfigPaths(root.root, files));
   const packageDirs = [
     ...new Set(listed.filter((f) => path.posix.basename(f) === 'package.json').map((f) => path.posix.dirname(f))),
   ]
@@ -250,12 +301,13 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
   }
   const tally: Record<Certainty, number> = { exact: 0, inferred: 0, unsupported: 0 };
   for (const e of edges) tally[e.certainty] += 1;
-  return new CodeGraph(root.root, identity.version, nodes, edges, skipped, {
-    files: nodes.size,
-    parsed,
-    cached,
-    edges: tally,
-    contracts: byTarget.size,
-    ms: Date.now() - started,
-  });
+  return new CodeGraph(
+    root.root,
+    identity,
+    nodes,
+    edges,
+    skipped,
+    { files: nodes.size, parsed, cached, unchanged, edges: tally, contracts: byTarget.size, ms: Date.now() - started },
+    fileFacts,
+  );
 }
