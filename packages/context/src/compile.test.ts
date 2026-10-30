@@ -1,10 +1,10 @@
 /**
  * The context compiler (plan M4d, ADR-0022) on fixture-shop.
  */
-import { cpSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildGraph, type CodeGraph, memoryFactsCache } from '@friday/code-graph';
+import { buildGraph, type CodeGraph, lookupSymbol, memoryFactsCache } from '@friday/code-graph';
 import { sequentialIds } from '@friday/core';
 import { openDatabase } from '@friday/db';
 import { GitRoot } from '@friday/git';
@@ -611,6 +611,69 @@ describe('the record of a packet (plan M12.6)', () => {
 });
 
 describe('authority at delivery (review M7.1 R02, R06)', () => {
+  it('filters symbol callers, callees, tests and name-only references before delivery', async () => {
+    const files = {
+      'backend/src/public-symbol.ts':
+        "import { hiddenCallee } from '../../frontend/src/hidden-helper.js';\nexport function scopeTarget() {\n  return hiddenCallee();\n}\n",
+      'backend/src/readable-consumer.ts':
+        "import { scopeTarget } from './public-symbol.js';\nexport function allowedCaller() {\n  return scopeTarget();\n}\n",
+      'backend/src/readable-guess.ts': 'export function allowedGuess(value: any) {\n  return value.scopeTarget();\n}\n',
+      'frontend/src/private-caller.ts':
+        "import { scopeTarget } from '../../backend/src/public-symbol.js';\nexport function privateCaller() {\n  return scopeTarget();\n}\n",
+      'frontend/src/hidden-helper.ts': 'export function hiddenCallee() {\n  return 1;\n}\n',
+      'frontend/src/hidden-guess.ts':
+        'export function hiddenGuess(value: any) {\n  value.scopeTarget();\n  value.privateOnly();\n}\n',
+      'frontend/test/scope.test.ts':
+        "import { scopeTarget } from '../../backend/src/public-symbol.js';\nscopeTarget();\n",
+    };
+    for (const [file, text] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+      writeFileSync(path.join(dir, file), text);
+    }
+    await deterministicGit(dir).commitAll('symbol permission fixture');
+    const graph = await deps.graph(dir);
+    expect(graph).not.toBeNull();
+    const found = lookupSymbol(graph as CodeGraph, 'scopeTarget');
+    expect(found.matches[0]?.callers.some((e) => e.from.path === 'frontend/src/private-caller.ts')).toBe(true);
+    expect(found.matches[0]?.callees.some((e) => e.to?.path === 'frontend/src/hidden-helper.ts')).toBe(true);
+    expect(found.matches[0]?.tests).toContain('frontend/test/scope.test.ts');
+    expect(found.name_references.some((e) => e.from.path === 'frontend/src/hidden-guess.ts')).toBe(true);
+    const taskId = backendTask();
+    const policies: ContextPolicy[] = [
+      { version: 'symbol-deny', deny: { read: ['frontend/**'] }, teams: {} },
+      {
+        version: 'symbol-team',
+        deny: { read: [] },
+        teams: { backend: [{ source: 'teams', write: ['backend/**'], read: ['backend/**', 'shared/**'] }] },
+      },
+    ];
+    for (const policy of policies) {
+      deps.policy = () => policy;
+      const askSymbol = (query: string) =>
+        compileContext(
+          deps,
+          {
+            recipient: { kind: 'agent', id: agent.agent_id, harness_id: agent.harness_id },
+            task_id: taskId,
+            purpose: 'symbol permission',
+            request: { kind: 'symbol', query },
+          },
+          { kind: 'agent', id: agent.agent_id },
+        );
+      const result = await askSymbol('scopeTarget');
+      expect(JSON.stringify(result), policy.version).not.toContain('frontend/');
+      expect(section(result.packet, 'code.requested')).toContain('allowedCaller');
+      expect(section(result.packet, 'code.requested')).toContain('allowedGuess');
+      expect(section(result.packet, 'code.requested')).not.toContain('hiddenCallee');
+      expect(result.explanation.withheld_by_permission).toBeGreaterThanOrEqual(4);
+      const hidden = await askSymbol('privateOnly');
+      expect(JSON.stringify(hidden), policy.version).not.toContain('frontend/');
+      expect(section(hidden.packet, 'request.note')).toContain('no symbol named privateOnly');
+      expect(section(hidden.packet, 'code.requested')).toBe('');
+      expect(hidden.explanation.withheld_by_permission).toBeGreaterThan(0);
+    }
+  });
+
   const ask = (taskId: string, request: { kind: string; paths?: string[] }) =>
     compileContext(
       deps,

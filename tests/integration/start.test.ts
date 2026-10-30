@@ -108,6 +108,7 @@ describe('friday start', () => {
         expect.arrayContaining([
           'friday --version',
           'friday setup --help',
+          'friday registry validate matches the packaged artifact',
           'friday start in a fresh repository initializes it and starts Friday',
           'the Studio is served from the archive',
           'Friday stopped',

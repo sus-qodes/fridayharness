@@ -121,6 +121,63 @@ describe('tool.check', () => {
     await h.close();
   });
 
+  it.each([0, 1])(
+    'renews an unanswered approval %s ms after its expiry without reusing the expired request',
+    async (late) => {
+      const clock = new FakeClock(new Date().toISOString());
+      const td = await startTestDaemon(ws(), { git: true, brain: false, clock });
+      const { h, task, start } = await running(td, 'cx-1', ['src/**']);
+      const pid = td.project.project_id;
+      const check = () =>
+        h.client.call('tool.check', {
+          tool: 'commandExecution',
+          action: { kind: 'command', command: 'git commit -m wip' },
+        });
+      const first = await check();
+      expect(first).toMatchObject({ decision: 'ask', rule: 'command.git.mutate' });
+      expect(first.approval_id).toMatch(/^apr_/);
+      clock.advance(3_600_000 - 1);
+      await h.client.heartbeat();
+      expect((await check()).approval_id).toBe(first.approval_id);
+      clock.advance(1 + late);
+      await h.client.heartbeat();
+      const renewed = await check();
+      expect(renewed).toMatchObject({ decision: 'ask', rule: 'command.git.mutate' });
+      expect(renewed.approval_id).toMatch(/^apr_/);
+      expect(renewed.approval_id).not.toBe(first.approval_id);
+      expect((await check()).approval_id).toBe(renewed.approval_id);
+      const pending = td.daemon.state.q.approvals(pid, 'pending');
+      expect(pending).toHaveLength(2);
+      expect(pending.find((a) => a.approval_id === renewed.approval_id)).toMatchObject({
+        task_id: task.task_id,
+        run_id: start.run_id,
+        expires_at: new Date(clock.nowMs() + 3_600_000).toISOString(),
+      });
+      expect(() =>
+        td.daemon.state.decideApproval(pid, { kind: 'human', id: 'operator' }, first.approval_id as string, true),
+      ).toThrow(/approval request expired/);
+      await h.client.update({
+        task_id: task.task_id,
+        run_id: start.run_id,
+        status: 'waiting',
+        waiting_reason: 'human_approval',
+        note: 'waiting for the fresh request',
+      });
+      expect(td.daemon.state.q.task(pid, task.task_id).status).toBe('WAITING');
+      expect((await cli(['--project', ws().projectDir, 'approve', renewed.approval_id as string])).code).toBe(0);
+      expect(
+        td.daemon.state.db
+          .prepare("SELECT COUNT(*) AS n FROM outbox_messages WHERE run_id = ? AND method = 'task.resume'")
+          .get<{ n: number }>(start.run_id)?.n,
+      ).toBe(1);
+      await h.waitFor('task.resume');
+      await expect.poll(() => td.daemon.state.q.task(pid, task.task_id).status).toBe('RUNNING');
+      expect(await check()).toMatchObject({ decision: 'allow', rule: 'command.approved' });
+      expect((await check()).approval_id).not.toBe(renewed.approval_id);
+      await h.close();
+    },
+  );
+
   it('asks a human before a printed value is written into a file (review M8-R01)', async () => {
     const td = await startTestDaemon(ws(), { git: true, brain: false });
     const { h, start } = await running(td, 'cx-1', ['src/**']);

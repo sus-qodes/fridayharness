@@ -12,8 +12,8 @@
  * resolving: the CLI finds its launcher (apps/cli/bin/friday.mjs), the Studio bundle (apps/ui/dist)
  * and the MCP server's launcher (packages/mcp-server/bin/friday-mcp.mjs) exactly as in a checkout.
  * Modules inlined into a bundle resolve relative to that bundle instead, so the files they read are
- * copied next to it: the routing registry's model-guide.yaml and the Claude adapter's hook launcher
- * (apps/cli/model-guide.yaml, apps/cli/hook.mjs).
+ * copied next to it: the routing registry's model-guide.yaml and friday_registry.json and the Claude
+ * adapter's hook launcher (apps/cli/model-guide.yaml, apps/cli/friday_registry.json, apps/cli/hook.mjs).
  *
  * Third-party packages stay declared dependencies, which npm installs with the archive:
  * better-sqlite3 and @vscode/tree-sitter-wasm carry a native or WebAssembly binary and are loaded
@@ -49,6 +49,11 @@ const BESIDE = [
     module: 'packages/routing/src/registry.ts',
     source: 'packages/routing/model-guide.yaml',
     beside: '../model-guide.yaml',
+  },
+  {
+    module: 'packages/routing/src/registry-artifact.ts',
+    source: 'packages/routing/friday_registry.json',
+    beside: '../friday_registry.json',
   },
   {
     module: 'packages/adapters/claude/src/config/claude-code.ts',
@@ -370,6 +375,13 @@ export async function verifyArchive(archive, { log = () => {} } = {}) {
     check(
       'the project files were written',
       existsSync(path.join(repo, '.friday', 'config.yaml')) && existsSync(path.join(repo, '.friday', '.gitignore')),
+    );
+    const registry = friday(['--json', 'registry', 'validate'], repo);
+    const registryInfo = registry.status === 0 ? JSON.parse(registry.stdout) : {};
+    check(
+      'friday registry validate matches the packaged artifact',
+      registry.status === 0 && registryInfo.ok === true && registryInfo.artifact === 'matches',
+      registry.status === 0 ? registry.stdout.trim() : registry.stderr.trim(),
     );
     const health = await fetchStatus(`${outcome.url}/health`);
     check('the daemon answers /health', health.status === 200 || health.status === 401, String(health.status));

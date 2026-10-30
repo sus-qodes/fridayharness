@@ -189,7 +189,12 @@ export class StateProjector implements Projector {
       case 'worktree.released':
         this.db
           .prepare('UPDATE worktrees SET status = ?, note = ?, updated_at = ? WHERE worktree_id = ?')
-          .run(p.status === 'preserved' ? 'preserved' : 'released', opt(p.reason), e.occurred_at, str(p.worktree_id));
+          .run(
+            p.status === 'active' || p.status === 'preserved' ? p.status : 'released',
+            opt(p.reason),
+            e.occurred_at,
+            str(p.worktree_id),
+          );
         return;
       case 'worktree.removed':
         this.db

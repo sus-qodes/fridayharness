@@ -111,20 +111,10 @@ export function createToolJudge(deps: {
   ): string | null => {
     if (!result.grant) return null;
     const { capability, target } = result.grant;
-    const pending = (
-      state.q.approvals(pid, 'pending') as {
-        approval_id: string;
-        requested_by_id: string;
-        run_id: string | null;
-        capability: string;
-        target: string | null;
-      }[]
-    ).find(
-      (a) =>
-        a.requested_by_id === caller.agent_id &&
-        a.run_id === task.current_run_id &&
-        a.capability === capability &&
-        a.target === target,
+    const pending = state.q.pendingApproval(
+      pid,
+      { capability, target, task_id: task.task_id, run_id: task.current_run_id, agent_id: caller.agent_id },
+      state.clock.now(),
     );
     if (pending) return pending.approval_id;
     const effective = deps.policy?.();

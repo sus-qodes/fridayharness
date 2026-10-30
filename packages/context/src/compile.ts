@@ -939,9 +939,16 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
       else if (!symGraph) notes.push('the code graph is not available; the symbol could not be looked up');
       else {
         const found = lookupSymbol(symGraph, name, { limit: 5, edges: 20 });
+        const readableEdges = (edges: SymbolEdge[]) =>
+          edges.filter((e) => {
+            const allowed = readable(e.from.path) && (e.to === null || readable(e.to.path));
+            if (!allowed) withheld += 1;
+            return allowed;
+          });
         const shown = found.matches.filter((m) => readable(m.symbol.path));
         withheld += found.matches.length - shown.length;
-        if (!shown.length && !found.name_references.length) {
+        const nameReferences = readableEdges(found.name_references);
+        if (!shown.length && !nameReferences.length) {
           notes.push(`no symbol named ${name} in the code graph`);
           const line = `Nothing found: no symbol named ${name} in the code graph (TypeScript and JavaScript files git sees, by exact name). Try the words of its name (kind "scope_files" lists your files; "file" reads one), or check the spelling.`;
           add({
@@ -962,11 +969,18 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
             : `${e.name} (${e.certainty}: ${e.reason ?? 'unresolved'})`;
         for (const m of shown) {
           const s = m.symbol;
+          const callers = readableEdges(m.callers);
+          const callees = readableEdges(m.callees);
+          const tests = m.tests.filter((file) => {
+            if (readable(file)) return true;
+            withheld += 1;
+            return false;
+          });
           const line = [
             `${s.path}:${s.line}-${s.end_line}  ${s.kind}${s.parent ? ` of ${s.parent}` : ''}${s.exported ? ', exported' : ''}: ${s.signature}`,
-            `  called or used by: ${m.callers.map(where).join('; ') || 'nobody the graph can see'}${m.callers_cut ? ` (+${m.callers_cut} more)` : ''}`,
-            `  uses: ${m.callees.map(uses).join('; ') || 'nothing the graph can see'}${m.callees_cut ? ` (+${m.callees_cut} more)` : ''}`,
-            `  tests of its file: ${m.tests.join(', ') || 'none'}`,
+            `  called or used by: ${callers.map(where).join('; ') || 'nobody the graph can see'}${m.callers_cut ? ` (+${m.callers_cut} more)` : ''}`,
+            `  uses: ${callees.map(uses).join('; ') || 'nothing the graph can see'}${m.callees_cut ? ` (+${m.callees_cut} more)` : ''}`,
+            `  tests of its file: ${tests.join(', ') || 'none'}`,
           ].join('\n');
           add({
             section: 'code.requested',
@@ -988,8 +1002,8 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
             rule: 'requested (priority 0)',
           });
         }
-        if (found.name_references.length) {
-          const line = `Name-only matches of ${name} (member calls on values the graph does not know; guesses): ${found.name_references.map((e) => `${e.from.path}:${e.line} in ${e.from.symbol}`).join('; ')}`;
+        if (nameReferences.length) {
+          const line = `Name-only matches of ${name} (member calls on values the graph does not know; guesses): ${nameReferences.map((e) => `${e.from.path}:${e.line} in ${e.from.symbol}`).join('; ')}`;
           add({
             section: 'code.requested',
             line,

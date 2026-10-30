@@ -5776,8 +5776,9 @@ export class FridayState {
     const task = this.q.findTask(projectId, a.task_id);
     if (task?.status !== 'WAITING' || task.current_run_id !== a.run_id) return;
     const others = this.db
-      .prepare("SELECT COUNT(*) AS n FROM approvals WHERE run_id = ? AND status = 'pending' AND approval_id <> ?")
-      .get<{ n: number }>(a.run_id, approvalId);
+      .prepare(`SELECT COUNT(*) AS n FROM approvals WHERE run_id = ? AND status = 'pending' AND approval_id <> ?
+        AND (expires_at IS NULL OR expires_at > ?)`)
+      .get<{ n: number }>(a.run_id, approvalId, ctx.now);
     if ((others?.n ?? 0) > 0) return;
     const decided = granted ? 'granted' : 'denied';
     const message = `A human ${decided} your request to ${what}.${note ? ` Note: ${note}` : ''}${granted ? '' : ' Continue without it.'}`;
