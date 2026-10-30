@@ -8,10 +8,14 @@ import {
   type ModelRecordInput,
   mergeModels,
   modelCostClass,
+  ROLE_REGISTRY_SOURCE,
+  type RoleRegistry,
   type RouteInput,
   type RoutingDecision,
   type RoutingPin,
   type RoutingSettings,
+  validateRoleRegistry,
+  withProjectRoleCandidates,
 } from '@friday/routing';
 import type { ProjectRef } from '@friday/sdk';
 import { type FridayState, type HarnessRecord, hostCohort, type RunRouter } from '@friday/state';
@@ -27,6 +31,10 @@ export class RoutingService {
   readonly models: ModelRecord[];
   readonly settings: RoutingSettings;
   readonly guideVersion: string;
+  /** Friday's candidates plus the project's `routing.role_candidates` extensions. */
+  roleRegistry: RoleRegistry;
+  /** Whether `routing.static_registry.enabled` makes the registry the dispatch authority. */
+  staticRegistryEnabled: boolean;
   /** Laya's stored answer for a task (M7c), when its question still stands. */
   laya: (taskId: string) => LayaAnswer | null = () => null;
   /** Why there is no answer, for the decision's record (review F11). */
@@ -49,6 +57,9 @@ export class RoutingService {
       sensitive: r.sensitive,
       profile_preferences: r.profile_preferences,
     };
+    this.roleRegistry = withProjectRoleCandidates(ROLE_REGISTRY_SOURCE, r.role_candidates);
+    this.staticRegistryEnabled = r.static_registry.enabled;
+    validateRoleRegistry(this.roleRegistry, this.models);
   }
 
   private get pid() {
@@ -104,13 +115,14 @@ export class RoutingService {
       pins: this.pins(),
       evidence: this.evidence(harness),
       laya: null,
+      ...(this.staticRegistryEnabled ? { role_registry: this.roleRegistry } : {}),
     };
     return { ...base, laya: this.laya(task.task_id), laya_status: this.layaStatus(task.task_id) };
   }
 
   /** The router the state calls for every new run (ADR-0031 §6). */
-  readonly router: RunRouter = ({ task, harness, agent }) => {
-    const decision = decideRoute(this.input({ ...task, role: agent.role }, harness));
+  readonly router: RunRouter = ({ task, harness }) => {
+    const decision = decideRoute(this.input(task, harness));
     if (decision.model === null && decision.source === 'none') {
       this.deps.logger.info('routing chose no model', { task_id: task.task_id, reason: decision.reason });
     }
@@ -128,7 +140,7 @@ export class RoutingService {
     const agent = this.deps.state.q.findAgent(agentId);
     const harness = agent?.harness_id ? this.deps.state.q.findHarness(agent.harness_id) : undefined;
     if (!agent || !harness) return null;
-    const d = decideRoute(this.input({ ...task, role: agent.role }, harness));
+    const d = decideRoute(this.input(task, harness));
     // The agent's cost class (plan M13.3): as its harness declared it, else its model's.
     const declared = CostClass.safeParse((harness.capabilities as { cost_class?: unknown } | null)?.cost_class);
     // An agent whose route blocks the task has no class for it: it cannot take it (review of M13).
@@ -147,8 +159,6 @@ export class RoutingService {
   /** What routing would choose for a task now, on any harness (a dry run; nothing is recorded). */
   explain(taskId: string): RoutingDecision {
     const task = this.deps.state.q.task(this.pid, taskId);
-    const run = task.current_run_id ? this.deps.state.q.findRun(task.current_run_id) : undefined;
-    const agent = run ? this.deps.state.q.findAgent(run.agent_id) : undefined;
-    return decideRoute(this.input({ ...task, role: agent?.role ?? task.role ?? null }, null));
+    return decideRoute(this.input(task, null));
   }
 }

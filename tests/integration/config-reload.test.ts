@@ -218,6 +218,68 @@ describe('config.yaml read again while Friday runs', () => {
     expect(td.project.config.recovery.max_retries).toBe(0);
   });
 
+  it('turns static registry dispatch on and merges project role candidates on a live reload', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const P = (p: string) => td.operator.projectPath(p);
+    const task = await td.operator.post<TaskView>(P('/tasks'), {
+      summary: 'write the guide',
+      kind: 'docs',
+      scope: { write: ['docs/**'], read: [] },
+    });
+    const explain = () =>
+      td.operator.get<{
+        dry_run: {
+          source: string;
+          model: string | null;
+          blocked: boolean;
+          reason: string;
+          role: string | null;
+          role_source: string;
+          registry_version: string | null;
+          selected_rank: number | null;
+          selected_harness: string | null;
+          candidates: Array<{ model: string; reasons: string[] }>;
+        };
+      }>(P(`/routing/explain/${task.task_id}`));
+    expect((await explain()).dry_run).toMatchObject({ registry_version: null });
+    expect((await explain()).dry_run.source).not.toBe('registry');
+
+    editConfig(
+      (y) =>
+        `${y}routing:\n` +
+        '  static_registry:\n    enabled: true\n' +
+        '  must_use_local: true\n' +
+        '  role_candidates:\n    docs:\n      - { model: local-coder, harness: generic }\n' +
+        '  models:\n    - { id: local-coder, provider: local, vendors: [generic], local: true }\n',
+    );
+    const snap = await until(
+      () => snapshot(td),
+      (s) => s.config.changes?.applied.some((key) => key.startsWith('routing.static_registry')) ?? false,
+      'the registry flag to apply',
+    );
+    expect(snap.config.changes?.restart_needed).toEqual([]);
+    const enabled = (await explain()).dry_run;
+    // A dry run has no harness to confirm a local-only constraint, so it blocks rather than claiming
+    // the model was applied; the merged registry still names the project's candidate as the route.
+    expect(enabled).toMatchObject({
+      source: 'none',
+      model: null,
+      blocked: true,
+      role: 'docs',
+      role_source: 'kind_fallback',
+      registry_version: '2026-10-21.2',
+      selected_rank: 3,
+      selected_harness: 'generic',
+    });
+    expect(enabled.reason).toContain('must hold');
+    expect(enabled.candidates).toContainEqual(
+      expect.objectContaining({
+        model: 'local-coder',
+        reasons: ['registry.rank(3)', 'registry.harness(generic)'],
+      }),
+    );
+  });
+
   it('keeps the settings in force while the file is invalid, says so once it stood still, and applies the fix', async () => {
     const td = await startTestDaemon(ws());
     const valid = readFileSync(configPath(), 'utf8');

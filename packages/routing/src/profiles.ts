@@ -20,6 +20,10 @@ export interface RoutingProfileClassification {
 export type ProfilePreference = GuideClass;
 
 const GLOB = /[*?]|\[/;
+const KNOWN_KINDS = new Set(['implementation', 'verification', 'review', 'research', 'docs', 'chore']);
+const READ_ONLY_KINDS = new Set(['verification', 'review', 'research']);
+const HIGH_RISK_PATH =
+  /(^|[\\/])(\.env(?:\.|$)|.*(?:auth|security|payment|migration|policy|permission|firestore\.rules).*)/i;
 
 /**
  * Classify only from task facts. This deliberately does not inspect files or call a model, which keeps
@@ -29,13 +33,22 @@ export function classifyRoutingProfile(task: RoutingTaskFacts): RoutingProfileCl
   const reasons: string[] = [];
   const summary = task.summary.trim();
   if (!summary) reasons.push('summary is empty');
+  if (!KNOWN_KINDS.has(task.kind)) reasons.push(`unknown task kind: ${task.kind}`);
   if (!task.scope) reasons.push('scope is missing');
 
-  const paths = task.scope ? [...task.scope.write, ...task.scope.read] : [];
+  const writePaths = task.scope?.write ?? [];
+  const readPaths = task.scope?.read ?? [];
+  const paths = READ_ONLY_KINDS.has(task.kind) ? [...writePaths, ...readPaths] : [...writePaths];
   if (!paths.length) reasons.push('scope has no paths');
-  if (!summary || !task.scope || !paths.length) return { profile: 'ambiguous', reasons };
+  if (!READ_ONLY_KINDS.has(task.kind) && !writePaths.length) reasons.push('task kind requires a write scope');
+  if (!summary || !task.scope || !paths.length || !KNOWN_KINDS.has(task.kind)) return { profile: 'ambiguous', reasons };
 
-  if (task.risk_level === 'high') return { profile: 'high-risk', reasons: ['risk_level=high'] };
+  if (task.risk_level === 'high' || paths.some((path) => HIGH_RISK_PATH.test(path))) {
+    return {
+      profile: 'high-risk',
+      reasons: task.risk_level === 'high' ? ['risk_level=high'] : ['scope contains a high-risk path'],
+    };
+  }
 
   if (paths.some((path) => GLOB.test(path))) {
     return { profile: 'large', reasons: ['scope contains a glob pattern'] };
@@ -43,6 +56,12 @@ export function classifyRoutingProfile(task: RoutingTaskFacts): RoutingProfileCl
 
   if (paths.length === 1 && ['chore', 'docs', 'verification'].includes(task.kind)) {
     return { profile: 'trivial', reasons: ['one concrete path', `kind=${task.kind}`] };
+  }
+  if (['review', 'research'].includes(task.kind) && paths.length <= 3) {
+    return {
+      profile: 'medium',
+      reasons: [`${paths.length} bounded path${paths.length === 1 ? '' : 's'}`, `kind=${task.kind}`],
+    };
   }
   if (paths.length <= 2)
     return { profile: 'short', reasons: [`${paths.length} concrete path${paths.length === 1 ? '' : 's'}`] };

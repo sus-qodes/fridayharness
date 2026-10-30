@@ -10,3 +10,5 @@ export * from './laya.js';
 export * from './profiles.js';
 export * from './registry.js';
 export * from './requirements.js';
+export * from './role-registry.js';
+export * from './roles.js';

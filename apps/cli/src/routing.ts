@@ -33,6 +33,7 @@ function decisionLines(
 ): string[] {
   const lines = [
     `${d.model ?? 'no model'} (${d.source}, mode ${d.mode}, class ${d.task_class}${d.binding ? ', binding' : ''})`,
+    `  role: ${d.role ?? 'missing'} (${d.role_source})${d.registry_version ? `, registry ${d.registry_version}` : ''}`,
     `  profile: ${d.profile} (${d.profile_reasons.join('; ') || 'no additional facts'})`,
     `  ${d.reason}`,
   ];

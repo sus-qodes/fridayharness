@@ -13,12 +13,15 @@
   },
   "files": [
     "dist",
-    "model-guide.yaml"
+    "model-guide.yaml",
+    "friday_registry.json"
   ],
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -p tsconfig.test.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "registry:generate": "tsx --conditions development scripts/generate-registry.ts",
+    "registry:check": "tsx --conditions development scripts/generate-registry.ts --check"
   },
   "dependencies": {
     "yaml": "^2.9.1",

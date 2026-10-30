@@ -65,6 +65,55 @@ describe('config', () => {
     expect(laya('https://laya.example.com')).toThrow(/on this machine/);
   });
 
+  it('parses user-editable routing profile strategies and capability floors', () => {
+    const text = [
+      renderInitialConfig(PID, 'shop'),
+      'routing:',
+      '  profile_preferences:',
+      '    short:',
+      '      preferred: [claude-haiku-5-5]',
+      '      fallback: [claude-sonnet-5-5]',
+      '      strategy: cheapest-capable',
+      '      min_fit: 0.65',
+      '',
+    ].join('\n');
+    const c = parseConfig(text);
+    expect(c.routing.profile_preferences.short).toMatchObject({
+      preferred: ['claude-haiku-5-5'],
+      fallback: ['claude-sonnet-5-5'],
+      strategy: 'cheapest-capable',
+      min_fit: 0.65,
+    });
+  });
+
+  it('keeps static registry dispatch off by default and parses project role candidates', () => {
+    const defaults = parseConfig(renderInitialConfig(PID, 'shop'));
+    expect(defaults.routing.static_registry).toEqual({ enabled: false });
+    expect(defaults.routing.role_candidates).toEqual({});
+    const c = parseConfig(
+      [
+        renderInitialConfig(PID, 'shop'),
+        'routing:',
+        '  static_registry:',
+        '    enabled: true',
+        '  role_candidates:',
+        '    implementation:',
+        '      - { model: local-coder, harness: generic }',
+        '',
+      ].join('\n'),
+    );
+    expect(c.routing.static_registry.enabled).toBe(true);
+    expect(c.routing.role_candidates.implementation).toEqual([
+      {
+        model: 'local-coder',
+        harness: 'generic',
+        dispatchable: true,
+        mcp_required: false,
+        reason_if_unavailable: null,
+      },
+    ]);
+  });
+
   it('reports schema problems with paths', () => {
     expect(() => parseConfig('project: { id: nope }')).toThrow(/project.id/);
     expect(() => parseConfig('project: [')).toThrow(/not valid YAML/);

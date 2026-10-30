@@ -97,7 +97,11 @@ describe('model routing', () => {
   }, 120_000);
 
   it('binds a harness that applies models, advises one that does not, and follows a human pin', async () => {
-    const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
+    const td = await startTestDaemon(ws(), {
+      git: true,
+      extensions: [claudeCodeHooks()],
+      extraConfig: ['routing:', '  static_registry:', '    enabled: true', ''].join('\n'),
+    });
     const dir = ws().projectDir;
     // A spawn adapter that applies the model it is given, and can run two models.
     const fake = await FakeHarness.connect(td, {
@@ -116,10 +120,10 @@ describe('model routing', () => {
     // What was recorded (Part 12 §9): the model, the reason, the evidence and the fallback.
     const explained = await cli(['--project', dir, 'routing', 'explain', t1.task_id]);
     expect(explained.code, explained.stderr).toBe(0);
-    expect(explained.stdout).toContain('claude-opus-5-5 (score, mode hybrid, class implementation, binding)');
+    expect(explained.stdout).toContain('claude-opus-5-5 (registry, mode hybrid, class implementation, binding)');
     expect(explained.stdout).toContain('profile: large (scope contains a glob pattern)');
-    expect(explained.stdout).toContain('no measured outcomes yet');
-    expect(explained.stdout).toContain('fallback: claude-haiku-5-5 -> a human');
+    expect(explained.stdout).toContain('role: implementation (kind_fallback)');
+    expect(explained.stdout).toContain('fallback: a human');
     expect(explained.stdout).toContain('excluded claude-sonnet-5-5: harness.cannot_run');
     // The adapter reports what actually ran.
     await fake.client.emitEvent({
@@ -207,6 +211,11 @@ describe('model routing', () => {
       extraConfig: [
         'routing:',
         '  must_use_local: true',
+        '  static_registry:',
+        '    enabled: true',
+        '  role_candidates:',
+        '    implementation:',
+        '      - { model: local-coder, harness: generic }',
         '  models:',
         '    - { id: local-coder, provider: local, vendors: [generic], local: true, capabilities: { code_editing: 0.6 } }',
         '',

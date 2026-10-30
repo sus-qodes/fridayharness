@@ -7,7 +7,16 @@ import { type ExecutionProfile, ProcessGroups } from '@friday/execution';
 import { GitRoot, rootKey, worktreesDir } from '@friday/git';
 import type { PlannerModel } from '@friday/planner';
 import { type Actor, API_VERSION, type ContextPacket, FridayError, PROTOCOL_VERSIONS } from '@friday/protocol';
-import { loadGuide, type ModelRecord, type ModelRecordInput, mergeModels, type RoutingSettings } from '@friday/routing';
+import {
+  loadGuide,
+  type ModelRecord,
+  type ModelRecordInput,
+  mergeModels,
+  ROLE_REGISTRY_SOURCE,
+  type RoutingSettings,
+  validateRoleRegistry,
+  withProjectRoleCandidates,
+} from '@friday/routing';
 import {
   type DaemonDiscovery,
   ensurePrivateDir,
@@ -154,12 +163,20 @@ function routingRegistry(cfg: FridayConfig): ModelRecord[] {
   return mergeModels(loadGuide().models, cfg.routing.models as ModelRecordInput[], cfg.master_brain);
 }
 
+/** Friday's static role candidates plus the project's `routing.role_candidates` extensions. */
+function routingRoles(cfg: FridayConfig) {
+  return withProjectRoleCandidates(ROLE_REGISTRY_SOURCE, cfg.routing.role_candidates);
+}
+
 /**
- * Routing copied its settings and registry when it was made (routing.ts); a changed config.yaml
+ * Routing copied its settings and registries when it was made (routing.ts); a changed config.yaml
  * brings the one instance every reader holds up to date in place, so the next decision uses it.
  */
 function applyRouting(routing: RoutingService, cfg: FridayConfig): void {
   const r = cfg.routing;
+  const models = routingRegistry(cfg);
+  const roles = routingRoles(cfg);
+  validateRoleRegistry(roles, models);
   Object.assign(routing.settings, {
     mode: r.mode,
     optimize: r.optimize,
@@ -171,7 +188,9 @@ function applyRouting(routing: RoutingService, cfg: FridayConfig): void {
     sensitive: r.sensitive,
     profile_preferences: r.profile_preferences,
   } satisfies RoutingSettings);
-  routing.models.splice(0, routing.models.length, ...routingRegistry(cfg));
+  routing.models.splice(0, routing.models.length, ...models);
+  routing.roleRegistry = roles;
+  routing.staticRegistryEnabled = r.static_registry.enabled;
 }
 
 function pidAlive(pid: number): boolean {
@@ -361,7 +380,10 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   const configs = reloadingConfig({
     file: configFile,
     initial: project.config,
-    check: (next) => void routingRegistry(next),
+    check: (next) => {
+      const models = routingRegistry(next);
+      validateRoleRegistry(routingRoles(next), models);
+    },
     onApply: (change) => {
       project.config = change.config;
       // The state reads these where it uses them; settings a caller fixed (tests) stay as given.

@@ -239,6 +239,14 @@ export const RoutingDecisionView = z.object({
   pin_id: z.string().nullable(),
   requirements_version: z.string(),
   guide_version: z.string(),
+  role: z.string().nullable().default(null),
+  role_source: z.enum(['task', 'decision_model', 'kind_fallback', 'path_fallback', 'missing', 'none']).default('none'),
+  registry_version: z.string().nullable().default(null),
+  selected_rank: z.number().int().nullable().default(null),
+  selected_harness: z.string().nullable().default(null),
+  decision_model: z.string().nullable().default(null),
+  decision_confidence: z.number().nullable().default(null),
+  failover_policy: z.enum(['host_failure', 'none']).default('none'),
   created_at: z.string(),
 });
 export type RoutingDecisionView = z.infer<typeof RoutingDecisionView>;

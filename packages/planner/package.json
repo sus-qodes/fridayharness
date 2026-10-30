@@ -25,6 +25,7 @@
     "@friday/events": "workspace:*",
     "@friday/policy": "workspace:*",
     "@friday/protocol": "workspace:*",
+    "@friday/routing": "workspace:*",
     "@friday/state": "workspace:*",
     "zod": "^4.6.5"
   },

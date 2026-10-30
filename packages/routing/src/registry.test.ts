@@ -1,5 +1,14 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { loadGuide, mergeModels, modelCostClass, plannerLocalModel } from './registry.js';
+import {
+  canonicalRole,
+  generatedRegistryView,
+  ROLE_REGISTRY_SOURCE,
+  validateRoleRegistry,
+  withProjectRoleCandidates,
+} from './role-registry.js';
+import { parseRoleDecision } from './roles.js';
 
 describe("the Master Brain's local model in the registry (plan M12.1)", () => {
   it('is listed as a local model with no harness vendor when the planner is a local server', () => {
@@ -43,5 +52,103 @@ describe('cost classes in the registry (plan M13.3)', () => {
       null,
     );
     expect(modelCostClass(own.find((m) => m.id === 'gpt-5.6-luna'))).toBe('cheap');
+  });
+});
+
+describe('the static role registry', () => {
+  it('is typed, ordered, and exposes future entries without making them dispatchable', () => {
+    const models = loadGuide().models;
+    validateRoleRegistry(ROLE_REGISTRY_SOURCE, models);
+    expect(ROLE_REGISTRY_SOURCE.roles.implementation?.candidates[0]).toMatchObject({
+      rank: 1,
+      model: 'claude-opus-5-5',
+      dispatchable: true,
+    });
+    expect(ROLE_REGISTRY_SOURCE.roles.implementation?.candidates.at(-1)).toMatchObject({
+      dispatchable: false,
+      reason_if_unavailable: 'adapter_not_verified',
+    });
+    expect(canonicalRole('backend')).toBe('implementation');
+    expect(canonicalRole('QA')).toBe('verification');
+    expect(canonicalRole('designer')).toBeNull();
+  });
+
+  it('is generated exactly into friday_registry.json (drift check)', () => {
+    const committed = readFileSync(new URL('../friday_registry.json', import.meta.url), 'utf8');
+    expect(committed).toBe(generatedRegistryView());
+  });
+
+  it('lets a project append candidates to a declared role, with omitted ranks after Friday’s', () => {
+    const extended = withProjectRoleCandidates(ROLE_REGISTRY_SOURCE, {
+      backend: [{ model: 'local-coder', harness: 'generic' }],
+    });
+    expect(extended.roles.implementation?.candidates.at(-1)).toEqual({
+      rank: 4,
+      model: 'local-coder',
+      harness: 'generic',
+      dispatchable: true,
+      mcp_required: false,
+      reason_if_unavailable: null,
+    });
+    validateRoleRegistry(
+      extended,
+      mergeModels(loadGuide().models, [{ id: 'local-coder', local: true, vendors: ['generic'] }], null),
+    );
+    expect(() => withProjectRoleCandidates(ROLE_REGISTRY_SOURCE, { designer: [] })).toThrow(/unknown role/);
+    expect(() =>
+      withProjectRoleCandidates(ROLE_REGISTRY_SOURCE, {
+        designer: [{ model: 'local-coder', harness: 'generic' }],
+      }),
+    ).toThrow(/unknown role/);
+    expect(() =>
+      validateRoleRegistry(
+        withProjectRoleCandidates(ROLE_REGISTRY_SOURCE, {
+          implementation: [{ rank: 1, model: 'local-coder', harness: 'generic' }],
+        }),
+        loadGuide().models,
+      ),
+    ).toThrow(/duplicate candidate ranks/);
+  });
+});
+
+describe('decision-model role output', () => {
+  it('accepts a known multi-role DAG and rejects unsupported or cyclic output', () => {
+    const roles = new Set(['implementation', 'verification', 'review']);
+    expect(
+      parseRoleDecision(
+        {
+          status: 'classified',
+          roles: [
+            { role: 'implementation', task_summary: 'make the change', depends_on: [], confidence: 0.92 },
+            { role: 'verification', task_summary: 'run the checks', depends_on: ['implementation'], confidence: 0.88 },
+          ],
+          assumptions: [],
+        },
+        roles,
+      ),
+    ).toMatchObject({ status: 'classified', roles: [{ role: 'implementation' }, { role: 'verification' }] });
+    expect(() =>
+      parseRoleDecision(
+        {
+          status: 'classified',
+          roles: [{ role: 'unknown', task_summary: 'bad', depends_on: [], confidence: 0.5 }],
+          assumptions: [],
+        },
+        roles,
+      ),
+    ).toThrow(/unsupported role/);
+    expect(() =>
+      parseRoleDecision(
+        {
+          status: 'classified',
+          roles: [
+            { role: 'implementation', task_summary: 'a', depends_on: ['verification'], confidence: 0.5 },
+            { role: 'verification', task_summary: 'b', depends_on: ['implementation'], confidence: 0.5 },
+          ],
+          assumptions: [],
+        },
+        roles,
+      ),
+    ).toThrow(/cycle/);
   });
 });

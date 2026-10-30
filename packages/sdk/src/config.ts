@@ -132,6 +132,20 @@ const loopbackUrl = (message: string) =>
     }, message);
 const LoopbackUrl = loopbackUrl('Laya must run on this machine: use http://127.0.0.1:<port>');
 
+/** A project's additional candidate for a static role (`routing.role_candidates`). */
+export const RoleCandidateSettings = z
+  .object({
+    /** Unset: appended after Friday's candidates for that role. */
+    rank: z.number().int().min(1).optional(),
+    model: z.string().min(1).max(100),
+    harness: z.string().min(1).max(50),
+    dispatchable: z.boolean().default(true),
+    mcp_required: z.boolean().default(false),
+    reason_if_unavailable: z.string().min(1).max(200).nullable().default(null),
+  })
+  .strict();
+export type RoleCandidateSettings = z.input<typeof RoleCandidateSettings>;
+
 /** Model routing (ADR-0031). */
 export const RoutingSettings = z
   .object({
@@ -160,10 +174,25 @@ export const RoutingSettings = z
             fallback: z.array(z.string()).default([]),
             avoid: z.array(z.string()).default([]),
             notes: z.string().nullable().default(null),
+            strategy: z.enum(['score', 'cheapest-capable', 'strongest-capable', 'block']).default('score'),
+            min_fit: z.number().min(0).max(1).nullable().default(null),
           })
           .strict(),
       )
       .default({}),
+    /**
+     * Static role/model registry dispatch (ADR-0031's 2026-10-21 amendment). Off by default: the
+     * score, guide, evidence and Laya path stays the safe default until the registry slice is verified.
+     */
+    static_registry: z
+      .object({ enabled: z.boolean().default(false) })
+      .strict()
+      .prefault({}),
+    /**
+     * Additional candidates a project appends to a declared static role. A project can make a local
+     * model eligible for a role, but cannot invent a role or renumber Friday's candidates.
+     */
+    role_candidates: z.record(z.string().min(1).max(64), z.array(RoleCandidateSettings).max(100)).default({}),
     /** Models the project adds to Friday's registry, or replaces by id. */
     models: z.array(z.record(z.string(), z.unknown())).max(100).default([]),
     /**

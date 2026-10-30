@@ -68,6 +68,10 @@ const GuideClass = z
     fallback: z.array(z.string()).default([]),
     avoid: z.array(z.string()).default([]),
     notes: z.string().nullable().default(null),
+    /** How this class selects among eligible candidates after hard constraints. */
+    strategy: z.enum(['score', 'cheapest-capable', 'strongest-capable', 'block']).default('score'),
+    /** Minimum capability fit for capability-aware strategies. */
+    min_fit: z.number().min(0).max(1).nullable().default(null),
   })
   .strict();
 export type GuideClass = z.output<typeof GuideClass>;

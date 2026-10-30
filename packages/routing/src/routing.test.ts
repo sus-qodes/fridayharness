@@ -9,8 +9,10 @@ import {
   type Evidence,
   loadGuide,
   mergeModels,
+  ROLE_REGISTRY_SOURCE,
   type RouteInput,
   type RoutingPin,
+  withProjectRoleCandidates,
 } from './index.js';
 
 const guide = loadGuide();
@@ -66,15 +68,152 @@ describe('the registry and the guide', () => {
 });
 
 describe('decideRoute', () => {
+  it('uses static role rank for production dispatch and ignores score/Laya selection', () => {
+    const d = decideRoute(
+      base({
+        role_registry: ROLE_REGISTRY_SOURCE,
+        laya: {
+          question_id: 'q',
+          checkpoint: 'test',
+          choice: 'claude-haiku-5-5',
+          confidence: 1,
+          threshold: 0,
+        },
+      }),
+    );
+    expect(d).toMatchObject({
+      model: 'claude-opus-5-5',
+      source: 'registry',
+      role: 'implementation',
+      role_source: 'task',
+      selected_rank: 1,
+      failover_policy: 'host_failure',
+    });
+    expect(d.reason_codes).toContain('registry.rank');
+    expect(d.fallback_chain).toEqual([{ model: null, reason: 'human' }]);
+  });
+
+  it('resolves an unroled task deterministically, but blocks an unsupported or undeterminable role', () => {
+    expect(
+      decideRoute(base({ role_registry: ROLE_REGISTRY_SOURCE, task: { ...base().task, role: null } })),
+    ).toMatchObject({
+      blocked: false,
+      role: 'implementation',
+      role_source: 'kind_fallback',
+      model: 'claude-opus-5-5',
+    });
+    expect(
+      decideRoute(base({ role_registry: ROLE_REGISTRY_SOURCE, task: { ...base().task, role: 'designer' } })),
+    ).toMatchObject({ blocked: true, reason_codes: ['role.unsupported'] });
+    expect(
+      decideRoute(
+        base({
+          role_registry: ROLE_REGISTRY_SOURCE,
+          task: { ...base().task, kind: 'analysis', role: null, scope: { write: [], read: [] } },
+        }),
+      ),
+    ).toMatchObject({ blocked: true, reason_codes: ['role.missing'] });
+  });
+
+  it('uses scope paths for an unknown kind whose paths point at one role', () => {
+    const d = decideRoute(
+      base({
+        role_registry: ROLE_REGISTRY_SOURCE,
+        task: {
+          ...base().task,
+          kind: 'analysis',
+          role: null,
+          scope: { write: ['docs/routing-guide.md'], read: [] },
+        },
+      }),
+    );
+    expect(d).toMatchObject({
+      blocked: false,
+      role: 'docs',
+      role_source: 'path_fallback',
+      model: 'claude-sonnet-5-5',
+    });
+    expect(d.reason_codes).toContain('role.path_fallback');
+    const source = decideRoute(
+      base({
+        role_registry: ROLE_REGISTRY_SOURCE,
+        task: { ...base().task, kind: 'analysis', role: null, scope: { write: ['src/**'], read: [] } },
+      }),
+    );
+    expect(source).toMatchObject({ role: 'implementation', role_source: 'path_fallback', model: 'claude-opus-5-5' });
+  });
+
+  it('applies a role pin to the resolved fallback role', () => {
+    const d = decideRoute(
+      base({
+        role_registry: ROLE_REGISTRY_SOURCE,
+        task: { ...base().task, role: null },
+        pins: [pin({ scope: 'role', target: 'implementation', model: 'claude-haiku-5-5' })],
+      }),
+    );
+    expect(d).toMatchObject({ model: 'claude-haiku-5-5', source: 'pin', role: 'implementation' });
+  });
+
+  it('lets a project supply the only local candidate for a role without displacing Friday’s ranks', () => {
+    const models = mergeModels(guide.models, [{ id: 'local-coder', local: true, vendors: ['generic'] }], null);
+    const roleRegistry = withProjectRoleCandidates(ROLE_REGISTRY_SOURCE, {
+      implementation: [{ model: 'local-coder', harness: 'generic' }],
+    });
+    const d = decideRoute(
+      base({
+        role_registry: roleRegistry,
+        models,
+        settings: { ...DEFAULT_ROUTING, must_use_local: true },
+        vendor: 'generic',
+        harness_models: ['local-coder'],
+        model_control: 'set',
+        task: { ...base().task, role: null },
+      }),
+    );
+    expect(d).toMatchObject({
+      model: 'local-coder',
+      source: 'registry',
+      role: 'implementation',
+      role_source: 'kind_fallback',
+      selected_rank: 4,
+      selected_harness: 'generic',
+      binding: true,
+    });
+  });
+
+  it('accepts a validated decision-model role without mutating the task role', () => {
+    const d = decideRoute(
+      base({
+        role_registry: ROLE_REGISTRY_SOURCE,
+        resolved_role: 'review',
+        task: { ...base().task, role: null },
+      }),
+    );
+    expect(d).toMatchObject({ role: 'review', role_source: 'decision_model', model: 'claude-opus-5-5' });
+  });
+
+  it('keeps pins ahead of the static registry and excludes candidates for another harness', () => {
+    const d = decideRoute(
+      base({
+        role_registry: ROLE_REGISTRY_SOURCE,
+        model_control: 'set',
+        pins: [pin({ model: 'claude-haiku-5-5' })],
+      }),
+    );
+    expect(d).toMatchObject({ model: 'claude-haiku-5-5', source: 'pin', binding: true });
+    const codex = decideRoute(base({ role_registry: ROLE_REGISTRY_SOURCE, vendor: 'codex', model_control: 'set' }));
+    expect(codex).toMatchObject({ model: 'gpt-5.6-luna', selected_rank: 2, source: 'registry' });
+    expect(codex.excluded).toContainEqual({ model: 'claude-opus-5-5', reason: 'registry.harness.claude-code' });
+  });
   it('routes by the requirement-weighted fit among the models the harness can run, as advice for an attached host', () => {
     const d = decideRoute(base());
     expect(d.mode).toBe('hybrid');
     expect(d.profile).toBe('short');
     expect(d.model).toMatch(/^claude-/);
-    expect(d.source).toBe('score');
+    expect(d.source).toBe('guide');
     expect(d.binding).toBe(false);
     expect(d.reason).toContain('advisory');
-    expect(d.reason_codes).toEqual(['laya.none', 'score.best']);
+    expect(d.reason_codes).toEqual(['laya.none', 'profile.cheapest_capable']);
     expect(d.excluded).toContainEqual({ model: 'gpt-5.6-luna', reason: 'harness.cannot_run' });
     expect(d.fallback_chain.at(-1)).toEqual({ model: null, reason: 'human' });
     // A harness that applies the model it is given is bound by the decision.
@@ -104,6 +243,13 @@ describe('decideRoute', () => {
         scope: { write: ['src/payments.ts'], read: [] },
       },
     ],
+    [
+      'high-risk',
+      { kind: 'implementation', summary: 'Update authentication flow', scope: { write: ['src/auth.ts'], read: [] } },
+    ],
+    ['medium', { kind: 'review', summary: 'Review one module', scope: { write: [], read: ['src/a.ts'] } }],
+    ['ambiguous', { kind: 'implementation', summary: 'Read only', scope: { write: [], read: ['src/a.ts'] } }],
+    ['ambiguous', { kind: 'unknown', summary: 'Do a thing', scope: { write: ['src/a.ts'], read: [] } }],
     ['ambiguous', { kind: 'implementation', summary: '', scope: null }],
   ] as const)('classifies %s tasks and exposes the reasons', (profile, facts) => {
     const d = decideRoute(base({ task: { ...base().task, ...facts } }));
@@ -117,7 +263,7 @@ describe('decideRoute', () => {
 
   it('uses profile defaults for ordinary work while a human pin still wins', () => {
     const ordinary = decideRoute(base({ model_control: 'set' }));
-    expect(ordinary.model).toBe('claude-sonnet-5-5');
+    expect(ordinary.model).toBe('claude-haiku-5-5');
     const projectOverride = decideRoute(
       base({
         model_control: 'set',
@@ -129,6 +275,8 @@ describe('decideRoute', () => {
               fallback: ['claude-sonnet-5-5'],
               avoid: [],
               notes: 'project override',
+              strategy: 'score',
+              min_fit: null,
             },
           },
         },
@@ -244,7 +392,14 @@ describe('decideRoute', () => {
     // Every model the harness can run is on the guide's avoid list: blocked as well.
     const avoidAll = {
       ...guide.classes,
-      implementation: { preferred: [], fallback: [], avoid: ['claude-haiku-5-5'], notes: null },
+      implementation: {
+        preferred: [],
+        fallback: [],
+        avoid: ['claude-haiku-5-5'],
+        notes: null,
+        strategy: 'score' as const,
+        min_fit: null,
+      },
     };
     expect(
       decideRoute(base({ harness_models: ['claude-haiku-5-5'], guide: avoidAll, model_control: 'set' })).blocked,
@@ -252,13 +407,26 @@ describe('decideRoute', () => {
   });
 
   it('lets measured outcomes count once there are enough of them', () => {
-    const top = decideRoute(base()).model as string;
+    const scoreSettings = {
+      ...DEFAULT_ROUTING,
+      profile_preferences: {
+        short: {
+          preferred: [],
+          fallback: [],
+          avoid: [],
+          notes: 'score regression',
+          strategy: 'score' as const,
+          min_fit: null,
+        },
+      },
+    };
+    const top = decideRoute(base({ settings: scoreSettings })).model as string;
     const poor: Evidence[] = [{ model: top, task_class: 'implementation', samples: 10, passed: 1 }];
-    const after = decideRoute(base({ evidence: poor }));
+    const after = decideRoute(base({ settings: scoreSettings, evidence: poor }));
     expect(after.model).not.toBe(top);
     expect(after.candidates.find((c) => c.model === top)).toMatchObject({ pass_rate: 0.1, samples: 10 });
     // Four outcomes are shown but do not decide.
-    const few = decideRoute(base({ evidence: [{ ...poor[0], samples: 4 } as Evidence] }));
+    const few = decideRoute(base({ settings: scoreSettings, evidence: [{ ...poor[0], samples: 4 } as Evidence] }));
     expect(few.model).toBe(top);
     expect(few.candidates.find((c) => c.model === top)?.reasons).toContain('evidence.too_few(4/5)');
   });
@@ -308,7 +476,7 @@ describe('decideRoute', () => {
       confidence: 0.91,
     });
     const uncalibrated = decideRoute(base({ laya: { ...laya, threshold: null } }));
-    expect(uncalibrated.source).toBe('score');
+    expect(uncalibrated.source).toBe('guide');
     expect(uncalibrated.reason_codes).toContain('laya.uncalibrated');
     const weak = { ...laya, threshold: 0.95 };
     expect(decideRoute(base({ laya: weak })).reason_codes).toContain('laya.low_confidence');

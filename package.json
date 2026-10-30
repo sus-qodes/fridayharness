@@ -15,6 +15,7 @@
     "test": "turbo run test",
     "test:all": "vitest run",
     "test:watch": "vitest",
+    "check:registry": "pnpm --filter @friday/routing registry:check",
     "friday": "tsx --conditions development apps/cli/src/bin.ts",
     "check:portability": "node scripts/check-portability.mjs",
     "check:portability:local": "node scripts/check-portability.mjs --working-tree",

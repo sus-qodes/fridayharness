@@ -80,6 +80,12 @@ export {
   ZERO_USAGE,
 } from './providers/types.js';
 export {
+  classifyTaskRoles,
+  ROLE_CLASSIFIER_PROMPT_VERSION,
+  type RoleClassifierPolicy,
+  type RoleClassifierSettings,
+} from './role-classifier.js';
+export {
   draftJsonSchema,
   NeedsHuman,
   PLAN_LIMITS,

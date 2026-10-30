@@ -4,7 +4,7 @@ import { ModelError, type ModelRequest, type ModelUsage, type PlannerModel, ZERO
 
 /** One model request as Friday records it (`model.called`, plan B28). Never the prompt or the answer. */
 export interface PlannerCall {
-  purpose: 'plan' | 'replan';
+  purpose: 'plan' | 'replan' | 'role';
   prompt_version: string;
   provider: string;
   model: string;
