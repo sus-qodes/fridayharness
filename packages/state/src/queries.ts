@@ -10,11 +10,13 @@ import {
   type GoalView,
   type HarnessView,
   type IntegrationView,
+  type LearningProposalView,
   type MessageView,
   type ModelCallView,
   type ModelEvidenceView,
   type OperationRunView,
   type PlanVersionView,
+  type ProjectIntentView,
   type RoutingDecisionView,
   type RoutingPinView,
   type RunView,
@@ -32,19 +34,23 @@ import {
   type DeliveryRow,
   type GoalRow,
   type HarnessRow,
+  type LearningProposalRow,
   type MessageRow,
   type ModelCallRow,
   type PlanRow,
   type PlanTaskRow,
+  type ProjectIntentRow,
   type RunRow,
   type TaskRow,
   toAgentView,
   toAssignmentView,
   toGoalView,
   toHarnessView,
+  toLearningProposalView,
   toMessageView,
   toModelCallView,
   toPlanVersionView,
+  toProjectIntentView,
   toRunView,
   toTaskView,
   toVerificationView,
@@ -1041,6 +1047,72 @@ export class Queries {
     const g = this.findGoal(projectId, goalId);
     if (!g) throw new FridayError('goal_not_found', `goal ${goalId} not found`);
     return g;
+  }
+
+  // ---- ADR-0034: project intent and learning proposals ----------------------------------------
+
+  /** Every version of the project intent, newest first. */
+  projectIntents(projectId: string): ProjectIntentView[] {
+    return this.db
+      .prepare('SELECT * FROM project_intents WHERE project_id = ? ORDER BY version DESC')
+      .all<ProjectIntentRow>(projectId)
+      .map(toProjectIntentView);
+  }
+
+  projectIntent(projectId: string, version: number): ProjectIntentView {
+    const row = this.db
+      .prepare('SELECT * FROM project_intents WHERE project_id = ? AND version = ?')
+      .get<ProjectIntentRow>(projectId, version);
+    if (!row) throw new FridayError('intent_not_found', `project intent version ${version} not found`);
+    return toProjectIntentView(row);
+  }
+
+  /** The intent that counts: the newest approved version, if a human approved one. */
+  approvedProjectIntent(projectId: string): ProjectIntentView | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM project_intents WHERE project_id = ? AND status = 'approved'")
+      .get<ProjectIntentRow>(projectId);
+    return row ? toProjectIntentView(row) : undefined;
+  }
+
+  /** The proposal waiting for a human, if any; there is at most one. */
+  proposedProjectIntent(projectId: string): ProjectIntentView | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM project_intents WHERE project_id = ? AND status = 'proposed'")
+      .get<ProjectIntentRow>(projectId);
+    return row ? toProjectIntentView(row) : undefined;
+  }
+
+  /** Learning proposals, newest first; by status or task. */
+  learningProposals(
+    projectId: string,
+    filter: { status?: LearningProposalView['status']; task_id?: string; limit?: number } = {},
+  ): LearningProposalView[] {
+    const where = ['project_id = ?'];
+    const args: (string | number)[] = [projectId];
+    if (filter.status) {
+      where.push('status = ?');
+      args.push(filter.status);
+    }
+    if (filter.task_id) {
+      where.push('task_id = ?');
+      args.push(filter.task_id);
+    }
+    args.push(filter.limit ?? 200);
+    return this.db
+      .prepare(
+        `SELECT * FROM learning_proposals WHERE ${where.join(' AND ')} ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+      )
+      .all<LearningProposalRow>(...args)
+      .map(toLearningProposalView);
+  }
+
+  learningProposal(projectId: string, proposalId: string): LearningProposalView {
+    const row = this.db
+      .prepare('SELECT * FROM learning_proposals WHERE project_id = ? AND proposal_id = ?')
+      .get<LearningProposalRow>(projectId, proposalId);
+    if (!row) throw new FridayError('learning_not_found', `learning proposal ${proposalId} not found`);
+    return toLearningProposalView(row);
   }
 
   goals(projectId: string, opts: { statuses?: string[]; limit?: number; liveSince?: string } = {}): GoalView[] {

@@ -6,10 +6,13 @@ import type {
   DeliveryView,
   GoalView,
   HarnessView,
+  IntentItem,
+  LearningProposalView,
   MessageView,
   ModelCallView,
   PlanTaskView,
   PlanVersionView,
+  ProjectIntentView,
   RunView,
   TaskScope,
   TaskView,
@@ -303,6 +306,11 @@ export interface GoalRow {
   outcomes_json: string;
   inferred_constraints_json?: string;
   inferred_outcomes_json?: string;
+  non_goals_json?: string;
+  definition_of_done_json?: string;
+  inferred_non_goals_json?: string;
+  inferred_definition_of_done_json?: string;
+  intent_revision?: number;
   priority: string;
   status: string;
   plan_id: string | null;
@@ -323,6 +331,11 @@ export function toGoalView(row: GoalRow): GoalView {
     outcomes: fromJson<string[]>(row.outcomes_json, []),
     inferred_constraints: fromJson<string[]>(row.inferred_constraints_json ?? '[]', []),
     inferred_outcomes: fromJson<string[]>(row.inferred_outcomes_json ?? '[]', []),
+    non_goals: fromJson<string[]>(row.non_goals_json ?? '[]', []),
+    definition_of_done: fromJson<string[]>(row.definition_of_done_json ?? '[]', []),
+    inferred_non_goals: fromJson<string[]>(row.inferred_non_goals_json ?? '[]', []),
+    inferred_definition_of_done: fromJson<string[]>(row.inferred_definition_of_done_json ?? '[]', []),
+    intent_revision: row.intent_revision ?? 1,
     priority: row.priority as GoalView['priority'],
     status: row.status as GoalView['status'],
     plan_id: row.plan_id,
@@ -330,6 +343,94 @@ export function toGoalView(row: GoalRow): GoalView {
     created_at: row.created_at,
     updated_at: row.updated_at,
     completed_at: row.completed_at,
+  };
+}
+
+// ---- ADR-0034: project intent and learning proposals ------------------------------------------
+
+export interface ProjectIntentRow {
+  project_id: string;
+  version: number;
+  status: string;
+  objective: string;
+  constraints_json: string;
+  outcomes_json: string;
+  non_goals_json: string;
+  definition_of_done_json: string;
+  content_hash: string;
+  proposed_by_kind: string;
+  proposed_by_id: string;
+  decided_by_kind: string | null;
+  decided_by_id: string | null;
+  decision_note: string | null;
+  created_at: string;
+  decided_at: string | null;
+}
+
+export function toProjectIntentView(row: ProjectIntentRow): ProjectIntentView {
+  return {
+    project_id: row.project_id,
+    version: row.version,
+    status: row.status as ProjectIntentView['status'],
+    objective: row.objective,
+    constraints: fromJson<IntentItem[]>(row.constraints_json, []),
+    outcomes: fromJson<IntentItem[]>(row.outcomes_json, []),
+    non_goals: fromJson<IntentItem[]>(row.non_goals_json, []),
+    definition_of_done: fromJson<IntentItem[]>(row.definition_of_done_json, []),
+    content_hash: row.content_hash,
+    proposed_by: { kind: row.proposed_by_kind as ActorKind, id: row.proposed_by_id },
+    decided_by:
+      row.decided_by_kind && row.decided_by_id
+        ? { kind: row.decided_by_kind as ActorKind, id: row.decided_by_id }
+        : null,
+    decision_note: row.decision_note,
+    created_at: row.created_at,
+    decided_at: row.decided_at,
+  };
+}
+
+export interface LearningProposalRow {
+  proposal_id: string;
+  project_id: string;
+  task_id: string;
+  run_id: string | null;
+  agent_id: string;
+  agent_key: string;
+  kind: string;
+  subject: string;
+  content: string;
+  tags_json: string;
+  paths_json: string;
+  status: string;
+  memory_id: string | null;
+  decided_by_kind: string | null;
+  decided_by_id: string | null;
+  decision_note: string | null;
+  created_at: string;
+  decided_at: string | null;
+}
+
+export function toLearningProposalView(row: LearningProposalRow): LearningProposalView {
+  return {
+    proposal_id: row.proposal_id,
+    project_id: row.project_id,
+    task_id: row.task_id,
+    run_id: row.run_id,
+    proposed_by: { agent_id: row.agent_id, agent_key: row.agent_key },
+    kind: row.kind as LearningProposalView['kind'],
+    subject: row.subject,
+    content: row.content,
+    tags: fromJson<string[]>(row.tags_json, []),
+    paths: fromJson<string[]>(row.paths_json, []),
+    status: row.status as LearningProposalView['status'],
+    memory_id: row.memory_id,
+    decided_by:
+      row.decided_by_kind && row.decided_by_id
+        ? { kind: row.decided_by_kind as ActorKind, id: row.decided_by_id }
+        : null,
+    decision_note: row.decision_note,
+    created_at: row.created_at,
+    decided_at: row.decided_at,
   };
 }
 

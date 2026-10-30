@@ -68,6 +68,8 @@ import {
 import { ROLE_REGISTRY_SOURCE, type RoleDecision, resolveTaskRoleContract, type TaskRoleOrigin } from '@friday/routing';
 import type { z } from 'zod';
 import { CommandBus, type CommandContext, type CommandMeta } from './bus.js';
+import { IntentService } from './intent.js';
+import { LearningService } from './learnings.js';
 import { MemoryService } from './memory.js';
 import { ALL_MIGRATIONS } from './migrations.js';
 import { StateProjector } from './projector.js';
@@ -740,6 +742,10 @@ export class FridayState {
   readonly config: StateConfig;
   /** Scoped memory (M4c, ADR-0021). */
   readonly memory: MemoryService;
+  /** Project and goal intent (ADR-0034 §1–§3). */
+  readonly intent: IntentService;
+  /** Learnings agents propose for the project (ADR-0034 §7). */
+  readonly learnings: LearningService;
   /**
    * Per project: sessions that last reported at or before `since` are not judged until `until`
    * (daemon start, after a pause), because they could not report in between.
@@ -785,6 +791,8 @@ export class FridayState {
     });
     this.artifactsDir = deps.artifactsDir;
     this.memory = new MemoryService(this);
+    this.intent = new IntentService(this);
+    this.learnings = new LearningService(this);
     this.artifacts = deps.artifactsDir
       ? new ArtifactStore(this.db, deps.artifactsDir, { ids: this.ids, clock: this.clock, redactor: this.redactor })
       : undefined;
@@ -2766,6 +2774,8 @@ export class FridayState {
               objective: null,
               constraints: req.constraints,
               outcomes: req.outcomes,
+              non_goals: req.non_goals,
+              definition_of_done: req.definition_of_done,
               priority: req.priority,
               created_by: actor,
             },

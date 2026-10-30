@@ -5,6 +5,8 @@
 export const PACKAGE_NAME = '@friday/state';
 
 export { CommandBus, type CommandContext, type CommandMeta, type CommandOutcome, stableStringify } from './bus.js';
+export { INTENT_LISTS, IntentService, projectIntentHash } from './intent.js';
+export { LearningService } from './learnings.js';
 export {
   decayWeight,
   ftsQuery,
@@ -26,6 +28,7 @@ export {
   ALL_MIGRATIONS,
   CONSUMER_MIGRATIONS,
   DOMAIN_TABLES,
+  INTENT_MIGRATIONS,
   MASTER_BRAIN_MIGRATIONS,
   MESSAGING_MIGRATIONS,
   ROLE_RESOLUTION_MIGRATIONS,

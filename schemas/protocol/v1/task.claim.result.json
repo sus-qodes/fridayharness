@@ -51,6 +51,55 @@
             "null"
           ]
         },
+        "role_source": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "plan",
+                "task",
+                "human",
+                "decision_model",
+                "kind_fallback",
+                "path_fallback",
+                "missing",
+                "none"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role_confidence": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "role_decision_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role_intent_version": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role_registry_version": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "kind": {
           "type": "string",
           "enum": [

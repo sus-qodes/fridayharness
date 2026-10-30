@@ -39,6 +39,9 @@ export const RefKind = z.enum([
   'operation',
   // M7: routing decisions and pins.
   'routing',
+  // ADR-0034: project intent versions and learning proposals.
+  'intent',
+  'learning',
 ]);
 export type RefKind = z.infer<typeof RefKind>;
 
@@ -164,5 +167,11 @@ export const EVENT_TYPES = [
   'budget.exceeded',
   // M11.2: config.yaml read again while Friday ran; the keys applied and the keys that wait for a restart.
   'config.reloaded',
+  // ADR-0034: project intent and learning proposals.
+  'project_intent.proposed',
+  'project_intent.approved',
+  'project_intent.rejected',
+  'learning.proposed',
+  'learning.rejected',
 ] as const;
 export type KnownEventType = (typeof EVENT_TYPES)[number];

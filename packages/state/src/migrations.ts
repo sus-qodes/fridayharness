@@ -944,6 +944,67 @@ CREATE INDEX ix_task_role_decisions ON task_role_decisions(project_id, task_id, 
   },
 ];
 
+/**
+ * ADR-0034: what the whole project is for (one row per version; only the newest approved one
+ * counts), a goal's non-goals and definition of done with an intent revision, and the learnings
+ * agents propose before verification or a human promotes them.
+ */
+export const INTENT_MIGRATIONS: Migration[] = [
+  {
+    version: 24,
+    name: 'intent_and_learnings',
+    up: `
+CREATE TABLE project_intents (
+  project_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('proposed', 'approved', 'rejected', 'superseded')),
+  objective TEXT NOT NULL,
+  constraints_json TEXT NOT NULL DEFAULT '[]',
+  outcomes_json TEXT NOT NULL DEFAULT '[]',
+  non_goals_json TEXT NOT NULL DEFAULT '[]',
+  definition_of_done_json TEXT NOT NULL DEFAULT '[]',
+  content_hash TEXT NOT NULL,
+  proposed_by_kind TEXT NOT NULL,
+  proposed_by_id TEXT NOT NULL,
+  decided_by_kind TEXT,
+  decided_by_id TEXT,
+  decision_note TEXT,
+  created_at TEXT NOT NULL,
+  decided_at TEXT,
+  PRIMARY KEY (project_id, version)
+);
+CREATE INDEX ix_project_intents_status ON project_intents(project_id, status);
+ALTER TABLE goals ADD COLUMN non_goals_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE goals ADD COLUMN definition_of_done_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE goals ADD COLUMN inferred_non_goals_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE goals ADD COLUMN inferred_definition_of_done_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE goals ADD COLUMN intent_revision INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE learning_proposals (
+  proposal_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  run_id TEXT,
+  agent_id TEXT NOT NULL,
+  agent_key TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  content TEXT NOT NULL,
+  tags_json TEXT NOT NULL DEFAULT '[]',
+  paths_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL CHECK (status IN ('proposed', 'promoted', 'rejected')),
+  memory_id TEXT,
+  decided_by_kind TEXT,
+  decided_by_id TEXT,
+  decision_note TEXT,
+  created_at TEXT NOT NULL,
+  decided_at TEXT
+);
+CREATE INDEX ix_learning_proposals ON learning_proposals(project_id, status, created_at);
+CREATE INDEX ix_learning_proposals_task ON learning_proposals(project_id, task_id);
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -966,10 +1027,13 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...REVIEW_M7_MIGRATIONS,
   ...CONTROL_MIGRATIONS,
   ...ROLE_RESOLUTION_MIGRATIONS,
+  ...INTENT_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */
 export const DOMAIN_TABLES = [
+  'learning_proposals',
+  'project_intents',
   'project_controls',
   'task_role_decisions',
   'laya_calibrations',

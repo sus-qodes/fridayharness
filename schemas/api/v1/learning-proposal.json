@@ -1,0 +1,147 @@
+{
+  "$id": "urn:friday:api:v1:learning-proposal",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "proposal_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "proposed_by": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "agent_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_id",
+        "agent_key"
+      ]
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "decision",
+        "architecture",
+        "constraint",
+        "convention",
+        "bug-pattern",
+        "dependency",
+        "operational-runbook",
+        "human-preference",
+        "learned-risk"
+      ]
+    },
+    "subject": {
+      "type": "string"
+    },
+    "content": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "proposed",
+        "promoted",
+        "rejected"
+      ]
+    },
+    "memory_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "decided_by": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "human",
+                "system",
+                "agent",
+                "harness",
+                "master_brain"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "decision_note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "decided_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "proposal_id",
+    "project_id",
+    "task_id",
+    "run_id",
+    "proposed_by",
+    "kind",
+    "subject",
+    "content",
+    "tags",
+    "paths",
+    "status",
+    "memory_id",
+    "decided_by",
+    "decision_note",
+    "created_at",
+    "decided_at"
+  ]
+}

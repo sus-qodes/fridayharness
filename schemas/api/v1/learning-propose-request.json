@@ -1,0 +1,59 @@
+{
+  "$id": "urn:friday:api:v1:learning-propose-request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "decision",
+        "architecture",
+        "constraint",
+        "convention",
+        "bug-pattern",
+        "dependency",
+        "operational-runbook",
+        "human-preference",
+        "learned-risk"
+      ]
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "tags": {
+      "default": [],
+      "maxItems": 12,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      }
+    },
+    "paths": {
+      "default": [],
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      }
+    },
+    "task_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "subject",
+    "content"
+  ]
+}

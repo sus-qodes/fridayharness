@@ -54,6 +54,8 @@ export const ID_PREFIXES = [
   'oc',
   // R2: persisted task role-resolution decisions.
   'rdec',
+  // ADR-0034: learning proposals.
+  'lrn',
 ] as const;
 export type IdPrefix = (typeof ID_PREFIXES)[number];
 export type Id<P extends IdPrefix = IdPrefix> = `${P}_${string}`;

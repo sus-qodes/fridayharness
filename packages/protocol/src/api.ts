@@ -520,10 +520,17 @@ export type PlanStatus = z.infer<typeof PlanStatus>;
 export const PlanChange = z.enum(['new', 'keep', 'rework', 'drop']);
 export type PlanChange = z.infer<typeof PlanChange>;
 
+/** One line of intent (ADR-0034): a constraint, outcome, non-goal or definition-of-done item. */
+const IntentLine = z.string().trim().min(1).max(300);
+const IntentLines = z.array(IntentLine).max(12);
+
 export const GoalCreateRequest = z.object({
   request: z.string().min(3).max(4000),
-  constraints: z.array(z.string().min(1).max(300)).max(12).default([]),
-  outcomes: z.array(z.string().min(1).max(300)).max(12).default([]),
+  constraints: IntentLines.default([]),
+  outcomes: IntentLines.default([]),
+  /** ADR-0034 §3: what this goal deliberately does not do, and what "done" means. */
+  non_goals: IntentLines.default([]),
+  definition_of_done: IntentLines.default([]),
   priority: Priority.default('normal'),
   /** Ask the Master Brain for a plan right away (default). False: a human will propose one. */
   plan: z.boolean().default(true),
@@ -541,6 +548,13 @@ export const GoalView = z.object({
   /** What the planner added while normalizing the request; kept apart from the human's own. */
   inferred_constraints: z.array(z.string()).default([]),
   inferred_outcomes: z.array(z.string()).default([]),
+  /** ADR-0034 §3: the human's non-goals and definition of done, and the planner's additions apart. */
+  non_goals: z.array(z.string()).default([]),
+  definition_of_done: z.array(z.string()).default([]),
+  inferred_non_goals: z.array(z.string()).default([]),
+  inferred_definition_of_done: z.array(z.string()).default([]),
+  /** Starts at 1; every change to the objective or an intent list adds one (ADR-0034 §3). */
+  intent_revision: z.number().int().positive().default(1),
   priority: Priority,
   status: GoalStatus,
   plan_id: z.string().nullable(),
@@ -550,6 +564,121 @@ export const GoalView = z.object({
   completed_at: z.string().nullable(),
 });
 export type GoalView = z.infer<typeof GoalView>;
+
+/** A human edit of a goal's intent (ADR-0034 §3); a field left out keeps its value. */
+export const GoalIntentUpdateRequest = z.object({
+  objective: z.string().trim().min(1).max(600).optional(),
+  constraints: IntentLines.optional(),
+  outcomes: IntentLines.optional(),
+  non_goals: IntentLines.optional(),
+  definition_of_done: IntentLines.optional(),
+});
+export type GoalIntentUpdateRequest = z.input<typeof GoalIntentUpdateRequest>;
+
+// ---- ADR-0034: project intent and learning proposals ------------------------------------------
+
+/** The rendered project intent stays small enough to include in every packet (ADR-0034 §1). */
+export const PROJECT_INTENT_MAX_CHARS = 2000;
+
+export const IntentItemSource = z.enum(['human', 'planner']);
+export type IntentItemSource = z.infer<typeof IntentItemSource>;
+
+/** One project-intent line with its provenance: who wrote it and, for a draft, where it came from. */
+export const IntentItem = z.object({
+  text: IntentLine,
+  source: IntentItemSource,
+  from_paths: z.array(z.string().min(1).max(300)).max(10).default([]),
+});
+export type IntentItem = z.infer<typeof IntentItem>;
+
+/** A line as proposed: plain text, or text with the repository paths a draft drew it from. */
+const IntentItemInput = z.union([
+  IntentLine,
+  z.object({ text: IntentLine, from_paths: z.array(z.string().min(1).max(300)).max(10).default([]) }),
+]);
+
+export const ProjectIntentProposeRequest = z.object({
+  objective: z.string().trim().min(1).max(600),
+  constraints: z.array(IntentItemInput).max(12).default([]),
+  outcomes: z.array(IntentItemInput).max(12).default([]),
+  non_goals: z.array(IntentItemInput).max(12).default([]),
+  definition_of_done: z.array(IntentItemInput).max(12).default([]),
+});
+export type ProjectIntentProposeRequest = z.input<typeof ProjectIntentProposeRequest>;
+
+export const ProjectIntentStatus = z.enum(['proposed', 'approved', 'rejected', 'superseded']);
+export type ProjectIntentStatus = z.infer<typeof ProjectIntentStatus>;
+
+/** One version of what the whole project is for. Only the newest approved version counts. */
+export const ProjectIntentView = z.object({
+  project_id: z.string(),
+  version: z.number().int().positive(),
+  status: ProjectIntentStatus,
+  objective: z.string(),
+  constraints: z.array(IntentItem),
+  outcomes: z.array(IntentItem),
+  non_goals: z.array(IntentItem),
+  definition_of_done: z.array(IntentItem),
+  /** Of the normalized content: equal intents have equal hashes, whatever their version. */
+  content_hash: z.string(),
+  proposed_by: Actor,
+  decided_by: Actor.nullable(),
+  decision_note: z.string().nullable(),
+  created_at: z.string(),
+  decided_at: z.string().nullable(),
+});
+export type ProjectIntentView = z.infer<typeof ProjectIntentView>;
+
+/** The memory kinds a project learning may have (ADR-0034 §6). */
+export const LearningKind = z.enum([
+  'decision',
+  'architecture',
+  'constraint',
+  'convention',
+  'bug-pattern',
+  'dependency',
+  'operational-runbook',
+  'human-preference',
+  'learned-risk',
+]);
+export type LearningKind = z.infer<typeof LearningKind>;
+
+export const LearningProposeRequest = z.object({
+  kind: LearningKind,
+  subject: z.string().trim().min(1).max(200),
+  content: z.string().trim().min(1).max(4000),
+  tags: z.array(z.string().trim().min(1).max(64)).max(12).default([]),
+  /** Repository paths the learning is about; they let a later packet pick it for matching work. */
+  paths: z.array(z.string().trim().min(1).max(300)).max(20).default([]),
+  /** The held task it comes from; defaults to the agent's current task. */
+  task_id: z.string().optional(),
+});
+export type LearningProposeRequest = z.input<typeof LearningProposeRequest>;
+
+export const LearningProposalStatus = z.enum(['proposed', 'promoted', 'rejected']);
+export type LearningProposalStatus = z.infer<typeof LearningProposalStatus>;
+
+/** What an agent asked the project to learn; it reaches other agents only once promoted (ADR-0034 §7). */
+export const LearningProposalView = z.object({
+  proposal_id: z.string(),
+  project_id: z.string(),
+  task_id: z.string(),
+  run_id: z.string().nullable(),
+  proposed_by: z.object({ agent_id: z.string(), agent_key: z.string() }),
+  kind: LearningKind,
+  subject: z.string(),
+  content: z.string(),
+  tags: z.array(z.string()),
+  paths: z.array(z.string()),
+  status: LearningProposalStatus,
+  /** The project memory a promotion recorded. */
+  memory_id: z.string().nullable(),
+  decided_by: Actor.nullable(),
+  decision_note: z.string().nullable(),
+  created_at: z.string(),
+  decided_at: z.string().nullable(),
+});
+export type LearningProposalView = z.infer<typeof LearningProposalView>;
 
 /**
  * What Friday did for a goal (plan M12.7), counted from Friday's own records: the events that name

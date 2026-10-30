@@ -5,6 +5,19 @@ import { DOMAIN_TABLES } from './migrations.js';
 
 type Encoder = string | { column: string; encode: (v: unknown) => SqlValue };
 
+/** The goal fields whose change makes a new intent revision (ADR-0034 §3). */
+const GOAL_INTENT_FIELDS = new Set([
+  'objective',
+  'constraints',
+  'outcomes',
+  'inferred_constraints',
+  'inferred_outcomes',
+  'non_goals',
+  'definition_of_done',
+  'inferred_non_goals',
+  'inferred_definition_of_done',
+]);
+
 /** Columns an event's `changes` may touch, per table. Anything else is a bug and fails loudly. */
 const TASK_CHANGES: Record<string, Encoder> = {
   role: 'role',
@@ -632,6 +645,28 @@ export class StateProjector implements Projector {
       case 'goal.created':
         this.insertGoal(e, p.goal as Payload);
         return;
+      case 'project_intent.proposed':
+        this.insertProjectIntent(e, p.intent as Payload);
+        return;
+      case 'project_intent.approved':
+      case 'project_intent.rejected':
+        this.decideProjectIntent(e, Number(p.version), e.type === 'project_intent.approved', p.note);
+        return;
+      case 'learning.proposed':
+        this.insertLearningProposal(e, p.proposal as Payload);
+        return;
+      case 'learning.rejected': {
+        const res = this.db
+          .prepare(
+            `UPDATE learning_proposals SET status = 'rejected', decided_by_kind = ?, decided_by_id = ?, decision_note = ?,
+               decided_at = ? WHERE proposal_id = ? AND status = 'proposed'`,
+          )
+          .run(e.actor.kind, e.actor.id, opt(p.note), e.occurred_at, str(p.proposal_id));
+        if (res.changes !== 1) {
+          throw new FridayError('internal_error', `event ${e.type}: open proposal ${str(p.proposal_id)} not found`);
+        }
+        return;
+      }
       case 'goal.updated':
       case 'goal.status_changed':
         this.updateGoal(e, str(p.goal_id), (p.changes as Payload) ?? {}, (p.transition as Payload | undefined)?.to);
@@ -987,9 +1022,9 @@ export class StateProjector implements Projector {
     const by = (g.created_by as Payload | undefined) ?? { kind: e.actor.kind, id: e.actor.id };
     this.db
       .prepare(
-        `INSERT INTO goals (goal_id, project_id, request, objective, constraints_json, outcomes_json, priority, status,
-           created_by_kind, created_by_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
+        `INSERT INTO goals (goal_id, project_id, request, objective, constraints_json, outcomes_json,
+           non_goals_json, definition_of_done_json, priority, status, created_by_kind, created_by_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
       )
       .run(
         str(g.goal_id),
@@ -998,10 +1033,87 @@ export class StateProjector implements Projector {
         opt(g.objective),
         toJson(g.constraints ?? []),
         toJson(g.outcomes ?? []),
+        toJson(g.non_goals ?? []),
+        toJson(g.definition_of_done ?? []),
         str(g.priority),
         str(by.kind),
         str(by.id),
         e.occurred_at,
+        e.occurred_at,
+      );
+  }
+
+  /** A new project intent version; an older proposal still waiting is superseded by it (ADR-0034 §1). */
+  private insertProjectIntent(e: StoredEvent, i: Payload): void {
+    this.db
+      .prepare(`UPDATE project_intents SET status = 'superseded' WHERE project_id = ? AND status = 'proposed'`)
+      .run(e.project_id);
+    this.db
+      .prepare(
+        `INSERT INTO project_intents (project_id, version, status, objective, constraints_json, outcomes_json,
+           non_goals_json, definition_of_done_json, content_hash, proposed_by_kind, proposed_by_id, created_at)
+         VALUES (?, ?, 'proposed', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        e.project_id,
+        Number(i.version),
+        str(i.objective),
+        toJson(i.constraints ?? []),
+        toJson(i.outcomes ?? []),
+        toJson(i.non_goals ?? []),
+        toJson(i.definition_of_done ?? []),
+        str(i.content_hash),
+        e.actor.kind,
+        e.actor.id,
+        e.occurred_at,
+      );
+  }
+
+  /** Approving a version supersedes the approved one before it; rejecting closes the proposal. */
+  private decideProjectIntent(e: StoredEvent, version: number, approved: boolean, note: unknown): void {
+    if (approved) {
+      this.db
+        .prepare(`UPDATE project_intents SET status = 'superseded' WHERE project_id = ? AND status = 'approved'`)
+        .run(e.project_id);
+    }
+    const res = this.db
+      .prepare(
+        `UPDATE project_intents SET status = ?, decided_by_kind = ?, decided_by_id = ?, decision_note = ?, decided_at = ?
+         WHERE project_id = ? AND version = ? AND status = 'proposed'`,
+      )
+      .run(
+        approved ? 'approved' : 'rejected',
+        e.actor.kind,
+        e.actor.id,
+        opt(note),
+        e.occurred_at,
+        e.project_id,
+        version,
+      );
+    if (res.changes !== 1) {
+      throw new FridayError('internal_error', `event ${e.type}: proposed project intent v${version} not found`);
+    }
+  }
+
+  private insertLearningProposal(e: StoredEvent, l: Payload): void {
+    this.db
+      .prepare(
+        `INSERT INTO learning_proposals (proposal_id, project_id, task_id, run_id, agent_id, agent_key, kind, subject,
+           content, tags_json, paths_json, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?)`,
+      )
+      .run(
+        str(l.proposal_id),
+        e.project_id,
+        str(l.task_id),
+        opt(l.run_id),
+        str(l.agent_id),
+        str(l.agent_key),
+        str(l.kind),
+        str(l.subject),
+        str(l.content),
+        toJson(l.tags ?? []),
+        toJson(l.paths ?? []),
         e.occurred_at,
       );
   }
@@ -1033,11 +1145,17 @@ export class StateProjector implements Projector {
       outcomes: { column: 'outcomes_json', encode: (v) => toJson(v ?? []) },
       inferred_constraints: { column: 'inferred_constraints_json', encode: (v) => toJson(v ?? []) },
       inferred_outcomes: { column: 'inferred_outcomes_json', encode: (v) => toJson(v ?? []) },
+      non_goals: { column: 'non_goals_json', encode: (v) => toJson(v ?? []) },
+      definition_of_done: { column: 'definition_of_done_json', encode: (v) => toJson(v ?? []) },
+      inferred_non_goals: { column: 'inferred_non_goals_json', encode: (v) => toJson(v ?? []) },
+      inferred_definition_of_done: { column: 'inferred_definition_of_done_json', encode: (v) => toJson(v ?? []) },
       plan_id: 'plan_id',
       completed_at: 'completed_at',
     };
     const sets: string[] = ['updated_at = ?'];
     const params: SqlValue[] = [e.occurred_at];
+    // ADR-0034 §3: any change to what the goal is for is a new intent revision, replayed the same way.
+    if (Object.keys(changes).some((k) => GOAL_INTENT_FIELDS.has(k))) sets.push('intent_revision = intent_revision + 1');
     for (const [k, v] of Object.entries(changes)) {
       const enc = allowed[k];
       if (!enc) throw new FridayError('internal_error', `event ${e.type} may not change goals.${k}`);

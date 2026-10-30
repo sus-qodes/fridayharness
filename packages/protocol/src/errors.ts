@@ -18,6 +18,9 @@ export const ERROR_CODES = {
   goal_not_found: { code: 'COS-2006', http: 404, retryable: false },
   plan_not_found: { code: 'COS-2007', http: 404, retryable: false },
   plan_outdated: { code: 'COS-2008', http: 409, retryable: false },
+  // ADR-0034: project intent versions and learning proposals.
+  intent_not_found: { code: 'COS-2009', http: 404, retryable: false },
+  learning_not_found: { code: 'COS-2010', http: 404, retryable: false },
 
   permission_denied: { code: 'COS-3000', http: 403, retryable: false },
   capability_not_granted: { code: 'COS-3001', http: 403, retryable: false },
