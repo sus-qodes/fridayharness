@@ -17,6 +17,9 @@ export {
   type GraphNode,
   type GraphStats,
   isTestPath,
+  type SymbolEdge,
+  type SymbolNode,
+  type SymbolRef,
 } from './graph.js';
 export { LANGUAGES, type LanguageId, type LanguageSpec, languageOf } from './languages.js';
 export {
@@ -36,3 +39,14 @@ export {
   stripJsonComments,
   type WorkspacePackage,
 } from './resolve.js';
+export {
+  enclosingSymbol,
+  extractFacts,
+  type ImportBinding,
+  MODULE_SYMBOL,
+  type ParsedFacts,
+  type ReferenceFact,
+  type ReferenceKind,
+  type SymbolFact,
+  type SymbolKind,
+} from './symbols.js';

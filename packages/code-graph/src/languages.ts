@@ -17,6 +17,7 @@ export interface TsNode {
   type: string;
   text: string;
   startPosition: TsPoint;
+  endPosition: TsPoint;
   namedChildren: (TsNode | null)[];
   children: (TsNode | null)[];
   childForFieldName(name: string): TsNode | null;

@@ -443,3 +443,99 @@ describe('a real repository: Friday itself', () => {
     // The build grows with this repository and slows under the parallel suite; only queries are timed (LESSONS T-61).
   }, 180_000);
 });
+
+describe('symbols and the edges between them (ADR-0037 §1)', () => {
+  const FILES = {
+    'package.json': '{"name":"sym","private":true}\n',
+    'src/money.ts': [
+      'export interface Money { amount: number }',
+      'export function add(a: Money, b: Money): Money {',
+      '  return { amount: a.amount + b.amount };',
+      '}',
+      'export default class Wallet {',
+      '  total(items: Money[]): Money { return items.reduce(add, { amount: 0 }); }',
+      '}',
+      'function hidden() {}',
+      'export { hidden as shown };',
+      '',
+    ].join('\n'),
+    'src/checkout.ts': [
+      "import Wallet, { add, type Money } from './money.ts';",
+      "import * as money from './money.ts';",
+      "import { nothing } from './gone.ts';",
+      'export function checkout(lines: Money[]): Money {',
+      '  const w = new Wallet();',
+      '  const sum = money.add(lines[0], lines[1]);',
+      '  nothing();',
+      '  return w.total(lines);',
+      '}',
+      'export class Service {',
+      '  run() { return this.helper(); }',
+      '  helper() { return checkout([]); }',
+      '}',
+      '',
+    ].join('\n'),
+    'src/checkout.test.ts': "import { checkout } from './checkout.ts';\ncheckout([]);\n",
+  };
+
+  it('resolves local, imported, namespace and this references, and reports what it cannot follow', async () => {
+    const { dir } = await repoFrom(FILES, 'symbols');
+    const graph = await buildGraph(await GitRoot.open(dir));
+    expect(graph.symbolsOf('src/money.ts').map((s) => [s.name, s.kind, s.exported, s.parent])).toEqual([
+      ['Money', 'interface', true, null],
+      ['add', 'function', true, null],
+      ['Wallet', 'class', true, null],
+      ['total', 'method', true, 'Wallet'],
+      ['hidden', 'function', true, null],
+    ]);
+    expect(graph.findSymbols('add')).toHaveLength(1);
+    expect(graph.findSymbols('add', { path: 'src/none.ts' })).toEqual([]);
+    const out = graph
+      .calleesOf('src/checkout.ts', 'checkout')
+      .map((e) => [e.name, e.kind, e.certainty, e.to?.symbol ?? e.reason]);
+    expect(out).toEqual([
+      ['Money', 'type', 'exact', 'Money'],
+      ['Wallet', 'new', 'exact', 'Wallet'],
+      ['add', 'member', 'exact', 'add'],
+      ['nothing', 'call', 'unsupported', expect.stringContaining('./gone.ts')],
+      ['total', 'member', 'unsupported', expect.stringContaining('name only')],
+    ]);
+    // The enclosing symbol is the innermost: a method, named through its class.
+    expect(graph.calleesOf('src/checkout.ts', 'Service.run').map((e) => [e.name, e.to?.symbol])).toEqual([
+      ['helper', 'Service.helper'],
+    ]);
+    expect(graph.calleesOf('src/checkout.ts', 'Service.helper').map((e) => e.to?.symbol)).toEqual(['checkout']);
+    // Callers: from the test file's module level and from the class.
+    expect(graph.callersOf('src/checkout.ts', 'checkout').map((e) => `${e.from.path}#${e.from.symbol}`)).toEqual([
+      'src/checkout.test.ts#<module>',
+      'src/checkout.ts#Service.helper',
+    ]);
+    expect(graph.callersOf('src/money.ts', 'add').map((e) => e.from.symbol)).toEqual(['checkout']);
+    // A name-only reference is findable by name, and labelled.
+    expect(graph.nameReferences('total').map((e) => e.certainty)).toEqual(['unsupported']);
+    // `reduce(add, …)` inside money.ts: `add` is passed, not called, so no edge; `a.amount` is a name-only member read? No: reads are not references.
+    // Two uses of `Money` on one line are one reference: references are per name and line.
+    expect(graph.calleesOf('src/money.ts', 'Wallet.total').map((e) => [e.name, e.certainty])).toEqual([
+      ['Money', 'exact'],
+      ['reduce', 'unsupported'],
+    ]);
+    expect(graph.stats.symbols).toBe(graph.symbols.length);
+    expect(
+      graph.stats.symbol_edges.exact + graph.stats.symbol_edges.unsupported + graph.stats.symbol_edges.inferred,
+    ).toBe(graph.symbolEdges.length);
+  });
+
+  it('keeps symbols equal between a clean build and an incremental one', async () => {
+    const { dir, g } = await repoFrom(FILES, 'symbols-inc');
+    const root = await GitRoot.open(dir);
+    const first = await buildGraph(root);
+    write(dir, { 'src/money.ts': `${FILES['src/money.ts']}export const tax = 0.2;\n` });
+    await g.commitAll('tax');
+    const incremental = await buildGraph(root, { previous: first });
+    const clean = await buildGraph(await GitRoot.open(dir));
+    expect(incremental.stats.unchanged).toBeGreaterThan(0);
+    expect(incremental.symbols).toEqual(clean.symbols);
+    expect(incremental.symbolEdges).toEqual(clean.symbolEdges);
+    expect(clean.findSymbols('tax')).toHaveLength(1);
+  });
+});

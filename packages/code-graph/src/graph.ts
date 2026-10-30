@@ -4,9 +4,18 @@ import path from 'node:path';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import type { GitRoot, SourceIdentity } from '@friday/git';
 import { type FactsCache, memoryFactsCache } from './cache.js';
-import { extractImports, type ImportFact, type ImportKind } from './extract.js';
+import type { ImportKind } from './extract.js';
 import { type LanguageId, languageOf, withTree } from './languages.js';
 import { type Certainty, Resolver, readTsconfigPaths, readWorkspacePackages } from './resolve.js';
+import {
+  enclosingSymbol,
+  extractFacts,
+  type ImportBinding,
+  type ParsedFacts,
+  type ReferenceFact,
+  type ReferenceKind,
+  type SymbolFact,
+} from './symbols.js';
 
 export interface GraphNode {
   path: string;
@@ -39,6 +48,9 @@ export interface GraphStats {
   unchanged: number;
   edges: Record<Certainty, number>;
   contracts: number;
+  /** ADR-0037 §1: the symbols declared, and the references between them by how they resolved. */
+  symbols: number;
+  symbol_edges: Record<Certainty, number>;
   ms: number;
 }
 
@@ -50,13 +62,44 @@ export const isTestPath = (p: string) => TEST_PATH.test(p) || TEST_NAME.test(p);
 export interface FileFacts {
   sha: string;
   language: LanguageId;
-  facts: ImportFact[];
+  facts: ParsedFacts;
+}
+
+/** A symbol of a file (ADR-0037 §1). */
+export interface SymbolNode extends SymbolFact {
+  path: string;
+}
+
+/** One end of a symbol edge: a symbol of a file, or its module level (`<module>`). */
+export interface SymbolRef {
+  path: string;
+  symbol: string;
+}
+
+/**
+ * A reference from one symbol to another, derived from a file's references and bindings and the
+ * file graph's edges. `to` is null when it could not be resolved: the reason says why, and the
+ * `name` lets a query match it by name alone, labelled as such.
+ */
+export interface SymbolEdge {
+  from: SymbolRef;
+  to: SymbolRef | null;
+  name: string;
+  kind: ReferenceKind;
+  certainty: Certainty;
+  reason?: string;
+  line: number;
 }
 
 /** A file-level graph of one execution root at one source version (ADR-0020). */
 export class CodeGraph {
   private readonly incoming = new Map<string, GraphEdge[]>();
   private readonly outgoing = new Map<string, GraphEdge[]>();
+  private readonly symbolsByPath = new Map<string, SymbolNode[]>();
+  private readonly symbolsByName = new Map<string, SymbolNode[]>();
+  private readonly symbolIn = new Map<string, SymbolEdge[]>();
+  private readonly symbolOut = new Map<string, SymbolEdge[]>();
+  private readonly byName = new Map<string, SymbolEdge[]>();
   /** `identity().version` of the root when the graph was built. */
   readonly version: string;
 
@@ -72,12 +115,59 @@ export class CodeGraph {
     readonly facts: ReadonlyMap<string, FileFacts> = new Map(),
     /** The size limit used when this graph decided whether to read or skip a file. */
     readonly maxFileBytes = 1024 * 1024,
+    /** Every symbol of every file (ADR-0037 §1), sorted by path and line. */
+    readonly symbols: SymbolNode[] = [],
+    /** Every reference between symbols, resolved or not, sorted by file and line. */
+    readonly symbolEdges: SymbolEdge[] = [],
   ) {
     this.version = identity.version;
     for (const e of edges) {
       push(this.outgoing, e.from, e);
       if (e.to) push(this.incoming, e.to, e);
     }
+    for (const s of symbols) {
+      push(this.symbolsByPath, s.path, s);
+      push(this.symbolsByName, s.name, s);
+    }
+    for (const e of symbolEdges) {
+      push(this.symbolOut, `${e.from.path}#${e.from.symbol}`, e);
+      if (e.to) push(this.symbolIn, `${e.to.path}#${e.to.symbol}`, e);
+      else push(this.byName, e.name, e);
+    }
+  }
+
+  /** The symbols a file declares, in line order. */
+  symbolsOf(file: string): SymbolNode[] {
+    return this.symbolsByPath.get(file) ?? [];
+  }
+
+  /** The symbols named `name` (exact, case-sensitive), optionally within one file or under a path prefix. */
+  findSymbols(name: string, opts: { path?: string; prefix?: string; limit?: number } = {}): SymbolNode[] {
+    const all = this.symbolsByName.get(name) ?? [];
+    const matched = all.filter(
+      (s) => (!opts.path || s.path === opts.path) && (!opts.prefix || s.path.startsWith(opts.prefix)),
+    );
+    return matched.slice(0, opts.limit ?? 20);
+  }
+
+  /** Resolved references into a symbol of a file: who calls, constructs, types or renders it. */
+  callersOf(file: string, symbol: string): SymbolEdge[] {
+    return this.symbolIn.get(`${file}#${symbol}`) ?? [];
+  }
+
+  /** References out of a symbol of a file, resolved or not. */
+  calleesOf(file: string, symbol: string): SymbolEdge[] {
+    return this.symbolOut.get(`${file}#${symbol}`) ?? [];
+  }
+
+  /** Unresolved references matched by name alone (a member call on an unknown value): guesses, labelled. */
+  nameReferences(name: string): SymbolEdge[] {
+    return this.byName.get(name) ?? [];
+  }
+
+  /** The symbol of a file whose range holds the line, else the module level. */
+  enclosingSymbol(file: string, line: number): string {
+    return enclosingSymbol(this.symbolsOf(file), line);
   }
 
   /** What a file imports (edges out of it). */
@@ -180,10 +270,10 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
   const files = new Set(listed);
   const changed =
     opts.previous && opts.previous.maxFileBytes === maxBytes ? await changedSince(root, opts.previous, identity) : null;
-  const facts = new Map<string, ImportFact[]>();
+  const facts = new Map<string, ParsedFacts>();
   const fileFacts = new Map<string, FileFacts>();
   const skipped: { path: string; reason: string }[] = [];
-  const fresh: { sha: string; language: string; facts: ImportFact[] }[] = [];
+  const fresh: { sha: string; language: string; facts: ParsedFacts }[] = [];
   const languages = new Map<string, LanguageId>();
   let parsed = 0;
   let cached = 0;
@@ -222,7 +312,7 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
       cached += 1;
     } else {
       try {
-        found = await withTree(lang, bytes.toString('utf8'), extractImports);
+        found = await withTree(lang, bytes.toString('utf8'), extractFacts);
       } catch (e) {
         skipped.push({ path: rel, reason: `could not be parsed: ${(e as Error).message}` });
         continue;
@@ -257,7 +347,7 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
       external: [],
     };
     nodes.set(rel, node);
-    for (const f of list) {
+    for (const f of list.imports) {
       const r = resolver.resolve(rel, f.specifier);
       if (r.type === 'external') {
         if (!node.external.includes(r.module)) node.external.push(r.module);
@@ -304,14 +394,156 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
   }
   const tally: Record<Certainty, number> = { exact: 0, inferred: 0, unsupported: 0 };
   for (const e of edges) tally[e.certainty] += 1;
+  const { symbols, symbolEdges, symbolTally } = deriveSymbols(facts, edges);
   return new CodeGraph(
     root.root,
     identity,
     nodes,
     edges,
     skipped,
-    { files: nodes.size, parsed, cached, unchanged, edges: tally, contracts: byTarget.size, ms: Date.now() - started },
+    {
+      files: nodes.size,
+      parsed,
+      cached,
+      unchanged,
+      edges: tally,
+      contracts: byTarget.size,
+      symbols: symbols.length,
+      symbol_edges: symbolTally,
+      ms: Date.now() - started,
+    },
     fileFacts,
     maxBytes,
+    symbols,
+    symbolEdges,
   );
+}
+
+/**
+ * Symbol nodes and the edges between them (ADR-0037 §1), from each file's symbols, bindings and
+ * references and the file graph's edges. A reference to a local symbol is an edge within the file;
+ * a reference to an imported name follows the import's file edge and lands on the symbol the target
+ * declares and exports, else it is unsupported with the reason; a member call on a value the graph
+ * does not know is kept by name alone. Nothing is guessed: every edge says how it resolved.
+ */
+function deriveSymbols(
+  facts: ReadonlyMap<string, ParsedFacts>,
+  edges: readonly GraphEdge[],
+): { symbols: SymbolNode[]; symbolEdges: SymbolEdge[]; symbolTally: Record<Certainty, number> } {
+  const symbols: SymbolNode[] = [];
+  const symbolEdges: SymbolEdge[] = [];
+  const symbolTally: Record<Certainty, number> = { exact: 0, inferred: 0, unsupported: 0 };
+  const fileEdges = new Map<string, GraphEdge[]>();
+  for (const e of edges) push(fileEdges, e.from, e);
+  const paths = [...facts.keys()].sort();
+  for (const rel of paths) {
+    for (const s of (facts.get(rel) as ParsedFacts).symbols) symbols.push({ ...s, path: rel });
+  }
+  /** The top-level symbol of a file by name, exported or not. */
+  const topLevel = (rel: string, name: string): SymbolFact | undefined =>
+    facts.get(rel)?.symbols.find((s) => s.parent === null && s.name === name);
+  const exportedOf = (rel: string, name: string): SymbolFact | undefined => {
+    const s = topLevel(rel, name);
+    return s?.exported ? s : undefined;
+  };
+  for (const rel of paths) {
+    const f = facts.get(rel) as ParsedFacts;
+    const bindings = new Map(f.bindings.map((b) => [b.local, b]));
+    const local = new Map(f.symbols.filter((s) => s.parent === null).map((s) => [s.name, s]));
+    const mine = fileEdges.get(rel) ?? [];
+    const edgeFor = (specifier: string | null): GraphEdge | undefined => mine.find((e) => e.specifier === specifier);
+    const emit = (r: ReferenceFact, to: SymbolRef | null, certainty: Certainty, reason?: string) => {
+      const edge: SymbolEdge = {
+        from: { path: rel, symbol: enclosingSymbol(f.symbols, r.line) },
+        to,
+        name: r.name,
+        kind: r.kind,
+        certainty,
+        ...(reason ? { reason } : {}),
+        line: r.line,
+      };
+      symbolEdges.push(edge);
+      symbolTally[certainty] += 1;
+    };
+    /** Follows an import binding to the symbol `name` of its target file. */
+    const viaImport = (r: ReferenceFact, b: ImportBinding, name: string) => {
+      const fe = edgeFor(b.specifier);
+      if (!fe) return emit(r, null, 'unsupported', `no import edge for "${b.specifier ?? '(computed)'}"`);
+      if (fe.certainty === 'unsupported' || !fe.to) {
+        return emit(
+          r,
+          null,
+          'unsupported',
+          `the import of "${b.specifier}" is unsupported: ${fe.reason ?? 'unresolved'}`,
+        );
+      }
+      const target = facts.get(fe.to);
+      if (!target) return emit(r, null, 'unsupported', `${fe.to} is not in the graph`);
+      const wanted = name === 'default' ? target.default_export : name;
+      const found = wanted ? exportedOf(fe.to, wanted) : undefined;
+      if (!found) {
+        return emit(
+          r,
+          null,
+          'unsupported',
+          name === 'default'
+            ? `${fe.to} names no default export the graph can follow`
+            : `${fe.to} does not declare an exported ${name} (a re-export, or a name it does not define)`,
+        );
+      }
+      emit(r, { path: fe.to, symbol: found.name }, fe.certainty);
+    };
+    for (const r of f.references) {
+      if (r.via === null) {
+        const b = bindings.get(r.name);
+        if (b) {
+          if (b.imported === '*') emit(r, null, 'unsupported', `${r.name} is a namespace import, not a symbol`);
+          else viaImport(r, b, b.imported);
+          continue;
+        }
+        const s = local.get(r.name);
+        if (s) emit(r, { path: rel, symbol: s.name }, 'exact');
+        // A name the file neither declares nor imports (a global, a parameter) is nobody's edge.
+        continue;
+      }
+      if (r.via === 'this') {
+        const from = enclosingSymbol(f.symbols, r.line);
+        const owner = from.includes('.') ? (from.split('.')[0] as string) : from;
+        const member = f.symbols.find((s) => s.parent === owner && s.name === r.name);
+        if (member) emit(r, { path: rel, symbol: `${owner}.${member.name}` }, 'exact');
+        else emit(r, null, 'unsupported', `${owner} declares no member ${r.name} the graph can see`);
+        continue;
+      }
+      const b = bindings.get(r.via);
+      if (b?.imported === '*') {
+        viaImport(r, b, r.name);
+        continue;
+      }
+      if (b) {
+        emit(
+          r,
+          null,
+          'unsupported',
+          `${r.name} is a member of the import ${r.via}, whose shape the graph does not follow`,
+        );
+        continue;
+      }
+      const ns = local.get(r.via);
+      if (ns?.kind === 'namespace') {
+        const member = f.symbols.find((s) => s.parent === ns.name && s.name === r.name);
+        if (member) emit(r, { path: rel, symbol: `${ns.name}.${member.name}` }, 'exact');
+        else emit(r, null, 'unsupported', `namespace ${ns.name} declares no ${r.name}`);
+        continue;
+      }
+      emit(
+        r,
+        null,
+        'unsupported',
+        `name only: a member of ${r.via === '?' ? 'an expression' : r.via}, whose type the graph does not know`,
+      );
+    }
+  }
+  symbols.sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line || a.name.localeCompare(b.name));
+  symbolEdges.sort((a, b) => a.from.path.localeCompare(b.from.path) || a.line - b.line || a.name.localeCompare(b.name));
+  return { symbols, symbolEdges, symbolTally };
 }

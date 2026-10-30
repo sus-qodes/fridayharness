@@ -98,6 +98,7 @@ export function summary(g: CodeGraph) {
   return {
     version: g.version,
     stats: g.stats,
+    symbols: { count: g.symbols.length, edges: g.stats.symbol_edges },
     contracts: g.contracts().map((n) => ({ path: n.path, area: n.area, consumers: n.contract?.areas ?? [] })),
     unsupported: g.unsupported(),
     skipped: g.skipped,

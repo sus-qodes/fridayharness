@@ -1,24 +1,25 @@
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { closeDatabase, openDatabase, type SqlDatabase } from '@friday/db';
-import type { ImportFact } from './extract.js';
+import type { ParsedFacts } from './symbols.js';
 
 /**
- * Content-addressed facts (ADR-0020 §3): what a file imports, keyed by the sha256 of its bytes.
- * Shared by every execution root and version; derived data that is always safe to delete.
+ * Content-addressed facts (ADR-0020 §3; ADR-0037 §1): what a file imports, declares, binds and
+ * references, keyed by the sha256 of its bytes. Shared by every execution root and version;
+ * derived data that is always safe to delete.
  */
 export interface FactsCache {
-  get(sha: string): ImportFact[] | undefined;
-  putAll(entries: { sha: string; language: string; facts: ImportFact[] }[]): void;
+  get(sha: string): ParsedFacts | undefined;
+  putAll(entries: { sha: string; language: string; facts: ParsedFacts }[]): void;
   clear(): void;
   close(): void;
 }
 
 /** Bump when the shape of the facts changes: an older cache is discarded, never migrated. */
-export const FACTS_FORMAT = 1;
+export const FACTS_FORMAT = 2;
 
 export function memoryFactsCache(): FactsCache {
-  const map = new Map<string, ImportFact[]>();
+  const map = new Map<string, ParsedFacts>();
   return {
     get: (sha) => map.get(sha),
     putAll: (entries) => {
@@ -46,7 +47,7 @@ export function openFactsCache(dir: string): FactsCache {
   return {
     get(sha) {
       const row = get.get<{ facts_json: string }>(sha);
-      return row ? (JSON.parse(row.facts_json) as ImportFact[]) : undefined;
+      return row ? (JSON.parse(row.facts_json) as ParsedFacts) : undefined;
     },
     putAll(entries) {
       if (!entries.length) return;
