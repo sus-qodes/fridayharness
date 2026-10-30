@@ -2,6 +2,11 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — Phase 5B, the code graph knows when nothing changed, and answers keywords (ADR-0037, proposed)
+
+- **A Merkle tree over the files git sees** (`.friday/graph/merkle.db`): the BLAKE3 of each file, kept with its size and time so an unchanged file is never read again; folder hashes from their children; the root hash names the tree and is recorded on the graph. "Did anything change" costs a stat per file. When git could not vouch for a checkout (an approximate identity, many dirty files), an unchanged tree keeps the last graph instead of rebuilding it, and a changed tree names the files to read again. Git's source identity stays the authority on what the checkout is; the tree only accelerates the graph's own staleness check. `@noble/hashes` (pure JavaScript, no install scripts) provides BLAKE3.
+- **Keyword search over the graph** (`.friday/graph/search.db`, SQLite FTS5 with BM25): one row per symbol (its name's words, its path, its signature) and one per file (its path's words, its area, the names it exports); identifiers are split at case changes and separators, so `checkoutService` is found by `checkout`; every word is required first, any word second; symbols rank above files on a tie. Rebuilt with each graph; `friday graph reindex` rebuilds everything. No vectors: they wait for a measurement that shows keyword and graph retrieval miss things. The daemon's graph service exposes `search()`; the command and the context request that read it come with 5C.
+
 ## Unreleased — Phase 5A, the code graph knows the symbols inside files (ADR-0037, proposed)
 
 - **Symbols are facts of a file:** functions, classes with their methods and fields, interfaces, type aliases, enums, variables and namespaces, each with its line range, whether it is exported (as a declaration, the default, or in an `export { … }` list), its parent and a one-line signature; beside them, what each import binds and what the file calls, constructs, uses as a type, renders as JSX or calls through a member. Facts stay content-addressed (format 2; an older `facts.db` is discarded) and the incremental build keeps unchanged files' symbols as it keeps their imports.

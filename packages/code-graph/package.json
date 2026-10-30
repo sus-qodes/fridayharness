@@ -23,6 +23,7 @@
     "@friday/db": "workspace:*",
     "@friday/git": "workspace:*",
     "@friday/protocol": "workspace:*",
+    "@noble/hashes": "2.4.0",
     "@vscode/tree-sitter-wasm": "0.3.1"
   },
   "devDependencies": {

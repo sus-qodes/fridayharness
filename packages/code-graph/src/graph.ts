@@ -119,6 +119,8 @@ export class CodeGraph {
     readonly symbols: SymbolNode[] = [],
     /** Every reference between symbols, resolved or not, sorted by file and line. */
     readonly symbolEdges: SymbolEdge[] = [],
+    /** The Merkle tree's root hash when this graph was built (ADR-0037 §2); null when none was scanned. */
+    readonly treeHash: string | null = null,
   ) {
     this.version = identity.version;
     for (const e of edges) {
@@ -240,6 +242,15 @@ export interface BuildOptions {
    * built keep their facts unread; the rest are read as usual. Every edge is resolved anew.
    */
   previous?: CodeGraph;
+  /** The root's files, when the caller just listed them; listed here otherwise. */
+  files?: readonly string[];
+  /**
+   * What changed since `previous` by the Merkle tree's account (ADR-0037 §2), used only when git
+   * cannot vouch for the checkout (an approximate identity). Null or absent: everything is read.
+   */
+  changedPaths?: ReadonlySet<string> | null;
+  /** The Merkle tree's root hash for this build, recorded on the graph. */
+  treeHash?: string | null;
 }
 
 /**
@@ -266,10 +277,12 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
   const cache = opts.cache ?? memoryFactsCache();
   const maxBytes = opts.maxFileBytes ?? 1024 * 1024;
   const identity = opts.identity ?? (await root.identity());
-  const listed = await root.files();
+  const listed = opts.files ? [...opts.files] : await root.files();
   const files = new Set(listed);
-  const changed =
-    opts.previous && opts.previous.maxFileBytes === maxBytes ? await changedSince(root, opts.previous, identity) : null;
+  const sameLimit = opts.previous && opts.previous.maxFileBytes === maxBytes;
+  const byGit = sameLimit ? await changedSince(root, opts.previous as CodeGraph, identity) : null;
+  // Git's account first; the Merkle tree's when git cannot vouch and the caller scanned it.
+  const changed = byGit ?? (sameLimit && opts.changedPaths ? new Set(opts.changedPaths) : null);
   const facts = new Map<string, ParsedFacts>();
   const fileFacts = new Map<string, FileFacts>();
   const skipped: { path: string; reason: string }[] = [];
@@ -416,6 +429,7 @@ export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promis
     maxBytes,
     symbols,
     symbolEdges,
+    opts.treeHash ?? null,
   );
 }
 

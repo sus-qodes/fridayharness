@@ -1,4 +1,14 @@
-import { buildGraph, type CodeGraph, type FactsCache, openFactsCache } from '@friday/code-graph';
+import {
+  buildGraph,
+  type CodeGraph,
+  type FactsCache,
+  type MerkleStore,
+  openFactsCache,
+  openMerkleStore,
+  openSearchIndex,
+  type SearchHit,
+  type SearchIndex,
+} from '@friday/code-graph';
 import { GitRoot, type SourceIdentity } from '@friday/git';
 import { FridayError } from '@friday/protocol';
 
@@ -15,6 +25,8 @@ interface RootGraph {
  */
 export class GraphService {
   #cache: FactsCache | undefined;
+  #merkle: MerkleStore | undefined;
+  #search: SearchIndex | undefined;
   readonly #roots = new Map<string, RootGraph>();
 
   constructor(
@@ -24,6 +36,16 @@ export class GraphService {
   private cache(): FactsCache {
     this.#cache ??= openFactsCache(this.opts.cacheDir);
     return this.#cache;
+  }
+
+  private merkle(): MerkleStore {
+    this.#merkle ??= openMerkleStore(this.opts.cacheDir);
+    return this.#merkle;
+  }
+
+  private index(): SearchIndex {
+    this.#search ??= openSearchIndex(this.opts.cacheDir);
+    return this.#search;
   }
 
   private entry(root: string): RootGraph {
@@ -61,13 +83,27 @@ export class GraphService {
       await e.building.promise;
       return this.graph(root);
     }
+    // The Merkle tree (ADR-0037 §2): a stat per file, nothing read when nothing changed. When git
+    // could not vouch for the checkout, an unchanged tree keeps the last graph, and a changed one
+    // says which files to read again.
+    const files = await git.files();
+    const scan = await this.merkle().scan(git.root, files);
+    if (e.latest && e.latest.treeHash === scan.root_hash && identity.basis !== 'content') return e.latest;
     // The last graph of this checkout is the starting point: files git says are unchanged keep
     // their facts, and only the changed ones are read again (ADR-0020, amendment of 2026-10-20).
     const previous = e.latest;
+    const changedPaths = previous && previous.treeHash === scan.previous_root_hash ? scan.changed : null;
     const promise = (this.opts.build ?? buildGraph)(git, {
       cache: this.cache(),
       identity,
+      files,
+      changedPaths,
+      treeHash: scan.root_hash,
       ...(previous ? { previous } : {}),
+    }).then((graph) => {
+      // The keyword index follows the graph (ADR-0037 §2).
+      this.index().replace(git.root, graph);
+      return graph;
     });
     e.building = { promise };
     try {
@@ -78,6 +114,16 @@ export class GraphService {
     }
   }
 
+  /** Keyword search over a checkout's symbols and files (BM25), the main checkout's by default. */
+  async search(
+    query: string,
+    opts: { limit?: number; kind?: 'symbol' | 'file'; root?: string } = {},
+  ): Promise<SearchHit[]> {
+    const root = opts.root ?? this.opts.root;
+    await this.graph(root);
+    return this.index().search((await this.entry(root).root).root, query, opts);
+  }
+
   /** Forgets every parsed file and builds the main checkout's graph again (`friday graph reindex`). */
   async reindex(): Promise<CodeGraph> {
     for (const e of this.#roots.values()) {
@@ -85,12 +131,18 @@ export class GraphService {
       e.latest = undefined;
     }
     this.cache().clear();
+    this.merkle().clear();
+    this.index().clear();
     return this.graph();
   }
 
   close(): void {
     this.#cache?.close();
     this.#cache = undefined;
+    this.#merkle?.close();
+    this.#merkle = undefined;
+    this.#search?.close();
+    this.#search = undefined;
   }
 }
 
@@ -99,6 +151,7 @@ export function summary(g: CodeGraph) {
     version: g.version,
     stats: g.stats,
     symbols: { count: g.symbols.length, edges: g.stats.symbol_edges },
+    tree_hash: g.treeHash,
     contracts: g.contracts().map((n) => ({ path: n.path, area: n.area, consumers: n.contract?.areas ?? [] })),
     unsupported: g.unsupported(),
     skipped: g.skipped,

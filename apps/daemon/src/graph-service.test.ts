@@ -56,3 +56,32 @@ describe('GraphService', () => {
     expect(graph.identity.paths).toEqual(['src.ts']);
   });
 });
+
+describe('GraphService and the Merkle tree (ADR-0037 §2)', () => {
+  it('keeps the last graph when nothing on disk changed and git cannot vouch, and reads only what changed', async () => {
+    const dir = ws().projectDir;
+    await writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'tree-root', private: true }));
+    await writeFile(path.join(dir, 'a.ts'), 'export const a = 1;\n');
+    await writeFile(path.join(dir, 'b.ts'), "import { a } from './a.ts';\nexport const b = a + 1;\n");
+    const git = deterministicGit(dir);
+    await git.init();
+    await git.commitAll('initial');
+    const service = new GraphService({ root: dir, cacheDir: path.join(ws().root, 'graph-cache') });
+    ws().track(service);
+    const first = await service.graph();
+    expect(first.treeHash).toMatch(/^[0-9a-f]{64}$/);
+    // An approximate identity (git could not vouch) with nothing changed on disk: the same graph.
+    const approx = { ...first.identity, basis: 'approximate' as const, version: 'x~1' };
+    expect(await service.graph(dir, approx)).toBe(first);
+    // One file changes: the tree names it, and only it is read.
+    await writeFile(path.join(dir, 'b.ts'), "import { a } from './a.ts';\nexport const b = a + 2;\n");
+    const second = await service.graph(dir, { ...approx, version: 'x~2' });
+    expect(second).not.toBe(first);
+    expect(second.treeHash).not.toBe(first.treeHash);
+    expect(second.stats.unchanged).toBe(1);
+    expect(second.stats.parsed).toBe(1);
+    // The keyword index followed the graph.
+    const hits = await service.search('b');
+    expect(hits.map((h) => [h.kind, h.path, h.name])).toContainEqual(['symbol', 'b.ts', 'b']);
+  });
+});

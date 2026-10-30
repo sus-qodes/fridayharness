@@ -23,6 +23,15 @@ export {
 } from './graph.js';
 export { LANGUAGES, type LanguageId, type LanguageSpec, languageOf } from './languages.js';
 export {
+  hashBytes,
+  MERKLE_FORMAT,
+  type MerkleStore,
+  memoryMerkleStore,
+  openMerkleStore,
+  type TreeScan,
+  treeHash,
+} from './merkle.js';
+export {
   type BuildLayout,
   type Certainty,
   CONDITIONS,
@@ -39,6 +48,14 @@ export {
   stripJsonComments,
   type WorkspacePackage,
 } from './resolve.js';
+export {
+  memorySearchIndex,
+  openSearchIndex,
+  SEARCH_FORMAT,
+  type SearchHit,
+  type SearchIndex,
+  tokenize,
+} from './search.js';
 export {
   enclosingSymbol,
   extractFacts,
