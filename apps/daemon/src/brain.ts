@@ -164,8 +164,6 @@ export function createMasterBrain(input: {
     task: TaskView,
     agentId: string,
   ) => { fit: number; cost: number; cost_class?: CostClass | null; blocked?: string } | null;
-  /** Whether routing has Laya's answer, or its failure, for a task (review F11). */
-  routingReady?: (task: TaskView) => boolean;
 }): BrainHandle {
   const { state, project, env, logger } = input;
   /** The provider Friday started with (restart-only). */
@@ -282,7 +280,6 @@ export function createMasterBrain(input: {
     // The daemon's recovery preserves and fences lost attempts before reassigning them (ADR-0026).
     lostWork: 'external',
     ...(input.modelFit ? { modelFit: input.modelFit } : {}),
-    ...(input.routingReady ? { routingReady: input.routingReady } : {}),
   });
 
   return {

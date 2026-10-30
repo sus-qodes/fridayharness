@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { loadGuide, mergeModels, modelCostClass, plannerLocalModel } from './registry.js';
+import { loadModelCatalog, mergeModels, modelCostClass, plannerLocalModel } from './registry.js';
 import {
   canonicalRole,
   generatedRegistryView,
@@ -16,7 +16,7 @@ import { parseRoleDecision } from './roles.js';
 
 describe("the Master Brain's local model in the registry (plan M12.1)", () => {
   it('is listed as a local model with no harness vendor when the planner is a local server', () => {
-    const models = mergeModels(loadGuide().models, [], { provider: 'local', model: 'qwen2.5:7b' });
+    const models = mergeModels(loadModelCatalog().models, [], { provider: 'local', model: 'qwen2.5:7b' });
     expect(models.find((m) => m.id === 'qwen2.5:7b')).toMatchObject({
       provider: 'local',
       local: true,
@@ -27,7 +27,7 @@ describe("the Master Brain's local model in the registry (plan M12.1)", () => {
   });
 
   it('is not listed for other providers, for a model still unset, or when the project already lists that id', () => {
-    const seed = loadGuide().models;
+    const seed = loadModelCatalog().models;
     expect(mergeModels(seed, [], { provider: 'anthropic', model: 'claude-opus-5-5' })).toHaveLength(seed.length);
     expect(mergeModels(seed, [], { provider: 'local', model: 'auto' })).toHaveLength(seed.length);
     expect(mergeModels(seed, [], null)).toHaveLength(seed.length);
@@ -43,7 +43,7 @@ describe("the Master Brain's local model in the registry (plan M12.1)", () => {
 
 describe('cost classes in the registry (plan M13.3)', () => {
   it('records Haiku as cheap, a local model as free and anything else as standard', () => {
-    const models = mergeModels(loadGuide().models, [{ id: 'qwen-coder', local: true }], null);
+    const models = mergeModels(loadModelCatalog().models, [{ id: 'qwen-coder', local: true }], null);
     const of = (id: string) => modelCostClass(models.find((m) => m.id === id));
     expect(of('claude-haiku-5-5')).toBe('cheap');
     expect(of('qwen-coder')).toBe('free');
@@ -51,7 +51,7 @@ describe('cost classes in the registry (plan M13.3)', () => {
     expect(modelCostClass(undefined)).toBe('standard');
     // A project's record says its own class.
     const own = mergeModels(
-      loadGuide().models,
+      loadModelCatalog().models,
       [{ id: 'gpt-5.6-luna', vendors: ['codex'], cost_class: 'cheap' }],
       null,
     );
@@ -73,7 +73,7 @@ function withImplementationCandidate(candidate: RoleRegistryCandidate): RoleRegi
 
 describe('the static role registry', () => {
   it('covers the handoff roles, canonical aliases and declared requirements', () => {
-    const models = loadGuide().models;
+    const models = loadModelCatalog().models;
     validateRoleRegistry(ROLE_REGISTRY_SOURCE, models);
     expect(Object.keys(ROLE_REGISTRY_SOURCE.roles)).toEqual([
       'decision_router',
@@ -153,7 +153,7 @@ describe('the static role registry', () => {
     });
     validateRoleRegistry(
       extended,
-      mergeModels(loadGuide().models, [{ id: 'local-coder', local: true, vendors: ['generic'] }], null),
+      mergeModels(loadModelCatalog().models, [{ id: 'local-coder', local: true, vendors: ['generic'] }], null),
     );
     expect(() => withProjectRoleCandidates(ROLE_REGISTRY_SOURCE, { designer: [] })).toThrow(/unknown role/);
     expect(() =>
@@ -166,7 +166,7 @@ describe('the static role registry', () => {
         withProjectRoleCandidates(ROLE_REGISTRY_SOURCE, {
           implementation: [{ rank: 1, model: 'local-coder', harness: 'generic' }],
         }),
-        loadGuide().models,
+        loadModelCatalog().models,
       ),
     ).toThrow(/duplicate candidate ranks/);
   });
@@ -178,10 +178,16 @@ describe('static registry validation', () => {
 
   it('rejects dispatchable candidates with an unknown model, harness or missing requirements', () => {
     expect(() =>
-      validateRoleRegistry(withImplementationCandidate({ ...first, model: 'not-in-the-guide' }), loadGuide().models),
+      validateRoleRegistry(
+        withImplementationCandidate({ ...first, model: 'not-in-the-guide' }),
+        loadModelCatalog().models,
+      ),
     ).toThrow(/unknown model/);
     expect(() =>
-      validateRoleRegistry(withImplementationCandidate({ ...first, harness: 'future-harness' }), loadGuide().models),
+      validateRoleRegistry(
+        withImplementationCandidate({ ...first, harness: 'future-harness' }),
+        loadModelCatalog().models,
+      ),
     ).toThrow(/unknown harness/);
     expect(() =>
       validateRoleRegistry(
@@ -189,7 +195,7 @@ describe('static registry validation', () => {
           ...first,
           requirements: undefined as unknown as RoleCandidateRequirements,
         }),
-        loadGuide().models,
+        loadModelCatalog().models,
       ),
     ).toThrow(/without complete dispatch requirements/);
     // An unknown future harness is allowed only while the candidate is declared non-dispatchable.
@@ -200,7 +206,7 @@ describe('static registry validation', () => {
         declared_dispatchable: false,
         reason_if_unavailable: 'adapter_not_verified',
       }),
-      loadGuide().models,
+      loadModelCatalog().models,
     );
   });
 
@@ -208,7 +214,7 @@ describe('static registry validation', () => {
     expect(() =>
       validateRoleRegistry(
         { ...ROLE_REGISTRY_SOURCE, aliases: { ...ROLE_REGISTRY_SOURCE.aliases, Backend: 'backend_engineer' } },
-        loadGuide().models,
+        loadModelCatalog().models,
       ),
     ).toThrow(/collides/);
     const docs = ROLE_REGISTRY_SOURCE.roles.docs;
@@ -216,7 +222,7 @@ describe('static registry validation', () => {
     expect(() =>
       validateRoleRegistry(
         { ...ROLE_REGISTRY_SOURCE, roles: { ...ROLE_REGISTRY_SOURCE.roles, docs: { ...docs, candidates: [] } } },
-        loadGuide().models,
+        loadModelCatalog().models,
       ),
     ).toThrow(/no candidates/);
     expect(() =>
@@ -226,19 +232,22 @@ describe('static registry validation', () => {
           declared_dispatchable: false,
           reason_if_unavailable: null,
         }),
-        loadGuide().models,
+        loadModelCatalog().models,
       ),
     ).toThrow(/without a reason/);
   });
 
   it('rejects invalid provenance and contradictions between MCP requirements', () => {
     expect(() =>
-      validateRoleRegistry(withImplementationCandidate({ ...first, last_checked: 'yesterday' }), loadGuide().models),
+      validateRoleRegistry(
+        withImplementationCandidate({ ...first, last_checked: 'yesterday' }),
+        loadModelCatalog().models,
+      ),
     ).toThrow(/last_checked/);
     expect(() =>
       validateRoleRegistry(
         withImplementationCandidate({ ...first, cost: { source: '', observed_at: '2026-10-20' } }),
-        loadGuide().models,
+        loadModelCatalog().models,
       ),
     ).toThrow(/cost provenance/);
     expect(() =>
@@ -247,7 +256,7 @@ describe('static registry validation', () => {
           ...first,
           benchmark: { source: 'a benchmark', metric: 'pass@1', value: 0.8, measured_at: '2026-10-20', samples: 0 },
         }),
-        loadGuide().models,
+        loadModelCatalog().models,
       ),
     ).toThrow(/benchmark provenance/);
     expect(() =>
@@ -256,7 +265,7 @@ describe('static registry validation', () => {
           ...first,
           requirements: { ...first.requirements, mcp_required: false, mcp_verified: true },
         }),
-        loadGuide().models,
+        loadModelCatalog().models,
       ),
     ).toThrow(/requires MCP verification but not MCP/);
   });

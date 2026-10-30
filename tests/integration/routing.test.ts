@@ -5,6 +5,7 @@
  */
 import { claudeCodeHooks } from '@friday/adapter-claude';
 import { GenericHarnessClient } from '@friday/adapter-generic';
+import { FakePlannerModel } from '@friday/planner';
 import type { RunView, TaskRoleDecisionView, TaskStartParams, TaskView } from '@friday/protocol';
 import { useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -29,56 +30,38 @@ const inspect = (td: TestDaemon, id: string) =>
   td.operator.get<{ task: TaskView; runs: RunView[] }>(td.operator.projectPath(`/tasks/${id}`));
 
 describe('model routing', () => {
-  it('passes task facts into deterministic profiles and preserves a pin over the profile default', async () => {
+  it('dispatches by static role registry and preserves a pin over registry rank', async () => {
     const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
-    const cases = [
-      {
-        expected: 'short',
-        summary: 'Fix one file',
-        risk_level: 'low' as const,
-        scope: { write: ['src/a.ts'], read: [] },
-      },
-      {
-        expected: 'medium',
-        summary: 'Update related modules',
-        risk_level: 'low' as const,
-        scope: { write: ['src/a.ts', 'src/b.ts', 'src/c.ts'], read: [] },
-      },
-      {
-        expected: 'large',
-        summary: 'Refactor the source tree',
-        risk_level: 'low' as const,
-        scope: { write: ['src/**'], read: [] },
-      },
-      {
-        expected: 'high-risk',
-        summary: 'Change payment authorization',
-        risk_level: 'high' as const,
-        scope: { write: ['src/payments.ts'], read: [] },
-      },
-      { expected: 'ambiguous', summary: 'Needs clarification', risk_level: 'low' as const, scope: null },
-    ];
-    for (const [index, facts] of cases.entries()) {
-      const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
-        summary: facts.summary,
-        kind: 'implementation',
-        risk_level: facts.risk_level,
-        scope: facts.scope ?? undefined,
-      });
-      const explained = await td.operator.get<{ dry_run: { profile: string; blocked: boolean } }>(
-        td.operator.projectPath(`/routing/explain/${task.task_id}`),
-      );
-      expect(explained.dry_run, `case ${index}`).toMatchObject({
-        profile: facts.expected,
-        blocked: facts.expected === 'ambiguous',
-      });
-    }
+    const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Fix one file',
+      kind: 'implementation',
+      risk_level: 'low',
+      scope: { write: ['src/a.ts'], read: [] },
+    });
+    const explained = await td.operator.get<{
+      dry_run: { role: string | null; source: string; model: string | null; selected_rank: number | null };
+    }>(td.operator.projectPath(`/routing/explain/${task.task_id}`));
+    expect(explained.dry_run).toMatchObject({
+      role: 'implementation',
+      source: 'registry',
+      model: 'claude-opus-5-5',
+      selected_rank: 1,
+    });
+
+    const docs = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Document the checkout flow',
+      kind: 'docs',
+      scope: { write: ['docs/**'], read: [] },
+    });
+    const docsExplain = await td.operator.get<{ dry_run: { role: string | null; model: string | null } }>(
+      td.operator.projectPath(`/routing/explain/${docs.task_id}`),
+    );
+    expect(docsExplain.dry_run).toMatchObject({ role: 'docs', model: 'claude-sonnet-5-5' });
 
     await td.operator.post(td.operator.projectPath('/routing/pins'), {
       scope: 'kind',
       target: 'implementation',
-      model: 'claude-opus-5-5',
-      mode: null,
+      model: 'claude-haiku-5-5',
       sensitive: false,
       needs_vision: false,
       until: null,
@@ -90,17 +73,16 @@ describe('model routing', () => {
       risk_level: 'low',
       scope: { write: ['src/pinned.ts'], read: [] },
     });
-    const explained = await td.operator.get<{ dry_run: { model: string | null; profile: string; source: string } }>(
+    const pinnedExplain = await td.operator.get<{ dry_run: { model: string | null; source: string } }>(
       td.operator.projectPath(`/routing/explain/${pinned.task_id}`),
     );
-    expect(explained.dry_run).toMatchObject({ model: 'claude-opus-5-5', profile: 'short', source: 'pin' });
+    expect(pinnedExplain.dry_run).toMatchObject({ model: 'claude-haiku-5-5', source: 'pin' });
   }, 120_000);
 
   it('binds a harness that applies models, advises one that does not, and follows a human pin', async () => {
     const td = await startTestDaemon(ws(), {
       git: true,
       extensions: [claudeCodeHooks()],
-      extraConfig: ['routing:', '  static_registry:', '    enabled: true', ''].join('\n'),
     });
     const dir = ws().projectDir;
     // A spawn adapter that applies the model it is given, and can run two models.
@@ -120,8 +102,7 @@ describe('model routing', () => {
     // What was recorded (Part 12 §9): the model, the reason, the evidence and the fallback.
     const explained = await cli(['--project', dir, 'routing', 'explain', t1.task_id]);
     expect(explained.code, explained.stderr).toBe(0);
-    expect(explained.stdout).toContain('claude-opus-5-5 (registry, mode hybrid, class implementation, binding)');
-    expect(explained.stdout).toContain('profile: large (scope contains a glob pattern)');
+    expect(explained.stdout).toContain('claude-opus-5-5 (registry, class implementation, binding)');
     expect(explained.stdout).toContain('role: implementation (kind_fallback)');
     expect(explained.stdout).toContain('fallback: a human');
     expect(explained.stdout).toContain('excluded claude-sonnet-5-5: harness.cannot_run');
@@ -197,13 +178,34 @@ describe('model routing', () => {
     });
     expect((await cli(['--project', dir, 'verify', t2.task_id, '--result', 'passed'])).code).toBe(0);
     const models = await cli(['--project', dir, 'models']);
-    expect(models.stdout).toMatch(/claude-sonnet-5-5\s+docs\s+1\s+100% \(too few\)/);
+    expect(models.stdout).toMatch(/claude-sonnet-5-5\s+docs\s+1\s+100%/);
     const pins = await cli(['--project', dir, 'routing', 'pins']);
     expect(pins.stdout).toContain('model claude-haiku-5-5 for kind docs, by human:local-operator until');
   }, 120_000);
 
   it('persists task role resolution and exposes it in routing explain, including a proposed DAG', async () => {
-    const td = await startTestDaemon(ws(), { git: true, brain: { autoStart: false } });
+    const classifier = new FakePlannerModel([
+      {
+        purpose: 'role',
+        output: {
+          status: 'classified',
+          assumptions: ['the page and the API can ship together'],
+          roles: [
+            { role: 'frontend_engineer', task_summary: 'Build the page', depends_on: [], confidence: 0.9 },
+            {
+              role: 'backend_engineer',
+              task_summary: 'Build the API',
+              depends_on: ['frontend_engineer'],
+              confidence: 0.85,
+            },
+          ],
+        },
+      },
+    ]);
+    const td = await startTestDaemon(ws(), {
+      git: true,
+      brain: { autoStart: false, model: classifier },
+    });
     const pid = td.project.project_id;
     const dir = ws().projectDir;
     const explained = (id: string) =>
@@ -268,19 +270,9 @@ describe('model routing', () => {
       scope: { write: ['apps/web/src/App.tsx', 'server/src/api.ts'], read: [] },
     });
     expect(ambiguous).toMatchObject({ role: null, role_source: 'missing' });
-    td.daemon.state.recordTaskRoleDecision(pid, { kind: 'system', id: 'role-classifier' }, ambiguous.task_id, {
-      status: 'classified',
-      assumptions: ['the page and the API can ship together'],
-      roles: [
-        { role: 'frontend_engineer', task_summary: 'Build the page', depends_on: [], confidence: 0.9 },
-        {
-          role: 'backend_engineer',
-          task_summary: 'Build the API',
-          depends_on: ['frontend_engineer'],
-          confidence: 0.85,
-        },
-      ],
-    });
+    await td.daemon.brain?.brain.runOnce();
+    expect(classifier.requests).toHaveLength(1);
+    expect(td.daemon.state.q.modelCalls(pid)).toEqual([expect.objectContaining({ purpose: 'role', status: 'ok' })]);
     const proposal = await explained(ambiguous.task_id);
     expect(proposal.role_decision).toMatchObject({
       status: 'proposed',
@@ -331,6 +323,9 @@ describe('model routing', () => {
     const planExplain = await explained(planned.task_id);
     expect(planExplain.role_decision).toMatchObject({ status: 'resolved', source: 'plan', role: 'frontend' });
     expect(planExplain.dry_run).toMatchObject({ role: 'frontend_engineer', role_source: 'plan' });
+    // A plan role never reaches the classifier, including when the brain catches up afterwards.
+    await td.daemon.brain?.brain.runOnce();
+    expect(classifier.requests).toHaveLength(1);
   }, 120_000);
 
   it('starts no work its route forbids, assigned, claimed or delegated, and runs what it allows (review F01)', async () => {
@@ -342,8 +337,6 @@ describe('model routing', () => {
       extraConfig: [
         'routing:',
         '  must_use_local: true',
-        '  static_registry:',
-        '    enabled: true',
         '  role_candidates:',
         '    implementation:',
         '      - { model: local-coder, harness: generic }',

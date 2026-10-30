@@ -130,7 +130,6 @@ const loopbackUrl = (message: string) =>
         return false;
       }
     }, message);
-const LoopbackUrl = loopbackUrl('Laya must run on this machine: use http://127.0.0.1:<port>');
 
 const ProvenanceDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'use a YYYY-MM-DD date');
 
@@ -177,46 +176,14 @@ export const RoleCandidateSettings = z
   .strict();
 export type RoleCandidateSettings = z.input<typeof RoleCandidateSettings>;
 
-/** Model routing (ADR-0031). */
+/** Model routing (ADR-0031's 2026-10-21 amendment): the static role registry is the dispatch authority. */
 export const RoutingSettings = z
   .object({
-    /** manual: a pinned or default model; policy: the guide; auto: Laya or the score; hybrid: pins and constraints first. */
-    mode: z.enum(['manual', 'policy', 'auto', 'hybrid']).default('hybrid'),
-    optimize: z.enum(['quality', 'balanced', 'cost', 'latency']).default('balanced'),
-    default_model: z.string().min(1).max(100).nullable().default(null),
+    /** Only models marked local in the registry may run work. */
     must_use_local: z.boolean().default(false),
-    prefer_cheaper_if_score_delta_below: z.number().min(0).max(1).default(0.05),
-    /** When Laya's answer is not confident: the score's choice, the strongest model, a human, or no autonomous run. */
-    low_confidence: z.enum(['score', 'strongest', 'human', 'block']).default('score'),
-    /** Outcomes a model needs for a task class before they count. */
-    min_samples: z.number().int().min(1).max(1000).default(5),
-    /** Work that only runs on a model a human pinned for it. */
+    /** Work that only runs on a local model a human pinned for it. */
     sensitive: z
       .object({ kinds: z.array(z.string()).default([]), roles: z.array(z.string()).default([]) })
-      .strict()
-      .prefault({}),
-    /** Optional project overrides for the shipped trivial/short/medium/large/high-risk profiles. */
-    profile_preferences: z
-      .record(
-        z.string(),
-        z
-          .object({
-            preferred: z.array(z.string()).default([]),
-            fallback: z.array(z.string()).default([]),
-            avoid: z.array(z.string()).default([]),
-            notes: z.string().nullable().default(null),
-            strategy: z.enum(['score', 'cheapest-capable', 'strongest-capable', 'block']).default('score'),
-            min_fit: z.number().min(0).max(1).nullable().default(null),
-          })
-          .strict(),
-      )
-      .default({}),
-    /**
-     * Static role/model registry dispatch (ADR-0031's 2026-10-21 amendment). Off by default: the
-     * score, guide, evidence and Laya path stays the safe default until the registry slice is verified.
-     */
-    static_registry: z
-      .object({ enabled: z.boolean().default(false) })
       .strict()
       .prefault({}),
     /**
@@ -224,7 +191,7 @@ export const RoutingSettings = z
      * model eligible for a role, but cannot invent a role or renumber Friday's candidates.
      */
     role_candidates: z.record(z.string().min(1).max(64), z.array(RoleCandidateSettings).max(100)).default({}),
-    /** Models the project adds to Friday's registry, or replaces by id. */
+    /** Models the project adds to Friday's model catalog, or replaces by id. */
     models: z.array(z.record(z.string(), z.unknown())).max(100).default([]),
     /**
      * A spending cap per task attempt, in dollars (plan M11.5); unset means no cap. Friday hands it
@@ -232,16 +199,6 @@ export const RoutingSettings = z
      * the adapter's own cap and this), and ends any attempt whose reported cost reaches it.
      */
     task_budget_usd: z.number().positive().optional(),
-    laya: z
-      .object({
-        enabled: z.boolean().default(false),
-        url: LoopbackUrl.default('http://127.0.0.1:8000'),
-        /** A Laya checkpoint name; default: Laya picks. */
-        model: z.string().min(1).max(200).optional(),
-        timeout_ms: z.number().int().min(100).max(60_000).default(3000),
-      })
-      .strict()
-      .prefault({}),
   })
   .strict()
   .prefault({});
@@ -312,8 +269,8 @@ export type ProviderConfig = z.infer<typeof Provider>;
  * The model server on this machine for `master_brain.provider: local` (plan M12.1): an
  * OpenAI-compatible chat endpoint such as Ollama (port 11434) or LM Studio (port 1234). Nothing
  * leaves the machine, so no key, no consent and no budget applies. The address is loopback only,
- * as Laya's (review F09), which is why the tracked file may name it: at most it points Friday at
- * another port of this machine, never at a place a key could be sent.
+ * as the local model server's (review F09), which is why the tracked file may name it: at most it
+ * points Friday at another port of this machine, never at a place a key could be sent.
  */
 const LocalProvider = Provider.extend({
   base_url: loopbackUrl(

@@ -1433,7 +1433,6 @@ function toPinView(r: Record<string, unknown>): RoutingPinView {
     scope: r.scope as RoutingPinView['scope'],
     target: (r.target as string | null) ?? null,
     model: (r.model as string | null) ?? null,
-    mode: (r.mode as RoutingPinView['mode']) ?? null,
     sensitive: Number(r.sensitive ?? 0) === 1,
     needs_vision: Number(r.needs_vision ?? 0) === 1,
     until: (r.until as string | null) ?? null,

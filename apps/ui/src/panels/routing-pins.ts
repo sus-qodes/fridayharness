@@ -1,8 +1,7 @@
 /**
- * The routing pins and the routing mode (plan §7.10, review decision 2): a pin steers a role, a
- * task or a kind of task to one model; the mode word is the one the daemon reports (`GET models`
- * → `settings.mode`, which `friday routing explain` prints for each decision). Settings → Routing
- * is their home; the Agents drawer no longer shows them.
+ * The routing pins (plan §7.10, review decision 2): a pin steers a role, a task or a kind of task
+ * to one model. Dispatch itself is the static role registry; pins beat registry rank. Settings →
+ * Routing is their home; the Agents drawer no longer shows them.
  */
 import type { RoutingPinView } from '@friday/protocol';
 import { TASK_KIND } from '../model/status.js';
@@ -15,27 +14,20 @@ import { badge, errorOf, field, input, plain, select, type Teardown } from './co
 
 export type PinScope = 'role' | 'task' | 'kind';
 
-/** The mode word from `GET models` → `settings.mode`; null when the daemon did not say. */
-export function routingModeOf(settings: unknown): string | null {
-  const s = settings && typeof settings === 'object' ? (settings as { mode?: unknown }).mode : null;
-  return typeof s === 'string' && s.trim() ? plain(s, 40) : null;
-}
-
 export interface RoutingPins {
-  /** The mode line, the pins list and the pin form, in this order. */
+  /** The dispatch line, the pins list and the pin form, in this order. */
   el: HTMLElement;
-  /** Reads the pins, the models and the mode. */
+  /** Reads the pins and the models. */
   load(): void;
 }
 
 export function routingPins(ctx: AppContext, td: Teardown): RoutingPins {
-  const modeWord = h('span', { class: 'badge badge-info pn-routing-mode' }, '…');
-  const modeLine = h(
+  const dispatchLine = h(
     'div',
     { class: 'row pn-routing-mode-line' },
-    h('span', { class: 'muted' }, 'Routing mode'),
-    modeWord,
-    h('span', { class: 'muted' }, 'from the project’s routing settings; a pin with a mode overrides it'),
+    h('span', { class: 'muted' }, 'Dispatch'),
+    badge('static role registry', 'info'),
+    h('span', { class: 'muted' }, 'pins beat registry rank; hard constraints come first'),
   );
   const pinsList = h('div', { class: 'pn-pins' }, h('div', { class: 'muted' }, 'Reading the routing pins…'));
   let models: string[] = [];
@@ -51,25 +43,29 @@ export function routingPins(ctx: AppContext, td: Teardown): RoutingPins {
     replace(
       pinsList,
       live.length === 0
-        ? h('div', { class: 'muted' }, 'No pins: Friday routes by evidence and the project’s settings.')
+        ? h('div', { class: 'muted' }, 'No pins: Friday routes by the static role registry.')
         : h(
             'ul',
             { class: 'pn-list' },
-            live.map((p) =>
-              h(
+            live.map((p) => {
+              const marks = [p.sensitive ? 'sensitive' : null, p.needs_vision ? 'needs vision' : null].filter(
+                (v): v is string => v !== null,
+              );
+              const what = p.model ? `→ ${plain(p.model, 80)}` : marks.join(', ');
+              return h(
                 'li',
                 { class: 'pn-item' },
                 badge(p.scope, 'info'),
                 p.target ? h('span', { class: 'mono' }, visible(truncate(p.target, 80))) : null,
-                h('span', { class: 'pn-grow' }, p.model ? `→ ${plain(p.model, 80)}` : p.mode ? `mode ${p.mode}` : ''),
+                h('span', { class: 'pn-grow' }, what),
                 p.until ? h('span', { class: 'muted' }, `until ${timeAgo(p.until, ctx.now())}`) : null,
                 p.note ? h('span', { class: 'muted' }, plain(p.note, 200)) : null,
                 button('Unpin', () => void unpin(p), {
                   class: 'btn btn-ghost',
                   ariaLabel: `Unpin the ${p.scope} pin${p.target ? ` for ${visible(p.target)}` : ''}`,
                 }),
-              ),
-            ),
+              );
+            }),
           ),
     );
   }
@@ -179,28 +175,24 @@ export function routingPins(ctx: AppContext, td: Teardown): RoutingPins {
     if (r && !td.done) void loadPins();
   }
 
-  // The models and the mode come in one answer: the form lists the models, the line shows the mode.
+  // One answer lists the models for the pin form.
   async function loadModels() {
-    let mode: string | null = null;
     try {
       const r = await ctx.api.models();
       if (td.done) return;
       models = (Array.isArray(r?.models) ? r.models : [])
         .map((m) => m.id)
         .filter((id): id is string => typeof id === 'string');
-      mode = routingModeOf(r?.settings);
     } catch {
       models = [];
     }
     if (td.done) return;
-    modeWord.textContent = mode ?? 'unknown';
-    modeWord.className = mode ? 'badge badge-info pn-routing-mode' : 'badge badge-muted pn-routing-mode';
     renderPinForm();
   }
 
   renderPinForm();
   return {
-    el: h('div', { class: 'pn-routing' }, modeLine, pinsList, pinForm),
+    el: h('div', { class: 'pn-routing' }, dispatchLine, pinsList, pinForm),
     load() {
       void loadPins();
       void loadModels();

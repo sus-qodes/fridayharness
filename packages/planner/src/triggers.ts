@@ -26,6 +26,7 @@ export type BrainAction =
       escalation_id?: string;
     }
   | { kind: 'after_rejection'; goal_id: string; plan_id: string; version: number; note: string | null }
+  | { kind: 'classify_role'; goal_id: string | null; task_id: string; decision_id: string }
   | { kind: 'escalate'; goal_id: string | null; task_id: string | null; reason: EscalationReason; detail: string }
   | { kind: 'release_lost'; harness_id: string };
 
@@ -50,6 +51,8 @@ export interface TriggerFacts {
   brainEscalation(escalationId: string): { goal_id: string; replan: boolean; force: boolean } | null;
   /** The goal a plan belongs to. */
   goalOfPlan(planId: string): string | null;
+  /** Whether this task already had a role-classifier job (so a clarification is not asked again). */
+  roleClassificationAttempted(taskId: string): boolean;
   planner: { available: boolean; reason: string };
   limits: { escalateAfterFailures: number; maxReplans: number; autoApprove: boolean };
 }
@@ -96,6 +99,15 @@ export function triggersFor(e: TriggerEvent, f: TriggerFacts): BrainAction[] {
       return f.planner.available
         ? [{ kind: 'plan', goal_id }]
         : [{ kind: 'escalate', goal_id, task_id: null, reason: 'planner_unavailable', detail: f.planner.reason }];
+    }
+    case 'task.role_resolved': {
+      // Only a genuinely blocked contract needs the decision model (R3). Plan/task/human roles and
+      // deterministic fallbacks are already resolved, and a proposal is waiting for a human.
+      const decision = p.decision as { status?: string; decision_id?: string } | undefined;
+      if (decision?.status !== 'blocked' || !decision.decision_id || !f.planner.available) return [];
+      const task_id = String(p.task_id);
+      if (f.roleClassificationAttempted(task_id)) return [];
+      return [{ kind: 'classify_role', goal_id: f.goalOf(task_id), task_id, decision_id: decision.decision_id }];
     }
     case 'plan.proposed': {
       const plan = p.plan as { plan_id: string; version: number; needs_human?: unknown };

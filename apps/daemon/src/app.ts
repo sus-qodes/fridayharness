@@ -17,7 +17,6 @@ import {
   type TokenClass,
   VerifyRequest,
 } from '@friday/protocol';
-import { fitThresholds } from '@friday/routing';
 import { FRIDAY_DIR, FRIDAY_VERSION, type ProjectRef } from '@friday/sdk';
 import {
   backupTo,
@@ -41,7 +40,6 @@ import type { ControlManager } from './control.js';
 import { countMatches, listFiles } from './files.js';
 import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
 import type { IntegrationManager } from './integration.js';
-import type { LayaService } from './laya.js';
 import type { Logger } from './log.js';
 import type { OperationManager } from './operations.js';
 import type { EffectivePolicy } from './policy.js';
@@ -99,8 +97,6 @@ export interface AppDeps {
   routing?: RoutingService;
   /** Judges a host's tool call the way the hooks do (ADR-0032 §4). */
   judgeTool?: ToolJudge;
-  /** Laya (M7c, ADR-0031 §10). */
-  laya?: LayaService;
   /** The interface's built bundle, served at /ui/ (M9); without it /ui is the legacy status page. */
   ui?: UiBundle;
   /** Browser sign-in by one-time link (M9). */
@@ -1120,8 +1116,6 @@ export function buildApp(deps: AppDeps): Hono<Env> {
       // Measured outcomes under the current checks; assumed ones and other cohorts are counted apart.
       evidence: state.q.modelEvidence(pid, { checksVersion: r.checksVersion }),
       settings: r.settings,
-      guide_version: r.guideVersion,
-      min_samples: r.settings.min_samples,
     });
   });
   // The token baseline (plan M10a): one usage row per run attempt, joined from the event log. An
@@ -1161,7 +1155,6 @@ export function buildApp(deps: AppDeps): Hono<Env> {
         scope: z.enum(['project', 'kind', 'role', 'task']),
         target: z.string().min(1).max(200).nullable().default(null),
         model: z.string().min(1).max(100).nullable().default(null),
-        mode: z.enum(['manual', 'policy', 'auto', 'hybrid']).nullable().default(null),
         sensitive: z.boolean().default(false),
         needs_vision: z.boolean().default(false),
         until: z.string().datetime().nullable().default(null),
@@ -1179,40 +1172,6 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.post(`${P}/routing/pins/:pin/revoke`, allow(...OPERATOR), (c) =>
     c.json({ pin: state.unpinRouting(pid, HUMAN, c.req.param('pin')) }),
   );
-
-  // Laya (M7c, ADR-0031 §10): its settings, the thresholds fitted for it, and fitting new ones.
-  app.get(`${P}/laya`, allow(...OPERATOR), (c) => {
-    const cfg = project.config.routing.laya;
-    return c.json({
-      enabled: cfg.enabled,
-      url: cfg.url,
-      model: cfg.model ?? null,
-      calibrations: state.q.layaCalibrations(pid),
-    });
-  });
-  app.post(`${P}/laya/calibrate`, allow(...OPERATOR), async (c) => {
-    const body = z
-      .object({
-        records: z
-          .array(
-            z.object({
-              checkpoint: z.string().min(1).max(200),
-              options: z.number().int().min(2).max(100),
-              confidence: z.number().min(0).max(1),
-              correct: z.boolean(),
-            }),
-          )
-          .min(1)
-          .max(100_000),
-        target: z.number().min(0.5).max(1).default(0.9),
-        min_support: z.number().int().min(1).max(100_000).default(20),
-        source: z.string().max(200).default('friday laya calibrate'),
-      })
-      .parse(await c.req.json().catch(() => ({})));
-    const fitted = fitThresholds(body.records, { target: body.target, minSupport: body.min_support });
-    state.recordLayaCalibrations(pid, HUMAN, fitted, body.source);
-    return c.json({ calibrations: fitted });
-  });
 
   // Operations the gateway runs, and their runs (M6c, ADR-0029). Secret names only, never values.
   app.get(`${P}/operations`, allow(...OPERATOR), (c) => {

@@ -2,7 +2,7 @@
   "name": "@friday/routing",
   "version": "0.0.0",
   "private": true,
-  "description": "Model routing: the capability registry, the routing guide, decisions, outcomes and Laya.",
+  "description": "Model routing: the model catalog, the static role registry and the routing decision.",
   "type": "module",
   "exports": {
     ".": {

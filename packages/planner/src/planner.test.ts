@@ -355,6 +355,7 @@ describe('Master Brain trigger table', () => {
     failuresOf: () => 1,
     replansOf: () => 0,
     goalOfPlan: () => 'goal_1',
+    roleClassificationAttempted: () => false,
     brainEscalation: (id) =>
       id === 'esc_brain'
         ? { goal_id: 'goal_1', replan: true, force: false }
@@ -398,6 +399,48 @@ describe('Master Brain trigger table', () => {
       ev('plan.proposed', { plan: { plan_id: 'plan_1', version: 1 } }),
       facts({ limits: { escalateAfterFailures: 2, maxReplans: 3, autoApprove: true } }),
       [{ kind: 'auto_approve', plan_id: 'plan_1', version: 1 }],
+    ],
+    [
+      'a blocked task role asks the classifier',
+      ev('task.role_resolved', { task_id: 'task_g1', decision: { status: 'blocked', decision_id: 'rdec_1' } }),
+      facts(),
+      [{ kind: 'classify_role', goal_id: 'goal_1', task_id: 'task_g1', decision_id: 'rdec_1' }],
+    ],
+    [
+      'a resolved task role needs no classifier',
+      ev('task.role_resolved', { task_id: 'task_g1', decision: { status: 'resolved' } }),
+      facts(),
+      [],
+    ],
+    [
+      'a proposed task role waits for a human',
+      ev('task.role_resolved', { task_id: 'task_g1', decision: { status: 'proposed' } }),
+      facts(),
+      [],
+    ],
+    [
+      'a clarification is not asked twice',
+      ev('task.role_resolved', {
+        task_id: 'task_g1',
+        decision: { status: 'blocked', decision_id: 'rdec_1' },
+      }),
+      facts({ roleClassificationAttempted: () => true }),
+      [],
+    ],
+    [
+      'a blocked decision without an id is not classified',
+      ev('task.role_resolved', { task_id: 'task_g1', decision: { status: 'blocked' } }),
+      facts(),
+      [],
+    ],
+    [
+      'a blocked role without a planner waits for a human',
+      ev('task.role_resolved', {
+        task_id: 'task_g1',
+        decision: { status: 'blocked', decision_id: 'rdec_1' },
+      }),
+      facts({ planner: { available: false, reason: 'no key' } }),
+      [],
     ],
     ['plan.approved', ev('plan.approved', {}), facts(), [{ kind: 'delegate' }]],
     [

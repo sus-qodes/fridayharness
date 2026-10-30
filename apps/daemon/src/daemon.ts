@@ -8,7 +8,7 @@ import { GitRoot, rootKey, worktreesDir } from '@friday/git';
 import type { PlannerModel } from '@friday/planner';
 import { type Actor, API_VERSION, type ContextPacket, FridayError, PROTOCOL_VERSIONS } from '@friday/protocol';
 import {
-  loadGuide,
+  loadModelCatalog,
   type ModelRecord,
   type ModelRecordInput,
   mergeModels,
@@ -39,7 +39,6 @@ import { ControlManager } from './control.js';
 import { profileCache } from './execution.js';
 import { GraphService } from './graph-service.js';
 import { IntegrationManager } from './integration.js';
-import { LayaService } from './laya.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
 import { OperationManager } from './operations.js';
 import { type EffectivePolicy, loadEffectivePolicy, reloadingPolicy, writePolicyTrust } from './policy.js';
@@ -160,7 +159,7 @@ function stateSettings(cfg: FridayConfig): Partial<StateConfig> {
  * Master Brain plans on this machine, its local model (plan M12.1); throws on a bad record.
  */
 function routingRegistry(cfg: FridayConfig): ModelRecord[] {
-  return mergeModels(loadGuide().models, cfg.routing.models as ModelRecordInput[], cfg.master_brain);
+  return mergeModels(loadModelCatalog().models, cfg.routing.models as ModelRecordInput[], cfg.master_brain);
 }
 
 /** Friday's static role candidates plus the project's `routing.role_candidates` extensions. */
@@ -178,19 +177,11 @@ function applyRouting(routing: RoutingService, cfg: FridayConfig): void {
   const roles = routingRoles(cfg);
   validateRoleRegistry(roles, models);
   Object.assign(routing.settings, {
-    mode: r.mode,
-    optimize: r.optimize,
-    default_model: r.default_model,
     must_use_local: r.must_use_local,
-    prefer_cheaper_if_score_delta_below: r.prefer_cheaper_if_score_delta_below,
-    low_confidence: r.low_confidence,
-    min_samples: r.min_samples,
     sensitive: r.sensitive,
-    profile_preferences: r.profile_preferences,
   } satisfies RoutingSettings);
   routing.models.splice(0, routing.models.length, ...models);
   routing.roleRegistry = roles;
-  routing.staticRegistryEnabled = r.static_registry.enabled;
 }
 
 function pidAlive(pid: number): boolean {
@@ -355,25 +346,6 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   // Every new run is routed in its own transaction (ADR-0031 §6): set before anything can create one.
   const routing = new RoutingService({ state, project, logger });
   state.setRouter(routing.router);
-  // Laya, when enabled: asked as a task becomes READY; its stored answer feeds routing (ADR-0031 §10).
-  const laya = new LayaService({ state, project, logger, routing });
-  routing.laya = (taskId) => laya.answerFor(taskId);
-  routing.layaStatus = (taskId) => {
-    const t = state.q.findTask(project.project_id, taskId);
-    return t ? laya.status(t) : 'off';
-  };
-  const stopLaya = state.transport.subscribe(
-    { project_id: project.project_id, types: ['task.ready', 'task.cancelled'] },
-    (e) => {
-      const taskId = (e.payload as { task_id?: string }).task_id;
-      if (!taskId || !laya.enabled) return;
-      // A cancelled task's question no longer matters (review F11).
-      if (e.type === 'task.cancelled') laya.cancel(taskId);
-      else void laya.ask(taskId);
-    },
-  );
-  // READY tasks whose question was never answered (the daemon stopped meanwhile) are asked again.
-  void laya.sweep().catch((err) => logger.warn('asking Laya again failed', { message: (err as Error).message }));
   // config.yaml, read again whenever it changes (plan M11.2): `project.config`, which every service
   // holds, becomes the configuration in force, so a key read where it is used applies at the next
   // use; the keys captured at start keep their start values and are named as needing a restart.
@@ -590,8 +562,6 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
           logger,
           policy: currentPolicy,
           modelFit: (task, agentId) => routing.fitFor(task, agentId),
-          // A task Laya is still asked about waits for the answer, or its deadline (review F11).
-          routingReady: (task) => laya.ready(task),
           ...(opts.brain && opts.brain.model !== undefined ? { model: opts.brain.model } : {}),
         });
 
@@ -647,7 +617,6 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     },
     operations,
     routing,
-    laya,
     judgeTool,
   });
   const extensionClosers: (() => Promise<void>)[] = [];
@@ -793,8 +762,6 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       stopWorkspaces();
       stopAutoVerify();
       stopResumeSweep();
-      stopLaya();
-      laya.close();
       // Integrations and worktree jobs in flight finish first, within a bound: no git process the
       // daemon started outlives it in the user's checkout, and none records into a closed database.
       const settled = (await integration.idle(60_000)) && (await workspaces.idle(30_000));

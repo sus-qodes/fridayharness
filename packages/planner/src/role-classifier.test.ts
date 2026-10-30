@@ -37,6 +37,50 @@ describe('classifyTaskRoles', () => {
     expect(model.requests[0]?.purpose).toBe('role');
   });
 
+  it('returns a clarification as a valid decision so its question can be persisted', async () => {
+    const model = new FakePlannerModel([
+      {
+        purpose: 'role',
+        output: {
+          status: 'clarification_required',
+          missing_facts: ['whether the checkout page is in scope'],
+          questions: ['Should this include the checkout page?'],
+        },
+      },
+    ]);
+    const result = await classifyTaskRoles(model, ROLE_REGISTRY_SOURCE, input, policy, settings);
+    expect(result).toMatchObject({
+      ok: true,
+      draft: {
+        status: 'clarification_required',
+        questions: ['Should this include the checkout page?'],
+      },
+    });
+  });
+
+  it('keeps a low-confidence multi-role answer as a proposal for a human', async () => {
+    const model = new FakePlannerModel([
+      {
+        purpose: 'role',
+        output: {
+          status: 'classified',
+          roles: [
+            { role: 'frontend_engineer', task_summary: 'build the page', depends_on: [], confidence: 0.2 },
+            {
+              role: 'backend_engineer',
+              task_summary: 'build the API',
+              depends_on: ['frontend_engineer'],
+              confidence: 0.3,
+            },
+          ],
+          assumptions: [],
+        },
+      },
+    ]);
+    const result = await classifyTaskRoles(model, ROLE_REGISTRY_SOURCE, input, policy, settings);
+    expect(result).toMatchObject({ ok: true, draft: { status: 'classified' } });
+  });
+
   it('turns low confidence into a blocked structured outcome', async () => {
     const response = {
       purpose: 'role' as const,

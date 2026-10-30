@@ -53,56 +53,42 @@ describe('config', () => {
     expect(c.providers.anthropic?.allow_remote).toBe(false);
   });
 
-  it('routes in hybrid mode by default, and keeps Laya on this machine (ADR-0031 §10)', () => {
+  it('defaults to registry-only routing settings and rejects the retired router fields', () => {
     const c = parseConfig(renderInitialConfig(PID, 'shop'));
-    expect(c.routing).toMatchObject({ mode: 'hybrid', optimize: 'balanced', min_samples: 5 });
-    expect(c.routing.laya).toMatchObject({ enabled: false, url: 'http://127.0.0.1:8000' });
-    const laya = (url: string) => () =>
-      parseConfig(`${renderInitialConfig(PID, 'shop')}\nrouting:\n  laya:\n    enabled: true\n    url: ${url}\n`);
-    expect(laya('http://127.0.0.1:9000')).not.toThrow();
-    expect(laya('http://[::1]:9000')).not.toThrow();
-    expect(laya('http://localhost:9000')).toThrow(/127\.0\.0\.1/); // portability-allow: localhost
-    expect(laya('https://laya.example.com')).toThrow(/on this machine/);
-  });
-
-  it('parses user-editable routing profile strategies and capability floors', () => {
-    const text = [
-      renderInitialConfig(PID, 'shop'),
-      'routing:',
-      '  profile_preferences:',
-      '    short:',
-      '      preferred: [claude-haiku-5-5]',
-      '      fallback: [claude-sonnet-5-5]',
-      '      strategy: cheapest-capable',
-      '      min_fit: 0.65',
-      '',
-    ].join('\n');
-    const c = parseConfig(text);
-    expect(c.routing.profile_preferences.short).toMatchObject({
-      preferred: ['claude-haiku-5-5'],
-      fallback: ['claude-sonnet-5-5'],
-      strategy: 'cheapest-capable',
-      min_fit: 0.65,
+    expect(c.routing).toEqual({
+      must_use_local: false,
+      sensitive: { kinds: [], roles: [] },
+      role_candidates: {},
+      models: [],
     });
+    expect(() =>
+      parseConfig(`${renderInitialConfig(PID, 'shop')}\nrouting:\n  static_registry:\n    enabled: true\n`),
+    ).toThrow(/routing/);
+    expect(() => parseConfig(`${renderInitialConfig(PID, 'shop')}\nrouting:\n  mode: hybrid\n`)).toThrow(/routing/);
+    expect(() => parseConfig(`${renderInitialConfig(PID, 'shop')}\nrouting:\n  profile_preferences: {}\n`)).toThrow(
+      /routing/,
+    );
   });
 
-  it('keeps static registry dispatch off by default and parses project role candidates', () => {
-    const defaults = parseConfig(renderInitialConfig(PID, 'shop'));
-    expect(defaults.routing.static_registry).toEqual({ enabled: false });
-    expect(defaults.routing.role_candidates).toEqual({});
+  it('parses project role candidates, local-only work and sensitive kinds', () => {
     const c = parseConfig(
       [
         renderInitialConfig(PID, 'shop'),
         'routing:',
-        '  static_registry:',
-        '    enabled: true',
+        '  must_use_local: true',
+        '  sensitive:',
+        '    kinds: [security]',
+        '    roles: [backend]',
         '  role_candidates:',
         '    implementation:',
         '      - { model: local-coder, harness: generic }',
+        '  models:',
+        '    - { id: local-coder, provider: local, vendors: [generic], local: true }',
         '',
       ].join('\n'),
     );
-    expect(c.routing.static_registry.enabled).toBe(true);
+    expect(c.routing.must_use_local).toBe(true);
+    expect(c.routing.sensitive).toEqual({ kinds: ['security'], roles: ['backend'] });
     expect(c.routing.role_candidates.implementation).toEqual([
       {
         model: 'local-coder',
@@ -121,6 +107,7 @@ describe('config', () => {
         benchmark: null,
       },
     ]);
+    expect(c.routing.models).toEqual([{ id: 'local-coder', provider: 'local', vendors: ['generic'], local: true }]);
   });
 
   it('reports schema problems with paths', () => {

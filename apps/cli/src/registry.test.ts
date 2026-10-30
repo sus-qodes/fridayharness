@@ -1,11 +1,11 @@
-import { loadGuide, ROLE_REGISTRY_SOURCE } from '@friday/routing';
+import { loadModelCatalog, ROLE_REGISTRY_SOURCE } from '@friday/routing';
 import { describe, expect, it } from 'vitest';
 import { formatRoleRegistry, type RegistryView, validateRegistryView } from './registry.js';
 
 const view = {
   project: {},
   registry: ROLE_REGISTRY_SOURCE,
-  models: loadGuide().models,
+  models: loadModelCatalog().models,
   project_candidates: 0,
 } as unknown as RegistryView;
 

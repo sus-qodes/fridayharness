@@ -24,7 +24,7 @@ export type Dimension = (typeof DIMENSIONS)[number];
 const Score = z.number().min(0).max(1);
 const Capabilities = z.partialRecord(z.enum(DIMENSIONS), Score);
 
-/** One model as a project may declare it (`routing.models`) or Friday ships it (the guide). */
+/** One model as a project may declare it (`routing.models`) or Friday ships it (the catalog). */
 export const ModelRecordInput = z
   .object({
     id: z.string().min(1).max(100),
@@ -62,48 +62,28 @@ export function modelCostClass(
   return m?.cost_class ?? (m?.local ? 'free' : 'standard');
 }
 
-const GuideClass = z
-  .object({
-    preferred: z.array(z.string()).default([]),
-    fallback: z.array(z.string()).default([]),
-    avoid: z.array(z.string()).default([]),
-    notes: z.string().nullable().default(null),
-    /** How this class selects among eligible candidates after hard constraints. */
-    strategy: z.enum(['score', 'cheapest-capable', 'strongest-capable', 'block']).default('score'),
-    /** Minimum capability fit for capability-aware strategies. */
-    min_fit: z.number().min(0).max(1).nullable().default(null),
-  })
-  .strict();
-export type GuideClass = z.output<typeof GuideClass>;
-
-const GuideFile = z
+const CatalogFile = z
   .object({
     version: z.string().min(1),
     models: z.array(ModelRecordInput),
-    classes: z.record(z.string(), GuideClass),
-    profiles: z.record(z.string(), GuideClass).default({}),
   })
   .strict();
 
-export interface ModelGuide {
+export interface ModelCatalog {
   version: string;
   models: ModelRecord[];
-  classes: Record<string, GuideClass>;
-  profiles: Record<string, GuideClass>;
 }
 
-let cached: ModelGuide | undefined;
+let cached: ModelCatalog | undefined;
 
-/** Friday's shipped registry priors and routing guide (`packages/routing/model-guide.yaml`). */
-export function loadGuide(): ModelGuide {
+/** Friday's shipped model catalog (`packages/routing/model-guide.yaml`). */
+export function loadModelCatalog(): ModelCatalog {
   if (cached) return cached;
   const file = fileURLToPath(new URL('../model-guide.yaml', import.meta.url));
-  const parsed = GuideFile.parse(parseYaml(readFileSync(file, 'utf8')));
+  const parsed = CatalogFile.parse(parseYaml(readFileSync(file, 'utf8')));
   cached = {
     version: parsed.version,
     models: parsed.models.map((m) => ({ ...m, source: 'seed' as const })),
-    classes: parsed.classes,
-    profiles: parsed.profiles,
   };
   return cached;
 }

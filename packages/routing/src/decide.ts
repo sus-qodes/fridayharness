@@ -1,79 +1,37 @@
-import { classifyRoutingProfile, type RoutingProfile } from './profiles.js';
-import type { GuideClass, ModelRecord } from './registry.js';
-import { REQUIREMENTS_VERSION, type Requirements, requirementsFor } from './requirements.js';
-import { canonicalRole, ROLE_REGISTRY_SOURCE, type RoleRegistry } from './role-registry.js';
+import type { ModelRecord } from './registry.js';
+import { canonicalRole, ROLE_REGISTRY_SOURCE, type RoleRegistry, type RoleRegistryCandidate } from './role-registry.js';
 import { type RoutingRoleSource, resolveTaskRole } from './roles.js';
 
 /**
- * The routing decision (spec Part 08 §7, §11–§12; ADR-0031 §4–§5): pure and deterministic, so the
- * same records always route the same way. Human pins and hard constraints come first; then the
- * guide, measured evidence and Laya's calibrated answer, by mode; then the fallback chain.
+ * The routing decision (spec Part 08 §7, §11; ADR-0031's 2026-10-21 amendment): pure and
+ * deterministic. The static role registry is the only dispatch authority. Human pins and hard
+ * constraints still come first, and a task whose role is unresolved or proposed as a DAG never
+ * dispatches on a guess.
  */
 
-export type RoutingMode = 'manual' | 'policy' | 'auto' | 'hybrid';
-export type Optimize = 'quality' | 'balanced' | 'cost' | 'latency';
-export type LowConfidence = 'score' | 'strongest' | 'human' | 'block';
-
 export interface RoutingSettings {
-  mode: RoutingMode;
-  optimize: Optimize;
-  /** The model `manual` mode uses when no pin names one. */
-  default_model: string | null;
   must_use_local: boolean;
-  prefer_cheaper_if_score_delta_below: number;
-  /** What happens when Laya's answer is not confident (spec Part 12 §10). */
-  low_confidence: LowConfidence;
-  /** Outcomes a model needs for a task class before they count. */
-  min_samples: number;
-  /** Task kinds and roles whose work is secret-sensitive: only a human-pinned model. */
+  /** Task kinds and roles whose work is secret-sensitive: only a human-pinned local model. */
   sensitive: { kinds: string[]; roles: string[] };
-  /** Project overrides for the shipped profile preferences. */
-  profile_preferences: Readonly<Record<string, GuideClass>>;
 }
 
 export const DEFAULT_ROUTING: RoutingSettings = {
-  mode: 'hybrid',
-  optimize: 'balanced',
-  default_model: null,
   must_use_local: false,
-  prefer_cheaper_if_score_delta_below: 0.05,
-  low_confidence: 'score',
-  min_samples: 5,
   sensitive: { kinds: [], roles: [] },
-  profile_preferences: {},
 };
 
-/** A human's routing policy (spec Part 12 §11): a model or a mode for a scope, with its source and expiry. */
+/** A human's routing policy: a model for a scope, with its source and expiry. */
 export interface RoutingPin {
   pin_id: string;
   scope: 'project' | 'kind' | 'role' | 'task';
   /** The kind, role or task id; null for the project. */
   target: string | null;
   model: string | null;
-  mode: RoutingMode | null;
   sensitive: boolean;
   needs_vision: boolean;
   until: string | null;
   source: string;
   note: string | null;
-}
-
-/** Measured outcomes of a model for a task class (ADR-0031 §8). */
-export interface Evidence {
-  model: string;
-  task_class: string;
-  samples: number;
-  passed: number;
-}
-
-/** Laya's stored answer to this task's routing question (ADR-0031 §10). */
-export interface LayaAnswer {
-  question_id: string;
-  checkpoint: string;
-  choice: string;
-  confidence: number;
-  /** The fitted threshold for this checkpoint and option count; null: not calibrated. */
-  threshold: number | null;
 }
 
 export interface RouteInput {
@@ -105,59 +63,42 @@ export interface RouteInput {
    */
   observed_model?: string | null;
   models: readonly ModelRecord[];
-  guide: Readonly<Record<string, GuideClass>>;
-  profiles?: Readonly<Record<string, GuideClass>>;
-  guide_version: string;
   settings: RoutingSettings;
   /** Active pins (not expired, not revoked). */
   pins: readonly RoutingPin[];
-  evidence: readonly Evidence[];
-  laya: LayaAnswer | null;
-  /**
-   * Why there is no Laya answer (review F11): `unavailable` (recorded as not answering) or
-   * `pending` (still asked: a human assigned the task before the answer came). Recorded as the
-   * decision's reason code; without it, `laya.none`.
-   */
-  laya_status?: 'off' | 'answered' | 'unavailable' | 'pending';
-  /** The typed role registry. When present, registry rank replaces score/Laya dispatch selection. */
+  /** The static role registry; defaults to Friday's shipped registry. */
   role_registry?: RoleRegistry;
-  /**
-   * The role vocabulary used to canonicalize and fall back (R2), independent of whether registry
-   * rank is the dispatch authority. Defaults to Friday's shipped registry.
-   */
-  role_vocabulary?: RoleRegistry;
   /** A role already assigned by the plan or a validated decision-model result. */
   resolved_role?: string | null;
 }
 
 export interface Candidate {
   model: string;
+  /** Registry preference: 1 for rank 1, 0.5 for rank 2, and so on. Not a capability score. */
   score: number;
+  /** The same registry preference, kept for delegation's fit arithmetic. */
   fit: number;
-  /** Measured pass rate when it counted. */
+  /** No measured outcome changes dispatch; evidence is reported, not scored. */
   pass_rate: number | null;
   samples: number;
-  /** Relative cost among the candidates, 0 (cheapest) to 1; null when the price is unknown. */
   cost: number | null;
   reasons: string[];
 }
 
 export interface RoutingDecision {
-  mode: RoutingMode;
+  /** The dispatch mode: registry is the only one. */
+  mode: 'registry';
   task_class: string;
-  profile: RoutingProfile;
-  profile_reasons: string[];
   model: string | null;
   /** The harness applies it (true) or may ignore it (false). */
   binding: boolean;
   /**
-   * The work must not start here (review F01): a pinned model that cannot run, a hard constraint
-   * no runnable model meets, manual mode without a model, an unreliable Laya answer configured to
-   * stop, or an advisory host not seen running a model that meets the constraints. `model: null`
-   * without `blocked` means routing has no opinion: Friday knows no model this harness runs.
+   * The work must not start here: a pinned model that cannot run, a hard constraint no runnable
+   * model meets, an unsupported or unresolved role, or an advisory host not seen running a model
+   * that meets the constraints.
    */
   blocked: boolean;
-  source: 'pin' | 'manual' | 'laya' | 'score' | 'guide' | 'fallback' | 'registry' | 'none';
+  source: 'pin' | 'registry' | 'none';
   reason: string;
   reason_codes: string[];
   candidates: Candidate[];
@@ -166,8 +107,6 @@ export interface RoutingDecision {
   fallback_chain: { model: string | null; reason: string }[];
   confidence: number | null;
   pin_id: string | null;
-  requirements_version: string;
-  guide_version: string;
   role: string | null;
   role_source: RoutingRoleSource;
   role_confidence: number | null;
@@ -205,57 +144,27 @@ export function applicablePins(
     .sort((a, b) => SPECIFICITY[b.scope] - SPECIFICITY[a.scope]);
 }
 
-function fitOf(m: ModelRecord, req: Requirements): { fit: number; known: boolean } {
-  const entries = Object.entries(req.weights) as [keyof ModelRecord['capabilities'], number][];
-  const total = entries.reduce((s, [, w]) => s + w, 0);
-  if (!total) return { fit: 0.5, known: false };
-  let known = false;
-  let sum = 0;
-  for (const [d, w] of entries) {
-    const v = m.capabilities[d];
-    if (v !== undefined) known = true;
-    sum += w * (v ?? 0.5);
-  }
-  return { fit: sum / total, known };
-}
-
 export function decideRoute(input: RouteInput): RoutingDecision {
   const { task, settings } = input;
-  const req = requirementsFor(task.kind);
-  const classification = classifyRoutingProfile(task);
-  const profile = classification.profile;
+  const registry = input.role_registry ?? ROLE_REGISTRY_SOURCE;
   const resolved = resolveTaskRole({
     task,
-    registry: input.role_vocabulary ?? input.role_registry ?? ROLE_REGISTRY_SOURCE,
+    registry,
     resolvedRole: input.resolved_role ?? null,
   });
   const role = resolved.role;
   const roleSource = resolved.source;
   const pins = applicablePins(input.pins, task, role);
+  const task_class = role ?? task.kind;
+
   const pinModel = pins.find((p) => p.model);
-  const pinMode = pins.find((p) => p.mode);
-  const mode = pinMode?.mode ?? settings.mode;
-  const roleClass = role ? `role:${role}` : null;
-  const task_class = roleClass && input.guide[roleClass] ? roleClass : task.kind;
-  const guide = input.guide[task_class] ?? input.guide[task.kind];
-  const profileGuide = settings.profile_preferences[profile] ?? input.profiles?.[profile];
-  const preference: GuideClass | undefined =
-    guide || profileGuide
-      ? {
-          preferred: profileGuide?.preferred.length ? profileGuide.preferred : (guide?.preferred ?? []),
-          fallback: profileGuide?.fallback.length ? profileGuide.fallback : (guide?.fallback ?? []),
-          avoid: [...new Set([...(guide?.avoid ?? []), ...(profileGuide?.avoid ?? [])])],
-          notes: profileGuide?.notes ?? guide?.notes ?? null,
-          strategy: profileGuide?.strategy ?? guide?.strategy ?? 'score',
-          min_fit: profileGuide?.min_fit ?? guide?.min_fit ?? null,
-        }
-      : undefined;
   const sensitive =
     settings.sensitive.kinds.includes(task.kind) ||
     (task.role !== null && settings.sensitive.roles.includes(task.role)) ||
     (role !== null && settings.sensitive.roles.includes(role)) ||
     pins.some((p) => p.sensitive);
-  const needsVision = req.vision || pins.some((p) => p.needs_vision);
+  const needsVision = pins.some((p) => p.needs_vision);
+
   const constraints: string[] = [];
   const excluded: RoutingDecision['excluded'] = [];
   const codes: string[] = [];
@@ -263,6 +172,12 @@ export function decideRoute(input: RouteInput): RoutingDecision {
   if (roleSource === 'path_fallback') codes.push('role.path_fallback');
   if (roleSource === 'plan') codes.push('role.plan');
   if (roleSource === 'human') codes.push('role.human');
+
+  const exclude = (model: string, reason: string): void => {
+    const at = excluded.findIndex((entry) => entry.model === model);
+    if (at >= 0) excluded.splice(at, 1);
+    excluded.push({ model, reason });
+  };
 
   // What the harness can run: its own list, else the registry's vendors.
   const known = new Map(input.models.map((m) => [m.id, m]));
@@ -287,34 +202,32 @@ export function decideRoute(input: RouteInput): RoutingDecision {
       );
     }
     for (const m of input.models) {
-      if (!input.harness_models.includes(m.id)) excluded.push({ model: m.id, reason: 'harness.cannot_run' });
+      if (!input.harness_models.includes(m.id)) exclude(m.id, 'harness.cannot_run');
     }
   } else {
     for (const m of input.models) {
       if (input.vendor === null || m.vendors.includes(input.vendor)) runnable.push(m);
-      else excluded.push({ model: m.id, reason: 'harness.cannot_run' });
+      else exclude(m.id, 'harness.cannot_run');
     }
   }
+  const runnableIds = new Set(runnable.map((m) => m.id));
 
-  // Hard constraints (spec Part 08 §11): always before Laya and the score.
+  // Hard constraints (spec Part 08 §11): always before registry rank.
   let eligible = runnable;
   if (settings.must_use_local) {
     constraints.push('must_use_local');
-    for (const m of eligible.filter((x) => !x.local))
-      excluded.push({ model: m.id, reason: 'constraint.must_use_local' });
+    for (const m of eligible.filter((x) => !x.local)) exclude(m.id, 'constraint.must_use_local');
     eligible = eligible.filter((m) => m.local);
   }
   if (needsVision) {
     constraints.push('vision');
-    for (const m of eligible.filter((x) => !x.vision)) excluded.push({ model: m.id, reason: 'constraint.vision' });
+    for (const m of eligible.filter((x) => !x.vision)) exclude(m.id, 'constraint.vision');
     eligible = eligible.filter((m) => m.vision);
   }
-  // Secret-sensitive work runs only on an approved local model (spec Part 08 §11): local here, and
-  // approved below by a pin made for sensitive work. No other pin counts as that consent (review §6).
+  // Secret-sensitive work runs only on a local model a human pinned for it (spec Part 08 §11).
   if (sensitive) {
     constraints.push('sensitive');
-    for (const m of eligible.filter((x) => !x.local))
-      excluded.push({ model: m.id, reason: 'constraint.sensitive_local' });
+    for (const m of eligible.filter((x) => !x.local)) exclude(m.id, 'constraint.sensitive_local');
     eligible = eligible.filter((m) => m.local);
   }
   const constrained = eligible;
@@ -327,39 +240,35 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     reason: string,
     extra: Partial<RoutingDecision> = {},
   ): RoutingDecision => ({
-    mode,
+    mode: 'registry',
     task_class,
-    profile,
-    profile_reasons: classification.reasons,
     model,
     binding: model !== null && binding,
     blocked: false,
     source,
     reason: model && !binding ? `${reason}; advisory: this session's host chooses its own model` : reason,
-    reason_codes: codes,
+    reason_codes: [...codes],
     candidates: [],
-    excluded,
-    constraints,
+    excluded: [...excluded],
+    constraints: [...constraints],
     fallback_chain: [],
     confidence: null,
     pin_id: null,
-    requirements_version: REQUIREMENTS_VERSION,
-    guide_version: input.guide_version,
     role,
     role_source: roleSource,
     role_confidence: resolved.confidence,
     role_decision_id: resolved.decision_id,
     role_intent_version: resolved.intent_version,
-    role_registry_version: resolved.registry_version,
+    role_registry_version: resolved.registry_version ?? registry.version,
     role_proposed:
       resolved.proposed_roles.length > 1 ||
       (roleSource === 'decision_model' && role === null && resolved.decision_id !== null),
-    registry_version: input.role_registry?.version ?? null,
+    registry_version: registry.version,
     selected_rank: null,
     selected_harness: null,
     decision_model: null,
     decision_confidence: null,
-    failover_policy: input.role_registry ? 'host_failure' : 'none',
+    failover_policy: model === null ? 'none' : 'host_failure',
     ...extra,
   });
   /**
@@ -371,7 +280,6 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     if (d.blocked || d.model === null || binding || !constraints.length) return d;
     const meets = observed !== null && (sensitive ? observed === d.model : constrained.some((m) => m.id === observed));
     if (meets && observed !== null) {
-      // The host runs its own model; it meets the constraints, so that model is the route.
       return observed === d.model
         ? d
         : {
@@ -380,43 +288,42 @@ export function decideRoute(input: RouteInput): RoutingDecision {
             reason: `${observed}, which this session runs and which meets ${constraints.join(', ')}`,
           };
     }
-    codes.push('advisory.unverified');
     return {
       ...d,
       model: null,
       binding: false,
       blocked: true,
       source: 'none',
+      failover_policy: 'none',
+      reason_codes: [...d.reason_codes, 'advisory.unverified'],
       reason: `${constraints.join(', ')} must hold, but this session's host chooses its own model and ${observed ? `reports ${observed}, which does not meet them` : 'has not reported one'}; ${sensitive ? `run it where ${d.model} is applied, ` : ''}a human decides`,
     };
   };
   const blocked = (reason: string, extra: Partial<RoutingDecision> = {}) =>
-    assemble(null, 'none', reason, { ...extra, blocked: true });
+    assemble(null, 'none', reason, { ...extra, blocked: true, failover_policy: 'none' });
 
-  // A human's pinned model (or manual mode's default) is never silently replaced. Sensitive work
-  // takes only a pin made for it: a general pin, or manual mode's default, is no consent.
+  // A human's pinned model is never silently replaced. Sensitive work takes only a pin made for it:
+  // a general pin is no consent.
   const chosen = sensitive ? pins.find((p) => p.model && p.sensitive) : pinModel;
-  const wanted = chosen?.model ?? (mode === 'manual' && !sensitive ? settings.default_model : null);
+  const wanted = chosen?.model ?? null;
   if (wanted) {
     const pin_id = chosen?.pin_id ?? null;
-    const src = chosen ? 'pin' : 'manual';
     const why = excluded.find((e) => e.model === wanted)?.reason;
     if (eligible.some((m) => m.id === wanted)) {
-      codes.push(chosen ? `pin.${chosen.scope}` : 'manual.default');
+      codes.push(chosen ? `pin.${chosen.scope}` : 'pin');
       return result(
         wanted,
-        src,
+        'pin',
         chosen
           ? `${wanted}, pinned by ${chosen.source}${chosen.until ? ` until ${chosen.until}` : ''}`
-          : `${wanted}, the manual default`,
+          : `${wanted}, pinned`,
         { pin_id },
       );
     }
     codes.push('pin.unavailable');
-    return blocked(
-      `${wanted} is ${chosen ? 'pinned' : 'the manual default'} but cannot run here (${why ?? 'not in the registry'}); a human decides`,
-      { pin_id },
-    );
+    return blocked(`${wanted} is pinned but cannot run here (${why ?? 'not in the registry'}); a human decides`, {
+      pin_id,
+    });
   }
   if (sensitive) {
     codes.push('constraint.sensitive');
@@ -424,323 +331,104 @@ export function decideRoute(input: RouteInput): RoutingDecision {
       'sensitive work runs only on a local model a human pinned for it ("friday routing pin --sensitive --model <local model>")',
     );
   }
-  // R2: a task whose persisted role resolution is blocked or still a proposed multi-role DAG does
-  // not dispatch on a guess, whatever the static-registry setting.
-  if (!role && resolved.decision_id && (roleSource === 'decision_model' || roleSource === 'missing')) {
+
+  // A task whose persisted role resolution is blocked or still a proposed multi-role DAG does not
+  // dispatch on a guess.
+  if (!role) {
     if (roleSource === 'decision_model') {
       codes.push('role.proposed_dag');
       return blocked(resolved.reason);
     }
-    codes.push('role.classification_required');
-    return blocked(resolved.reason);
+    if (roleSource === 'missing' && resolved.decision_id) {
+      codes.push('role.classification_required');
+      return blocked(resolved.reason);
+    }
+    codes.push('role.missing');
+    return blocked('role classification is required before static registry dispatch; clarification is required');
   }
-  if (input.role_registry) {
-    if (!role) {
-      codes.push('role.missing');
-      return blocked('role classification is required before static registry dispatch; clarification is required');
+
+  const registryRole = canonicalRole(role, registry);
+  const definition = registryRole ? registry.roles[registryRole] : undefined;
+  if (!registryRole || !definition) {
+    codes.push('role.unsupported');
+    return blocked(`role "${role}" is not declared in the static role registry`);
+  }
+
+  const registryCandidates = [...definition.candidates].sort((a, b) => a.rank - b.rank);
+  const selected: { candidate: RoleRegistryCandidate; row: Candidate }[] = [];
+  for (const candidate of registryCandidates) {
+    if (!candidate.declared_dispatchable) {
+      exclude(candidate.model, candidate.reason_if_unavailable ?? 'registry.not_dispatchable');
+      continue;
     }
-    const registryRole = canonicalRole(role, input.role_registry);
-    const definition = registryRole ? input.role_registry.roles[registryRole] : undefined;
-    if (!definition) {
-      codes.push('role.unsupported');
-      return blocked(`role "${role}" is not declared in the static role registry`);
+    if (
+      input.vendor !== null &&
+      candidate.harness !== input.vendor &&
+      !(input.harness_models?.includes(candidate.model) ?? false)
+    ) {
+      exclude(candidate.model, `registry.harness.${candidate.harness}`);
+      continue;
     }
-    if (mode === 'manual' && !pinModel) {
-      codes.push('manual.none');
-      return blocked('manual routing: no model is pinned; static registry dispatch is disabled in manual mode');
+    if (input.harness_models && !input.harness_models.includes(candidate.model)) {
+      exclude(candidate.model, 'harness.cannot_run');
+      continue;
     }
-    const registryCandidates = [...definition.candidates].sort((a, b) => a.rank - b.rank);
-    const candidateRows: Candidate[] = [];
-    const registryExcluded = [...excluded];
-    const modelById = new Map(input.models.map((model) => [model.id, model]));
-    for (const candidate of registryCandidates) {
-      const model = modelById.get(candidate.model);
-      if (!candidate.declared_dispatchable) {
-        registryExcluded.push({
-          model: candidate.model,
-          reason: candidate.reason_if_unavailable ?? 'registry.not_dispatchable',
-        });
-        continue;
-      }
-      if (
-        candidate.harness !== input.vendor &&
-        input.vendor !== null &&
-        !(input.harness_models?.includes(candidate.model) ?? false)
-      ) {
-        registryExcluded.push({ model: candidate.model, reason: `registry.harness.${candidate.harness}` });
-        continue;
-      }
-      if (input.harness_models && !input.harness_models.includes(candidate.model)) {
-        registryExcluded.push({ model: candidate.model, reason: 'harness.cannot_run' });
-        continue;
-      }
-      if (!model) {
-        registryExcluded.push({ model: candidate.model, reason: 'registry.model_unknown' });
-        continue;
-      }
-      if (settings.must_use_local && !model.local) {
-        registryExcluded.push({ model: candidate.model, reason: 'constraint.must_use_local' });
-        continue;
-      }
-      if (needsVision && !model.vision) {
-        registryExcluded.push({ model: candidate.model, reason: 'constraint.vision' });
-        continue;
-      }
-      if (sensitive && !model.local) {
-        registryExcluded.push({ model: candidate.model, reason: 'constraint.sensitive_local' });
-        continue;
-      }
-      candidateRows.push({
+    const model = known.get(candidate.model);
+    if (!model) {
+      exclude(candidate.model, 'registry.model_unknown');
+      continue;
+    }
+    if (!runnableIds.has(candidate.model)) {
+      exclude(candidate.model, 'harness.cannot_run');
+      continue;
+    }
+    if (settings.must_use_local && !model.local) {
+      exclude(candidate.model, 'constraint.must_use_local');
+      continue;
+    }
+    if (needsVision && !model.vision) {
+      exclude(candidate.model, 'constraint.vision');
+      continue;
+    }
+    if (sensitive && !model.local) {
+      exclude(candidate.model, 'constraint.sensitive_local');
+      continue;
+    }
+    const preference = round(1 / candidate.rank);
+    selected.push({
+      candidate,
+      row: {
         model: candidate.model,
-        score: round(1 / candidate.rank),
-        fit: 1,
+        score: preference,
+        fit: preference,
         pass_rate: null,
         samples: 0,
         cost: null,
         reasons: [`registry.rank(${candidate.rank})`, `registry.harness(${candidate.harness})`],
-      });
-    }
-    if (!candidateRows.length) {
-      codes.push('registry.none_eligible');
-      return blocked(`no dispatchable candidate for role "${role}" on this harness`, {
-        excluded: registryExcluded,
-        candidates: [],
-      });
-    }
-    const first = candidateRows[0] as Candidate;
-    const firstEntry = registryCandidates.find(
-      (candidate) => candidate.model === first.model,
-    ) as (typeof registryCandidates)[number];
-    codes.push('registry.rank');
-    return result(
-      first.model,
-      'registry',
-      `${first.model}, rank ${firstEntry.rank} for role ${role}${registryRole !== role ? ` (${registryRole})` : ''}`,
-      {
-        candidates: candidateRows,
-        excluded: registryExcluded,
-        fallback_chain: [
-          ...candidateRows.slice(1).map((candidate) => ({ model: candidate.model, reason: 'registry.rank.next' })),
-          { model: null, reason: 'human' },
-        ],
-        selected_rank: firstEntry.rank,
-        selected_harness: firstEntry.harness,
       },
-    );
+    });
   }
-  if (mode === 'manual') {
-    codes.push('manual.none');
-    return blocked('manual routing: no model is pinned or set as routing.default_model');
-  }
-  if (profile === 'ambiguous') {
-    codes.push('profile.ambiguous');
+  if (!selected.length) {
+    codes.push('registry.none_eligible');
     return blocked(
-      `ambiguous task profile (${classification.reasons.join('; ')}); provide a summary and bounded scope, or a human pin decides`,
+      `no dispatchable candidate for role "${role}" on this harness${constraints.length ? ` while ${constraints.join(', ')} must hold` : ''}`,
+      { candidates: [] },
     );
   }
-  if (!runnable.length && !constraints.length) {
-    // Nothing to judge: the harness declares no models and runs none Friday knows (a generic host).
-    codes.push('harness.models_unknown');
-    return assemble(null, 'none', 'Friday knows no model this harness runs; the harness uses its own');
-  }
-
-  // The guide's avoid list; scores for the rest.
-  for (const m of eligible.filter((x) => preference?.avoid.includes(x.id)))
-    excluded.push({
-      model: m.id,
-      reason: profileGuide?.avoid.includes(m.id) ? `profile.${profile}.avoid` : 'guide.avoid',
-    });
-  eligible = eligible.filter((m) => !preference?.avoid.includes(m.id));
-  if (!eligible.length) {
-    codes.push('none.eligible');
-    return blocked('no eligible model can run this task here; a human decides');
-  }
-  // Relative to the dearest and slowest model in the registry, not among these candidates: a
-  // model's cost rating must not change with what else one harness happens to run.
-  const priceOf = (m: ModelRecord) => (m.price ? (m.price.input + m.price.output) / 2 : null);
-  const prices = eligible.map(priceOf);
-  const maxPrice = Math.max(0, ...input.models.map(priceOf).filter((p): p is number => p !== null));
-  const latencies = eligible.map((m) => m.latency_ms);
-  const maxLatency = Math.max(0, ...input.models.map((m) => m.latency_ms).filter((l): l is number => l !== null));
-  const candidates: Candidate[] = eligible.map((m, i) => {
-    const reasons: string[] = [];
-    const { fit, known: hasCaps } = fitOf(m, req);
-    if (!hasCaps) reasons.push('capabilities.unknown');
-    const ev = input.evidence.find((e) => e.model === m.id && e.task_class === task_class);
-    const samples = ev?.samples ?? 0;
-    let quality = fit;
-    let pass_rate: number | null = null;
-    if (ev && samples >= settings.min_samples) {
-      pass_rate = ev.passed / samples;
-      quality = 0.5 * fit + 0.5 * pass_rate;
-      reasons.push(`evidence.used(${samples})`);
-    } else {
-      reasons.push(`evidence.too_few(${samples}/${settings.min_samples})`);
-    }
-    const price = prices[i] ?? null;
-    const cost = price !== null && maxPrice > 0 ? price / maxPrice : null;
-    const lat = latencies[i] ?? null;
-    const latency = lat !== null && maxLatency > 0 ? lat / maxLatency : null;
-    const c = cost ?? 0;
-    const l = latency ?? 0;
-    let score =
-      settings.optimize === 'quality'
-        ? quality
-        : settings.optimize === 'cost'
-          ? quality - 0.3 * c
-          : settings.optimize === 'latency'
-            ? quality - 0.3 * l
-            : quality - 0.1 * c * (0.5 + req.cost_sensitivity) - 0.05 * l * (0.5 + req.latency_sensitivity);
-    const rank = preference?.preferred.indexOf(m.id) ?? -1;
-    if (rank >= 0 && rank < 3) {
-      score += profileGuide ? 0.2 - 0.05 * rank : 0.03 - 0.01 * rank;
-      reasons.push(`${profileGuide ? `profile.${profile}` : 'guide'}.preferred(${rank + 1})`);
-    }
-    return {
-      model: m.id,
-      score: round(score),
-      fit: round(fit),
-      pass_rate,
-      samples,
-      cost: cost === null ? null : round(cost),
-      reasons,
-    };
-  });
-  candidates.sort((a, b) => b.score - a.score || a.model.localeCompare(b.model));
-  // Between models within the delta of the best, the cheaper one (spec Part 08 §13).
-  const top = candidates[0] as Candidate;
-  const close = candidates.filter(
-    (c) => top.score - c.score < settings.prefer_cheaper_if_score_delta_below && c.cost !== null,
+  const first = selected[0] as (typeof selected)[number];
+  codes.push('registry.rank');
+  return result(
+    first.row.model,
+    'registry',
+    `${first.row.model}, rank ${first.candidate.rank} for role ${role}${registryRole !== role ? ` (${registryRole})` : ''}`,
+    {
+      candidates: selected.map((entry) => entry.row),
+      fallback_chain: [
+        ...selected.slice(1).map((entry) => ({ model: entry.row.model, reason: 'registry.rank.next' })),
+        { model: null, reason: 'human' },
+      ],
+      selected_rank: first.candidate.rank,
+      selected_harness: first.candidate.harness,
+    },
   );
-  const cheapest = close.length > 1 ? close.reduce((a, b) => ((b.cost ?? 1) < (a.cost ?? 1) ? b : a)) : top;
-  const best = cheapest.model !== top.model ? cheapest : top;
-  if (best !== top) codes.push('cheaper.within_delta');
-  const strongest = [...candidates].sort((a, b) => b.fit - a.fit || a.model.localeCompare(b.model))[0] as Candidate;
-  const chainFor = (chosen: string) => [
-    ...(preference?.fallback ?? [])
-      .filter((id) => id !== chosen && candidates.some((c) => c.model === id))
-      .map((id) => ({ model: id, reason: profileGuide ? `profile.${profile}.fallback` : 'guide.fallback' })),
-    ...candidates
-      .filter((c) => c.model !== chosen && !(preference?.fallback ?? []).includes(c.model))
-      .slice(0, 2)
-      .map((c) => ({ model: c.model, reason: 'score.next' })),
-    { model: null, reason: 'human' },
-  ];
-  const scored = (model: string, source: RoutingDecision['source'], reason: string, confidence: number | null = null) =>
-    result(model, source, reason, { candidates, fallback_chain: chainFor(model), confidence });
-  const scoredProfile = (chosen: Candidate, profileChain: { model: string | null; reason: string }[]) =>
-    result(
-      chosen.model,
-      'guide',
-      `${chosen.model}, the ${profile} profile selected a ${strategy} model (fit ${chosen.fit} ≥ ${minFit})`,
-      {
-        candidates,
-        fallback_chain: profileChain,
-      },
-    );
-  const fitText = (c: Candidate) =>
-    `fit ${c.fit}${c.pass_rate !== null ? `, ${Math.round(c.pass_rate * 100)}% verified in ${c.samples} ${task_class} task(s)` : `, no measured outcomes yet (${c.samples} of ${settings.min_samples})`}`;
-  if (mode === 'policy') {
-    const preferred = preference?.preferred.find((id) => candidates.some((c) => c.model === id));
-    if (preferred) {
-      codes.push(profileGuide ? 'profile.preferred' : 'guide.preferred');
-      return scored(
-        preferred,
-        profileGuide ? 'guide' : 'guide',
-        `${preferred}, the ${profileGuide ? `${profile} profile's` : "guide's"} preference for ${task_class} tasks`,
-      );
-    }
-    const fallback = preference?.fallback.find((id) => candidates.some((c) => c.model === id));
-    if (fallback) {
-      codes.push('guide.fallback');
-      return scored(fallback, 'fallback', `${fallback}, the guide's fallback for ${task_class} tasks`);
-    }
-    codes.push('score.best');
-    return scored(best.model, 'score', `${best.model}, the best score (${fitText(best)})`);
-  }
-
-  // auto and hybrid: Laya when its calibrated answer is confident, else the configured fallback.
-  if (input.laya) {
-    const a = input.laya;
-    const usable = candidates.some((c) => c.model === a.choice);
-    if (usable && a.threshold !== null && a.confidence >= a.threshold) {
-      codes.push('laya.confident');
-      return scored(
-        a.choice,
-        'laya',
-        `${a.choice}, Laya's choice (${a.checkpoint}, confidence ${round(a.confidence)} ≥ calibrated ${a.threshold})`,
-        a.confidence,
-      );
-    }
-    codes.push(!usable ? 'laya.ineligible_choice' : a.threshold === null ? 'laya.uncalibrated' : 'laya.low_confidence');
-    if (settings.low_confidence === 'human' || settings.low_confidence === 'block') {
-      return blocked(
-        `Laya's answer is not reliable enough (${codes.at(-1)}); ${settings.low_confidence === 'human' ? 'a human decides' : 'autonomous routing is blocked'}`,
-        { candidates, confidence: a.confidence },
-      );
-    }
-    if (settings.low_confidence === 'strongest') {
-      return scored(
-        strongest.model,
-        'fallback',
-        `${strongest.model}, the strongest eligible model (Laya was not confident)`,
-        a.confidence,
-      );
-    }
-  } else {
-    codes.push(
-      input.laya_status === 'unavailable' || input.laya_status === 'pending'
-        ? `laya.${input.laya_status}`
-        : 'laya.none',
-    );
-  }
-  const strategy = preference?.strategy ?? 'score';
-  const minFit = preference?.min_fit ?? 0.6;
-  if (strategy === 'block') {
-    codes.push(`profile.${profile}.block`);
-    return blocked(`the ${profile} routing profile blocks autonomous model selection; a human decides`, {
-      candidates,
-    });
-  }
-  const capable = candidates.filter((candidate) => candidate.fit >= minFit);
-  if (strategy === 'cheapest-capable' && capable.length) {
-    const modelById = new Map(eligible.map((model) => [model.id, model]));
-    const costRank = (model: ModelRecord) =>
-      model.cost_class === 'free' || model.local ? 0 : model.cost_class === 'cheap' ? 1 : 2;
-    const cheapestCapable = [...capable].sort((a, b) => {
-      const am = modelById.get(a.model) as ModelRecord;
-      const bm = modelById.get(b.model) as ModelRecord;
-      return (
-        costRank(am) - costRank(bm) ||
-        (a.cost ?? Number.POSITIVE_INFINITY) - (b.cost ?? Number.POSITIVE_INFINITY) ||
-        b.score - a.score
-      );
-    })[0] as Candidate;
-    codes.push('profile.cheapest_capable');
-    const profileChain = [
-      ...capable
-        .filter((candidate) => candidate.model !== cheapestCapable.model)
-        .slice(0, 2)
-        .map((candidate) => ({ model: candidate.model, reason: `profile.${profile}.capable_fallback` })),
-      { model: null, reason: 'human' },
-    ];
-    return scoredProfile(cheapestCapable, profileChain);
-  }
-  if (strategy === 'strongest-capable' && capable.length) {
-    const strongestCapable = [...capable].sort((a, b) => b.fit - a.fit || b.score - a.score)[0] as Candidate;
-    codes.push('profile.strongest_capable');
-    const profileChain = [
-      ...capable
-        .filter((candidate) => candidate.model !== strongestCapable.model)
-        .slice(0, 2)
-        .map((candidate) => ({ model: candidate.model, reason: `profile.${profile}.capable_fallback` })),
-      { model: null, reason: 'human' },
-    ];
-    return scoredProfile(strongestCapable, profileChain);
-  }
-  if ((strategy === 'cheapest-capable' || strategy === 'strongest-capable') && !capable.length) {
-    codes.push('profile.capability_floor_unmet');
-  }
-  codes.push('score.best');
-  return scored(best.model, 'score', `${best.model} for ${task_class} tasks: ${fitText(best)}`);
 }

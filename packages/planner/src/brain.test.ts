@@ -11,6 +11,7 @@ import { parsePlanDraft } from './parse.js';
 import { proposalFromDraft } from './proposals.js';
 import { FakePlannerModel } from './providers/fake.js';
 import type { PlannerModel } from './providers/types.js';
+import { ROLE_CLASSIFIER_PROMPT_VERSION } from './role-classifier.js';
 
 const PROJECT = 'proj_00000000000000000000000001';
 const human: Actor = { kind: 'human', id: 'local-operator' };
@@ -643,6 +644,204 @@ describe('Master Brain', () => {
     const again = byKey(goal.goal_id)['billing-service'];
     expect(again?.status).toBe('ASSIGNED');
     expect(agentKeyOf(again)).toBe('be-2');
+  });
+
+  it('classifies a blocked task role once, and never a task an explicit role already resolved', async () => {
+    const model = new FakePlannerModel([
+      {
+        purpose: 'role',
+        output: {
+          status: 'classified',
+          roles: [{ role: 'implementation', task_summary: 'split the change', depends_on: [], confidence: 0.95 }],
+          assumptions: [],
+        },
+      },
+    ]);
+    const b = brain(model);
+    const blocked = state.createTask(PROJECT, human, {
+      summary: 'Split a cross-cutting change',
+      kind: 'implementation',
+      scope: { write: ['apps/web/src/App.tsx', 'server/src/api.ts'], read: [] },
+    });
+    expect(blocked).toMatchObject({ role: null, role_source: 'missing' });
+    const explicit = state.createTask(PROJECT, human, {
+      summary: 'Build the checkout API',
+      kind: 'implementation',
+      role: 'backend',
+      scope: { write: ['server/src/api.ts'], read: [] },
+    });
+
+    await b.runOnce();
+    expect(state.q.task(PROJECT, blocked.task_id)).toMatchObject({
+      role: 'implementation',
+      role_source: 'decision_model',
+      role_confidence: 0.95,
+    });
+    expect(state.q.task(PROJECT, explicit.task_id)).toMatchObject({ role: 'backend', role_source: 'task' });
+    expect(model.requests).toHaveLength(1);
+    expect(model.requests[0]?.purpose).toBe('role');
+    expect(state.q.modelCalls(PROJECT)).toEqual([
+      expect.objectContaining({ purpose: 'role', status: 'ok', prompt_version: ROLE_CLASSIFIER_PROMPT_VERSION }),
+    ]);
+
+    // The resolved contract and the recorded job mean no second classifier call.
+    await b.runOnce();
+    expect(model.requests).toHaveLength(1);
+  });
+
+  it('stores a multi-role classifier answer as a proposed DAG and keeps it blocked', async () => {
+    const model = new FakePlannerModel([
+      {
+        purpose: 'role',
+        output: {
+          status: 'classified',
+          assumptions: ['the page and the API can ship together'],
+          roles: [
+            { role: 'frontend_engineer', task_summary: 'Build the page', depends_on: [], confidence: 0.9 },
+            {
+              role: 'backend_engineer',
+              task_summary: 'Build the API',
+              depends_on: ['frontend_engineer'],
+              confidence: 0.85,
+            },
+          ],
+        },
+      },
+    ]);
+    const b = brain(model);
+    const task = state.createTask(PROJECT, human, {
+      summary: 'Split the checkout work',
+      kind: 'implementation',
+      scope: { write: ['apps/web/src/App.tsx', 'server/src/api.ts'], read: [] },
+    });
+    await b.runOnce();
+    expect(state.q.task(PROJECT, task.task_id)).toMatchObject({ role: null, role_source: 'decision_model' });
+    expect(state.q.latestTaskRoleDecision(PROJECT, task.task_id)).toMatchObject({
+      status: 'proposed',
+      roles: [
+        { role: 'frontend_engineer', depends_on: [] },
+        { role: 'backend_engineer', depends_on: ['frontend_engineer'] },
+      ],
+    });
+    expect(model.requests).toHaveLength(1);
+  });
+
+  it('persists a classifier clarification as the blocked contract and does not ask again', async () => {
+    const model = new FakePlannerModel([
+      {
+        purpose: 'role',
+        output: {
+          status: 'clarification_required',
+          missing_facts: ['whether the checkout page is in scope'],
+          questions: ['Should this include the checkout page?'],
+        },
+      },
+    ]);
+    const b = brain(model);
+    const task = state.createTask(PROJECT, human, {
+      summary: 'Split a cross-cutting change',
+      kind: 'implementation',
+      scope: { write: ['apps/web/src/App.tsx', 'server/src/api.ts'], read: [] },
+    });
+    const initialDecision = state.q.latestTaskRoleDecision(PROJECT, task.task_id);
+    await b.runOnce();
+    expect(state.q.task(PROJECT, task.task_id)).toMatchObject({ role: null, role_source: 'missing' });
+    expect(state.q.latestTaskRoleDecision(PROJECT, task.task_id)).toMatchObject({
+      status: 'blocked',
+      source: 'missing',
+      questions: ['Should this include the checkout page?'],
+    });
+    expect(model.requests).toHaveLength(1);
+    expect(state.brainJobs(PROJECT, ['done']).filter((job) => job.kind === 'role')).toHaveLength(1);
+
+    await b.runOnce();
+    expect(model.requests).toHaveLength(1);
+    expect(state.brainJobs(PROJECT, ['pending', 'calling', 'done']).filter((job) => job.kind === 'role')).toHaveLength(
+      1,
+    );
+
+    // A job recovered from before the clarification still names the old blocked decision. It must
+    // stop at the changed contract rather than ask the classifier the same question again.
+    const [staleJob] = state.enqueueBrainJobs(
+      PROJECT,
+      [
+        {
+          kind: 'role',
+          goal_id: null,
+          task_id: task.task_id,
+          reason: 'simulated restart',
+          payload: { decision_id: initialDecision?.decision_id },
+          dedupe_key: `role:stale:${task.task_id}`,
+          source_sequence: state.store.head(PROJECT),
+        },
+      ],
+      state.q.brainCursor(PROJECT),
+    );
+    await b.runOnce();
+    expect(model.requests).toHaveLength(1);
+    expect(state.brainJobs(PROJECT, ['done']).find((job) => job.job_id === staleJob)).toMatchObject({
+      result: expect.stringMatching(/contract changed/),
+    });
+  });
+
+  it('turns an unusable classifier answer into a human question without reclassifying', async () => {
+    const low = {
+      purpose: 'role' as const,
+      output: {
+        status: 'classified' as const,
+        roles: [{ role: 'implementation', task_summary: 'maybe', depends_on: [], confidence: 0.2 }],
+        assumptions: [],
+      },
+    };
+    const model = new FakePlannerModel([low, low]);
+    const b = brain(model);
+    const task = state.createTask(PROJECT, human, {
+      summary: 'Split a cross-cutting change',
+      kind: 'implementation',
+      scope: { write: ['apps/web/src/App.tsx', 'server/src/api.ts'], read: [] },
+    });
+    await b.runOnce();
+    expect(state.q.task(PROJECT, task.task_id)).toMatchObject({ role: null, role_source: 'missing' });
+    expect(state.q.latestTaskRoleDecision(PROJECT, task.task_id)).toMatchObject({
+      status: 'blocked',
+      source: 'missing',
+    });
+    expect(state.q.latestTaskRoleDecision(PROJECT, task.task_id)?.questions[0]).toMatch(/could not choose one role/);
+    expect(model.requests).toHaveLength(2);
+    expect(state.q.modelCalls(PROJECT)).toEqual([
+      expect.objectContaining({ purpose: 'role', status: 'invalid' }),
+      expect.objectContaining({ purpose: 'role', status: 'invalid' }),
+    ]);
+    expect(state.brainJobs(PROJECT, ['done']).filter((job) => job.kind === 'role')).toHaveLength(1);
+
+    await b.runOnce();
+    expect(model.requests).toHaveLength(2);
+  });
+
+  it('does not retry a role classification that failed for a permanent reason', async () => {
+    const model = new FakePlannerModel([
+      { purpose: 'role', error: { code: 'auth', message: 'no usable key', billed: 'no' } },
+    ]);
+    const b = brain(model);
+    const task = state.createTask(PROJECT, human, {
+      summary: 'Split a cross-cutting change',
+      kind: 'implementation',
+      scope: { write: ['apps/web/src/App.tsx', 'server/src/api.ts'], read: [] },
+    });
+    await b.runOnce();
+    expect(state.q.task(PROJECT, task.task_id)).toMatchObject({ role: null, role_source: 'missing' });
+    expect(state.q.latestTaskRoleDecision(PROJECT, task.task_id)).toMatchObject({ status: 'blocked' });
+    expect(model.requests).toHaveLength(1);
+    expect(state.q.modelCalls(PROJECT)).toEqual([
+      expect.objectContaining({ purpose: 'role', status: 'error', error_code: 'auth' }),
+    ]);
+    expect(state.brainJobs(PROJECT, ['done']).filter((job) => job.kind === 'role')).toMatchObject([
+      { result: expect.stringMatching(/classification unavailable/) },
+    ]);
+
+    await b.runOnce();
+    expect(model.requests).toHaveLength(1);
+    expect(state.brainJobs(PROJECT, ['pending', 'calling']).filter((job) => job.kind === 'role')).toHaveLength(0);
   });
 
   it('keeps its place in the event log across restarts', async () => {

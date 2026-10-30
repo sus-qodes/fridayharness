@@ -5,7 +5,6 @@ import type { TauriCore } from '../platform/tauri-transport.js';
 import { UI_VERSION } from '../shell/version.js';
 import { makeContext } from '../test/context.js';
 import { makeRun, makeSnapshot, makeTask } from '../test/fixtures.js';
-import { routingModeOf } from './routing-pins.js';
 import {
   clampNumber,
   pageActions,
@@ -47,7 +46,7 @@ const POLICY = {
   },
 };
 
-const MODELS = { models: [{ id: 'claude-sonnet-5' }, { id: 'gpt-5.6' }], evidence: [], settings: { mode: 'hybrid' } };
+const MODELS = { models: [{ id: 'claude-sonnet-5' }, { id: 'gpt-5.6' }], evidence: [], settings: {} };
 
 const PIN = {
   pin_id: 'pin1',
@@ -182,14 +181,6 @@ describe('settings helpers', () => {
     expect(worktreesInUse(board)).toBe(2);
     expect(worktreesInUse(null)).toBe(0);
     expect(worktreesInUse(makeSnapshot())).toBe(0);
-  });
-
-  it('reads the routing mode word the daemon reports, and nothing else', () => {
-    expect(routingModeOf({ mode: 'hybrid' })).toBe('hybrid');
-    expect(routingModeOf({ mode: '' })).toBeNull();
-    expect(routingModeOf({})).toBeNull();
-    expect(routingModeOf(undefined)).toBeNull();
-    expect(routingModeOf({ mode: 42 })).toBeNull();
   });
 });
 
@@ -586,19 +577,18 @@ describe('settings drawer', () => {
 
   // ---- Routing: the pins' home, as they worked from the Agents drawer before (review decision 2)
 
-  it('shows the routing mode word beside the pins, and "unknown" when the daemon did not say', async () => {
+  it('says dispatch is the static role registry beside the pins, and lists no models when none are known', async () => {
     const ctx = makeContext({ answers: { 'GET /models': MODELS, 'GET /routing/pins': { pins: [] } } });
     const d = settingsDrawer(ctx, { kind: 'settings', tab: 'routing' });
     await flush();
     const routing = section(d.el, 'Routing') as HTMLElement;
-    expect(routing.querySelector('.pn-routing-mode')?.textContent).toBe('hybrid');
-    expect(routing.textContent).toContain('Routing mode');
+    expect(routing.textContent).toContain('static role registry');
+    expect(routing.textContent).toContain('pins beat registry rank');
     expect(routing.textContent).toContain('No pins');
     expect(() => buttonBy(routing, 'Open routing pins')).toThrow();
     d.destroy();
     const bare = settingsDrawer(makeContext({ answers: { 'GET /models': { models: [] } } }), { kind: 'settings' });
     await flush();
-    expect(bare.el.querySelector('.pn-routing-mode')?.textContent).toBe('unknown');
     expect(bare.el.textContent).toContain('No models known');
     bare.destroy();
   });

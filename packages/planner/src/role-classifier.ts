@@ -7,7 +7,7 @@ import {
   roleRegistryRoles,
 } from '@friday/routing';
 import { type ParseResult, type PlannerOutcome, runPlanner } from './model.js';
-import type { PlannerModel } from './providers/types.js';
+import type { ModelRequest, PlannerModel } from './providers/types.js';
 
 export const ROLE_CLASSIFIER_PROMPT_VERSION = 'role-classifier-1';
 
@@ -48,8 +48,9 @@ function requestText(input: RoleDecisionInput): string {
 
 /**
  * One bounded, structured role-classification call. It cannot choose a model or harness; the static
- * role registry remains the only dispatch authority. Low-confidence and clarification results are
- * returned as invalid outcomes so the caller can block and ask a human.
+ * role registry remains the only dispatch authority. A low-confidence single role is an invalid
+ * result that gets the one repair attempt; a clarification is valid so its questions can be stored
+ * as the blocked role contract.
  */
 export async function classifyTaskRoles(
   model: PlannerModel,
@@ -58,12 +59,21 @@ export async function classifyTaskRoles(
   policy: RoleClassifierPolicy,
   settings: RoleClassifierSettings,
   signal?: AbortSignal,
+  opts: {
+    onCall?: (request: ModelRequest) => void;
+    outbound?: (request: ModelRequest) => ModelRequest;
+  } = {},
 ): Promise<PlannerOutcome<RoleDecision>> {
   const parse = (output: unknown): ParseResult<RoleDecision> => {
     try {
       const decision = parseRoleDecision(output, roleRegistryRoles(registry));
-      const blocked = roleDecisionBlockReason(decision, settings.minimumConfidence ?? 0.7);
-      return blocked ? { ok: false, errors: [blocked] } : { ok: true, value: decision };
+      // A clarification is a valid decision: the caller persists its questions and blocks the task.
+      // Low confidence on a real classification is retried, then blocked by the caller.
+      if (decision.status === 'classified') {
+        const blocked = roleDecisionBlockReason(decision, settings.minimumConfidence ?? 0.7);
+        if (blocked) return { ok: false, errors: [blocked] };
+      }
+      return { ok: true, value: decision };
     } catch (error) {
       return { ok: false, errors: [(error as Error).message] };
     }
@@ -101,6 +111,6 @@ export async function classifyTaskRoles(
     },
     parse,
     policy,
-    { promptVersion: ROLE_CLASSIFIER_PROMPT_VERSION, signal },
+    { promptVersion: ROLE_CLASSIFIER_PROMPT_VERSION, signal, ...opts },
   );
 }

@@ -1,6 +1,6 @@
 import {
   canonicalRole,
-  loadGuide,
+  loadModelCatalog,
   type ModelRecord,
   type ModelRecordInput,
   mergeModels,
@@ -26,7 +26,7 @@ export interface RegistryView {
 
 export function registryViewForProject(ref: ProjectRef): RegistryView {
   const routing = ref.config.routing;
-  const models = mergeModels(loadGuide().models, routing.models as ModelRecordInput[], ref.config.master_brain);
+  const models = mergeModels(loadModelCatalog().models, routing.models as ModelRecordInput[], ref.config.master_brain);
   return {
     project: ref,
     registry: withProjectRoleCandidates(

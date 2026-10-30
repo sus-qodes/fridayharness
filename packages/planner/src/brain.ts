@@ -7,6 +7,7 @@ import {
   type PlanVersionView,
   type TaskView,
 } from '@friday/protocol';
+import { ROLE_REGISTRY_SOURCE, type RoleDecisionInput } from '@friday/routing';
 import type { BrainJob, BrainJobInput, FridayState } from '@friday/state';
 import { consolidatePlan } from './consolidate.js';
 import { type DelegationCandidate, delegate } from './delegate.js';
@@ -32,6 +33,7 @@ import {
 } from './prompts.js';
 import { existingTasks, proposalFromDraft, proposalFromReplan } from './proposals.js';
 import type { ModelRequest, PlannerModel } from './providers/types.js';
+import { classifyTaskRoles, ROLE_CLASSIFIER_PROMPT_VERSION, type RoleClassifierSettings } from './role-classifier.js';
 import { draftJsonSchema, type NeedsHuman } from './schemas.js';
 import { type BrainAction, failureAction, type TriggerFacts, triggersFor } from './triggers.js';
 import { type ExistingTask, type PlanTaskBounder, validateReplanDraft } from './validate.js';
@@ -91,11 +93,6 @@ export interface BrainDeps {
     task: TaskView,
     agentId: string,
   ) => { fit: number; cost: number; cost_class?: CostClass | null; blocked?: string } | null;
-  /**
-   * Whether routing has what it waits for to route a task (Laya's answer, or that Laya did not
-   * answer within its deadline; review F11). A task that is not ready waits; other tasks go on.
-   */
-  routingReady?: (task: TaskView) => boolean;
 }
 
 export interface BrainStep {
@@ -112,9 +109,11 @@ export interface BrainReport {
 }
 
 const PRIORITY: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
-const MODEL_JOBS = new Set(['plan', 'replan']);
+const MODEL_JOBS = new Set(['plan', 'replan', 'role']);
 const COORDINATION = new Set(['ready_dependents', 'check_goal', 'delegate', 'release_lost']);
 const DEFAULT_RETRY_MS = [1000, 5000, 30_000];
+/** A role-classifier provider failure a retry cannot fix; the task keeps its existing human question. */
+const PERMANENT_ROLE_ERRORS = new Set(['auth', 'bad_request', 'refused']);
 
 type JobOutcome = { status: 'done' | 'waiting'; result: string } | { status: 'retry'; result: string };
 
@@ -342,6 +341,15 @@ export class MasterBrain {
           payload: { plan_id: a.plan_id, version: a.version, note: a.note },
           dedupe_key: `rejected:${a.plan_id}:${a.version}`,
         };
+      case 'classify_role':
+        return {
+          kind: 'role',
+          goal_id: a.goal_id,
+          task_id: a.task_id,
+          reason: 'the task role is blocked',
+          payload: { decision_id: a.decision_id },
+          dedupe_key: `role:${a.task_id}`,
+        };
       case 'escalate':
         return {
           kind: 'escalate',
@@ -456,11 +464,18 @@ export class MasterBrain {
     this.#recovered = true;
     const { state, projectId } = this.#deps;
     for (const job of state.brainJobs(projectId, ['calling'])) {
+      const purpose = job.kind === 'plan' ? 'plan' : job.kind === 'role' ? 'role' : 'replan';
+      const promptVersion =
+        job.kind === 'plan'
+          ? PROMPT_VERSIONS.plan
+          : job.kind === 'role'
+            ? ROLE_CLASSIFIER_PROMPT_VERSION
+            : PROMPT_VERSIONS.replan;
       this.#recordCalls(
         [
           {
-            purpose: job.kind === 'plan' ? 'plan' : 'replan',
-            prompt_version: job.kind === 'plan' ? PROMPT_VERSIONS.plan : PROMPT_VERSIONS.replan,
+            purpose,
+            prompt_version: promptVersion,
             provider: this.#deps.model?.provider ?? 'unknown',
             model: this.#deps.settings.model,
             remote: this.#deps.model?.remote ?? false,
@@ -475,7 +490,7 @@ export class MasterBrain {
             request_id: null,
           },
         ],
-        job.goal_id as string,
+        job.goal_id,
         job.goal_id ? (state.q.findGoal(projectId, job.goal_id)?.plan_id ?? null) : null,
       );
       state.updateBrainJob(job.job_id, { status: 'pending', attempts: job.attempts + 1, result: 'interrupted' });
@@ -537,6 +552,10 @@ export class MasterBrain {
     return {
       goalOf: (taskId) => state.q.findTask(projectId, taskId)?.goal_id ?? null,
       goalOfPlan: (planId) => state.q.planVersions(planId)[0]?.goal_id ?? null,
+      roleClassificationAttempted: (taskId) =>
+        state
+          .brainJobs(projectId, ['pending', 'waiting', 'calling', 'done', 'failed'])
+          .some((j) => j.kind === 'role' && j.task_id === taskId),
       failuresOf: (taskId) => state.q.verificationFailures(taskId),
       replansOf: (goalId) => {
         const g = state.q.findGoal(projectId, goalId);
@@ -625,6 +644,7 @@ export class MasterBrain {
   }
 
   async #runModelJob(job: BrainJob): Promise<JobOutcome> {
+    if (job.kind === 'role') return this.#classifyRole(job);
     const goalId = job.goal_id as string;
     if (job.kind === 'plan') return this.#plan(job, goalId, null, false);
     const blocker = this.#blocker(job);
@@ -649,7 +669,7 @@ export class MasterBrain {
   }
 
   /** Records every call as a `model.called` event; returns the id of the last one. */
-  #recordCalls(calls: PlannerCall[], goalId: string, planId: string | null): string | null {
+  #recordCalls(calls: PlannerCall[], goalId: string | null, planId: string | null): string | null {
     let last: string | null = null;
     for (const c of calls) {
       last = this.#deps.state.recordModelCall(this.#deps.projectId, MASTER_BRAIN, {
@@ -681,6 +701,21 @@ export class MasterBrain {
   }
 
   /** Marks the job as calling (with the worst-case cost) right before a request goes out, so a restart knows. */
+  #markCalling(job: BrainJob, model: PlannerModel, request: ModelRequest, policy: PlannerPolicy): void {
+    this.#deps.state.updateBrainJob(job.job_id, {
+      status: 'calling',
+      call_estimate_usd: requestEstimate(model, request, policy.prices),
+    });
+    // An observation, so an interface knows to look again while the call runs (plan M9 §5.11).
+    this.#deps.state.recordObservation(
+      this.#deps.projectId,
+      MASTER_BRAIN,
+      'brain.call_started',
+      { job_id: job.job_id, kind: job.kind, goal_id: job.goal_id ?? null },
+      [],
+    );
+  }
+
   #call<T>(
     job: BrainJob,
     model: PlannerModel,
@@ -693,20 +728,7 @@ export class MasterBrain {
       promptVersion,
       signal: this.#abort.signal,
       outbound: (req) => redactRequest(req, this.#deps.state.redactor),
-      onCall: (req) => {
-        this.#deps.state.updateBrainJob(job.job_id, {
-          status: 'calling',
-          call_estimate_usd: requestEstimate(model, req, policy.prices),
-        });
-        // An observation, so an interface knows to look again while the call runs (plan M9 §5.11).
-        this.#deps.state.recordObservation(
-          this.#deps.projectId,
-          MASTER_BRAIN,
-          'brain.call_started',
-          { job_id: job.job_id, kind: job.kind, goal_id: job.goal_id ?? null },
-          [],
-        );
-      },
+      onCall: (req) => this.#markCalling(job, model, req, policy),
     });
   }
 
@@ -722,6 +744,107 @@ export class MasterBrain {
           ? 'invalid_plan'
           : 'planner_unavailable';
     return this.#escalate(reason, goalId, taskId, outcome.message, outcome.errors);
+  }
+
+  /**
+   * R3: the decision model is asked only when the persisted contract is blocked. Its answer is
+   * recorded through the same R2 path as a human assignment, so a single role resolves the task,
+   * a multi-role answer becomes a proposed DAG, and a clarification becomes a human question.
+   */
+  async #classifyRole(job: BrainJob): Promise<JobOutcome> {
+    const { state, projectId, settings } = this.#deps;
+    const taskId = job.task_id;
+    if (!taskId) return { status: 'done', result: 'skipped: no task' };
+    const task = state.q.findTask(projectId, taskId);
+    if (!task) return { status: 'done', result: 'skipped: the task no longer exists' };
+    const queuedDecisionId = typeof job.payload.decision_id === 'string' ? job.payload.decision_id : null;
+    if (!queuedDecisionId) return { status: 'done', result: 'skipped: the job has no blocked decision' };
+    const latest = state.q.latestTaskRoleDecision(projectId, taskId);
+    if (latest?.status !== 'blocked' || latest.decision_id !== queuedDecisionId) {
+      return {
+        status: 'done',
+        result: `skipped: the role contract changed since this job was queued (${latest?.status ?? 'missing'})`,
+      };
+    }
+    const model = this.#deps.model;
+    if (!model) return { status: 'done', result: 'skipped: no planner is configured' };
+    const goal = task.goal_id ? state.q.findGoal(projectId, task.goal_id) : undefined;
+    const outcomes = [...(goal?.outcomes ?? []), ...(goal?.inferred_outcomes ?? [])];
+    const input: RoleDecisionInput = {
+      objective: goal?.objective ?? goal?.request ?? task.summary,
+      constraints: [...(goal?.constraints ?? []), ...(goal?.inferred_constraints ?? [])],
+      outcomes,
+      non_goals: [],
+      definition_of_done: task.acceptance_criteria.length ? task.acceptance_criteria : outcomes,
+      task_summary: task.summary,
+      task_description: task.description,
+      kind: task.kind,
+      risk_level: task.risk_level,
+      scope: task.scope,
+    };
+    const policy = this.#policy(model);
+    const classifierSettings: RoleClassifierSettings = {
+      model: settings.model,
+      maxTokens: settings.maxTokens,
+    };
+    const outcome = await classifyTaskRoles(
+      model,
+      ROLE_REGISTRY_SOURCE,
+      input,
+      policy,
+      classifierSettings,
+      this.#abort.signal,
+      {
+        onCall: (request) => this.#markCalling(job, model, request, policy),
+        outbound: (request) => redactRequest(request, state.redactor),
+      },
+    );
+    const planId = task.goal_id ? (state.q.findGoal(projectId, task.goal_id)?.plan_id ?? null) : null;
+    this.#recordCalls(outcome.calls, job.goal_id, planId);
+    if (this.#closed && !outcome.ok && outcome.reason === 'provider') {
+      return { status: 'retry', result: 'interrupted by shutdown' };
+    }
+    if (!outcome.ok) {
+      if (outcome.reason === 'provider') {
+        // Auth, bad request and an explicit refusal need a human or a config change, not the retry
+        // ladder. The task already carries its blocked role question, so the job ends quietly.
+        const permanent = outcome.calls.some((c) => c.error_code && PERMANENT_ROLE_ERRORS.has(c.error_code));
+        if (!permanent) return { status: 'retry', result: `role classification failed: ${outcome.message}` };
+        return { status: 'done', result: `role classification unavailable: ${outcome.message}` };
+      }
+      if (outcome.reason !== 'invalid') {
+        return { status: 'done', result: `role classification unavailable: ${outcome.message}` };
+      }
+      // The model answered twice with an unusable classification. Persist the question so the task
+      // stays blocked visibly instead of silently reverting to the generic role question.
+      const question = `The role classifier could not choose one role (${outcome.message}). Which role should do this work?`;
+      state.recordTaskRoleDecision(
+        projectId,
+        MASTER_BRAIN,
+        taskId,
+        {
+          status: 'clarification_required',
+          missing_facts: outcome.errors.length ? outcome.errors : [outcome.message],
+          questions: [question],
+        },
+        { intent_version: latest.intent_version, idempotency_key: `role:${taskId}:${latest.decision_id}` },
+      );
+      return { status: 'done', result: `asked a human: ${question}` };
+    }
+    state.recordTaskRoleDecision(projectId, MASTER_BRAIN, taskId, outcome.draft, {
+      intent_version: latest.intent_version,
+      idempotency_key: `role:${taskId}:${latest.decision_id}`,
+    });
+    if (outcome.draft.status === 'clarification_required') {
+      return { status: 'done', result: `asked a human: ${outcome.draft.questions.join('; ')}` };
+    }
+    if (outcome.draft.roles.length > 1) {
+      return {
+        status: 'done',
+        result: `proposed ${outcome.draft.roles.length} roles for ${taskId}: ${outcome.draft.roles.map((r) => r.role).join(', ')}`,
+      };
+    }
+    return { status: 'done', result: `resolved ${taskId} as ${outcome.draft.roles[0]?.role ?? 'a role'}` };
   }
 
   async #plan(job: BrainJob, goalId: string, feedback: string | null, force: boolean): Promise<JobOutcome> {
@@ -1189,16 +1312,13 @@ export class MasterBrain {
         .filter((e) => e.kind === 'recovery_needed' || e.kind === 'routing_violated')
         .map((e) => String(e.task_id)),
     );
-    const routingReady = this.#deps.routingReady ?? (() => true);
     // Plan tasks of active goals, and loose tasks a human reserved for an agent: a spawned agent
     // cannot claim a reservation, so it is pushed (below); other loose tasks stay a human's.
     const ready = state.q
       .tasks(projectId, { statuses: ['READY'] })
       .filter(
         (t) =>
-          ((t.goal_id && active.has(t.goal_id)) || (!t.goal_id && t.reserved_for_agent_key)) &&
-          !asked.has(t.task_id) &&
-          routingReady(t),
+          ((t.goal_id && active.has(t.goal_id)) || (!t.goal_id && t.reserved_for_agent_key)) && !asked.has(t.task_id),
       )
       .sort(
         (a, b) => (PRIORITY[a.priority] ?? 9) - (PRIORITY[b.priority] ?? 9) || a.created_at.localeCompare(b.created_at),

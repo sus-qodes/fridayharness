@@ -32,16 +32,17 @@ function decisionLines(
   d: Omit<RoutingDecisionView, 'decision_id' | 'task_id' | 'run_id' | 'harness_id' | 'created_at'>,
 ): string[] {
   const lines = [
-    `${d.model ?? 'no model'} (${d.source}, mode ${d.mode}, class ${d.task_class}${d.binding ? ', binding' : ''})`,
+    `${d.model ?? 'no model'} (${d.source}, class ${d.task_class}${d.binding ? ', binding' : ''})`,
     `  role: ${d.role ?? (d.role_proposed ? 'proposed DAG' : 'missing')} (${d.role_source})${
       d.role_confidence !== null ? `, confidence ${d.role_confidence}` : ''
     }${d.role_registry_version ? `, role registry ${d.role_registry_version}` : ''}${
       d.registry_version && d.registry_version !== d.role_registry_version
         ? `, dispatch registry ${d.registry_version}`
         : ''
-    }${d.role_decision_id ? `, decision ${d.role_decision_id}` : ''}`,
+    }${d.selected_rank !== null ? `, rank ${d.selected_rank}${d.selected_harness ? ` on ${d.selected_harness}` : ''}` : ''}${
+      d.role_decision_id ? `, decision ${d.role_decision_id}` : ''
+    }`,
     ...(d.role_intent_version ? [`  role intent: ${d.role_intent_version}`] : []),
-    `  profile: ${d.profile} (${d.profile_reasons.join('; ') || 'no additional facts'})`,
     `  ${d.reason}`,
   ];
   if (d.constraints.length) lines.push(`  constraints: ${d.constraints.join(', ')}`);
@@ -51,7 +52,7 @@ function decisionLines(
         .slice(0, 6)
         .map(
           (c) =>
-            `  ${c.model === d.model ? '*' : ' '} ${c.model}: score ${c.score}, fit ${c.fit}${c.pass_rate !== null ? `, verified ${Math.round(c.pass_rate * 100)}% of ${c.samples}` : `, ${c.samples} outcome(s)`}${c.cost !== null ? `, cost ${c.cost}` : ''}`,
+            `  ${c.model === d.model ? '*' : ' '} ${c.model}: rank ${c.reasons[0]?.replace(/^registry\.rank\(|\)$/g, '') ?? '-'}${c.reasons[1] ? `, ${c.reasons[1]}` : ''}`,
         ),
     );
   }
@@ -59,7 +60,7 @@ function decisionLines(
   if (d.fallback_chain.length) {
     lines.push(`  fallback: ${d.fallback_chain.map((f) => f.model ?? 'a human').join(' -> ')}`);
   }
-  lines.push(`  codes: ${d.reason_codes.join(', ')} (guide ${d.guide_version}, ${d.requirements_version})`);
+  lines.push(`  codes: ${d.reason_codes.join(', ')} (registry ${d.registry_version ?? '-'})`);
   return lines;
 }
 
@@ -72,8 +73,6 @@ export function registerRoutingCommands(program: Command, g: () => GlobalOptions
       const r = await client.get<{
         models: ModelRow[];
         evidence: ModelEvidenceView[];
-        min_samples: number;
-        guide_version: string;
       }>(client.projectPath('/models'));
       out(g(), r, () => {
         const lines = [
@@ -89,7 +88,7 @@ export function registerRoutingCommands(program: Command, g: () => GlobalOptions
               m.source,
             ]),
           ),
-          `Scores are priors (guide ${r.guide_version}) until a model has ${r.min_samples} verified outcomes for a task class.`,
+          'Dispatch order is the static role registry; measured outcomes are reported, not scored.',
         ];
         if (r.evidence.length) {
           lines.push(
@@ -100,9 +99,7 @@ export function registerRoutingCommands(program: Command, g: () => GlobalOptions
                 e.model,
                 e.task_class,
                 String(e.samples),
-                e.samples
-                  ? `${Math.round((e.passed / e.samples) * 100)}%${e.samples < r.min_samples ? ' (too few)' : ''}`
-                  : '-',
+                e.samples ? `${Math.round((e.passed / e.samples) * 100)}%` : '-',
                 e.median_duration_ms !== null ? `${Math.round(e.median_duration_ms / 1000)} s` : '-',
                 String(e.assumed ?? 0),
                 String(e.other_cohorts ?? 0),
@@ -160,12 +157,11 @@ export function registerRoutingCommands(program: Command, g: () => GlobalOptions
 
   routing
     .command('pin')
-    .description('pin a model or a mode for a task, role, kind or the whole project (it beats Laya and the score)')
+    .description('pin a model for a task, role, kind or the whole project (it beats registry rank)')
     .option('--task <task>', 'one task')
     .option('--role <role>', 'every task of agents with this role')
     .option('--kind <kind>', 'every task of this kind (implementation, review, …)')
     .option('--model <model>', 'the model to use')
-    .option('--mode <mode>', 'manual, policy, auto or hybrid')
     .option('--sensitive', 'secret-sensitive work: only a model a human pinned may run it')
     .option('--needs-vision', 'only models that see images')
     .option('--until <when>', 'when it expires: 7d, 12h, or a date')
@@ -176,7 +172,6 @@ export function registerRoutingCommands(program: Command, g: () => GlobalOptions
         role?: string;
         kind?: string;
         model?: string;
-        mode?: string;
         sensitive?: boolean;
         needsVision?: boolean;
         until?: string;
@@ -191,7 +186,6 @@ export function registerRoutingCommands(program: Command, g: () => GlobalOptions
           scope,
           target: o.task ?? o.role ?? o.kind ?? null,
           model: o.model ?? null,
-          mode: o.mode ?? null,
           sensitive: Boolean(o.sensitive),
           needs_vision: Boolean(o.needsVision),
           until: o.until ? untilFrom(o.until) : null,
@@ -225,82 +219,8 @@ export function registerRoutingCommands(program: Command, g: () => GlobalOptions
     });
 }
 
-interface Calibration {
-  checkpoint: string;
-  shape: string;
-  threshold: number | null;
-  accuracy: number | null;
-  coverage: number;
-  support: number;
-  target: number;
-}
-
-function calibrationLine(c: Calibration): string {
-  return c.threshold === null
-    ? `${c.checkpoint} ${c.shape}: no threshold reached ${c.target} accuracy in ${c.support} answer(s); Laya stays advisory`
-    : `${c.checkpoint} ${c.shape}: threshold ${c.threshold} (${Math.round((c.accuracy ?? 0) * 100)}% accurate at ${Math.round(c.coverage * 100)}% coverage of ${c.support})`;
-}
-
-/** Laya (plan M7c, ADR-0031 §10): its settings, and thresholds fitted on labelled answers. */
-export function registerLayaCommands(program: Command, g: () => GlobalOptions): void {
-  const laya = program.command('laya').description('Laya, the local decision model routing may consult');
-  laya
-    .command('status')
-    .description("Laya's settings and the thresholds fitted for it")
-    .action(async () => {
-      const { client } = operator(g());
-      const r = await client.get<{ enabled: boolean; url: string; model: string | null; calibrations: Calibration[] }>(
-        client.projectPath('/laya'),
-      );
-      out(g(), r, () =>
-        [
-          r.enabled
-            ? `Laya is enabled at ${r.url}${r.model ? ` (checkpoint ${r.model})` : ''}.`
-            : 'Laya is off (routing.laya.enabled: false); routing uses pins, the guide and the score.',
-          ...(r.calibrations.length
-            ? r.calibrations.map(calibrationLine)
-            : ['No thresholds fitted: Laya\'s answers are advisory until "friday laya calibrate".']),
-        ].join('\n'),
-      );
-    });
-  laya
-    .command('calibrate <file>')
-    .description(
-      'fit thresholds from labelled answers: JSON lines of {"checkpoint", "options", "confidence", "correct"}',
-    )
-    .option('--target <accuracy>', 'accuracy the answers above the threshold must reach', '0.9')
-    .option('--min-support <n>', 'answers a threshold needs above it', '20')
-    .action(async (file: string, o: { target: string; minSupport: string }) => {
-      const text = await import('node:fs').then((fs) => fs.readFileSync(file, 'utf8'));
-      const records = text
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter(Boolean)
-        .map((l, i) => {
-          try {
-            return JSON.parse(l) as Record<string, unknown>;
-          } catch {
-            throw new UsageError(`${file}:${i + 1} is not JSON`);
-          }
-        });
-      const { client } = operator(g());
-      const r = await client.post<{ calibrations: Calibration[] }>(client.projectPath('/laya/calibrate'), {
-        records,
-        target: Number(o.target),
-        min_support: Number(o.minSupport),
-        source: `friday laya calibrate ${file}`.slice(0, 200),
-      });
-      out(g(), r, () => r.calibrations.map(calibrationLine).join('\n'));
-    });
-}
-
 function pinText(p: RoutingPinView): string {
-  const what = [
-    p.model && `model ${p.model}`,
-    p.mode && `mode ${p.mode}`,
-    p.sensitive && 'sensitive',
-    p.needs_vision && 'needs vision',
-  ]
+  const what = [p.model && `model ${p.model}`, p.sensitive && 'sensitive', p.needs_vision && 'needs vision']
     .filter(Boolean)
     .join(', ');
   const scope = p.scope === 'project' ? 'the project' : `${p.scope} ${p.target}`;

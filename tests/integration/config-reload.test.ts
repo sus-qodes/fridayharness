@@ -177,7 +177,7 @@ describe('config.yaml read again while Friday runs', () => {
     expect((await snapshot(td)).policy_untrusted).toBe(false);
   });
 
-  it('applies new checks, conflict-prone files and routing settings while sessions run', async () => {
+  it('applies new checks, conflict-prone files and routing constraints while sessions run', async () => {
     const td = await startTestDaemon(ws(), { git: true, brain: false });
     const P = (p: string) => td.operator.projectPath(p);
     const task = await td.operator.post<TaskView>(P('/tasks'), {
@@ -186,15 +186,28 @@ describe('config.yaml read again while Friday runs', () => {
       scope: { write: ['docs/**'], read: [] },
     });
     const explain = () =>
-      td.operator.get<{ dry_run: { mode: string; reason: string } }>(P(`/routing/explain/${task.task_id}`));
-    expect((await explain()).dry_run.mode).toBe('hybrid');
+      td.operator.get<{
+        dry_run: {
+          mode: string;
+          source: string;
+          reason: string;
+          model: string | null;
+          blocked: boolean;
+          constraints: string[];
+        };
+      }>(P(`/routing/explain/${task.task_id}`));
+    expect((await explain()).dry_run).toMatchObject({
+      mode: 'registry',
+      source: 'registry',
+      model: 'claude-sonnet-5-5',
+    });
     expect((await snapshot(td)).verification.checks).toEqual([]);
 
     editConfig(
       (y) =>
         `${y.replace('  checks: []\n', '  checks:\n    - name: tests\n      command: node\n      args: ["--test"]\n')}` +
         'reservations:\n  required: ["package.json"]\n' +
-        'routing:\n  mode: manual\n  default_model: claude-haiku-5-5\n' +
+        'routing:\n  must_use_local: true\n' +
         'recovery:\n  max_retries: 0\n',
     );
     const snap = await snapshot(td);
@@ -203,8 +216,7 @@ describe('config.yaml read again while Friday runs', () => {
       applied: expect.arrayContaining([
         'verification.checks',
         'reservations.required',
-        'routing.mode',
-        'routing.default_model',
+        'routing.must_use_local',
         'recovery.max_retries',
       ]),
       restart_needed: [],
@@ -213,12 +225,13 @@ describe('config.yaml read again while Friday runs', () => {
     const reservations = await td.operator.get<{ required: string[] }>(P('/file-reservations'));
     expect(reservations.required).toEqual(['package.json']);
     const routed = (await explain()).dry_run;
-    expect(routed.mode).toBe('manual');
-    expect(routed.reason).toContain('claude-haiku-5-5');
+    expect(routed).toMatchObject({ mode: 'registry', source: 'none', model: null, blocked: true });
+    expect(routed.constraints).toContain('must_use_local');
+    expect(routed.reason).toContain('must_use_local');
     expect(td.project.config.recovery.max_retries).toBe(0);
   });
 
-  it('turns static registry dispatch on and merges project role candidates on a live reload', async () => {
+  it('merges project models and role candidates on a live reload and applies the local-only constraint', async () => {
     const td = await startTestDaemon(ws(), { git: true, brain: false });
     const P = (p: string) => td.operator.projectPath(p);
     const task = await td.operator.post<TaskView>(P('/tasks'), {
@@ -241,21 +254,27 @@ describe('config.yaml read again while Friday runs', () => {
           candidates: Array<{ model: string; reasons: string[] }>;
         };
       }>(P(`/routing/explain/${task.task_id}`));
-    expect((await explain()).dry_run).toMatchObject({ registry_version: null });
-    expect((await explain()).dry_run.source).not.toBe('registry');
+    expect((await explain()).dry_run).toMatchObject({
+      source: 'registry',
+      model: 'claude-sonnet-5-5',
+      role: 'docs',
+      role_source: 'kind_fallback',
+      registry_version: '2026-10-21.3',
+      selected_rank: 1,
+      selected_harness: 'claude-code',
+    });
 
     editConfig(
       (y) =>
         `${y}routing:\n` +
-        '  static_registry:\n    enabled: true\n' +
         '  must_use_local: true\n' +
         '  role_candidates:\n    docs:\n      - { model: local-coder, harness: generic }\n' +
         '  models:\n    - { id: local-coder, provider: local, vendors: [generic], local: true }\n',
     );
     const snap = await until(
       () => snapshot(td),
-      (s) => s.config.changes?.applied.some((key) => key.startsWith('routing.static_registry')) ?? false,
-      'the registry flag to apply',
+      (s) => s.config.changes?.applied.some((key) => key.startsWith('routing.must_use_local')) ?? false,
+      'the routing constraint to apply',
     );
     expect(snap.config.changes?.restart_needed).toEqual([]);
     const enabled = (await explain()).dry_run;
@@ -313,7 +332,7 @@ describe('which keys apply live', () => {
     expect(configKeyEffect('scopes.frontend.write')).toBe('live');
     expect(configKeyEffect('autonomy.git.push')).toBe('live');
     expect(configKeyEffect('verification.checks')).toBe('live');
-    expect(configKeyEffect('routing.laya.url')).toBe('live');
+    expect(configKeyEffect('routing.sensitive.roles')).toBe('live');
     expect(configKeyEffect('recovery.max_retries')).toBe('live');
     expect(configKeyEffect('master_brain.auto_approve')).toBe('live');
     expect(configKeyEffect('master_brain.reservation_ttl_ms')).toBe('live');

@@ -337,9 +337,13 @@ export function parseRoleDecision(value: unknown, allowedRoles: ReadonlySet<stri
   return { ...parsed, roles };
 }
 
-/** Returns the first clarification reason when a valid classification is still too uncertain to dispatch. */
+/**
+ * Returns the clarification reason when a valid classification is still too uncertain to dispatch.
+ * A multi-role answer always waits for a human, so its confidence cannot make dispatch less safe.
+ */
 export function roleDecisionBlockReason(decision: RoleDecision, minimumConfidence = 0.7): string | null {
   if (decision.status === 'clarification_required') return decision.questions.join('; ');
+  if (decision.roles.length !== 1) return null;
   const uncertain = decision.roles.filter((entry) => entry.confidence < minimumConfidence);
   return uncertain.length
     ? `role classification confidence is below ${minimumConfidence}: ${uncertain.map((entry) => `${entry.role}=${entry.confidence}`).join(', ')}`

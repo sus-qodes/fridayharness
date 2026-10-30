@@ -1091,15 +1091,15 @@ export class FridayState {
     this.router = router;
   }
 
-  /** A human pins a model or a mode for a scope (spec Part 12 §11, ADR-0031 §4). */
+  /** A human pins a model for a scope (spec Part 12 §11, ADR-0031 §4). */
   pinRouting(
     projectId: string,
     actor: Actor,
     p: Omit<RoutingPinView, 'pin_id' | 'source' | 'created_at' | 'revoked_at'>,
   ): RoutingPinView {
     if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human pins routing');
-    if (!p.model && !p.mode && !p.sensitive && !p.needs_vision) {
-      throw new FridayError('invalid_request', 'a pin names a model, a mode, or marks the work sensitive or visual');
+    if (!p.model && !p.sensitive && !p.needs_vision) {
+      throw new FridayError('invalid_request', 'a pin names a model, or marks the work sensitive or visual');
     }
     if ((p.scope === 'project') !== (p.target === null)) {
       throw new FridayError('invalid_request', 'a project pin has no target; a kind, role or task pin names one');
@@ -1113,7 +1113,6 @@ export class FridayState {
         scope: p.scope,
         target: p.target,
         model: p.model,
-        mode: p.mode,
         sensitive: p.sensitive,
         needs_vision: p.needs_vision,
         until: p.until,

@@ -266,10 +266,9 @@ export const RoutingDecisionView = z.object({
   task_id: z.string(),
   run_id: z.string().nullable(),
   harness_id: z.string().nullable(),
+  /** `registry`: dispatch is registry-only. Kept for the stored decision and its event. */
   mode: z.string(),
   task_class: z.string(),
-  profile: z.enum(['trivial', 'short', 'medium', 'large', 'high-risk', 'ambiguous']).default('ambiguous'),
-  profile_reasons: z.array(z.string()).default([]),
   model: z.string().nullable(),
   binding: z.boolean(),
   source: z.string(),
@@ -291,8 +290,6 @@ export const RoutingDecisionView = z.object({
   fallback_chain: z.array(z.object({ model: z.string().nullable(), reason: z.string() })),
   confidence: z.number().nullable(),
   pin_id: z.string().nullable(),
-  requirements_version: z.string(),
-  guide_version: z.string(),
   role: z.string().nullable().default(null),
   role_source: TaskRoleSource.default('none'),
   role_confidence: z.number().nullable().default(null),
@@ -310,13 +307,12 @@ export const RoutingDecisionView = z.object({
 });
 export type RoutingDecisionView = z.infer<typeof RoutingDecisionView>;
 
-/** A human's routing policy (spec Part 12 §11): a model or a mode for a scope, with source and expiry. */
+/** A human's routing policy (spec Part 12 §11): a model for a scope, with source and expiry. */
 export const RoutingPinView = z.object({
   pin_id: z.string(),
   scope: z.enum(['project', 'kind', 'role', 'task']),
   target: z.string().nullable(),
   model: z.string().nullable(),
-  mode: z.enum(['manual', 'policy', 'auto', 'hybrid']).nullable(),
   sensitive: z.boolean(),
   needs_vision: z.boolean(),
   until: z.string().nullable(),

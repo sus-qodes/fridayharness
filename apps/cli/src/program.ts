@@ -29,7 +29,7 @@ import { registerRecoveryCommands } from './recovery.js';
 import { registerRegistryCommands } from './registry.js';
 import { registerReservationCommands } from './reservations.js';
 import { restoreProject } from './restore.js';
-import { registerLayaCommands, registerRoutingCommands } from './routing.js';
+import { registerRoutingCommands } from './routing.js';
 import { runDaemon } from './run.js';
 import { createShortcut } from './shortcut.js';
 import { registerStartCommand } from './start.js';
@@ -852,7 +852,6 @@ export function buildProgram(): Command {
   registerOperationCommands(program, g);
   registerRoutingCommands(program, g);
   registerRegistryCommands(program, g);
-  registerLayaCommands(program, g);
   registerUsageCommands(program, g);
   registerMemoryCommands(program, g);
   registerStartCommand(program, g);

@@ -186,7 +186,6 @@ describe('routing in the state', () => {
       scope: 'role',
       target: 'architect',
       model: 'claude-opus-5-5',
-      mode: null,
       sensitive: false,
       needs_vision: false,
       until: '2026-10-21T10:00:00.000Z',
