@@ -452,7 +452,7 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
       name: 'friday_request_context',
       title: 'Request context',
       description:
-        'Ask Friday for context, with provenance: kind "task" for your task (contract, scope, git state, recent progress); "scope_files" for the files you may change and the code related to them; "file" for a file (query: its path); "history" for the commits of your scope (query: a path, else the scope); "decision" for recorded decisions with the task\'s context; "learnings" for more of the project\'s checked learnings (query: a topic). scope_files, file and history are answered alone, without the task packet; symbol lookups are not supported.',
+        'Ask Friday for context, with provenance: kind "task" for your task (contract, scope, git state, recent progress); "scope_files" for the files you may change and the code related to them; "file" for a file (query: its path); "history" for the commits of your scope (query: a path, else the scope); "decision" for recorded decisions with the task\'s context; "learnings" for more of the project\'s checked learnings (query: a topic). "symbol" for a symbol (query: its name): where it is, its signature, who calls or uses it, what it uses; scope_files with query "skeleton" adds each file with its bodies folded. scope_files, file, history and symbol are answered alone, without the task packet.',
       shape: {
         kind: z
           .enum(['task', 'scope_files', 'file', 'symbol', 'history', 'decision', 'learnings', 'freeform'])

@@ -481,11 +481,13 @@ describe('what a request asks for (review F17)', () => {
     const history = await ask(taskId, { kind: 'history', paths: ['backend/src/checkout.service.ts'] });
     expect(section(history.packet, 'repo.history')).toContain('fixture');
 
-    // What Friday cannot look up yet is said, never ignored in silence.
-    const symbol = await ask(taskId, { kind: 'symbol', query: 'applyDiscount' });
-    expect(section(symbol.packet, 'request.note')).toContain('Not supported yet');
-    expect(section(symbol.packet, 'request.note')).toContain('applyDiscount');
-    expect(symbol.explanation.notes).toContain('symbol requests are not supported yet');
+    // A symbol by name (ADR-0037 §3): its place, signature and callers; an unknown name is said, never ignored.
+    const symbol = await ask(taskId, { kind: 'symbol', query: 'totalOf' });
+    expect(section(symbol.packet, 'code.requested')).toContain('backend/src/checkout.service.ts:6-');
+    expect(section(symbol.packet, 'code.requested')).toContain('function totalOf(request: CheckoutRequest): Money');
+    const unknown = await ask(taskId, { kind: 'symbol', query: 'applyDiscount' });
+    expect(section(unknown.packet, 'request.note')).toContain('no symbol named applyDiscount');
+    expect(unknown.explanation.notes).toContain('no symbol named applyDiscount in the code graph');
   });
 });
 

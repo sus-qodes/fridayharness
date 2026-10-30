@@ -2,6 +2,13 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — Phase 5C, the questions asked of the code graph (ADR-0037, proposed)
+
+- **`friday graph symbol <name>`:** each match with its file and lines, kind, signature, whether it is exported, who calls, constructs, types or renders it (resolved edges with their certainty), what it uses, the tests of its file, and, apart, the name-only matches (guesses, labelled). Bounded: 20 matches, 50 edges each, and it says when cut.
+- **`friday graph blast-radius <path>… [--symbol file#name] [--diff] [--depth] [--names]`:** what a change would reach upstream, to a depth, each hit with a confidence from the edges it came by (`high` exact, `medium` inferred, `low` name-only) and what it was reached from; the seeds say why a change may break others (an exported symbol called from another area, a shared contract). Name-only matches come in only with `--names`. It lists; it judges nothing.
+- **`friday graph skeleton <file> [--level 2]`:** the file with its bodies folded, line numbers kept: L1 imports, exports and each declaration's first line; L2 also doc comments and exported interfaces, types and enums whole. A context view only. **`friday graph search <words>`** ranks symbols and files by their words.
+- **For agents:** `friday_request_context` answers `kind: "symbol"` (query: the name) with the lookup, alone like a file request; `scope_files` with `query: "skeleton"` adds each scope file's L1 skeleton. Nothing is sent unasked. Phase 5 is complete; the handoff's tool names (`graph_query_context`, `graph_blast_radius`, `opt_skeleton_read`) arrive as projections of these queries in Phase 6. Guide: `docs/graph.md`.
+
 ## Unreleased — Phase 5B, the code graph knows when nothing changed, and answers keywords (ADR-0037, proposed)
 
 - **A Merkle tree over the files git sees** (`.friday/graph/merkle.db`): the BLAKE3 of each file, kept with its size and time so an unchanged file is never read again; folder hashes from their children; the root hash names the tree and is recorded on the graph. "Did anything change" costs a stat per file. When git could not vouch for a checkout (an approximate identity, many dirty files), an unchanged tree keeps the last graph instead of rebuilding it, and a changed tree names the files to read again. Git's source identity stays the authority on what the checkout is; the tree only accelerates the graph's own staleness check. `@noble/hashes` (pure JavaScript, no install scripts) provides BLAKE3.

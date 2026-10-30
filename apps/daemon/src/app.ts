@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { blastRadius, lookupSymbol, skeletonOf } from '@friday/code-graph';
 import { patternsOverlap } from '@friday/policy';
 import {
   type Actor,
@@ -1344,6 +1345,62 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     if (!file) throw new FridayError('invalid_request', 'graph/query needs ?path=<file>');
     const depth = Math.min(Math.max(Number(c.req.query('depth') ?? 1) || 1, 1), 5);
     return c.json(graphQuery(await graphService().graph(), file, depth));
+  });
+  // The questions of ADR-0037 §3: a symbol, what a change would reach, a file with its bodies folded, keywords.
+  app.get(`${P}/graph/symbol`, allow(...OPERATOR), async (c) => {
+    const name = c.req.query('name');
+    if (!name) throw new FridayError('invalid_request', 'graph/symbol needs ?name=<symbol>');
+    const g = await graphService().graph();
+    const found = lookupSymbol(g, name, {
+      ...(c.req.query('path') ? { path: c.req.query('path') as string } : {}),
+      ...(c.req.query('prefix') ? { prefix: c.req.query('prefix') as string } : {}),
+      limit: Math.min(Number(c.req.query('limit') ?? 20) || 20, 100),
+    });
+    return c.json({ version: g.version, ...found });
+  });
+  app.get(`${P}/graph/blast-radius`, allow(...OPERATOR), async (c) => {
+    const g = await graphService().graph();
+    const clean = (p: string) => p.replace(/\\/g, '/').replace(/^\.\//, '');
+    const paths = (c.req.queries('path') ?? []).map(clean);
+    const symbols = (c.req.queries('symbol') ?? [])
+      .map((s) => {
+        const at = s.lastIndexOf('#');
+        return at > 0 ? { path: clean(s.slice(0, at)), symbol: s.slice(at + 1) } : null;
+      })
+      .filter((x): x is { path: string; symbol: string } => x !== null);
+    // `diff`: the working tree's changed files, as the source identity lists them.
+    const seeds = c.req.query('diff') === 'true' ? [...new Set([...paths, ...g.identity.paths])] : paths;
+    if (!seeds.length && !symbols.length) {
+      throw new FridayError(
+        'invalid_request',
+        'graph/blast-radius needs ?path=<file>, ?symbol=<file#symbol> or ?diff=true',
+      );
+    }
+    const depth = Math.min(Math.max(Number(c.req.query('depth') ?? 2) || 2, 1), 5);
+    return c.json({
+      version: g.version,
+      ...blastRadius(g, { paths: seeds, symbols }, { depth, includeNameMatches: c.req.query('names') === 'true' }),
+    });
+  });
+  app.get(`${P}/graph/skeleton`, allow(...OPERATOR), async (c) => {
+    const file = c.req.query('path');
+    if (!file) throw new FridayError('invalid_request', 'graph/skeleton needs ?path=<file>');
+    const g = await graphService().graph();
+    const rel = file.replace(/\\/g, '/').replace(/^\.\//, '');
+    const sk = await skeletonOf(g, g.root, rel, c.req.query('level') === '2' ? 2 : 1);
+    if (!sk)
+      throw new FridayError('invalid_request', `${rel} is not in the code graph (only TS/JS files git sees are)`);
+    return c.json({ version: g.version, ...sk });
+  });
+  app.get(`${P}/graph/search`, allow(...OPERATOR), async (c) => {
+    const q = c.req.query('q');
+    if (!q) throw new FridayError('invalid_request', 'graph/search needs ?q=<words>');
+    const kind = c.req.query('kind');
+    const hits = await graphService().search(q, {
+      limit: Math.min(Number(c.req.query('limit') ?? 20) || 20, 100),
+      ...(kind === 'symbol' || kind === 'file' ? { kind } : {}),
+    });
+    return c.json({ hits });
   });
   app.post(`${P}/graph/reindex`, allow(...OPERATOR), async (c) => c.json(graphSummary(await graphService().reindex())));
 

@@ -32,6 +32,19 @@ export {
   treeHash,
 } from './merkle.js';
 export {
+  type Affected,
+  type BlastRadius,
+  type BlastSeed,
+  blastRadius,
+  type Confidence,
+  lookupSymbol,
+  type Skeleton,
+  type SymbolLookup,
+  type SymbolMatch,
+  skeletonOf,
+  symbolKey,
+} from './queries.js';
+export {
   type BuildLayout,
   type Certainty,
   CONDITIONS,

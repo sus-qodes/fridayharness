@@ -82,3 +82,69 @@ describe('friday graph', () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe('friday graph: symbols, blast radius, skeletons and search (ADR-0037 §3)', () => {
+  it('answers through the CLI, bounded and labelled', async () => {
+    await startTestDaemon(ws(), { git: true });
+    const dir = ws().projectDir;
+    const write = (rel: string, text: string) => {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    };
+    write('package.json', '{"name":"shop","private":true}\n');
+    write('shared/package.json', '{"name":"@shop/shared","private":true}\n');
+    write(
+      'shared/api.ts',
+      [
+        '/** Money in minor units. */',
+        'export interface Money { amount: number }',
+        'export function add(a: Money, b: Money): Money {',
+        '  return { amount: a.amount + b.amount };',
+        '}',
+        '',
+      ].join('\n'),
+    );
+    write('web/package.json', '{"name":"@shop/web","private":true}\n');
+    write(
+      'web/client.ts',
+      [
+        "import { add, type Money } from '../shared/api.ts';",
+        'export function sum(a: Money, b: Money): Money {',
+        '  return add(a, b);',
+        '}',
+        '',
+      ].join('\n'),
+    );
+    const symbol = await cli(['--project', dir, 'graph', 'symbol', 'add']);
+    expect(symbol.code, symbol.stderr).toBe(0);
+    expect(symbol.stdout).toContain('shared/api.ts:3-5  function, exported');
+    expect(symbol.stdout).toContain('function add(a: Money, b: Money): Money');
+    expect(symbol.stdout).toContain('called or used by: web/client.ts#sum:3 (exact)');
+    const none = await cli(['--project', dir, 'graph', 'symbol', 'nothing']);
+    expect(none.stdout).toContain('No symbol named nothing');
+
+    const blast = await cli(['--project', dir, 'graph', 'blast-radius', '--symbol', 'shared/api.ts#add']);
+    expect(blast.code, blast.stderr).toBe(0);
+    expect(blast.stdout).toContain(
+      'Changed: shared/api.ts (add)  breaking: add is exported and called from web; shared contract of web',
+    );
+    expect(blast.stdout).toMatch(/1\s+high\s+web\/client\.ts#sum\s+reference/);
+    const diff = await cli(['--project', dir, '--json', 'graph', 'blast-radius', '--diff']);
+    expect(diff.code, diff.stderr).toBe(0);
+    expect((JSON.parse(diff.stdout) as { seeds: { path: string }[] }).seeds.map((s) => s.path)).toEqual([
+      'shared/api.ts',
+      'web/client.ts',
+    ]);
+
+    const skeleton = await cli(['--project', dir, 'graph', 'skeleton', 'shared/api.ts']);
+    expect(skeleton.code, skeleton.stderr).toBe(0);
+    expect(skeleton.stdout).toContain('shared/api.ts (L1: 5 lines, 2 folded)');
+    expect(skeleton.stdout).toContain('    2: export interface Money { amount: number }');
+    expect(skeleton.stdout).toContain('    3: export function add(a: Money, b: Money): Money {');
+    expect(skeleton.stdout).toContain('      … (2 lines)');
+
+    const search = await cli(['--project', dir, 'graph', 'search', 'money']);
+    expect(search.code, search.stderr).toBe(0);
+    expect(search.stdout).toMatch(/interface\s+Money\s+shared\/api\.ts:2/);
+  }, 120_000);
+});

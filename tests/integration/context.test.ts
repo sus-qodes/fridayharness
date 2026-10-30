@@ -308,3 +308,51 @@ describe('friday context explain (M4 gate, Part 12 §13)', () => {
     expect(approval(cut)).toMatchObject({ status: 'granted', uses: 0 });
   });
 });
+
+describe('symbol requests and skeletons (ADR-0037 §3)', () => {
+  it('answers a symbol by name, alone, and folds the scope files on request', async () => {
+    const td = await startTestDaemon(ws(), { git: true });
+    const dir = ws().projectDir;
+    for (const part of ['backend', 'frontend', 'shared', 'infra', 'tsconfig.json']) {
+      cpSync(path.join(REPO_ROOT, 'tests', 'fixtures', 'fixture-shop', part), path.join(dir, part), {
+        recursive: true,
+      });
+    }
+    await deterministicGit(dir).commitAll('fixture-shop');
+    const be = await FakeHarness.connect(td, { agentKey: 'be-1', role: 'backend' });
+    const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Add discount codes to checkout',
+      scope: { write: ['backend/**'], read: [] },
+      assign_agent_key: 'be-1',
+    });
+    await be.client.call('task.claim', { task_id: task.task_id });
+    const requested = (p: ContextPacket) => p.sections.find((s) => s.kind === 'code.requested')?.content ?? '';
+
+    const symbol = (await be.client.requestContext({
+      task_id: task.task_id,
+      kind: 'symbol',
+      query: 'totalOf',
+    })) as ContextPacket;
+    const text = requested(symbol);
+    expect(text).toContain('backend/src/checkout.service.ts:6-');
+    expect(text).toContain('function, exported: function totalOf(request: CheckoutRequest): Money');
+    expect(text).toMatch(/called or used by: .*checkout\.service\.ts#checkout:\d+ \(exact\)/);
+    expect(symbol.sections.map((s) => s.kind)).not.toContain('task.contract');
+    const nothing = (await be.client.requestContext({
+      task_id: task.task_id,
+      kind: 'symbol',
+      query: 'noSuchThing',
+    })) as ContextPacket;
+    expect(JSON.stringify(nothing)).toContain('no symbol named noSuchThing');
+
+    const folded = (await be.client.requestContext({
+      task_id: task.task_id,
+      kind: 'scope_files',
+      query: 'skeleton',
+    })) as ContextPacket;
+    const scope = requested(folded);
+    expect(scope).toContain('backend/src/checkout.service.ts (skeleton:');
+    expect(scope).toMatch(/\d+: export function totalOf\(request: CheckoutRequest\): Money \{/);
+    expect(scope).toContain('… (');
+  }, 120_000);
+});

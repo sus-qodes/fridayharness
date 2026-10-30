@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto';
 import { open, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
-import type { CodeGraph, GraphEdge } from '@friday/code-graph';
+import {
+  type CodeGraph,
+  type GraphEdge,
+  lookupSymbol,
+  type SymbolEdge,
+  skeletonOf,
+  symbolKey,
+} from '@friday/code-graph';
 import type { GitRoot, SourceIdentity } from '@friday/git';
 import { canonicalize, matchesAny, type PathContext, readKeptFromAgents, sensitiveClassOf } from '@friday/policy';
 import {
@@ -932,6 +939,116 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
         });
       }
       if (shown.length > 100) notes.push(`${shown.length - 100} more files in the write scope are not listed`);
+      // On request, each file with its bodies folded (ADR-0037 §3): a view, never the file itself.
+      if ((request.query ?? '').trim().toLowerCase() === 'skeleton') {
+        const skGraph = await deps.graph(root, identity).catch(() => null);
+        if (!skGraph) notes.push('the code graph is not available; no skeletons were made');
+        for (const f of shown.slice(0, 20)) {
+          const sk = skGraph ? await skeletonOf(skGraph, root, f, 1, { maxChars: 4000 }) : null;
+          if (!sk) continue;
+          const line = `${f} (skeleton: ${sk.lines} lines, ${sk.folded} folded${sk.cut ? ', cut' : ''}):\n${sk.text}`;
+          add({
+            section: 'code.requested',
+            line,
+            source: src({
+              source_id: `${f}#skeleton`,
+              source_type: 'graph',
+              authority: 'graph',
+              relevance: 0.9,
+              relationship_distance: 0,
+              verification_status: 'verified',
+              selection_reason: 'the skeleton you asked for',
+              content: line,
+            }),
+            priority: 0,
+            relevance: 0.9,
+            protected: false,
+            reason: 'the skeleton you asked for',
+            rule: 'requested (priority 0)',
+          });
+        }
+      }
+    } else if (request.kind === 'symbol') {
+      // A symbol lookup (ADR-0037 §3): the symbol, who uses it, what it uses; bounded and labelled.
+      const name = (request.query ?? '').trim();
+      const symGraph = name ? await deps.graph(root, identity).catch(() => null) : null;
+      if (!name) notes.push('a symbol request names no symbol (query: its name)');
+      else if (!symGraph) notes.push('the code graph is not available; the symbol could not be looked up');
+      else {
+        const found = lookupSymbol(symGraph, name, { limit: 5, edges: 20 });
+        const shown = found.matches.filter((m) => readable(m.symbol.path));
+        withheld += found.matches.length - shown.length;
+        if (!shown.length && !found.name_references.length) {
+          notes.push(`no symbol named ${name} in the code graph`);
+          const line = `Nothing found: no symbol named ${name} in the code graph (TypeScript and JavaScript files git sees, by exact name). Try the words of its name (kind "scope_files" lists your files; "file" reads one), or check the spelling.`;
+          add({
+            section: 'request.note',
+            line,
+            source: null,
+            priority: 0,
+            relevance: 1,
+            protected: true,
+            reason: 'what this request could not find',
+            rule: 'protected: request limitation',
+          });
+        }
+        const where = (e: SymbolEdge) => `${e.from.path}#${e.from.symbol}:${e.line} (${e.certainty})`;
+        const uses = (e: SymbolEdge) =>
+          e.to
+            ? `${e.to.path}#${e.to.symbol} (${e.certainty})`
+            : `${e.name} (${e.certainty}: ${e.reason ?? 'unresolved'})`;
+        for (const m of shown) {
+          const s = m.symbol;
+          const line = [
+            `${s.path}:${s.line}-${s.end_line}  ${s.kind}${s.parent ? ` of ${s.parent}` : ''}${s.exported ? ', exported' : ''}: ${s.signature}`,
+            `  called or used by: ${m.callers.map(where).join('; ') || 'nobody the graph can see'}${m.callers_cut ? ` (+${m.callers_cut} more)` : ''}`,
+            `  uses: ${m.callees.map(uses).join('; ') || 'nothing the graph can see'}${m.callees_cut ? ` (+${m.callees_cut} more)` : ''}`,
+            `  tests of its file: ${m.tests.join(', ') || 'none'}`,
+          ].join('\n');
+          add({
+            section: 'code.requested',
+            line,
+            source: src({
+              source_id: `${s.path}#${symbolKey(s)}`,
+              source_type: 'graph',
+              authority: 'graph',
+              relevance: 1,
+              relationship_distance: 0,
+              verification_status: 'verified',
+              selection_reason: 'the symbol you asked for',
+              content: line,
+            }),
+            priority: 0,
+            relevance: 1,
+            protected: false,
+            reason: 'the symbol you asked for',
+            rule: 'requested (priority 0)',
+          });
+        }
+        if (found.name_references.length) {
+          const line = `Name-only matches of ${name} (member calls on values the graph does not know; guesses): ${found.name_references.map((e) => `${e.from.path}:${e.line} in ${e.from.symbol}`).join('; ')}`;
+          add({
+            section: 'code.requested',
+            line,
+            source: src({
+              source_id: `name:${name}`,
+              source_type: 'graph',
+              authority: 'graph',
+              relevance: 0.6,
+              relationship_distance: 1,
+              verification_status: 'unverified',
+              selection_reason: 'name-only matches',
+              content: line,
+            }),
+            priority: 0,
+            relevance: 0.6,
+            protected: false,
+            reason: 'name-only matches of the symbol you asked for',
+            rule: 'requested (priority 0)',
+          });
+        }
+        if (found.matches_cut) notes.push(`${found.matches_cut} more symbols named ${name} are not shown`);
+      }
     } else if (request.kind === 'history') {
       const named = asked.filter((p) => {
         if (readable(p)) return true;
@@ -954,12 +1071,9 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
           relies: c.relies,
         });
       }
-    } else if (request.kind === 'symbol' || request.kind === 'freeform') {
+    } else if (request.kind === 'freeform') {
       // Not ignored in silence: the recipient is told what this packet cannot answer.
-      const why =
-        request.kind === 'symbol'
-          ? 'looking up a symbol needs the symbol graph, which Friday builds only from M9 on'
-          : 'a free-form question needs semantic retrieval, which is off until M9';
+      const why = 'a free-form question needs semantic retrieval, which is off until measurements call for it';
       add({
         section: 'request.note',
         line: `Not supported yet: ${why}. This packet holds the task's own context instead${request.query ? ` (you asked: "${request.query.slice(0, 200)}")` : ''}. Ask for files by path (kind "file"), their history ("history") or decisions ("decision").`,
