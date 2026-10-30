@@ -205,6 +205,46 @@ async function askInHost(
   }
 }
 
+/** The kinds a project learning may have (ADR-0034 §6); another kind stays the agent's own memory. */
+const LEARNING_KINDS = new Set([
+  'decision',
+  'architecture',
+  'constraint',
+  'convention',
+  'bug-pattern',
+  'dependency',
+  'operational-runbook',
+  'human-preference',
+  'learned-risk',
+]);
+
+/** friday_remember with share "project": a proposal, never project memory directly (ADR-0034 §7). */
+async function proposeLearning(
+  client: Awaited<ReturnType<FridaySession['ready']>>,
+  a: Record<string, unknown>,
+): Promise<ToolResult> {
+  const kind = String(a.kind);
+  if (!LEARNING_KINDS.has(kind)) {
+    throw new FridayError(
+      'invalid_request',
+      `a project lesson is one of ${[...LEARNING_KINDS].join(', ')}; "${kind}" can only be remembered for your task`,
+    );
+  }
+  const res = await client.call('learning.propose', {
+    kind: kind as ResultOf<'learning.propose'>['proposal']['kind'],
+    subject: a.subject as string,
+    content: a.content as string,
+    tags: (a.tags as string[] | undefined) ?? [],
+    paths: (a.paths as string[] | undefined) ?? [],
+    idempotency_key: idem('learn', a),
+  });
+  const p = res.proposal;
+  return {
+    text: `Proposed ${p.proposal_id} for the whole project. It reaches other agents once your task passes verification or a human approves it.`,
+    structured: res as unknown as Record<string, unknown>,
+  };
+}
+
 export function createFridayTools(session: FridaySession, host: HostUi = {}): FridayTool[] {
   return [
     {
@@ -619,7 +659,7 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
       name: 'friday_remember',
       title: 'Remember something for the project',
       description:
-        'Record what others working on this should know: a decision, constraint, convention, bug pattern, dependency, risk or open question. It is kept for your task (default), for yourself ("agent") or this session, marked unverified with you as its source; it never overrides what a human decided, and a contradiction waits for a human to review.',
+        'Record what others working on this should know: a decision, constraint, convention, bug pattern, dependency, risk or open question. It is kept for your task (default), for yourself ("agent") or this session, marked unverified with you as its source; it never overrides what a human decided, and a contradiction waits for a human to review. share "project" proposes it as a lesson for the whole project instead: it reaches other agents only after your task passes verification or a human approves it; name the paths it is about.',
       shape: {
         kind: z.enum([
           'decision',
@@ -639,11 +679,14 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
         content: z.string().min(1).max(4000),
         scope: z.enum(['task', 'agent', 'session']).optional(),
         tags: z.array(z.string()).max(10).optional(),
+        share: z.enum(['project']).optional(),
+        paths: z.array(z.string()).max(20).optional(),
       },
       alwaysLoad: false,
       readOnly: false,
       handler: async (a) => {
         const client = await session.ready();
+        if (a.share === 'project') return proposeLearning(client, a);
         const res = await client.call('memory.record', {
           kind: a.kind as ResultOf<'memory.record'>['memory']['kind'],
           subject: a.subject as string,

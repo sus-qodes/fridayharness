@@ -259,6 +259,16 @@ export class MemoryService {
     input: MemoryInput,
     opts: { idempotency_key?: string } = {},
   ): RecordResult {
+    this.check(input);
+    const actor = this.actorOf(who);
+    return this.state.bus.execute(
+      { name: 'memory.record', project_id: projectId, actor, idempotency_key: opts.idempotency_key, params: input },
+      (ctx) => this.recordWithin(ctx, projectId, who, input),
+    ).result;
+  }
+
+  /** What a memory must be before anything is recorded: a subject, content within bounds, a known kind. */
+  private check(input: MemoryInput): void {
     const subject = input.subject?.trim();
     const content = input.content?.trim();
     if (!subject) throw new FridayError('invalid_request', 'a memory needs a subject');
@@ -275,78 +285,82 @@ export class MemoryService {
         `unknown memory kind ${input.kind}; use one of ${MEMORY_KINDS.join(', ')}`,
       );
     }
-    const actor = this.actorOf(who);
-    return this.state.bus.execute(
-      { name: 'memory.record', project_id: projectId, actor, idempotency_key: opts.idempotency_key, params: input },
-      (ctx) => {
-        const scope = this.writeScope(projectId, who, input);
-        const prov = this.provenance(who);
-        const key = subjectKey(subject);
-        const hash = contentHash(content);
-        const same = this.rows(
-          'SELECT * FROM memories WHERE project_id = ? AND kind = ? AND subject_key = ? AND status = ?',
-          projectId,
-          input.kind,
-          key,
-          'active',
-        );
-        const duplicate = same.find((r) => r.scope_type === scope.type && r.scope_id === scope.id && holds(r, content));
-        if (duplicate) return { memory: this.view(duplicate), deduplicated: true, superseded: [], contradicts: [] };
-        const superseded: string[] = [];
-        const contradicts: string[] = [];
-        let needsReview = false;
-        for (const old of same) {
-          if (holds(old, content)) continue;
-          const sameScope = old.scope_type === scope.type && old.scope_id === scope.id;
-          const newRank = RANK[prov.authority];
-          const oldRank = RANK[old.authority];
-          const sameSource = old.source_kind === prov.source_kind && old.source_id === prov.source_id;
-          const humanUpdate = prov.authority === 'human-approved' && old.authority === 'human-approved';
-          const mayReplace =
-            old.authority === 'human-approved' ? humanUpdate : newRank > oldRank || (newRank === oldRank && sameSource);
-          if (sameScope && mayReplace) {
-            superseded.push(old.memory_id);
-          } else {
-            contradicts.push(old.memory_id);
-            if (newRank <= oldRank) needsReview = true;
-          }
-        }
-        const memory_id = this.state.ids.next('mem');
-        ctx.emit({
-          type: 'memory.recorded',
-          payload: {
-            memory: {
-              memory_id,
-              scope_type: scope.type,
-              scope_id: scope.id,
-              kind: input.kind,
-              subject,
-              subject_key: key,
-              content,
-              content_hash: hash,
-              tags: [...new Set((input.tags ?? []).map((t) => t.trim()).filter(Boolean))],
-              source_events: input.source_events ?? [],
-              ...prov,
-              supersedes: superseded[0] ?? null,
-              needs_review: needsReview,
-            },
-            contradicts,
-          },
-          refs: [{ kind: 'memory', id: memory_id }, ...contradicts.map((id) => ({ kind: 'memory' as const, id }))],
-        });
-        for (const old of superseded) {
-          ctx.emit({
-            type: 'memory.superseded',
-            payload: { memory_id: old, by: memory_id, reason: `superseded by ${prov.source_kind} ${prov.source_id}` },
-            refs: [
-              { kind: 'memory', id: old },
-              { kind: 'memory', id: memory_id },
-            ],
-          });
-        }
-        return { memory: this.get(memory_id), deduplicated: false, superseded, contradicts };
+  }
+
+  /**
+   * The same pipeline inside a command that is already open, so another record (a promoted
+   * learning, ADR-0034 §7) and the memory it makes commit together or not at all.
+   */
+  recordWithin(ctx: CommandContext, projectId: string, who: MemoryActor, input: MemoryInput): RecordResult {
+    this.check(input);
+    const subject = input.subject.trim();
+    const content = input.content.trim();
+    const scope = this.writeScope(projectId, who, input);
+    const prov = this.provenance(who);
+    const key = subjectKey(subject);
+    const hash = contentHash(content);
+    const same = this.rows(
+      'SELECT * FROM memories WHERE project_id = ? AND kind = ? AND subject_key = ? AND status = ?',
+      projectId,
+      input.kind,
+      key,
+      'active',
+    );
+    const duplicate = same.find((r) => r.scope_type === scope.type && r.scope_id === scope.id && holds(r, content));
+    if (duplicate) return { memory: this.view(duplicate), deduplicated: true, superseded: [], contradicts: [] };
+    const superseded: string[] = [];
+    const contradicts: string[] = [];
+    let needsReview = false;
+    for (const old of same) {
+      if (holds(old, content)) continue;
+      const sameScope = old.scope_type === scope.type && old.scope_id === scope.id;
+      const newRank = RANK[prov.authority];
+      const oldRank = RANK[old.authority];
+      const sameSource = old.source_kind === prov.source_kind && old.source_id === prov.source_id;
+      const humanUpdate = prov.authority === 'human-approved' && old.authority === 'human-approved';
+      const mayReplace =
+        old.authority === 'human-approved' ? humanUpdate : newRank > oldRank || (newRank === oldRank && sameSource);
+      if (sameScope && mayReplace) {
+        superseded.push(old.memory_id);
+      } else {
+        contradicts.push(old.memory_id);
+        if (newRank <= oldRank) needsReview = true;
+      }
+    }
+    const memory_id = this.state.ids.next('mem');
+    ctx.emit({
+      type: 'memory.recorded',
+      payload: {
+        memory: {
+          memory_id,
+          scope_type: scope.type,
+          scope_id: scope.id,
+          kind: input.kind,
+          subject,
+          subject_key: key,
+          content,
+          content_hash: hash,
+          tags: [...new Set((input.tags ?? []).map((t) => t.trim()).filter(Boolean))],
+          source_events: input.source_events ?? [],
+          ...prov,
+          supersedes: superseded[0] ?? null,
+          needs_review: needsReview,
+        },
+        contradicts,
       },
-    ).result;
+      refs: [{ kind: 'memory', id: memory_id }, ...contradicts.map((id) => ({ kind: 'memory' as const, id }))],
+    });
+    for (const old of superseded) {
+      ctx.emit({
+        type: 'memory.superseded',
+        payload: { memory_id: old, by: memory_id, reason: `superseded by ${prov.source_kind} ${prov.source_id}` },
+        refs: [
+          { kind: 'memory', id: old },
+          { kind: 'memory', id: memory_id },
+        ],
+      });
+    }
+    return { memory: this.get(memory_id), deduplicated: false, superseded, contradicts };
   }
 
   /** A human approves a memory: it becomes human-approved and verified (ADR-0021 §4). */

@@ -18,6 +18,7 @@ export const SPAWNED_AGENT_TOOLS = [
   'friday_communicate',
   'friday_request_permission',
   'friday_run_operation',
+  'friday_remember',
 ] as const;
 export type SpawnedAgentTool = (typeof SPAWNED_AGENT_TOOLS)[number];
 
@@ -26,7 +27,16 @@ export type SpawnedAgentTool = (typeof SPAWNED_AGENT_TOOLS)[number];
  * agent needs. Every call of the session carries these definitions, so each word costs as many
  * times as the session calls its model; the daemon checks every argument again behind the tool.
  */
-const SPAWNED_FORM: Record<SpawnedAgentTool, { description: string; shape: z.ZodRawShape; rule: string }> = {
+const SPAWNED_FORM: Record<
+  SpawnedAgentTool,
+  {
+    description: string;
+    shape: z.ZodRawShape;
+    rule: string;
+    /** Fixed arguments the spawned form adds to every call. */
+    fixed?: Record<string, unknown>;
+  }
+> = {
   friday_request_context: {
     description:
       'More context: "scope_files" (your files and related code), "file" (query: path) and "history" come alone; "task", "decision" and "learnings" (more checked project learnings) come with the task.',
@@ -72,6 +82,28 @@ const SPAWNED_FORM: Record<SpawnedAgentTool, { description: string; shape: z.Zod
     },
     rule: 'friday_run_operation has Friday run work that needs a secret',
   },
+  friday_remember: {
+    description:
+      'Propose a lesson for the whole project (a bug pattern, convention, runbook, risk). It reaches other agents only after your task passes verification or a human approves it. paths: what it is about.',
+    shape: {
+      kind: z.enum([
+        'decision',
+        'architecture',
+        'constraint',
+        'convention',
+        'bug-pattern',
+        'dependency',
+        'operational-runbook',
+        'human-preference',
+        'learned-risk',
+      ]),
+      subject: z.string(),
+      content: z.string(),
+      paths: z.array(z.string()).optional(),
+    },
+    rule: 'friday_remember proposes what the project should learn from your work',
+    fixed: { share: 'project' },
+  },
 };
 
 /**
@@ -98,11 +130,19 @@ export function spawnedAgentTools(
   const names: readonly string[] = SPAWNED_AGENT_TOOLS.filter(
     (n) => n !== 'friday_run_operation' || opts.operations !== false,
   );
+  // In the declared order, so every adapter lists them the same way whatever order they are defined in.
   return createFridayTools(session, { relaysMessages: true })
     .filter((t) => names.includes(t.name))
+    .sort((a, b) => names.indexOf(a.name) - names.indexOf(b.name))
     .map((t) => {
       const form = SPAWNED_FORM[t.name as SpawnedAgentTool];
-      return { ...t, description: form.description, shape: form.shape };
+      const fixed = form.fixed;
+      return {
+        ...t,
+        description: form.description,
+        shape: form.shape,
+        ...(fixed ? { handler: (a: Record<string, unknown>) => t.handler({ ...a, ...fixed }) } : {}),
+      };
     });
 }
 

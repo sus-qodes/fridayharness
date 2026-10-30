@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { TaskView } from './api.js';
+import { LearningProposalView, LearningProposeRequest, TaskView } from './api.js';
 import { ContextPacket } from './context.js';
 import {
   AttachMode,
@@ -439,6 +439,10 @@ export const MemoryRecordResult = z.object({
   superseded: z.array(z.string()),
   contradicts: z.array(z.string()),
 });
+/** An agent proposes a lesson for the whole project (ADR-0034 §7); it is not project memory yet. */
+export const LearningProposeParams = LearningProposeRequest.extend(Base);
+export const LearningProposeResult = z.object({ proposal: LearningProposalView });
+
 export const MemorySearchParams = z.object({
   ...Base,
   query: z.string().max(500).optional(),
@@ -622,6 +626,7 @@ export const METHODS = {
   'message.ack': { params: MessageAckParams, result: MessageAckResult },
   'memory.record': { params: MemoryRecordParams, result: MemoryRecordResult },
   'memory.search': { params: MemorySearchParams, result: MemorySearchResult },
+  'learning.propose': { params: LearningProposeParams, result: LearningProposeResult },
   'operation.run': { params: OperationRunParams, result: OperationResult },
   'operation.status': { params: OperationStatusParams, result: OperationResult },
   'operation.list': { params: OperationListParams, result: OperationListResult },

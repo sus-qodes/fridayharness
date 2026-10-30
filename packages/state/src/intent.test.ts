@@ -289,3 +289,131 @@ describe('replay (ADR-0034 §9)', () => {
     expect(state.q.approvedProjectIntent(PROJECT)?.version).toBe(1);
   });
 });
+
+describe('learning promotion (ADR-0034 §7)', () => {
+  let claims = 0;
+  /** be-1 holds a task, proposes what it learned, claims done; returns the task and its proposal. */
+  function proposedWork(content = 'Back up the dev database before running migrations.') {
+    const be = agent('be-1');
+    const t = state.createTask(PROJECT, human, {
+      summary: 'Fix migrations',
+      scope: { write: ['db/**'], read: [] },
+      assign_agent_key: 'be-1',
+    });
+    const run = state.claimTask(PROJECT, be, { task_id: t.task_id }).run_id;
+    const proposal = state.learnings.propose(PROJECT, be, {
+      task_id: t.task_id,
+      kind: 'bug-pattern',
+      subject: 'Migrations',
+      content,
+      paths: ['db/migrations/**'],
+      tags: ['db'],
+    });
+    claims += 1;
+    state.submitResult(PROJECT, be, {
+      idempotency_key: `claim-${claims}`,
+      task_id: t.task_id,
+      run_id: run,
+      status: 'completed_claim',
+      summary: 'done',
+      changed_paths: [],
+      checks: [],
+      notes: [],
+      risks: [],
+    });
+    return { taskId: t.task_id, proposal, be };
+  }
+  const verify = (taskId: string, passed: boolean) => {
+    const { verification_id } = state.startVerification(PROJECT, { kind: 'system', id: 'friday' }, taskId);
+    state.finishVerification(
+      PROJECT,
+      { kind: 'system', id: 'friday' },
+      verification_id,
+      passed,
+      passed ? 'ok' : 'failed',
+    );
+    return verification_id;
+  };
+  const H = { kind: 'human' as const, actor: human };
+
+  it('makes a proposal project memory with verification authority once its task passes', () => {
+    const { taskId, proposal } = proposedWork();
+    const verificationId = verify(taskId, true);
+    const p = state.q.learningProposal(PROJECT, proposal.proposal_id);
+    expect(p).toMatchObject({
+      status: 'promoted',
+      decided_by: { kind: 'system', id: `verification:${verificationId}` },
+    });
+    const memory = state.memory.get(p.memory_id as string);
+    expect(memory).toMatchObject({
+      scope_type: 'project',
+      kind: 'bug-pattern',
+      content: 'Back up the dev database before running migrations.',
+      authority: 'verified',
+      verification_status: 'verified',
+      needs_review: false,
+      source: { kind: 'system', id: `verification:${verificationId}` },
+    });
+    // Its paths become path tags, so a later packet can pick it for matching work.
+    expect(memory.tags).toEqual(expect.arrayContaining(['db', 'db/migrations/**']));
+    // The verdict and the promotion are one transaction.
+    const types = state.store.readByRef(PROJECT, 'task', taskId).map((e) => e.type);
+    expect(types.indexOf('learning.promoted')).toBeGreaterThan(types.indexOf('verification.finished'));
+  });
+
+  it('promotes nothing when verification fails; a human may still approve it', () => {
+    const { taskId, proposal } = proposedWork();
+    verify(taskId, false);
+    expect(state.q.learningProposal(PROJECT, proposal.proposal_id).status).toBe('proposed');
+    expect(state.memory.search(PROJECT, H)).toEqual([]);
+    expect(() => state.learnings.approve(PROJECT, { kind: 'agent', id: 'agent_x' }, proposal.proposal_id)).toThrow(
+      FridayError,
+    );
+    const approved = state.learnings.approve(PROJECT, human, proposal.proposal_id, 'right after all');
+    expect(approved).toMatchObject({ status: 'promoted', decided_by: human, decision_note: 'right after all' });
+    expect(state.memory.get(approved.memory_id as string)).toMatchObject({ authority: 'human-approved' });
+    expect(code(() => state.learnings.approve(PROJECT, human, proposal.proposal_id))).toBe('COS-2002');
+  });
+
+  it('keeps a promoted learning that contradicts a human decision waiting for review', () => {
+    state.memory.record(PROJECT, H, {
+      scope_type: 'project',
+      kind: 'bug-pattern',
+      subject: 'Migrations',
+      content: 'Migrations run without a backup; the dev database is disposable.',
+    });
+    const { taskId, proposal } = proposedWork();
+    verify(taskId, true);
+    const p = state.q.learningProposal(PROJECT, proposal.proposal_id);
+    expect(p.status).toBe('promoted');
+    const memory = state.memory.get(p.memory_id as string);
+    // A verified memory never overrides a human-approved one: both stay, the new one needs review.
+    expect(memory).toMatchObject({ needs_review: true, status: 'active' });
+    expect(memory.contradicts.length).toBe(1);
+  });
+
+  it('records an identical lesson once', () => {
+    state.memory.record(PROJECT, H, {
+      scope_type: 'project',
+      kind: 'bug-pattern',
+      subject: 'Migrations',
+      content: 'Back up the dev database before running migrations.',
+    });
+    const before = state.memory.search(PROJECT, H).length;
+    const { taskId, proposal } = proposedWork();
+    verify(taskId, true);
+    const p = state.q.learningProposal(PROJECT, proposal.proposal_id);
+    expect(p.status).toBe('promoted');
+    expect(state.memory.search(PROJECT, H).length).toBe(before);
+  });
+
+  it('replays promotions exactly', () => {
+    const { taskId } = proposedWork();
+    verify(taskId, true);
+    const dump = () =>
+      Object.fromEntries(DOMAIN_TABLES.map((tb) => [tb, db.prepare(`SELECT * FROM ${tb} ORDER BY 1, 2`).all()]));
+    const before = dump();
+    replay(db, state.store, PROJECT, state.projector);
+    expect(dump()).toEqual(before);
+  });
+});

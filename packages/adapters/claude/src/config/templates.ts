@@ -151,7 +151,7 @@ export const SKILL_REFERENCE_MD = `# Friday tools reference
 | friday_message_receipt | whether a message you sent was delivered, read or answered |
 | friday_request_permission | ask a human to allow something policy blocks |
 | friday_run_operation | run a project operation that needs a secret; you get the outcome, never the secret |
-| friday_remember / friday_recall | record or search project memory within your scopes |
+| friday_remember / friday_recall | record or search memory within your scopes; share "project" proposes a lesson for everyone |
 | friday_claim_done | completion claim with changed paths and real check outcomes |
 | friday_ask_human | a question only a human can answer |
 | friday_session_bind | repair tool when Friday reports the session as unlinked |

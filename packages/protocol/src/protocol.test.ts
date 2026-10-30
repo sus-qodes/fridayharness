@@ -150,7 +150,8 @@ describe('method schemas', () => {
     expect(isMethodName('operation.run')).toBe(true);
     expect(isMethodName('approval.elicited')).toBe(true);
     expect(isMethodName('tool.check')).toBe(true);
-    expect(Object.keys(METHODS)).toHaveLength(25);
+    expect(isMethodName('learning.propose')).toBe(true);
+    expect(Object.keys(METHODS)).toHaveLength(26);
   });
 });
 

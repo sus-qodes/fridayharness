@@ -363,9 +363,10 @@ describe('harness conformance: Gemini CLI in spawn mode, what is particular to i
       'the claim',
     );
     const calls = h.entries().filter((e) => e.mcp) as { mcp: string; tools: string[]; result: { isError?: boolean } }[];
-    // The attempt's server holds exactly the four tools of a spawned agent, and they work.
+    // The attempt's server holds exactly the five tools of a spawned agent, and they work.
     expect([...(calls[0]?.tools ?? [])].sort()).toEqual([
       'friday_communicate',
+      'friday_remember',
       'friday_request_context',
       'friday_request_permission',
       'friday_run_operation',

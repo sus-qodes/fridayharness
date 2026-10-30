@@ -1034,6 +1034,32 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     );
   });
 
+  // Learnings agents proposed for the project (ADR-0034 §7): a human lists, approves or rejects them.
+  app.get(`${P}/learnings`, allow(...OPERATOR), (c) => {
+    const status = c.req.query('status');
+    if (status && !['proposed', 'promoted', 'rejected'].includes(status)) {
+      throw new FridayError('invalid_request', `unknown learning status ${status}`);
+    }
+    return c.json({
+      learnings: state.q.learningProposals(pid, {
+        ...(status ? { status: status as 'proposed' | 'promoted' | 'rejected' } : {}),
+        ...(c.req.query('task') ? { task_id: c.req.query('task') as string } : {}),
+        limit: Number(c.req.query('limit') ?? 200) || 200,
+      }),
+    });
+  });
+  app.get(`${P}/learnings/:lid`, allow(...OPERATOR), (c) => c.json(state.q.learningProposal(pid, c.req.param('lid'))));
+  app.post(`${P}/learnings/:lid/approve`, allow(...OPERATOR), async (c) => {
+    const body = await json(c);
+    const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : undefined;
+    return c.json(state.learnings.approve(pid, HUMAN, c.req.param('lid'), note));
+  });
+  app.post(`${P}/learnings/:lid/reject`, allow(...OPERATOR), async (c) => {
+    const body = await json(c);
+    const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : undefined;
+    return c.json(state.learnings.reject(pid, HUMAN, c.req.param('lid'), note));
+  });
+
   // Scoped memory (M4c, ADR-0021). A human here: every scope is readable and writable.
   const humanMemory: MemoryActor = { kind: 'human', actor: HUMAN };
   app.get(`${P}/memory`, allow(...OPERATOR), (c) => {

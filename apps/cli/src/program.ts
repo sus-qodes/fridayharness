@@ -20,6 +20,7 @@ import { registerGoalCommands, renderEscalation } from './goals.js';
 import { registerGraphCommands } from './graph.js';
 import { registerIntegrationCommands } from './integrations.js';
 import { registerIntentCommands } from './intent.js';
+import { registerLearningCommands } from './learnings.js';
 import { registerMemoryCommands } from './memory.js';
 import { registerMessageCommands } from './messages.js';
 import { openTarget, runningDaemon, startDetached } from './open-link.js';
@@ -857,6 +858,7 @@ export function buildProgram(): Command {
   registerRegistryCommands(program, g);
   registerUsageCommands(program, g);
   registerMemoryCommands(program, g);
+  registerLearningCommands(program, g);
   registerStartCommand(program, g);
   for (const plugin of commandPlugins) plugin(program);
   return program;

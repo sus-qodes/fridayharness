@@ -498,6 +498,12 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
         p.idempotency_key ? { idempotency_key: p.idempotency_key } : {},
       );
     }
+    case 'learning.propose': {
+      const p = METHODS[method].params.parse(raw);
+      const { protocol_version: _v, correlation_id: _c, idempotency_key, ...input } = p;
+      const proposal = state.learnings.propose(pid, caller(), input, idempotency_key ? { idempotency_key } : {});
+      return { proposal };
+    }
     case 'memory.search': {
       const p = METHODS[method].params.parse(raw);
       const hits = state.memory.search(

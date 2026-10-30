@@ -655,6 +655,18 @@ export class StateProjector implements Projector {
       case 'learning.proposed':
         this.insertLearningProposal(e, p.proposal as Payload);
         return;
+      case 'learning.promoted': {
+        const res = this.db
+          .prepare(
+            `UPDATE learning_proposals SET status = 'promoted', memory_id = ?, decided_by_kind = ?, decided_by_id = ?,
+               decision_note = ?, decided_at = ? WHERE proposal_id = ? AND status = 'proposed'`,
+          )
+          .run(str(p.memory_id), e.actor.kind, e.actor.id, opt(p.note), e.occurred_at, str(p.proposal_id));
+        if (res.changes !== 1) {
+          throw new FridayError('internal_error', `event ${e.type}: open proposal ${str(p.proposal_id)} not found`);
+        }
+        return;
+      }
       case 'learning.rejected': {
         const res = this.db
           .prepare(

@@ -1,5 +1,7 @@
 import { type Actor, FridayError, type LearningProposalView, LearningProposeRequest } from '@friday/protocol';
 import type { z } from 'zod';
+import type { CommandContext } from './bus.js';
+import type { RecordResult } from './memory.js';
 import type { Caller, FridayState } from './service.js';
 
 const normalized = (s: string) => s.trim().replace(/\s+/g, ' ');
@@ -76,6 +78,88 @@ export class LearningService {
         return this.state.q.learningProposal(projectId, proposal_id);
       },
     ).result;
+  }
+
+  /**
+   * A human promotes a proposal: it becomes project memory with the human's authority
+   * (human-approved), through the ordinary memory pipeline (ADR-0034 §7).
+   */
+  approve(projectId: string, actor: Actor, proposalId: string, note?: string): LearningProposalView {
+    if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human approves a learning');
+    return this.state.bus.execute(
+      { name: 'learning.approve', project_id: projectId, actor, params: { proposalId, note: note ?? null } },
+      (ctx) => {
+        const p = this.state.q.learningProposal(projectId, proposalId);
+        if (p.status !== 'proposed') {
+          throw new FridayError('invalid_state_transition', `learning ${proposalId} is ${p.status}, not proposed`);
+        }
+        this.promoteWithin(ctx, projectId, p, { by: 'human', actor, note: note ?? null });
+        return this.state.q.learningProposal(projectId, proposalId);
+      },
+    ).result;
+  }
+
+  /**
+   * Every open proposal of a task whose verification passed becomes project memory with
+   * verification's authority (`verified`), inside the command that records the verdict, so the
+   * verdict and the learnings commit together. A failed verification promotes nothing.
+   */
+  promoteForVerification(ctx: CommandContext, projectId: string, taskId: string, verificationId: string): string[] {
+    const open = this.state.q.learningProposals(projectId, { status: 'proposed', task_id: taskId, limit: 500 });
+    const promoted: string[] = [];
+    for (const p of [...open].reverse()) {
+      this.promoteWithin(ctx, projectId, p, {
+        by: 'verification',
+        actor: { kind: 'system', id: `verification:${verificationId}` },
+        note: `the task's verification ${verificationId} passed`,
+        verificationId,
+      });
+      promoted.push(p.proposal_id);
+    }
+    return promoted;
+  }
+
+  /**
+   * One promotion: the memory pipeline decides dedupe, supersession and contradiction (ADR-0021 §5).
+   * A learning that contradicts a human-approved memory is recorded needing review, and no packet
+   * shows it as a learning until a human settles it. The proposal's paths become path tags.
+   */
+  private promoteWithin(
+    ctx: CommandContext,
+    projectId: string,
+    p: LearningProposalView,
+    how: { by: 'verification' | 'human'; actor: Actor; note: string | null; verificationId?: string },
+  ): RecordResult {
+    const recorded = this.state.memory.recordWithin(
+      ctx,
+      projectId,
+      how.by === 'human' ? { kind: 'human', actor: how.actor } : { kind: 'system', actor: how.actor },
+      {
+        scope_type: 'project',
+        kind: p.kind,
+        subject: p.subject,
+        content: p.content,
+        tags: [...new Set([...p.tags, ...p.paths])],
+      },
+    );
+    ctx.emit({
+      type: 'learning.promoted',
+      actor: how.actor,
+      payload: {
+        proposal_id: p.proposal_id,
+        memory_id: recorded.memory.memory_id,
+        by: how.by,
+        verification_id: how.verificationId ?? null,
+        needs_review: recorded.memory.needs_review,
+        note: how.note,
+      },
+      refs: [
+        { kind: 'learning', id: p.proposal_id },
+        { kind: 'task', id: p.task_id },
+        { kind: 'memory', id: recorded.memory.memory_id },
+      ],
+    });
+    return recorded;
   }
 
   /** A human closes a proposal; it stays queryable and never reaches a packet. */

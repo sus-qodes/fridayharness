@@ -172,6 +172,7 @@ export const EVENT_TYPES = [
   'project_intent.approved',
   'project_intent.rejected',
   'learning.proposed',
+  'learning.promoted',
   'learning.rejected',
 ] as const;
 export type KnownEventType = (typeof EVENT_TYPES)[number];

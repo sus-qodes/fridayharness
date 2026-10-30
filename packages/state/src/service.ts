@@ -3577,6 +3577,8 @@ export class FridayState {
         });
         const task = this.q.task(projectId, v.task_id);
         this.recordOutcome(ctx, task, v.run_id ?? null, passed, checksVersion);
+        // What the agents proposed for the project is learned only from work that passed (ADR-0034 §7).
+        if (passed) this.learnings.promoteForVerification(ctx, projectId, v.task_id, verificationId);
         return this.moveTask(ctx, task, passed ? 'verification.pass' : 'verification.fail', {
           reason: summary.slice(0, 200),
           changes: { current_run_id: null },
