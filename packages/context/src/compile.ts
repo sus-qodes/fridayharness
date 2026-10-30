@@ -123,6 +123,7 @@ const SECTION_ORDER = [
   'agent.identity',
   'intent.project',
   'intent.goal',
+  'intent.changed',
   'request.note',
   'task.contract',
   'task.acceptance',
@@ -146,6 +147,7 @@ const SECTION_AUTHORITY: Record<string, Authority> = {
   'agent.identity': 'system',
   'intent.project': 'human',
   'intent.goal': 'human',
+  'intent.changed': 'system',
   'learnings.relevant': 'memory',
   'request.note': 'system',
   'repo.history': 'git',
@@ -543,6 +545,40 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
         reason: `what this work is for (goal ${goal.goal_id}, revision ${goal.intent_revision})`,
         rule: 'protected: goal intent (ADR-0034, review F07)',
       });
+    }
+    // The intent moved since this attempt started (ADR-0034 §8): what changed, protected.
+    const run = task?.current_run_id ? state.q.findRun(task.current_run_id) : undefined;
+    if (task && run?.intent_version) {
+      const current = state.intent.effectiveVersion(pid, goal ?? null);
+      const changes =
+        run.intent_version === current
+          ? []
+          : state.intent.changesSince(pid, state.q.runIntentSnapshot(run.run_id), goal);
+      if (changes.length) {
+        const text = [
+          `The intent changed since this attempt started (${run.intent_version} -> ${current}). Make your work fit it:`,
+          ...changes.map((c) => `- ${c}`),
+        ].join('\n');
+        add({
+          section: 'intent.changed',
+          line: text,
+          source: src({
+            source_id: `${run.run_id}:intent:${current}`,
+            source_type: 'daemon',
+            authority: 'system',
+            relevance: 1,
+            relationship_distance: 0,
+            verification_status: 'verified',
+            selection_reason: 'the intent changed while this attempt runs',
+            content: text,
+          }),
+          priority: 1,
+          relevance: 1,
+          protected: true,
+          reason: 'the intent changed since this attempt started',
+          rule: 'protected: intent changed (ADR-0034 §8)',
+        });
+      }
     }
   }
   if (task && !requestOnly) {

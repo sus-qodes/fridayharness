@@ -65,7 +65,13 @@ import {
   type WaitingReason,
   type WorktreeView,
 } from '@friday/protocol';
-import { ROLE_REGISTRY_SOURCE, type RoleDecision, resolveTaskRoleContract, type TaskRoleOrigin } from '@friday/routing';
+import {
+  ROLE_REGISTRY_SOURCE,
+  type RoleDecision,
+  resolveTaskRoleContract,
+  type TaskRoleOrigin,
+  taskRoleIntentVersion,
+} from '@friday/routing';
 import type { z } from 'zod';
 import { CommandBus, type CommandContext, type CommandMeta } from './bus.js';
 import { IntentService } from './intent.js';
@@ -469,7 +475,14 @@ export interface PlanProposal {
    * The normalized intent from a first plan (spec Part 03 §5). Only the objective and what the
    * planner inferred: the human's own constraints and outcomes are never replaced (review F07).
    */
-  intent?: { objective: string; inferred_constraints: string[]; inferred_outcomes: string[] } | null;
+  intent?: {
+    objective: string;
+    inferred_constraints: string[];
+    inferred_outcomes: string[];
+    /** ADR-0034 §3: the planner's non-goals and definition of done, kept apart from the human's. */
+    inferred_non_goals?: string[];
+    inferred_definition_of_done?: string[];
+  } | null;
   /**
    * The ACTIVE version this proposal was made against (null: there was none). Checked when it is
    * proposed and again when it is approved, so a stale proposal cannot apply (review F06).
@@ -1004,9 +1017,24 @@ export class FridayState {
     }
     const run_id = this.ids.next('run');
     const attempt = this.q.maxAttempt(task.task_id) + 1;
+    const snapshot = this.intent.snapshot(
+      ctx.project_id,
+      task.goal_id ? this.q.findGoal(ctx.project_id, task.goal_id) : null,
+    );
     ctx.emit({
       type: 'run.created',
-      payload: { run: { run_id, task_id: task.task_id, harness_id: harnessId, agent_id: agentId, attempt, ...ws } },
+      payload: {
+        run: {
+          run_id,
+          task_id: task.task_id,
+          harness_id: harnessId,
+          agent_id: agentId,
+          attempt,
+          ...ws,
+          // What the run starts under (ADR-0034 §8), so a later change can be named to it.
+          intent: { version: snapshot.version, snapshot },
+        },
+      },
       refs: [
         { kind: 'task', id: task.task_id },
         { kind: 'run', id: run_id },
@@ -1506,9 +1534,20 @@ export class FridayState {
     taskId: string,
     origin: TaskRoleOrigin,
     explicitRole: string | null,
-    opts: { decision?: RoleDecision | null; preferDecision?: boolean; intentVersion?: string | null } = {},
+    opts: {
+      decision?: RoleDecision | null;
+      preferDecision?: boolean;
+      intentVersion?: string | null;
+      /** Reopened because the intent changed (ADR-0034 §4): the classifier may be asked again. */
+      reclassify?: boolean;
+    } = {},
   ): TaskRoleDecisionView {
     const task = this.q.task(ctx.project_id, taskId);
+    // The contract is keyed by the effective intent and the task's own facts (ADR-0034 §4).
+    const effective = this.intent.effectiveVersion(
+      ctx.project_id,
+      task.goal_id ? this.q.findGoal(ctx.project_id, task.goal_id) : null,
+    );
     const resolution = resolveTaskRoleContract({
       task,
       origin,
@@ -1516,7 +1555,7 @@ export class FridayState {
       registry: ROLE_REGISTRY_SOURCE,
       decision: opts.decision ?? null,
       prefer_decision: opts.preferDecision ?? false,
-      ...(opts.intentVersion !== undefined ? { intent_version: opts.intentVersion } : {}),
+      intent_version: opts.intentVersion ?? `${effective}:${taskRoleIntentVersion(task)}`,
     });
     const decision_id = this.ids.next('rdec');
     const decision = {
@@ -1528,7 +1567,7 @@ export class FridayState {
     };
     ctx.emit({
       type: 'task.role_resolved',
-      payload: { task_id: taskId, decision },
+      payload: { task_id: taskId, decision, ...(opts.reclassify ? { reclassify: true } : {}) },
       refs: [
         { kind: 'task', id: taskId },
         ...(task.goal_id ? [{ kind: 'goal' as const, id: task.goal_id }] : []),
@@ -1538,6 +1577,54 @@ export class FridayState {
     const stored = this.q.latestTaskRoleDecision(ctx.project_id, taskId);
     if (!stored) throw new Error(`task ${taskId}: role resolution was not projected`);
     return stored;
+  }
+
+  /**
+   * The intent changed (ADR-0034 §4, §8): the project's, or one goal's. Work not started whose role
+   * a model chose is reopened so the classifier decides again under the new intent; every agent
+   * holding affected work gets a notice naming what changed, and its next packet says so too.
+   * Running work is never re-routed.
+   */
+  intentChangedWithin(ctx: CommandContext, goalId: string | null): void {
+    const pid = ctx.project_id;
+    const tasks = goalId ? this.q.goalTasks(pid, goalId) : this.q.tasks(pid, { limit: 5000 });
+    for (const t of tasks) {
+      if (TERMINAL_TASK.has(t.status)) continue;
+      if (
+        t.role_source === 'decision_model' &&
+        (t.status === 'PROPOSED' || t.status === 'READY') &&
+        !t.assigned_agent_id
+      ) {
+        this.resolveTaskRoleWithin(ctx, t.task_id, 'none', null, { reclassify: true });
+        continue;
+      }
+      if (!t.assigned_agent_id || !t.current_run_id) continue;
+      const run = this.q.findRun(t.current_run_id);
+      if (!run || run.status === 'ENDED' || run.status === 'DECLINED') continue;
+      const goal = t.goal_id ? this.q.findGoal(pid, t.goal_id) : null;
+      if (run.intent_version === this.intent.effectiveVersion(pid, goal)) continue;
+      const agent = this.q.findAgent(t.assigned_agent_id);
+      if (!agent) continue;
+      const changes = this.intent.changesSince(pid, this.q.runIntentSnapshot(run.run_id), goal);
+      if (!changes.length) continue;
+      this.sendWithin(
+        ctx,
+        pid,
+        { kind: 'system', actor: SYSTEM },
+        {
+          to: agent.agent_key,
+          mode: 'notification',
+          priority: 'high',
+          subject: `Intent changed for ${t.task_id}`,
+          content: [
+            'What this work is for changed while you work on it. Keep going, but make your work fit the new intent:',
+            ...changes.map((c) => `- ${c}`),
+            'Your verification is reviewed against the new intent.',
+          ].join('\n'),
+          task_id: t.task_id,
+        },
+      );
+    }
   }
 
   /** A human deliberately replaces an existing task's stored role contract (R2). */
@@ -2229,6 +2316,11 @@ export class FridayState {
             notes: p.notes,
             risks: p.risks,
             discrepancies,
+            // The intent current when the work was claimed (ADR-0034 §8), beside the one it started under.
+            intent_version: this.intent.effectiveVersion(
+              projectId,
+              task.goal_id ? this.q.findGoal(projectId, task.goal_id) : null,
+            ),
           },
         });
         task = this.moveTask(ctx, task, 'agent.completion_claim', { reason: p.summary.slice(0, 200) });
@@ -2988,12 +3080,20 @@ export class FridayState {
           const fold = (xs: string[]) => new Set(xs.map((x) => x.trim().toLowerCase()));
           const ownC = fold(goal.constraints);
           const ownO = fold(goal.outcomes);
+          const ownN = fold(goal.non_goals);
+          const ownD = fold(goal.definition_of_done);
           changes.objective = proposal.intent.objective;
           changes.inferred_constraints = proposal.intent.inferred_constraints.filter(
             (c) => !ownC.has(c.trim().toLowerCase()),
           );
           changes.inferred_outcomes = proposal.intent.inferred_outcomes.filter(
             (o) => !ownO.has(o.trim().toLowerCase()),
+          );
+          changes.inferred_non_goals = (proposal.intent.inferred_non_goals ?? []).filter(
+            (n) => !ownN.has(n.trim().toLowerCase()),
+          );
+          changes.inferred_definition_of_done = (proposal.intent.inferred_definition_of_done ?? []).filter(
+            (d) => !ownD.has(d.trim().toLowerCase()),
           );
         }
         if (Object.keys(changes).length > 0) {
@@ -3562,6 +3662,12 @@ export class FridayState {
         const v = this.q.verification(verificationId);
         if (v.status !== 'RUNNING')
           throw new FridayError('invalid_state_transition', `verification is already ${v.status}`);
+        const verified = this.q.task(projectId, v.task_id);
+        const ran = v.run_id ? this.q.findRun(v.run_id) : undefined;
+        const current = this.intent.effectiveVersion(
+          projectId,
+          verified.goal_id ? this.q.findGoal(projectId, verified.goal_id) : null,
+        );
         ctx.emit({
           type: 'verification.finished',
           payload: {
@@ -3569,6 +3675,12 @@ export class FridayState {
             task_id: v.task_id,
             status: passed ? 'PASSED' : 'FAILED',
             summary,
+            // Deterministic checks cannot judge prose intent; they record that it moved (ADR-0034 §8).
+            intent: {
+              started: ran?.intent_version ?? null,
+              current,
+              changed_during_run: Boolean(ran?.intent_version && ran.intent_version !== current),
+            },
           },
           refs: [
             { kind: 'verification', id: verificationId },

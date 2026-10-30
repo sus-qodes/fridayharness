@@ -417,3 +417,118 @@ describe('learning promotion (ADR-0034 §7)', () => {
     expect(dump()).toEqual(before);
   });
 });
+
+describe('intent versions and changes (ADR-0034 §4, §8)', () => {
+  const H = human;
+
+  it('names the effective version by project version, goal revision and content', () => {
+    expect(state.intent.effectiveVersion(PROJECT, null)).toMatch(/^p0\.g0\.[0-9a-f]{6}$/);
+    state.intent.propose(PROJECT, H, draft);
+    // A proposal changes nothing.
+    expect(state.intent.effectiveVersion(PROJECT, null)).toMatch(/^p0\.g0\./);
+    state.intent.approve(PROJECT, H, 1);
+    const goal = state.createGoal(PROJECT, H, { request: 'Refactor cards', plan: false });
+    const v1 = state.intent.effectiveVersion(PROJECT, state.q.goal(PROJECT, goal.goal_id));
+    expect(v1).toMatch(/^p1\.g1\.[0-9a-f]{6}$/);
+    state.intent.updateGoal(PROJECT, H, goal.goal_id, { non_goals: ['No new packages.'] });
+    expect(state.intent.effectiveVersion(PROJECT, state.q.goal(PROJECT, goal.goal_id))).toMatch(/^p1\.g2\./);
+  });
+
+  it('lists what changed since a snapshot in plain words', () => {
+    state.intent.propose(PROJECT, H, draft);
+    state.intent.approve(PROJECT, H, 1);
+    const goal = state.createGoal(PROJECT, H, { request: 'Refactor cards', non_goals: ['No styling.'], plan: false });
+    const before = state.intent.snapshot(PROJECT, state.q.goal(PROJECT, goal.goal_id));
+    state.intent.propose(PROJECT, H, { ...draft, non_goals: ['Social feeds.', 'Paid plans.'] });
+    state.intent.approve(PROJECT, H, 2);
+    state.intent.updateGoal(PROJECT, H, goal.goal_id, { non_goals: ['No new packages.'] });
+    const lines = state.intent.changesSince(PROJECT, before, state.q.goal(PROJECT, goal.goal_id));
+    expect(lines).toEqual([
+      'The project intent is now version 2 (was 1).',
+      'New project non-goal: Paid plans.',
+      "The goal's intent is now revision 2 (was 1).",
+      'New goal non-goal: No new packages.',
+      'Removed goal non-goal: No styling.',
+    ]);
+  });
+
+  it('records the version a run starts under and the one current at its claim and verdict', () => {
+    const be = agent('be-1');
+    const t = state.createTask(PROJECT, H, {
+      summary: 'Fix it',
+      scope: { write: ['src/**'], read: [] },
+      assign_agent_key: 'be-1',
+    });
+    const runId = state.claimTask(PROJECT, be, { task_id: t.task_id }).run_id;
+    const started = state.q.run(runId).intent_version;
+    expect(started).toMatch(/^p0\.g0\./);
+    state.intent.propose(PROJECT, H, draft);
+    state.intent.approve(PROJECT, H, 1);
+    state.submitResult(PROJECT, be, {
+      idempotency_key: 'claim-1',
+      task_id: t.task_id,
+      run_id: runId,
+      status: 'completed_claim',
+      summary: 'done',
+      changed_paths: [],
+      checks: [],
+      notes: [],
+      risks: [],
+    });
+    expect((state.q.run(runId).claim as { intent_version: string }).intent_version).toMatch(/^p1\.g0\./);
+    const { verification_id } = state.startVerification(PROJECT, H, t.task_id);
+    state.finishVerification(PROJECT, H, verification_id, true, 'ok');
+    const finished = state.store
+      .readByRef(PROJECT, 'verification', verification_id)
+      .find((e) => e.type === 'verification.finished');
+    expect((finished?.payload as { intent?: unknown } | undefined)?.intent).toMatchObject({
+      started,
+      current: expect.stringMatching(/^p1\.g0\./),
+      changed_during_run: true,
+    });
+  });
+
+  it('tells the agent working on affected work what changed, and nobody else', () => {
+    const be = agent('be-1');
+    agent('fe-1');
+    const t = state.createTask(PROJECT, H, {
+      summary: 'Fix it',
+      scope: { write: ['src/**'], read: [] },
+      assign_agent_key: 'be-1',
+    });
+    state.claimTask(PROJECT, be, { task_id: t.task_id });
+    state.intent.propose(PROJECT, H, draft);
+    state.intent.approve(PROJECT, H, 1);
+    const beInbox = state.peekInbox(PROJECT, be.agent_id, 10).items;
+    const notice = beInbox.find((m) => m.subject === `Intent changed for ${t.task_id}`);
+    expect(notice?.body).toContain('The project intent is now version 1 (there was none).');
+    expect(notice?.body).toContain('New project constraint: Never show ads.');
+    expect(notice?.priority).toBe('high');
+    const fe = state.q.agents(PROJECT).find((a) => a.agent_key === 'fe-1');
+    expect(state.peekInbox(PROJECT, fe?.agent_id as string, 10).items).toEqual([]);
+  });
+
+  it('reopens a model-chosen role of work not started, so the classifier decides again', () => {
+    const t = state.createTask(PROJECT, H, {
+      summary: 'Split a change',
+      scope: { write: ['apps/web/src/App.tsx', 'server/src/api.ts'], read: [] },
+    });
+    expect(t.role_source).toBe('missing');
+    state.recordTaskRoleDecision(PROJECT, { kind: 'master_brain', id: 'master-brain' }, t.task_id, {
+      status: 'classified',
+      roles: [{ role: 'backend_engineer', task_summary: 'x', depends_on: [], confidence: 0.9 }],
+      assumptions: [],
+    });
+    expect(state.q.task(PROJECT, t.task_id).role_source).toBe('decision_model');
+    state.intent.propose(PROJECT, H, draft);
+    state.intent.approve(PROJECT, H, 1);
+    const latest = state.q.latestTaskRoleDecision(PROJECT, t.task_id);
+    expect(latest?.status).toBe('blocked');
+    expect(latest?.intent_version).toMatch(/^p1\.g0\./);
+    const reopened = state.store
+      .readByRef(PROJECT, 'task', t.task_id)
+      .filter((e) => e.type === 'task.role_resolved')
+      .at(-1);
+    expect((reopened?.payload as { reclassify?: boolean } | undefined)?.reclassify).toBe(true);
+  });
+});

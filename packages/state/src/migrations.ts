@@ -1005,6 +1005,18 @@ CREATE INDEX ix_learning_proposals_task ON learning_proposals(project_id, task_i
   },
 ];
 
+/** ADR-0034 §4, §8: the intent a run started under, so a change since can be named to it. */
+export const RUN_INTENT_MIGRATIONS: Migration[] = [
+  {
+    version: 25,
+    name: 'run_intent',
+    up: `
+ALTER TABLE task_runs ADD COLUMN intent_version TEXT;
+ALTER TABLE task_runs ADD COLUMN intent_snapshot_json TEXT;
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -1028,6 +1040,7 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...CONTROL_MIGRATIONS,
   ...ROLE_RESOLUTION_MIGRATIONS,
   ...INTENT_MIGRATIONS,
+  ...RUN_INTENT_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */

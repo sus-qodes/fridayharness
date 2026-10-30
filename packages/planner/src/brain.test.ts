@@ -137,7 +137,7 @@ describe('Master Brain', () => {
       status: 'PROPOSED',
       trigger: 'first plan',
       proposed_by: { kind: 'master_brain' },
-      prompt_version: 'plan-3',
+      prompt_version: 'plan-4',
     });
     expect(v1?.tasks.map((t) => [t.key, t.change])).toEqual([
       ['billing-service', 'new'],
@@ -192,7 +192,7 @@ describe('Master Brain', () => {
       status: 'PROPOSED',
       supersedes: 1,
       trigger: expect.stringContaining('verification failed'),
-      prompt_version: 'replan-4',
+      prompt_version: 'replan-5',
     });
     expect(v2?.tasks.map((t) => [t.key, t.change])).toEqual([
       ['billing-service', 'keep'],
@@ -330,7 +330,7 @@ describe('Master Brain', () => {
       goal_id: null,
       plan_id: null,
       purpose: 'plan',
-      prompt_version: 'plan-3',
+      prompt_version: 'plan-4',
       provider: 'anthropic',
       model: 'claude-opus-5-5',
       remote: true,

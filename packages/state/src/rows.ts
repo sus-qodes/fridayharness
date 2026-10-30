@@ -69,6 +69,7 @@ export interface RunRow {
   outcome: string | null;
   session_ref: string | null;
   claim_json: string | null;
+  intent_version?: string | null;
   observed_paths_json: string;
   created_at: string;
   accepted_at: string | null;
@@ -188,6 +189,7 @@ export function toRunView(row: RunRow): RunView {
     base_commit: row.base_commit ?? null,
     branch_ref: row.branch_ref ?? null,
     workspace: row.workspace === 'pending' ? 'pending' : 'ready',
+    intent_version: row.intent_version ?? null,
     model_requested: row.model_requested ?? null,
     model_binding: Number(row.model_binding ?? 0) === 1,
     routing_decision_id: row.routing_decision_id ?? null,

@@ -255,7 +255,8 @@ describe('model routing', () => {
     const shown = await cli(['--project', dir, 'routing', 'explain', task.task_id]);
     expect(shown.code, shown.stderr).toBe(0);
     expect(shown.stdout).toContain('Role decision');
-    expect(shown.stdout).toContain('intent ri1_');
+    // The role contract is keyed by the effective intent and the task's facts (ADR-0034 §4).
+    expect(shown.stdout).toMatch(/intent p\d+\.g\d+\.[0-9a-f]{6}:ri1_/);
     expect(shown.stdout).toContain('backend_engineer (task)');
 
     // A human role assignment is a new persisted resolution.

@@ -3,7 +3,7 @@
  * plan can be traced to the exact instructions that produced it.
  */
 
-export const PROMPT_VERSIONS = { plan: 'plan-3', replan: 'replan-4' } as const;
+export const PROMPT_VERSIONS = { plan: 'plan-4', replan: 'replan-5' } as const;
 
 const SHARED = `You are the Master Brain of Friday, the coordinator for AI coding agents working in one git repository. You plan; you never edit files or run commands yourself. Agents (Claude Code and others) claim the tasks you plan, work only inside each task's write scope, and submit completion claims that Friday verifies by running the project's checks.
 
@@ -23,7 +23,7 @@ Rules for every task:
 /** Friday's rules, identical for every call so they share the provider's cache with the project context. */
 export const PLANNER_SYSTEM = SHARED;
 
-export const PLAN_INSTRUCTIONS = `Your job now: turn a new goal into the first plan. Normalize the request into an objective, constraints and outcomes: list the human's own constraints and outcomes unchanged, and add only what the request clearly implies (Friday keeps your additions apart from the human's). Then decompose it into tasks with keys, dependencies and write scopes.`;
+export const PLAN_INSTRUCTIONS = `Your job now: turn a new goal into the first plan. Normalize the request into an objective, constraints, outcomes, non_goals (what the goal deliberately does not do) and definition_of_done (what "done" means): list the human's own unchanged, and add only what the request clearly implies (Friday keeps your additions apart from the human's). Then decompose it into tasks with keys, dependencies and write scopes.`;
 
 export const REPLAN_INSTRUCTIONS = `Your job now: revise the active plan after something changed (a verification failure, a cancelled task, or a human's answer). History is never rewritten: you can only
 - rework FAILED tasks (say concretely what the agent must do differently, based on the evidence),
@@ -42,6 +42,11 @@ export interface GoalForPrompt {
   /** What an earlier planning call added; shown as such. */
   inferred_constraints?: string[];
   inferred_outcomes?: string[];
+  /** ADR-0034 §3. */
+  non_goals?: string[];
+  definition_of_done?: string[];
+  inferred_non_goals?: string[];
+  inferred_definition_of_done?: string[];
   priority: string;
 }
 
@@ -59,6 +64,16 @@ export function goalBlock(goal: GoalForPrompt): string {
       : '',
     goal.inferred_outcomes?.length
       ? `Outcomes inferred by an earlier planning call:\n${bullets(goal.inferred_outcomes)}`
+      : '',
+    goal.non_goals?.length ? `Not part of this goal, from the human (authoritative):\n${bullets(goal.non_goals)}` : '',
+    goal.definition_of_done?.length
+      ? `Done when, from the human (authoritative):\n${bullets(goal.definition_of_done)}`
+      : '',
+    goal.inferred_non_goals?.length
+      ? `Non-goals inferred by an earlier planning call:\n${bullets(goal.inferred_non_goals)}`
+      : '',
+    goal.inferred_definition_of_done?.length
+      ? `Done when, inferred by an earlier planning call:\n${bullets(goal.inferred_definition_of_done)}`
       : '',
   ]
     .filter(Boolean)

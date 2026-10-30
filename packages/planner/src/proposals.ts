@@ -42,7 +42,13 @@ export function proposalFromDraft(draft: PlanDraft, meta: ProposalMeta): PlanPro
     tasks: draft.tasks.map(taskInput),
     model_call_id: meta.model_call_id ?? null,
     prompt_version: meta.prompt_version ?? null,
-    intent: { objective: draft.objective, inferred_constraints: draft.constraints, inferred_outcomes: draft.outcomes },
+    intent: {
+      objective: draft.objective,
+      inferred_constraints: draft.constraints,
+      inferred_outcomes: draft.outcomes,
+      inferred_non_goals: draft.non_goals,
+      inferred_definition_of_done: draft.definition_of_done,
+    },
     base_version: null,
   };
 }

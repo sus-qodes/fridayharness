@@ -68,6 +68,7 @@ function titleOf(kind: string): string {
     'agent.identity': 'You',
     'intent.project': 'Project intent: what the whole project is for',
     'intent.goal': 'Goal intent: what this work is for',
+    'intent.changed': 'The intent changed since you started',
     'learnings.relevant': 'What the project has learned (checked)',
     'memory.notes': 'Working notes (not checked)',
     'task.contract': 'Task',

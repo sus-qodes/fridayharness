@@ -48,7 +48,8 @@ describe('task role resolution (R2)', () => {
       role: 'backend',
       role_source: 'task',
       role_confidence: 1,
-      role_intent_version: expect.stringMatching(/^ri1_[0-9a-f]{16}$/),
+      // The effective intent (ADR-0034 §4) and the task's own facts key the contract.
+      role_intent_version: expect.stringMatching(/^p0\.g0\.[0-9a-f]{6}:ri1_[0-9a-f]{16}$/),
       role_registry_version: ROLE_REGISTRY_SOURCE.version,
     });
     expect(task.role_decision_id).toMatch(/^rdec_/);

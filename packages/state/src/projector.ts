@@ -1275,8 +1275,8 @@ export class StateProjector implements Projector {
     this.db
       .prepare(
         `INSERT INTO task_runs (run_id, project_id, task_id, harness_id, agent_id, attempt, status, created_at,
-           execution_root, base_commit, branch_ref, workspace)
-         VALUES (?, ?, ?, ?, ?, ?, 'STARTING', ?, ?, ?, ?, ?)`,
+           execution_root, base_commit, branch_ref, workspace, intent_version, intent_snapshot_json)
+         VALUES (?, ?, ?, ?, ?, ?, 'STARTING', ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         str(r.run_id),
@@ -1290,6 +1290,8 @@ export class StateProjector implements Projector {
         opt(r.base_commit),
         opt(r.branch_ref),
         r.workspace === 'pending' ? 'pending' : 'ready',
+        opt((r.intent as Payload | undefined)?.version),
+        (r.intent as Payload | undefined)?.snapshot ? toJson((r.intent as Payload).snapshot) : null,
       );
   }
 

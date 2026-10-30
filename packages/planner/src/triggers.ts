@@ -106,7 +106,9 @@ export function triggersFor(e: TriggerEvent, f: TriggerFacts): BrainAction[] {
       const decision = p.decision as { status?: string; decision_id?: string } | undefined;
       if (decision?.status !== 'blocked' || !decision.decision_id || !f.planner.available) return [];
       const task_id = String(p.task_id);
-      if (f.roleClassificationAttempted(task_id)) return [];
+      // A contract reopened because the intent changed is asked again (ADR-0034 §4); otherwise a
+      // task is classified once, so a question already put to a human is never repeated.
+      if (p.reclassify !== true && f.roleClassificationAttempted(task_id)) return [];
       return [{ kind: 'classify_role', goal_id: f.goalOf(task_id), task_id, decision_id: decision.decision_id }];
     }
     case 'plan.proposed': {

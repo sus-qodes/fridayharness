@@ -60,6 +60,9 @@ export const PlanDraft = z.object({
   objective: z.string().min(5).max(500),
   constraints: z.array(z.string().min(1).max(300)).max(12).default([]),
   outcomes: z.array(z.string().min(1).max(300)).max(12).default([]),
+  /** ADR-0034 §3: what the goal deliberately does not do, and what "done" means. */
+  non_goals: z.array(z.string().min(1).max(300)).max(12).default([]),
+  definition_of_done: z.array(z.string().min(1).max(300)).max(12).default([]),
   summary: z.string().min(5).max(1000),
   rationale: z.string().max(2000).default(''),
   needs_human: NeedsHuman.nullable().default(null),

@@ -42,6 +42,55 @@ function unique<T extends { text: string }>(items: T[]): T[] {
 const sameLines = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && a.every((x, i) => normalized(x) === normalized(b[i] ?? ''));
 
+/** What a run started under (ADR-0034 §8): enough to name, later, what changed since. */
+export interface IntentSnapshot {
+  version: string;
+  project_version: number;
+  goal: {
+    goal_id: string;
+    revision: number;
+    objective: string;
+    constraints: string[];
+    outcomes: string[];
+    non_goals: string[];
+    definition_of_done: string[];
+    inferred_constraints: string[];
+    inferred_outcomes: string[];
+    inferred_non_goals: string[];
+    inferred_definition_of_done: string[];
+  } | null;
+}
+
+const GOAL_LISTS = [
+  ['constraints', 'inferred_constraints', 'constraint'],
+  ['outcomes', 'inferred_outcomes', 'outcome'],
+  ['non_goals', 'inferred_non_goals', 'non-goal'],
+  ['definition_of_done', 'inferred_definition_of_done', '"done when" item'],
+] as const;
+
+/** A goal's intent as a snapshot holds it. */
+function goalIntent(goal: GoalView): NonNullable<IntentSnapshot['goal']> {
+  return {
+    goal_id: goal.goal_id,
+    revision: goal.intent_revision,
+    objective: goal.objective ?? goal.request,
+    constraints: goal.constraints,
+    outcomes: goal.outcomes,
+    non_goals: goal.non_goals,
+    definition_of_done: goal.definition_of_done,
+    inferred_constraints: goal.inferred_constraints,
+    inferred_outcomes: goal.inferred_outcomes,
+    inferred_non_goals: goal.inferred_non_goals,
+    inferred_definition_of_done: goal.inferred_definition_of_done,
+  };
+}
+
+/** The lines of `after` that `before` lacks, compared without case or extra spaces. */
+const added = (before: readonly string[], after: readonly string[]) => {
+  const had = new Set(before.map(lineKey));
+  return after.filter((x) => !had.has(lineKey(x)));
+};
+
 /**
  * Project intent and goal intent (ADR-0034 §1–§3). Only a human approves a project intent; the
  * Master Brain and humans may propose one. A goal's intent is edited by humans; the planner's
@@ -49,6 +98,75 @@ const sameLines = (a: readonly string[], b: readonly string[]) =>
  */
 export class IntentService {
   constructor(private readonly state: FridayState) {}
+
+  /**
+   * The effective intent version of work on a goal (ADR-0034 §4): `p<project version>.g<goal
+   * revision>.<hash>`. p0 means no approved project intent; g0, no goal. The hash covers the
+   * content, so equal versions mean equal intent.
+   */
+  effectiveVersion(projectId: string, goal: GoalView | null | undefined): string {
+    const approved = this.state.q.approvedProjectIntent(projectId);
+    const body = JSON.stringify({ project: approved?.content_hash ?? null, goal: goal ? goalIntent(goal) : null });
+    const hash = createHash('sha256').update(body).digest('hex').slice(0, 6);
+    return `p${approved?.version ?? 0}.g${goal?.intent_revision ?? 0}.${hash}`;
+  }
+
+  /** What a run starts under: its version, the project version and the goal's intent then. */
+  snapshot(projectId: string, goal: GoalView | null | undefined): IntentSnapshot {
+    return {
+      version: this.effectiveVersion(projectId, goal),
+      project_version: this.state.q.approvedProjectIntent(projectId)?.version ?? 0,
+      goal: goal ? goalIntent(goal) : null,
+    };
+  }
+
+  /**
+   * What changed since a snapshot, line by line, in plain words (ADR-0034 §8): the project intent
+   * against the version the run started under, and the goal's intent against its snapshot.
+   */
+  changesSince(projectId: string, before: IntentSnapshot | null, goal: GoalView | null | undefined): string[] {
+    const lines: string[] = [];
+    const now = this.state.q.approvedProjectIntent(projectId);
+    const then =
+      before && before.project_version > 0
+        ? this.state.q.projectIntents(projectId).find((v) => v.version === before.project_version)
+        : undefined;
+    if ((now?.version ?? 0) !== (before?.project_version ?? 0)) {
+      lines.push(
+        now
+          ? `The project intent is now version ${now.version}${then ? ` (was ${then.version})` : ' (there was none)'}.`
+          : 'The project intent was withdrawn.',
+      );
+      if (now && normalized(now.objective) !== normalized(then?.objective ?? '')) {
+        lines.push(`Project objective: ${now.objective}`);
+      }
+      const labels: Record<IntentList, string> = {
+        constraints: 'constraint',
+        outcomes: 'outcome',
+        non_goals: 'non-goal',
+        definition_of_done: '"done when" item',
+      };
+      for (const k of INTENT_LISTS) {
+        const a = (then?.[k] ?? []).map((i) => i.text);
+        const b = (now?.[k] ?? []).map((i) => i.text);
+        for (const x of added(a, b)) lines.push(`New project ${labels[k]}: ${x}`);
+        for (const x of added(b, a)) lines.push(`Removed project ${labels[k]}: ${x}`);
+      }
+    }
+    const g = goal ? goalIntent(goal) : null;
+    const was = before?.goal ?? null;
+    if (g && (!was || was.revision !== g.revision)) {
+      lines.push(`The goal's intent is now revision ${g.revision}${was ? ` (was ${was.revision})` : ''}.`);
+      if (was && normalized(was.objective) !== normalized(g.objective)) lines.push(`Goal objective: ${g.objective}`);
+      for (const [own, inferred, label] of GOAL_LISTS) {
+        const a = [...(was?.[own] ?? []), ...(was?.[inferred] ?? [])];
+        const b = [...g[own], ...g[inferred]];
+        for (const x of added(a, b)) lines.push(`New goal ${label}: ${x}`);
+        for (const x of added(b, a)) lines.push(`Removed goal ${label}: ${x}`);
+      }
+    }
+    return lines;
+  }
 
   /**
    * Records a new proposed version. A line a human proposes keeps the `planner` source when it is
@@ -148,6 +266,7 @@ export class IntentService {
           payload: { version, note: note ?? null },
           refs: [{ kind: 'intent', id: `v${version}` }],
         });
+        if (approve) this.state.intentChangedWithin(ctx, null);
         return this.state.q.projectIntent(projectId, version);
       },
     ).result;
@@ -185,6 +304,7 @@ export class IntentService {
             payload: { goal_id: goalId, changes },
             refs: [{ kind: 'goal', id: goalId }],
           });
+          this.state.intentChangedWithin(ctx, goalId);
         }
         return this.state.q.goal(projectId, goalId);
       },

@@ -107,6 +107,13 @@
         "ready"
       ]
     },
+    "intent_version": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "model_requested": {
       "default": null,
       "type": [

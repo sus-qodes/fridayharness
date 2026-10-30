@@ -2,12 +2,14 @@
  * `friday intent` and the goal intent flags end to end (ADR-0034 §1–§3; plan Phase 3.2): a real
  * daemon, a scripted Master Brain and the CLI as a person types it.
  */
+import { GenericHarnessClient } from '@friday/adapter-generic';
 import { FakePlannerModel } from '@friday/planner';
 import type { GoalView, ProjectIntentView } from '@friday/protocol';
 import { useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli } from '../helpers/cli.js';
 import { startTestDaemon } from '../helpers/daemon.js';
+import { TEST_HOST_MODELS } from '../helpers/fake-harness.js';
 
 const ws = useTestWorkspace();
 let saved: string | undefined;
@@ -171,5 +173,52 @@ describe('goal intent from the CLI', () => {
     const nothing = await cli(['--project', dir, 'goal', 'edit', goal.goal_id]);
     expect(nothing.code).not.toBe(0);
     expect(nothing.stderr).toContain('nothing to change');
+  });
+});
+
+describe('an intent change during an attempt, from the CLI (ADR-0034 §8)', () => {
+  it('tells the agent, and task inspect shows the change for review', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const dir = ws().projectDir;
+    const h = new GenericHarnessClient(td.bootstrap, {
+      harness_key: 'intent-cli:be-1',
+      vendor: 'generic',
+      name: 'be-1',
+      attach_mode: 'attach',
+      project_id: td.project.project_id,
+      agent_key: 'be-1',
+      capabilities: { models: TEST_HOST_MODELS },
+      enforcement_level: 'L1',
+    });
+    await h.register();
+    const task = await td.operator.post<{ task_id: string }>(td.operator.projectPath('/tasks'), {
+      summary: 'Fix the cards',
+      role: 'backend',
+      scope: { write: ['src/**'], read: [] },
+      assign_agent_key: 'be-1',
+    });
+    const claim = await h.claim({ next: true });
+    expect(claim.task.task_id).toBe(task.task_id);
+
+    const approved = await cli(['--project', dir, 'intent', 'edit', '--objective', 'Prove Friday works.', '--approve']);
+    expect(approved.code, approved.stderr).toBe(0);
+    const inbox = await h.call('message.inbox', { max: 10 });
+    const notice = inbox.items.find(
+      (m: { subject: string | null }) => m.subject === `Intent changed for ${task.task_id}`,
+    );
+    expect(notice?.body).toContain('The project intent is now version 1 (there was none).');
+
+    await h.reportResult({
+      task_id: task.task_id,
+      run_id: claim.run_id,
+      status: 'completed_claim',
+      summary: 'fixed',
+      changed_paths: [],
+    });
+    const inspect = await cli(['--project', dir, 'task', 'inspect', task.task_id]);
+    expect(inspect.code, inspect.stderr).toBe(0);
+    expect(inspect.stdout).toMatch(
+      /intent changed during this attempt: started under p0\.g0\.[0-9a-f]{6}, claimed under p1\.g0\./,
+    );
   });
 });

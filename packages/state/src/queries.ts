@@ -27,6 +27,7 @@ import {
   type VerificationView,
   type WorktreeView,
 } from '@friday/protocol';
+import type { IntentSnapshot } from './intent.js';
 import {
   type AgentRow,
   type AssignmentRow,
@@ -1050,6 +1051,14 @@ export class Queries {
   }
 
   // ---- ADR-0034: project intent and learning proposals ----------------------------------------
+
+  /** What a run started under (ADR-0034 §8); null for a run older than intent versions. */
+  runIntentSnapshot(runId: string): IntentSnapshot | null {
+    const row = this.db
+      .prepare('SELECT intent_snapshot_json FROM task_runs WHERE run_id = ?')
+      .get<{ intent_snapshot_json: string | null }>(runId);
+    return row?.intent_snapshot_json ? (JSON.parse(row.intent_snapshot_json) as IntentSnapshot) : null;
+  }
 
   /** Every version of the project intent, newest first. */
   projectIntents(projectId: string): ProjectIntentView[] {

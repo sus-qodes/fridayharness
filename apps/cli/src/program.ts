@@ -302,7 +302,12 @@ export function buildProgram(): Command {
         const t = d.task;
         const run = d.runs.at(-1);
         const claim = run?.claim as
-          | { summary?: string; changed_paths?: string[]; discrepancies?: { path: string; note: string }[] }
+          | {
+              summary?: string;
+              changed_paths?: string[];
+              discrepancies?: { path: string; note: string }[];
+              intent_version?: string;
+            }
           | null
           | undefined;
         const lines = [
@@ -344,6 +349,12 @@ export function buildProgram(): Command {
             `  claimed paths: ${(claim.changed_paths ?? []).join(', ') || '(none)'}`,
           );
           for (const x of claim.discrepancies ?? []) lines.push(`  discrepancy: ${x.path} - ${x.note}`);
+          // Deterministic checks cannot judge prose intent: a change during the run is shown for review (ADR-0034 §8).
+          if (run?.intent_version && claim.intent_version && claim.intent_version !== run.intent_version) {
+            lines.push(
+              `  intent changed during this attempt: started under ${run.intent_version}, claimed under ${claim.intent_version}; check the work against "friday intent" and the goal`,
+            );
+          }
         }
         if (d.verification) {
           lines.push(

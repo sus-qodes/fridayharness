@@ -1099,3 +1099,59 @@ describe('intent, learnings and notes as separate layers (ADR-0034 §5–§6)', 
     expect(section(packet, 'memory.notes')).toContain('[system, convention, unverified]');
   });
 });
+
+describe('an intent change during an attempt (ADR-0034 §8)', () => {
+  it('names what changed in a protected section of the running attempt, and only then', async () => {
+    const goal = state.createGoal(PROJECT, human, {
+      request: 'Discount codes at checkout',
+      non_goals: ['No new npm packages.'],
+      plan: false,
+    });
+    const version = state.proposePlan(PROJECT, human, goal.goal_id, {
+      summary: 'one task',
+      rationale: '',
+      needs_human: null,
+      trigger: 'test',
+      tasks: [
+        {
+          key: 'discounts',
+          change: 'new',
+          task_id: null,
+          kind: 'implementation',
+          summary: 'Add discount codes to checkout',
+          description: null,
+          acceptance_criteria: ['node --test passes'],
+          depends_on: [],
+          scope: { write: ['backend/**'], read: [] },
+          role: 'backend',
+          priority: 'normal',
+          risk_level: 'low',
+          note: null,
+        },
+      ],
+    });
+    state.approvePlan(PROJECT, human, version.plan_id, version.version);
+    const taskId = state.q.goalTasks(PROJECT, goal.goal_id)[0]?.task_id as string;
+    // be-1's attempt starts: assigned, accepted, RUNNING.
+    state.assignTask(PROJECT, human, taskId, 'be-1');
+    const msgs = state.pollOutbox(PROJECT, agent.harness_id, 10);
+    state.ackOutbox(
+      PROJECT,
+      agent.harness_id,
+      msgs.map((m) => ({ message_id: m.message_id, accepted: true, session_ref: 'sess-be-1' })),
+    );
+    expect(state.q.task(PROJECT, taskId).status).toBe('RUNNING');
+
+    const before = await compile(taskId);
+    expect(before.packet.sections.map((s) => s.kind)).not.toContain('intent.changed');
+
+    state.intent.updateGoal(PROJECT, human, goal.goal_id, { non_goals: ['No new npm packages.', 'No API changes.'] });
+    const after = await compile(taskId);
+    const kinds = after.packet.sections.map((s) => s.kind);
+    expect(kinds.indexOf('intent.changed')).toBe(kinds.indexOf('intent.goal') + 1);
+    const changed = section(after.packet, 'intent.changed');
+    expect(changed).toContain('The intent changed since this attempt started');
+    expect(changed).toContain('New goal non-goal: No API changes.');
+    expect(after.explanation.included.map((i) => i.rule)).toContain('protected: intent changed (ADR-0034 §8)');
+  });
+});

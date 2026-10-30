@@ -156,6 +156,8 @@ export const RunView = z.object({
   branch_ref: z.string().nullable(),
   /** `pending` while Friday prepares the worktree, then `ready`. */
   workspace: z.enum(['pending', 'ready']),
+  /** The effective intent version the run started under (ADR-0034 §4); null for older runs. */
+  intent_version: z.string().nullable().default(null),
   /** The model Friday routed the run to (ADR-0031 §6); binding when the harness applies it. */
   model_requested: z.string().nullable().default(null),
   model_binding: z.boolean().default(false),

@@ -144,6 +144,10 @@ const promptGoal = (g: GoalView): GoalForPrompt => ({
   outcomes: g.outcomes,
   inferred_constraints: g.inferred_constraints,
   inferred_outcomes: g.inferred_outcomes,
+  non_goals: g.non_goals,
+  definition_of_done: g.definition_of_done,
+  inferred_non_goals: g.inferred_non_goals,
+  inferred_definition_of_done: g.inferred_definition_of_done,
   priority: g.priority,
 });
 
@@ -803,13 +807,25 @@ export class MasterBrain {
     const model = this.#deps.model;
     if (!model) return { status: 'done', result: 'skipped: no planner is configured' };
     const goal = task.goal_id ? state.q.findGoal(projectId, task.goal_id) : undefined;
+    const project = state.q.approvedProjectIntent(projectId);
     const outcomes = [...(goal?.outcomes ?? []), ...(goal?.inferred_outcomes ?? [])];
+    // The goal's own intent first, then the project's (ADR-0034 §4).
+    const nonGoals = [
+      ...(goal?.non_goals ?? []),
+      ...(goal?.inferred_non_goals ?? []),
+      ...(project?.non_goals.map((i) => i.text) ?? []),
+    ];
+    const done = [
+      ...(goal?.definition_of_done ?? []),
+      ...(goal?.inferred_definition_of_done ?? []),
+      ...(project?.definition_of_done.map((i) => i.text) ?? []),
+    ];
     const input: RoleDecisionInput = {
       objective: goal?.objective ?? goal?.request ?? task.summary,
       constraints: [...(goal?.constraints ?? []), ...(goal?.inferred_constraints ?? [])],
       outcomes,
-      non_goals: [],
-      definition_of_done: task.acceptance_criteria.length ? task.acceptance_criteria : outcomes,
+      non_goals: nonGoals,
+      definition_of_done: done.length ? done : task.acceptance_criteria.length ? task.acceptance_criteria : outcomes,
       task_summary: task.summary,
       task_description: task.description,
       kind: task.kind,
