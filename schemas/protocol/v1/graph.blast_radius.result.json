@@ -1,0 +1,108 @@
+{
+  "$id": "urn:friday:protocol:v1:graph.blast_radius:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string"
+    },
+    "seeds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "symbols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "breaking": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "path",
+          "symbols",
+          "breaking"
+        ]
+      }
+    },
+    "affected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "via": {
+            "type": "string",
+            "enum": [
+              "import",
+              "reference",
+              "name"
+            ]
+          },
+          "distance": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "from": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "symbol",
+          "via",
+          "distance",
+          "confidence",
+          "from"
+        ]
+      }
+    },
+    "depth": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "cut": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "name_matches_included": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "version",
+    "seeds",
+    "affected",
+    "depth",
+    "cut",
+    "name_matches_included"
+  ]
+}

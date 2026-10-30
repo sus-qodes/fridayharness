@@ -463,6 +463,8 @@ export function buildApp(deps: AppDeps): Hono<Env> {
       awaiting_verification: held.filter((t) => t.status === 'READY_FOR_VERIFICATION').map((t) => t.task_id),
       claimable: state.claimableTasks(pid, agent.agent_key, 10).filter((t) => t.status === 'READY'),
       inbox,
+      // What this daemon can answer, so a server lists only the tools that work here (ADR-0038 §2).
+      capabilities: { graph: Boolean(deps.graph), artifacts: Boolean(state.artifacts) },
     });
   });
 
@@ -950,6 +952,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
           ...(deps.policy ? { policy: deps.policy } : {}),
           ...(deps.operations ? { operations: deps.operations } : {}),
           ...(deps.judgeTool ? { judgeTool: deps.judgeTool } : {}),
+          ...(deps.graph ? { graph: deps.graph } : {}),
         },
         c.get('auth'),
         body,

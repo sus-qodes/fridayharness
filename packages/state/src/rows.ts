@@ -411,6 +411,7 @@ export interface LearningProposalRow {
   decision_note: string | null;
   created_at: string;
   decided_at: string | null;
+  origin_json?: string | null;
 }
 
 export function toLearningProposalView(row: LearningProposalRow): LearningProposalView {
@@ -426,6 +427,7 @@ export function toLearningProposalView(row: LearningProposalRow): LearningPropos
     tags: fromJson<string[]>(row.tags_json, []),
     paths: fromJson<string[]>(row.paths_json, []),
     status: row.status as LearningProposalView['status'],
+    origin: row.origin_json ? fromJson<LearningProposalView['origin']>(row.origin_json, null) : null,
     memory_id: row.memory_id,
     decided_by:
       row.decided_by_kind && row.decided_by_id

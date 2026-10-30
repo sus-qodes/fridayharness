@@ -1,4 +1,11 @@
-import { type Actor, FridayError, type LearningProposalView, LearningProposeRequest } from '@friday/protocol';
+import {
+  type Actor,
+  FridayError,
+  type LearningOrigin,
+  type LearningProposalView,
+  LearningProposeRequest,
+  type TaskView,
+} from '@friday/protocol';
 import type { z } from 'zod';
 import type { CommandContext } from './bus.js';
 import type { RecordResult } from './memory.js';
@@ -42,6 +49,7 @@ export class LearningService {
             rule: 'learning.task_held',
           });
         }
+        const origin = req.from_failure ? this.originOf(task, req.from_failure) : null;
         const subject = normalized(req.subject);
         const content = normalized(req.content);
         const same = this.state.q
@@ -68,16 +76,64 @@ export class LearningService {
               content,
               tags: [...new Set(req.tags)],
               paths: [...new Set(req.paths)],
+              ...(origin ? { origin } : {}),
             },
           },
           refs: [
             { kind: 'learning', id: proposal_id },
             { kind: 'task', id: taskId },
+            ...(origin ? [{ kind: origin.kind, id: origin.id }] : []),
           ],
         });
         return this.state.q.learningProposal(projectId, proposal_id);
       },
     ).result;
+  }
+
+  /**
+   * The failure a lesson is learned from (ADR-0038 §5), written from Friday's own records: a
+   * verification of the task that FAILED (the latest, unless named) or an operation run of the
+   * task that failed or was interrupted. Anything else is refused: a failure is a resolved fact.
+   */
+  private originOf(task: TaskView, from: { kind: 'verification' | 'operation'; id?: string }): LearningOrigin {
+    const q = this.state.q;
+    if (from.kind === 'verification') {
+      const v = from.id ? q.verification(from.id) : q.latestVerification(task.task_id);
+      if (!v || v.task_id !== task.task_id) {
+        throw new FridayError(
+          'invalid_request',
+          `${from.id ?? 'no verification'} is not a verification of ${task.task_id}`,
+        );
+      }
+      if (v.status !== 'FAILED') {
+        throw new FridayError('invalid_request', `verification ${v.verification_id} is ${v.status}, not FAILED`);
+      }
+      const failed = v.checks
+        .filter((c) => c.status === 'FAILED' || c.status === 'BLOCKED')
+        .map((c) => `${c.name}: ${c.summary ?? c.status}${c.artifact_ref ? ` (${c.artifact_ref})` : ''}`);
+      return {
+        kind: 'verification',
+        id: v.verification_id,
+        detail: (failed.length ? failed.join('; ') : (v.summary ?? 'failed')).slice(0, 600),
+      };
+    }
+    if (!from.id) throw new FridayError('invalid_request', 'name the operation run (operation_run_id)');
+    const run = q.operationRun(from.id);
+    if (!run || run.task_id !== task.task_id) {
+      throw new FridayError('invalid_request', `${from.id} is not an operation run of ${task.task_id}`);
+    }
+    if (run.status !== 'failed' && run.status !== 'interrupted') {
+      throw new FridayError('invalid_request', `operation run ${run.operation_run_id} is ${run.status}, not failed`);
+    }
+    return {
+      kind: 'operation',
+      id: run.operation_run_id,
+      detail:
+        `${run.operation} ${run.status}${run.exit_code !== null ? ` (exit ${run.exit_code})` : ''}${run.timed_out ? ', timed out' : ''}: ${run.summary ?? run.status}${run.artifact_ref ? ` (${run.artifact_ref})` : ''}`.slice(
+          0,
+          600,
+        ),
+    };
   }
 
   /**
@@ -139,7 +195,8 @@ export class LearningService {
         kind: p.kind,
         subject: p.subject,
         content: p.content,
-        tags: [...new Set([...p.tags, ...p.paths])],
+        // The failure it was learned from stays with the memory (ADR-0038 §5).
+        tags: [...new Set([...p.tags, ...p.paths, ...(p.origin ? [`origin:${p.origin.kind}:${p.origin.id}`] : [])])],
       },
     );
     ctx.emit({

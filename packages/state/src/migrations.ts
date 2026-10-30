@@ -1047,6 +1047,14 @@ CREATE INDEX ix_readiness_evidence ON readiness_evidence(project_id, host, stage
 CREATE INDEX ix_readiness_evidence_harness ON readiness_evidence(harness_id);
 `,
   },
+  {
+    // ADR-0038 §5: the failure a learning was proposed from, as Friday recorded it.
+    version: 27,
+    name: 'learning_origin',
+    up: `
+ALTER TABLE learning_proposals ADD COLUMN origin_json TEXT;
+`,
+  },
 ];
 
 /** Every migration for a Friday project database, in order. */

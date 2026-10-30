@@ -788,6 +788,54 @@ export class Queries {
       .map(toOperationRunView);
   }
 
+  /**
+   * The record an artifact belongs to (ADR-0038 §3): an operation run, a verification check or a
+   * message; undefined when nothing references it (a snapshot, a backup, or nothing at all).
+   */
+  artifactOwner(
+    projectId: string,
+    artifactRef: string,
+  ):
+    | { kind: 'operation'; id: string; task_id: string }
+    | { kind: 'check'; id: string; task_id: string; verification_id: string; name: string }
+    | { kind: 'message'; id: string; task_id: string | null }
+    | undefined {
+    const op = this.db
+      .prepare('SELECT operation_run_id, task_id FROM operation_runs WHERE project_id = ? AND artifact_ref = ?')
+      .get<{ operation_run_id: string; task_id: string }>(projectId, artifactRef);
+    if (op) return { kind: 'operation', id: op.operation_run_id, task_id: op.task_id };
+    const check = this.db
+      .prepare(
+        `SELECT c.check_id, c.verification_id, c.name, v.task_id FROM verification_checks c
+           JOIN verification_runs v ON v.verification_id = c.verification_id
+          WHERE c.project_id = ? AND c.artifact_ref = ?`,
+      )
+      .get<{ check_id: string; verification_id: string; name: string; task_id: string }>(projectId, artifactRef);
+    if (check) {
+      return {
+        kind: 'check',
+        id: check.check_id,
+        task_id: check.task_id,
+        verification_id: check.verification_id,
+        name: check.name,
+      };
+    }
+    const msg = this.db
+      .prepare('SELECT message_id, task_id FROM messages WHERE project_id = ? AND body_artifact_ref = ?')
+      .get<{ message_id: string; task_id: string | null }>(projectId, artifactRef);
+    if (msg) return { kind: 'message', id: msg.message_id, task_id: msg.task_id };
+    return undefined;
+  }
+
+  /** Whether a message was delivered to this agent (any delivery of it names the agent). */
+  messageDeliveredTo(messageId: string, agentId: string): boolean {
+    return Boolean(
+      this.db
+        .prepare('SELECT 1 AS one FROM message_deliveries WHERE message_id = ? AND agent_id = ? LIMIT 1')
+        .get<{ one: number }>(messageId, agentId),
+    );
+  }
+
   operationRun(operationRunId: string): OperationRunView | undefined {
     const row = this.db
       .prepare('SELECT * FROM operation_runs WHERE operation_run_id = ?')

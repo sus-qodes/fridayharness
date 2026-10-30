@@ -73,6 +73,37 @@
         "rejected"
       ]
     },
+    "origin": {
+      "default": null,
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "verification",
+                "operation"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "detail"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "memory_id": {
       "type": [
         "string",

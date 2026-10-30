@@ -1,0 +1,579 @@
+{
+  "$id": "urn:friday:protocol:v1:graph.query:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string"
+    },
+    "asked": {
+      "type": "string",
+      "enum": [
+        "symbol",
+        "file",
+        "search"
+      ]
+    },
+    "symbol": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "matches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "symbol": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "end_line": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "exported": {
+                    "type": "boolean"
+                  },
+                  "parent": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "signature": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "name",
+                  "kind",
+                  "line",
+                  "end_line",
+                  "exported",
+                  "parent",
+                  "signature"
+                ]
+              },
+              "callers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "from": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "symbol": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "symbol"
+                      ]
+                    },
+                    "to": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "path": {
+                              "type": "string"
+                            },
+                            "symbol": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path",
+                            "symbol"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "certainty": {
+                      "type": "string",
+                      "enum": [
+                        "exact",
+                        "inferred",
+                        "unsupported"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "line": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "to",
+                    "name",
+                    "kind",
+                    "certainty",
+                    "line"
+                  ]
+                }
+              },
+              "callees": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "from": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "symbol": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "symbol"
+                      ]
+                    },
+                    "to": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "path": {
+                              "type": "string"
+                            },
+                            "symbol": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path",
+                            "symbol"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "certainty": {
+                      "type": "string",
+                      "enum": [
+                        "exact",
+                        "inferred",
+                        "unsupported"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "line": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "to",
+                    "name",
+                    "kind",
+                    "certainty",
+                    "line"
+                  ]
+                }
+              },
+              "tests": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "callers_cut": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "callees_cut": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "symbol",
+              "callers",
+              "callees",
+              "tests",
+              "callers_cut",
+              "callees_cut"
+            ]
+          }
+        },
+        "name_references": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "symbol": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "symbol"
+                ]
+              },
+              "to": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "symbol": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "symbol"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "certainty": {
+                "type": "string",
+                "enum": [
+                  "exact",
+                  "inferred",
+                  "unsupported"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "name",
+              "kind",
+              "certainty",
+              "line"
+            ]
+          }
+        },
+        "matches_cut": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "name",
+        "matches",
+        "name_references",
+        "matches_cut"
+      ]
+    },
+    "file": {
+      "type": "object",
+      "properties": {
+        "node": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "area": {
+              "type": "string"
+            },
+            "test": {
+              "type": "boolean"
+            },
+            "external": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "contract": {
+              "type": "object",
+              "properties": {
+                "areas": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "areas"
+              ]
+            }
+          },
+          "required": [
+            "path",
+            "area",
+            "test",
+            "external"
+          ]
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string"
+              },
+              "specifier": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "certainty": {
+                "type": "string",
+                "enum": [
+                  "exact",
+                  "inferred",
+                  "unsupported"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "kind",
+              "specifier",
+              "certainty",
+              "line"
+            ]
+          }
+        },
+        "consumers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string"
+              },
+              "specifier": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "certainty": {
+                "type": "string",
+                "enum": [
+                  "exact",
+                  "inferred",
+                  "unsupported"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "kind",
+              "specifier",
+              "certainty",
+              "line"
+            ]
+          }
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "neighbourhood": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "distance": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "path",
+              "distance"
+            ]
+          }
+        }
+      },
+      "required": [
+        "node",
+        "dependencies",
+        "consumers",
+        "tests",
+        "neighbourhood"
+      ]
+    },
+    "hits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "symbol",
+              "file"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "symbol_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signature": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "score": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "path",
+          "name",
+          "symbol_kind",
+          "line",
+          "signature",
+          "score"
+        ]
+      }
+    }
+  },
+  "required": [
+    "version",
+    "asked"
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "$id": "urn:friday:protocol:v1:artifact.read:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "artifact_ref": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "of": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "task_id"
+      ]
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "lines_total": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "from": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "to": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "text": {
+      "type": "string"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "matched": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "artifact_ref",
+    "kind",
+    "of",
+    "bytes",
+    "lines_total",
+    "from",
+    "to",
+    "text",
+    "truncated",
+    "matched"
+  ]
+}

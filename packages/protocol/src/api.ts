@@ -807,8 +807,23 @@ export const LearningProposeRequest = z.object({
   paths: z.array(z.string().trim().min(1).max(300)).max(20).default([]),
   /** The held task it comes from; defaults to the agent's current task. */
   task_id: z.string().optional(),
+  /**
+   * The resolved failure this lesson comes from (ADR-0038 §5): a verification of the task that
+   * failed (default: its latest), or an operation run that failed. Friday writes the origin from its
+   * own records, never from the agent's words; a failure that is not the task's is refused.
+   */
+  from_failure: z.object({ kind: z.enum(['verification', 'operation']), id: z.string().min(1).optional() }).optional(),
 });
 export type LearningProposeRequest = z.input<typeof LearningProposeRequest>;
+
+/** Where a learning came from, as Friday recorded it (ADR-0038 §5). */
+export const LearningOrigin = z.object({
+  kind: z.enum(['verification', 'operation']),
+  id: z.string(),
+  /** Friday's own line about the failure: the checks that failed, or the operation and its summary. */
+  detail: z.string(),
+});
+export type LearningOrigin = z.infer<typeof LearningOrigin>;
 
 export const LearningProposalStatus = z.enum(['proposed', 'promoted', 'rejected']);
 export type LearningProposalStatus = z.infer<typeof LearningProposalStatus>;
@@ -826,6 +841,8 @@ export const LearningProposalView = z.object({
   tags: z.array(z.string()),
   paths: z.array(z.string()),
   status: LearningProposalStatus,
+  /** The failure it was learned from, when it was proposed from one (ADR-0038 §5). */
+  origin: LearningOrigin.nullable().default(null),
   /** The project memory a promotion recorded. */
   memory_id: z.string().nullable(),
   decided_by: Actor.nullable(),

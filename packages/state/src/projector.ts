@@ -1169,8 +1169,8 @@ export class StateProjector implements Projector {
     this.db
       .prepare(
         `INSERT INTO learning_proposals (proposal_id, project_id, task_id, run_id, agent_id, agent_key, kind, subject,
-           content, tags_json, paths_json, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?)`,
+           content, tags_json, paths_json, status, created_at, origin_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?)`,
       )
       .run(
         str(l.proposal_id),
@@ -1185,6 +1185,7 @@ export class StateProjector implements Projector {
         toJson(l.tags ?? []),
         toJson(l.paths ?? []),
         e.occurred_at,
+        l.origin ? toJson(l.origin) : null,
       );
   }
 

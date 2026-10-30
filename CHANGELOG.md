@@ -2,6 +2,12 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — Phase 6A, what the daemon answers behind the handoff's tools (ADR-0038, proposed)
+
+- **Four RPC methods for a registered agent:** `graph.query` (a symbol by name, a file by path, or words: the code graph of the agent's own checkout, with the graph's version on every answer), `graph.blast_radius` (what a change to files, symbols or the working tree's diff would reach, with confidence), `graph.skeleton` (up to five files with their bodies folded, the ones the graph lacks named), and `artifact.read` (lines of the raw, redacted output of an operation run or a verification check of a task the agent holds or held, or of a message delivered to it; at most 400 lines and 16,000 characters per call, `find` for the matching lines only; anything else is refused). `GET /me` says what the daemon can answer (`capabilities.graph`, `capabilities.artifacts`).
+- **A lesson learned from a failure keeps the failure:** `learning.propose` takes `from_failure` (a verification of the task that failed, by default its latest, or an operation run that failed), and Friday writes the proposal's `origin` from its own records: the failed checks and their summaries, or the operation and its summary, never the agent's words. A passed verification, a running operation or another task's failure is refused. The proposal is promoted as before, by a human or by the task's verification passing later; the failure itself promotes nothing. The promoted memory carries `origin:<kind>:<id>` among its tags; `friday learning show` prints the origin. Migration 27 adds the column.
+- **The rework note names each failed check's raw output** (`artifact:<id>`), so a lesson can say where it comes from.
+
 ## Unreleased — Phase 5C, the questions asked of the code graph (ADR-0037, proposed)
 
 - **`friday graph symbol <name>`:** each match with its file and lines, kind, signature, whether it is exported, who calls, constructs, types or renders it (resolved edges with their certainty), what it uses, the tests of its file, and, apart, the name-only matches (guesses, labelled). Bounded: 20 matches, 50 edges each, and it says when cut.

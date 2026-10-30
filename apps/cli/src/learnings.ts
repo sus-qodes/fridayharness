@@ -38,6 +38,7 @@ function renderOne(l: LearningProposalView): string {
     `  proposed by ${l.proposed_by.agent_key} for ${l.task_id}${l.run_id ? ` (${l.run_id})` : ''}, ${shortTime(l.created_at)}`,
   ];
   if (l.paths.length) lines.push(`  about: ${l.paths.join(', ')}`);
+  if (l.origin) lines.push(`  learned from ${l.origin.kind} ${l.origin.id}: ${l.origin.detail}`);
   if (l.memory_id) lines.push(`  project memory: ${l.memory_id}`);
   if (l.decided_by) {
     lines.push(

@@ -151,7 +151,9 @@ describe('method schemas', () => {
     expect(isMethodName('approval.elicited')).toBe(true);
     expect(isMethodName('tool.check')).toBe(true);
     expect(isMethodName('learning.propose')).toBe(true);
-    expect(Object.keys(METHODS)).toHaveLength(26);
+    expect(isMethodName('graph.query')).toBe(true);
+    expect(isMethodName('artifact.read')).toBe(true);
+    expect(Object.keys(METHODS)).toHaveLength(30);
   });
 });
 

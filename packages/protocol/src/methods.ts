@@ -607,6 +607,198 @@ export const OperationListResult = z.object({
 // ---- registry --------------------------------------------------------------------------------
 
 /** Harness → daemon methods served at POST /protocol/v1/rpc. */
+// ---- the code graph and raw output, for an agent (ADR-0038 §2, §3) ------------------------
+
+const Certainty = z.enum(['exact', 'inferred', 'unsupported']);
+const GraphFileEdge = z.object({
+  from: z.string(),
+  to: z.string().nullable(),
+  kind: z.string(),
+  specifier: z.string().nullable(),
+  certainty: Certainty,
+  reason: z.string().optional(),
+  line: z.number().int(),
+});
+const SymbolRef = z.object({ path: z.string(), symbol: z.string() });
+const SymbolEdgeView = z.object({
+  from: SymbolRef,
+  to: SymbolRef.nullable(),
+  name: z.string(),
+  kind: z.string(),
+  certainty: Certainty,
+  reason: z.string().optional(),
+  line: z.number().int(),
+});
+const SymbolNodeView = z.object({
+  path: z.string(),
+  name: z.string(),
+  kind: z.string(),
+  line: z.number().int(),
+  end_line: z.number().int(),
+  exported: z.boolean(),
+  parent: z.string().nullable(),
+  signature: z.string(),
+});
+
+/**
+ * One question of the code graph (ADR-0037 §3), answered for the caller's own checkout: a symbol by
+ * `name`, a file by `path` (what it imports, who imports it, its tests, its neighbourhood), or the
+ * symbols and files matching `words`. Exactly one of the three.
+ */
+export const GraphQueryParams = z
+  .object({
+    ...Base,
+    name: z.string().trim().min(1).max(200).optional(),
+    path: z.string().trim().min(1).max(500).optional(),
+    words: z.string().trim().min(1).max(200).optional(),
+    /** With `name`: only in this file, or only under this folder. */
+    in_path: z.string().max(500).optional(),
+    prefix: z.string().max(500).optional(),
+    /** With `path`: the neighbourhood's depth; with `words`: the kind of hit. */
+    depth: z.number().int().min(1).max(5).default(1),
+    kind: z.enum(['symbol', 'file']).optional(),
+    limit: z.number().int().min(1).max(100).default(20),
+  })
+  .refine((p) => [p.name, p.path, p.words].filter(Boolean).length === 1, {
+    message: 'ask one question: name, path or words',
+  });
+export const GraphQueryResult = z.object({
+  /** The graph's version (its source identity): what the answer describes. */
+  version: z.string(),
+  asked: z.enum(['symbol', 'file', 'search']),
+  symbol: z
+    .object({
+      name: z.string(),
+      matches: z.array(
+        z.object({
+          symbol: SymbolNodeView,
+          callers: z.array(SymbolEdgeView),
+          callees: z.array(SymbolEdgeView),
+          tests: z.array(z.string()),
+          callers_cut: z.number().int(),
+          callees_cut: z.number().int(),
+        }),
+      ),
+      name_references: z.array(SymbolEdgeView),
+      matches_cut: z.number().int(),
+    })
+    .optional(),
+  file: z
+    .object({
+      node: z.object({
+        path: z.string(),
+        area: z.string(),
+        test: z.boolean(),
+        external: z.array(z.string()),
+        contract: z.object({ areas: z.array(z.string()) }).optional(),
+      }),
+      dependencies: z.array(GraphFileEdge),
+      consumers: z.array(GraphFileEdge),
+      tests: z.array(z.string()),
+      neighbourhood: z.array(z.object({ path: z.string(), distance: z.number().int() })),
+    })
+    .optional(),
+  hits: z
+    .array(
+      z.object({
+        kind: z.enum(['symbol', 'file']),
+        path: z.string(),
+        name: z.string(),
+        symbol_kind: z.string().nullable(),
+        line: z.number().int().nullable(),
+        signature: z.string().nullable(),
+        score: z.number(),
+      }),
+    )
+    .optional(),
+});
+
+/** What a change would reach (ADR-0037 §3), seeded with files, symbols (`file#name`) or the working tree's changed files. */
+export const GraphBlastRadiusParams = z
+  .object({
+    ...Base,
+    paths: z.array(z.string().trim().min(1).max(500)).max(50).default([]),
+    symbols: z.array(z.string().trim().min(1).max(700)).max(50).default([]),
+    diff: z.boolean().default(false),
+    depth: z.number().int().min(1).max(5).default(2),
+    /** Include name-only matches (guesses, labelled). */
+    names: z.boolean().default(false),
+  })
+  .refine((p) => p.paths.length > 0 || p.symbols.length > 0 || p.diff, {
+    message: 'seed it with paths, symbols or diff: true',
+  });
+export const GraphBlastRadiusResult = z.object({
+  version: z.string(),
+  seeds: z.array(z.object({ path: z.string(), symbols: z.array(z.string()), breaking: z.array(z.string()) })),
+  affected: z.array(
+    z.object({
+      path: z.string(),
+      symbol: z.string().nullable(),
+      via: z.enum(['import', 'reference', 'name']),
+      distance: z.number().int(),
+      confidence: z.enum(['high', 'medium', 'low']),
+      from: z.string(),
+    }),
+  ),
+  depth: z.number().int(),
+  cut: z.number().int(),
+  name_matches_included: z.boolean(),
+});
+
+/** Files with their bodies folded (ADR-0037 §3): at most 5 per call, each cut at 12,000 characters. */
+export const GraphSkeletonParams = z.object({
+  ...Base,
+  paths: z.array(z.string().trim().min(1).max(500)).min(1).max(5),
+  level: z.union([z.literal(1), z.literal(2)]).default(1),
+});
+export const GraphSkeletonResult = z.object({
+  version: z.string(),
+  files: z.array(
+    z.object({
+      path: z.string(),
+      level: z.number().int(),
+      lines: z.number().int(),
+      text: z.string(),
+      folded: z.number().int(),
+      cut: z.boolean(),
+    }),
+  ),
+  /** Paths asked for that the graph does not hold (not TypeScript or JavaScript git sees), with the reason. */
+  missing: z.array(z.object({ path: z.string(), reason: z.string() })),
+});
+
+/**
+ * Lines of an artifact the caller may read (ADR-0038 §3): the raw, redacted output of an operation
+ * run or a verification check of a task it holds or held, or the body of a message delivered to it.
+ */
+export const ArtifactReadParams = z.object({
+  ...Base,
+  artifact_ref: z.string().regex(/^artifact:[A-Za-z0-9_-]+$/),
+  /** The first line to return, from 1. */
+  offset: z.number().int().min(1).default(1),
+  /** How many lines at most. */
+  limit: z.number().int().min(1).max(400).default(200),
+  /** Only the lines containing this text (case ignored), each prefixed with its number. */
+  find: z.string().trim().min(1).max(200).optional(),
+});
+export const ArtifactReadResult = z.object({
+  artifact_ref: z.string(),
+  /** What produced it: `operation`, `check` (a verification's), `message`. */
+  kind: z.string(),
+  /** The record it belongs to. */
+  of: z.object({ kind: z.string(), id: z.string(), task_id: z.string().nullable() }),
+  bytes: z.number().int(),
+  lines_total: z.number().int(),
+  /** The lines returned, 1-based, inclusive; `to` is 0 when nothing matched. */
+  from: z.number().int(),
+  to: z.number().int(),
+  text: z.string(),
+  /** True when the answer stopped before `limit` lines or the end: more lines, or 16,000 characters reached. */
+  truncated: z.boolean(),
+  /** With `find`: how many lines matched in all. */
+  matched: z.number().int().nullable(),
+});
+
 export const METHODS = {
   'harness.register': { params: HarnessRegisterParams, result: HarnessRegisterResult },
   'harness.heartbeat': { params: HarnessHeartbeatParams, result: HarnessHeartbeatResult },
@@ -634,6 +826,10 @@ export const METHODS = {
   'operation.list': { params: OperationListParams, result: OperationListResult },
   'approval.elicited': { params: ApprovalElicitedParams, result: ApprovalElicitedResult },
   'tool.check': { params: ToolCheckParams, result: ToolCheckResult },
+  'graph.query': { params: GraphQueryParams, result: GraphQueryResult },
+  'graph.blast_radius': { params: GraphBlastRadiusParams, result: GraphBlastRadiusResult },
+  'graph.skeleton': { params: GraphSkeletonParams, result: GraphSkeletonResult },
+  'artifact.read': { params: ArtifactReadParams, result: ArtifactReadResult },
 } as const;
 
 export type MethodName = keyof typeof METHODS;

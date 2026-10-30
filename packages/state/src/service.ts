@@ -5492,9 +5492,13 @@ export class FridayState {
     if (then && (then.v ?? null) !== now) return null;
     const rework = this.store.readByRef(projectId, 'task', task.task_id, { types: ['task.rework'] }).at(-1);
     const why = (rework?.payload as { transition?: { reason?: string } } | undefined)?.transition?.reason;
+    // Each failed check names its raw output, so a lesson learned from it can say where it comes from (ADR-0038 §3).
     const failed = verification.checks
       .filter((c) => c.status === 'FAILED' || c.status === 'BLOCKED')
-      .map((c) => `${c.name}: ${c.summary ?? c.status}`.slice(0, 300));
+      .map(
+        (c) =>
+          `${c.name}: ${(c.summary ?? c.status).slice(0, 240)}${c.artifact_ref ? ` (raw output: ${c.artifact_ref})` : ''}`,
+      );
     const note = [
       "Friday's verification refused your completion claim.",
       why ? `Why: ${why}` : verification.summary ? `Why: ${verification.summary}` : '',

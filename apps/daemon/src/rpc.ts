@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { GitRoot } from '@friday/git';
+import { blastRadius, type CodeGraph, lookupSymbol, skeletonOf } from '@friday/code-graph';
+import { GitRoot, type SourceIdentity } from '@friday/git';
 import {
   type Autonomy,
   type Capability,
@@ -29,6 +30,7 @@ import {
 import { type ProjectRef, policyVersion } from '@friday/sdk';
 import type { Caller, FridayState } from '@friday/state';
 import type { CompileInput } from './context.js';
+import { type GraphService, query as graphQuery } from './graph-service.js';
 import type { OperationManager } from './operations.js';
 import type { ToolJudge } from './tool-policy.js';
 
@@ -62,6 +64,112 @@ export interface RpcDeps {
   operations?: OperationManager;
   /** Judges a host's tool call the way the hooks do (ADR-0032 §4). */
   judgeTool?: ToolJudge;
+  /** The code graphs of the project's checkouts (ADR-0038 §2); absent in a daemon without one. */
+  graph?: GraphService;
+}
+
+/** The most an artifact read answers with (ADR-0038 §3). */
+const ARTIFACT_READ_CHARS = 16_000;
+
+/**
+ * The caller's checkout, as the context compiler resolves it (ADR-0023): its run's execution root,
+ * else its session's folder, else its task's worktree, else the project root.
+ */
+function executionRootOf(deps: RpcDeps, c: Caller): string {
+  const { state, project } = deps;
+  const agent = state.q.agent(c.agent_id);
+  const task = agent.current_task_id ? state.q.findTask(project.project_id, agent.current_task_id) : undefined;
+  const run = task?.current_run_id ? state.q.findRun(task.current_run_id) : undefined;
+  if (run?.execution_root) return run.execution_root;
+  const cwd = state.q.findHarness(c.harness_id)?.host_cwd;
+  if (cwd) return cwd;
+  const worktree = task ? state.q.worktreeForTask(task.task_id) : undefined;
+  return worktree?.path ?? project.root;
+}
+
+/** The code graph of the caller's checkout (ADR-0038 §2). */
+async function graphFor(deps: RpcDeps, c: Caller): Promise<CodeGraph> {
+  if (!deps.graph) throw new FridayError('capability_unsupported', 'this daemon has no code graph');
+  const root = executionRootOf(deps, c);
+  let identity: SourceIdentity | null = null;
+  try {
+    identity = await (await GitRoot.open(root)).identity();
+  } catch {
+    // outside git: the service identifies the checkout itself
+  }
+  return deps.graph.graph(root, identity);
+}
+
+const cleanPath = (p: string) => p.replace(/\\/g, '/').replace(/^\.\//, '');
+
+/**
+ * Lines of an artifact the caller may read (ADR-0038 §3): it belongs to a task the caller holds or
+ * held, or to a message delivered to it. Redacted again on the way out, bounded in lines and characters.
+ */
+function readArtifact(deps: RpcDeps, c: Caller, p: ParsedParamsOf<'artifact.read'>): ResultOf<'artifact.read'> {
+  const { state, project } = deps;
+  const pid = project.project_id;
+  if (!state.artifacts) throw new FridayError('capability_unsupported', 'this daemon keeps no artifacts');
+  const owner = state.q.artifactOwner(pid, p.artifact_ref);
+  if (!owner) throw new FridayError('permission_denied', `${p.artifact_ref} is not an output you may read`);
+  const mine =
+    owner.kind === 'message'
+      ? state.q.messageDeliveredTo(owner.id, c.agent_id)
+      : state.q.runs(owner.task_id).some((r) => r.agent_id === c.agent_id) ||
+        state.q.findTask(pid, owner.task_id)?.assigned_agent_id === c.agent_id;
+  if (!mine) throw new FridayError('permission_denied', `${p.artifact_ref} belongs to work that is not yours`);
+  const id = p.artifact_ref.slice('artifact:'.length);
+  const record = state.artifacts.get(id);
+  if (!record || record.project_id !== pid) throw new FridayError('invalid_request', `${p.artifact_ref} is gone`);
+  const whole = state.redactor.redactString(state.artifacts.readText(id)).value;
+  const lines = whole.split('\n');
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  const picked: string[] = [];
+  let from = 0;
+  let to = 0;
+  let matched: number | null = null;
+  let truncated = false;
+  let chars = 0;
+  /** Keeps a line while the bounds allow; false once they do not. */
+  const take = (text: string, n: number): boolean => {
+    if (picked.length >= p.limit || chars + text.length + 1 > ARTIFACT_READ_CHARS) return false;
+    picked.push(text);
+    chars += text.length + 1;
+    if (!from) from = n;
+    to = n;
+    return true;
+  };
+  if (p.find) {
+    const needle = p.find.toLowerCase();
+    matched = 0;
+    let eligible = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] as string;
+      if (!line.toLowerCase().includes(needle)) continue;
+      matched++;
+      if (i + 1 < p.offset) continue;
+      eligible++;
+      take(`${i + 1}: ${line}`, i + 1);
+    }
+    truncated = picked.length < eligible;
+  } else {
+    for (let i = p.offset - 1; i < lines.length; i++) {
+      if (!take(lines[i] as string, i + 1)) break;
+    }
+    truncated = to < lines.length;
+  }
+  return {
+    artifact_ref: p.artifact_ref,
+    kind: owner.kind,
+    of: { kind: owner.kind, id: owner.id, task_id: owner.task_id },
+    bytes: record.bytes,
+    lines_total: lines.length,
+    from,
+    to,
+    text: picked.join('\n'),
+    truncated,
+    matched,
+  };
 }
 
 function issuesOf(err: { issues: { path: PropertyKey[]; message: string }[] }) {
@@ -550,6 +658,70 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
     case 'operation.status': {
       const p = METHODS[method].params.parse(raw);
       return gateway(deps).status(caller(), p.operation_run_id, p.wait_ms, deps.signal);
+    }
+    // The code graph of the caller's checkout (ADR-0038 §2): the daemon routes' questions and bounds.
+    case 'graph.query': {
+      const p = METHODS[method].params.parse(raw);
+      const c = caller();
+      const g = await graphFor(deps, c);
+      if (p.name) {
+        const found = lookupSymbol(g, p.name, {
+          ...(p.in_path ? { path: cleanPath(p.in_path) } : {}),
+          ...(p.prefix ? { prefix: cleanPath(p.prefix) } : {}),
+          limit: p.limit,
+        });
+        return { version: g.version, asked: 'symbol', symbol: found };
+      }
+      if (p.path) {
+        const { version: _v, ...file } = graphQuery(g, p.path, p.depth);
+        return { version: g.version, asked: 'file', file };
+      }
+      const hits = await (deps.graph as GraphService).search(p.words as string, {
+        limit: p.limit,
+        root: g.root,
+        ...(p.kind ? { kind: p.kind } : {}),
+      });
+      return { version: g.version, asked: 'search', hits };
+    }
+    case 'graph.blast_radius': {
+      const p = METHODS[method].params.parse(raw);
+      const g = await graphFor(deps, caller());
+      const symbols = p.symbols
+        .map((s) => {
+          const at = s.lastIndexOf('#');
+          return at > 0 ? { path: cleanPath(s.slice(0, at)), symbol: s.slice(at + 1) } : null;
+        })
+        .filter((x): x is { path: string; symbol: string } => x !== null);
+      const paths = p.paths.map(cleanPath);
+      const seeds = p.diff ? [...new Set([...paths, ...g.identity.paths])] : paths;
+      if (!seeds.length && !symbols.length) {
+        throw new FridayError('invalid_request', 'the working tree has no changed file to seed the blast radius with');
+      }
+      return {
+        version: g.version,
+        ...blastRadius(g, { paths: seeds, symbols }, { depth: p.depth, includeNameMatches: p.names }),
+      };
+    }
+    case 'graph.skeleton': {
+      const p = METHODS[method].params.parse(raw);
+      const g = await graphFor(deps, caller());
+      const files: ResultOf<'graph.skeleton'>['files'] = [];
+      const missing: ResultOf<'graph.skeleton'>['missing'] = [];
+      for (const raw of p.paths) {
+        const rel = cleanPath(raw);
+        const sk = await skeletonOf(g, g.root, rel, p.level);
+        if (sk) files.push(sk);
+        else
+          missing.push({
+            path: rel,
+            reason: 'not in the code graph (only TypeScript and JavaScript files git sees are)',
+          });
+      }
+      return { version: g.version, files, missing };
+    }
+    case 'artifact.read': {
+      const p = METHODS[method].params.parse(raw);
+      return readArtifact(deps, caller(), p);
     }
   }
   throw new FridayError('invalid_request', `unhandled method ${method}`);

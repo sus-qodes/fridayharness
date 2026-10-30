@@ -50,6 +50,25 @@
     "task_id": {
       "type": "string"
     },
+    "from_failure": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "verification",
+            "operation"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
     "protocol_version": {
       "type": "string"
     },
