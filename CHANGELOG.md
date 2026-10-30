@@ -2,6 +2,13 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — Phase 4, the coding tools on a machine wired to Friday once (ADR-0036, proposed)
+
+- **`friday hosts setup`:** one `friday` MCP server entry in each installed tool's own user configuration (Claude Code `~/.claude.json`, Cursor `~/.cursor/mcp.json`, Gemini CLI `~/.gemini/settings.json`, OpenCode `~/.config/opencode/opencode.json`, Codex `~/.codex/config.toml`, DeepSeek Harness `~/.deepseek-harness/config.yaml`), pointing at a launcher Friday owns in its state folder. From then on the tool reaches Friday in every repository on the machine; where there is no Friday project the server says so and does nothing else. Merge-only (JSON keys kept; TOML and YAML get one marked block and are never parsed), backed up once a day, atomic, byte-stable when nothing changes, `friday hosts remove` takes it back out, a hand-written entry is reported `manual` and never touched, a tool that is not installed is never written blind.
+- **`friday hosts`** reports each tool: installed, the machine entry, this project's attach files, the next step; the report is also written to the state folder. `friday init` runs the setup once the machine is set up (`--no-hosts` skips); `friday setup` writes the launcher. An installed and configured host counts as detected and configured in readiness for a day when the project's daemon runs.
+- **DeepSeek Harness skeleton** (`@friday/adapter-deepseek`): detection of `dsh`, its configuration block, a doctor; it spawns and attaches nothing, and stays non-dispatchable in the registry until someone has seen it work. Antigravity keeps project-local files only.
+- **`friday-local-mcp`** is the launcher's name and the setup surface; the server entry stays `friday`, so tools keep their `mcp__friday__…` names. OpenCode sessions started from a user entry now register under their own name.
+
 ## Unreleased — Phase 7.1, dependencies installed in a fresh task worktree
 
 - **No attempt waits mid-run for an install:** before the agent starts, Friday installs the worktree's dependencies in the execution profile: the install the lockfile calls for (pnpm, npm, yarn or bun; frozen, offline first, lifecycle scripts ignored, so no project code runs), or the project's own `worktrees.setup.command`. The project's own command and `allow_scripts: true` are loosenings that wait for `friday policy trust`; a declared command this clone has not trusted is refused, never replaced by a guess. Nothing runs when there is no `package.json`, no lockfile, or `node_modules` already.

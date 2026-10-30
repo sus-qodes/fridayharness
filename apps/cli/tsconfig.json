@@ -39,6 +39,9 @@
     },
     {
       "path": "../../packages/adapters/opencode"
+    },
+    {
+      "path": "../../packages/adapters/deepseek"
     }
   ]
 }

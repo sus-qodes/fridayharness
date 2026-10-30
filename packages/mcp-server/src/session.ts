@@ -18,6 +18,7 @@ export const SESSION_HOSTS = {
   cursor: 'Cursor',
   antigravity: 'Antigravity',
   gemini: 'Gemini CLI',
+  opencode: 'OpenCode',
   generic: 'MCP client',
 } as const;
 export type SessionVendor = keyof typeof SESSION_HOSTS;

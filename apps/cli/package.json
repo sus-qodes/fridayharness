@@ -25,6 +25,7 @@
     "@friday/adapter-claude": "workspace:*",
     "@friday/adapter-codex": "workspace:*",
     "@friday/adapter-cursor": "workspace:*",
+    "@friday/adapter-deepseek": "workspace:*",
     "@friday/adapter-gemini": "workspace:*",
     "@friday/adapter-opencode": "workspace:*",
     "@friday/daemon": "workspace:*",

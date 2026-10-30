@@ -12,13 +12,22 @@ import type {
   VerificationView,
 } from '@friday/protocol';
 import { newId, TaskStatus } from '@friday/protocol';
-import { FRIDAY_DIR, FRIDAY_VERSION, readToken, renderInitialConfig, stateDir, writePrivateFile } from '@friday/sdk';
+import {
+  FRIDAY_DIR,
+  FRIDAY_VERSION,
+  readInstallInfo,
+  readToken,
+  renderInitialConfig,
+  stateDir,
+  writePrivateFile,
+} from '@friday/sdk';
 import { Command, CommanderError, Option } from 'commander';
 import { type GlobalOptions, operator, out, project, UsageError } from './context.js';
 import { registerContextCommands } from './context-cmd.js';
 import { doctor, renderDoctor } from './doctor.js';
 import { registerGoalCommands, renderEscalation } from './goals.js';
 import { registerGraphCommands } from './graph.js';
+import { registerHostsCommands, setupHosts, writeMachineLauncher } from './hosts.js';
 import { registerIntegrationCommands } from './integrations.js';
 import { registerIntentCommands } from './intent.js';
 import { registerLearningCommands } from './learnings.js';
@@ -98,12 +107,16 @@ export function buildProgram(): Command {
         written_at: new Date().toISOString(),
       };
       const file = writePrivateFile(stateDir(), 'install.json', `${JSON.stringify(info, null, 2)}\n`);
-      out(g(), { ...info, file }, () =>
+      // The machine launcher every host's user entry points at (ADR-0036 §1).
+      const launcher = writeMachineLauncher();
+      out(g(), { ...info, file, launcher }, () =>
         kv([
           ['install.json', file],
           ['node', info.node_path],
           ['cli', info.cli_entry ?? '(not built)'],
           ['mcp server', info.mcp_server_entry ?? '(not built yet)'],
+          ['launcher', launcher],
+          ['next', 'friday hosts setup (wires every installed coding tool to Friday)'],
         ]),
       );
     });
@@ -114,7 +127,11 @@ export function buildProgram(): Command {
     .option('--name <name>', 'project name (default: directory name)')
     .option('--force', 'rewrite .friday/.gitignore and keep the existing project id')
     .option('--shortcut', 'also create a desktop shortcut that opens Friday for this project')
-    .action((opts: { name?: string; force?: boolean; shortcut?: boolean }) => {
+    .option(
+      '--no-hosts',
+      'do not wire the installed coding tools to Friday (otherwise done once the machine is set up)',
+    )
+    .action((opts: { name?: string; force?: boolean; shortcut?: boolean; hosts?: boolean }) => {
       const root = path.resolve(g().project ?? process.cwd());
       const dir = path.join(root, FRIDAY_DIR);
       const configPath = path.join(dir, 'config.yaml');
@@ -131,12 +148,39 @@ export function buildProgram(): Command {
       writeFileSync(path.join(dir, '.gitignore'), FRIDAY_DIR_GITIGNORE);
       const ref = project({ project: root });
       const shortcuts = opts.shortcut ? createShortcut(ref) : [];
-      out(g(), { project_id: ref.project_id, name: ref.name, root: ref.root, shortcuts }, () =>
+      // The installed coding tools, wired to Friday for every project (ADR-0036 §3): once the
+      // machine is set up; a host that is not installed is never written.
+      let hostLines: string[] = [];
+      let hosts: { host: string; installed: boolean; entry: string; change: string | null }[] | null = null;
+      if (opts.hosts !== false) {
+        if (readInstallInfo()) {
+          const r = setupHosts({ projectRoot: ref.root });
+          hosts = r.plans.map((p) => ({
+            host: p.host,
+            installed: p.detected.installed,
+            entry: p.entry,
+            change: p.change ? (p.change.before === null ? 'written' : 'updated') : null,
+          }));
+          const written = r.plans.filter((p) => p.change).map((p) => p.host);
+          const already = r.plans
+            .filter((p) => !p.change && p.detected.installed && p.entry === 'configured')
+            .map((p) => p.host);
+          hostLines = [
+            `Hosts: ${written.length ? `wired ${written.join(', ')}` : 'nothing new to wire'}${already.length ? `; already wired: ${already.join(', ')}` : ''} (details: friday hosts)`,
+          ];
+        } else {
+          hostLines = [
+            'Hosts: run "friday setup" (after building Friday), then "friday hosts setup" to wire your coding tools',
+          ];
+        }
+      }
+      out(g(), { project_id: ref.project_id, name: ref.name, root: ref.root, shortcuts, hosts }, () =>
         [
           `Initialized Friday project "${ref.name}" (${ref.project_id})`,
           `  ${path.relative(process.cwd(), configPath) || configPath}  (commit this)`,
           '  .friday/.gitignore  (commit this; it keeps runtime files out of git)',
           ...shortcuts.map((f) => `  shortcut: ${f}`),
+          ...hostLines,
           shortcuts.length ? 'Next: double-click the shortcut' : 'Next: friday start (or friday shortcut)',
           'Then tell Friday what the project is for: friday intent draft (or friday intent ask)',
         ].join('\n'),
@@ -893,6 +937,7 @@ export function buildProgram(): Command {
   registerOperationCommands(program, g);
   registerRoutingCommands(program, g);
   registerReadinessCommands(program, g);
+  registerHostsCommands(program, g);
   registerRegistryCommands(program, g);
   registerUsageCommands(program, g);
   registerMemoryCommands(program, g);

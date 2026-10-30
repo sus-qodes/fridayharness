@@ -1,0 +1,26 @@
+{
+  "name": "@friday/adapter-deepseek",
+  "version": "0.0.0",
+  "private": true,
+  "description": "DeepSeek Harness skeleton: detection of dsh, the user configuration block for Friday's MCP server, and a doctor. No spawn or attach behaviour; non-dispatchable until live-tested (ADR-0036).",
+  "type": "module",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@friday/test-support": "workspace:*"
+  }
+}
