@@ -1,9 +1,11 @@
+import path from 'node:path';
 import type { FileChange } from '@friday/adapter-claude';
 import { DaemonClient, type ProjectRef, privateDirFor } from '@friday/sdk';
 import { OpenCodeSpawnAdapter } from './adapter.js';
 import { applyOpenCodePlan, planOpenCode } from './config.js';
 import { findOpenCode, opencodeDoctor } from './doctor.js';
-import { configured, LEVEL_NOTE } from './profile.js';
+import { configured, LEVEL_NOTE, loopbackModelUrl, OPENCODE_VERSION } from './profile.js';
+import { OpenCodeWorker } from './worker.js';
 
 interface Io {
   out(value: unknown, text: () => string): void;
@@ -50,6 +52,41 @@ export function opencodeDoctorCli(ref: ProjectRef, _flags: unknown, io: Io): voi
   io.out(report, () => report.checks.map((c) => `${c.status}: ${c.message}`).join('\n'));
   if (report.checks.some((c) => c.status === 'fail')) process.exitCode = 1;
 }
+/**
+ * `friday harness run opencode --model-url <loopback> --model <name>` (plan M14.4, experimental):
+ * OpenCode works for Friday on a model on this machine, each run attempt in its own controlled
+ * server and session, until it is stopped. Resolves with the started worker and what to print.
+ */
+export async function opencodeWorkerCli(
+  ref: ProjectRef,
+  flags: { agent?: string; role?: string; hostBin?: string; modelUrl: string; model: string },
+): Promise<{ worker: OpenCodeWorker; message: string }> {
+  if (!configured(ref.root)) throw new Error('Run friday harness config opencode first');
+  const command = flags.hostBin ?? findOpenCode();
+  const dependenciesDir = process.env.FRIDAY_OPENCODE_DEPS_DIR;
+  if (!command || !dependenciesDir)
+    throw new Error('OpenCode native executable and FRIDAY_OPENCODE_DEPS_DIR are required');
+  const agentKey = flags.agent ?? (process.env.FRIDAY_AGENT || 'opencode-1');
+  const worker = new OpenCodeWorker({
+    bootstrap: DaemonClient.forProject(ref, 'bootstrap', { clientName: 'friday-opencode' }),
+    projectId: ref.project_id,
+    agentKey,
+    ...(flags.role ? { role: flags.role } : {}),
+    host: { command },
+    dependenciesDir,
+    inference: { baseURL: loopbackModelUrl(flags.modelUrl), model: flags.model },
+    workDir: privateDirFor(ref),
+    // Where an attempt's ending waits until Friday records it, as every spawn adapter keeps it.
+    stateDir: path.join(privateDirFor(ref), 'adapters', `opencode-${agentKey.replace(/[^A-Za-z0-9_.-]/g, '_')}`),
+    log: (m) => process.stderr.write(`${m}\n`),
+  });
+  const reg = await worker.start();
+  return {
+    worker,
+    message: `OpenCode ${OPENCODE_VERSION} works for Friday as ${reg.agent_key} (${reg.harness_id}) on ${flags.model} at ${flags.modelUrl}. ${LEVEL_NOTE}. Ctrl+C stops it and its work.`,
+  };
+}
+
 /** Runs A/B preflight and closes. It does not poll tasks, submit prompts or read provider credentials. */
 export async function opencodeRunCli(
   ref: ProjectRef,

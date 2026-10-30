@@ -15,7 +15,7 @@ import {
   geminiRunCommand,
   compareVersions as geminiVersionCompare,
 } from '@friday/adapter-gemini';
-import { opencodeRunCli } from '@friday/adapter-opencode';
+import { opencodeRunCli, opencodeWorkerCli } from '@friday/adapter-opencode';
 import { DaemonClient, type ProjectRef, privateDirFor } from '@friday/sdk';
 import { type Command, Option } from 'commander';
 import { type GlobalOptions, out, project, UsageError } from './context.js';
@@ -41,6 +41,9 @@ interface SpawnRunOptions {
   hostBin?: string;
   /** gemini: folders outside the worktree its sessions may also read. */
   includeDirectories?: string[];
+  /** opencode: the model server on this machine its sessions use, and the model (plan M14.4). */
+  modelUrl?: string;
+  model?: string;
 }
 
 /** The cost class and models an agent declares (plan M13.3), as the adapters take them. */
@@ -102,7 +105,7 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
   harness
     .command('run <host>')
     .description(
-      `work for Friday as a spawn-mode harness, in the foreground (${SPAWN_HOSTS.join(', ')}; opencode: no-model preflight)`,
+      `work for Friday as a spawn-mode harness, in the foreground (${SPAWN_HOSTS.join(', ')}; opencode: the no-model preflight, or with --model-url and --model a worker on a model on this machine, experimental)`,
     )
     .option(
       '--agent <key>',
@@ -136,12 +139,32 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
     .option('--parent-stdin', 'stop when standard input closes (used by the agent launcher)')
     .option('--host-bin <path>', 'the host binary to run, instead of finding it')
     .option('--include-directories <dirs...>', 'gemini: folders outside the worktree its sessions may also read')
+    .option(
+      '--model-url <url>',
+      'opencode: the model server on this machine its sessions use, a loopback http address such as http://127.0.0.1:11434/v1',
+    )
+    .option('--model <name>', 'opencode: the model that server has, such as qwen2.5:7b')
     .action(async (host: string, o: SpawnRunOptions) => {
       if (host !== 'gemini' && o.includeDirectories?.length)
         throw new UsageError('--include-directories is for gemini');
+      if ((o.modelUrl || o.model) && host !== 'opencode')
+        throw new UsageError('--model-url and --model are for opencode');
+      if (host === 'opencode' && Boolean(o.modelUrl) !== Boolean(o.model))
+        throw new UsageError('opencode takes --model-url and --model together');
       if ((o.costClass || o.models) && host !== 'claude-code' && host !== 'codex')
         throw new UsageError('--cost-class and --models are for claude-code and codex');
       if (host === 'claude-code') return runClaudeSpawn(g, o);
+      if (host === 'opencode' && o.modelUrl && o.model) {
+        const { worker, message } = await opencodeWorkerCli(project(g()), {
+          ...(o.agent ? { agent: o.agent } : {}),
+          role: o.role,
+          ...(o.hostBin ? { hostBin: o.hostBin } : {}),
+          modelUrl: o.modelUrl,
+          model: o.model,
+        });
+        process.stdout.write(`${message}\n`);
+        return untilStopped(() => worker.close(), o.parentStdin);
+      }
       if (host === 'opencode') return opencodeRunCli(project(g()), o, { out: (v, text) => out(g(), v, text) });
       if (host === 'cursor') return cursorRunCli(project(g()), o);
       if (host === 'gemini') {

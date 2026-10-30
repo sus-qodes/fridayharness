@@ -2,6 +2,10 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — M14.4, OpenCode as a worker (experimental)
+
+- **OpenCode takes Friday's tasks on a model on this machine:** `friday harness run opencode --model-url http://127.0.0.1:11434/v1 --model qwen2.5:7b` registers a worker (cost class free) that runs each attempt in its own controlled OpenCode server and session, with every call judged for that task and run. The task goes as one prompt with its packet; the last answer is the claim (a final line of JSON, else the text), with the worktree's changed paths and what the model calls cost. A cancellation stops the session with no call after it and ends its server; a restarted worker resumes its runs in a new session under the policy of that moment. It passes the eleven-case harness conformance suite against a scripted server. `harness run opencode` without the two flags is still the no-model preflight.
+
 ## Unreleased — M14.6, the packet names the project's checks
 
 - **An agent is told which checks will judge its claim:** every task packet's acceptance section names the checks Friday's verification runs for the task, with their commands (`Friday verifies a claim with these project checks; run them before you claim: - tests: node --test … - rules: node scripts/check.mjs`). An agent kept to its task's files no longer misses a project rule that only a check enforces. A change of the checks compiles a new packet. Token cost: one line per configured check in each task packet.

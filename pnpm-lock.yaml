@@ -478,6 +478,9 @@ importers:
       '@friday/execution':
         specifier: workspace:*
         version: link:../../execution
+      '@friday/git':
+        specifier: workspace:*
+        version: link:../../git
       '@friday/protocol':
         specifier: workspace:*
         version: link:../../protocol

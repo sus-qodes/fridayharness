@@ -2,7 +2,7 @@
   "name": "@friday/adapter-opencode",
   "version": "0.0.0",
   "private": true,
-  "description": "Experimental OpenCode controlled no-model launcher and policy plugin (checkpoints A/B).",
+  "description": "Experimental OpenCode: the controlled launcher and policy plugin, the local-model enforcement check, and the worker on a model on this machine.",
   "type": "module",
   "exports": {
     ".": {
@@ -23,6 +23,7 @@
     "@friday/adapter-claude": "workspace:*",
     "@friday/adapter-generic": "workspace:*",
     "@friday/execution": "workspace:*",
+    "@friday/git": "workspace:*",
     "@friday/protocol": "workspace:*",
     "@friday/sdk": "workspace:*"
   },

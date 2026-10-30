@@ -4,7 +4,7 @@ import path from 'node:path';
 import { GenericHarnessClient } from '@friday/adapter-generic';
 import { type InteractiveProcess, type ProcessGroup, ProcessGroups, runProcess, startProcess } from '@friday/execution';
 import type { DaemonClient } from '@friday/sdk';
-import { PolicyBridge } from './bridge.js';
+import { PolicyBridge, type ToolCheck } from './bridge.js';
 import {
   type ControlledProfile,
   createControlledProfile,
@@ -38,6 +38,15 @@ export interface OpenCodeSpawnOptions {
    * that a failing check blocks the call. Production leaves it unset.
    */
   checkFault?: () => 'none' | 'error' | 'hang';
+  /**
+   * The worker's attempts (plan M14.4): the worker is the harness, so the attempt's server registers
+   * nothing of its own (`register: false`) and its calls are judged by `check`, which names the task
+   * and run. The A/B/C adapter registers and judges with its own registration.
+   */
+  register?: boolean;
+  check?: ToolCheck;
+  /** The title of the bound session. */
+  title?: string;
 }
 
 /**
@@ -58,11 +67,12 @@ export class OpenCodeSpawnAdapter {
   sessionId: string | undefined;
   constructor(private readonly opts: OpenCodeSpawnOptions) {
     this.#bridge = new PolicyBridge(async (params) => {
-      if (!this.#client || this.#closed) throw new Error('Friday is not connected');
+      if (this.#closed || (!opts.check && !this.#client)) throw new Error('Friday is not connected');
       const fault = opts.checkFault?.() ?? 'none';
       if (fault === 'error') throw new Error('the policy check failed (injected)');
       if (fault === 'hang') await new Promise<never>(() => undefined);
-      return this.#client.call('tool.check', params);
+      if (opts.check) return opts.check(params);
+      return (this.#client as GenericHarnessClient).call('tool.check', params);
     }, opts.checkTimeoutMs ?? 4000);
   }
   get client(): GenericHarnessClient {
@@ -158,7 +168,7 @@ export class OpenCodeSpawnAdapter {
       verifyEffectiveConfig(await this.#request('/config'), profile);
       if (!this.#bridge.ready) throw new Error('Friday policy plugin is missing or failed to initialize');
       const session = (await this.#request('/session', 'POST', {
-        title: this.opts.inference ? 'Friday checkpoint C' : 'Friday no-model preflight',
+        title: this.opts.title ?? (this.opts.inference ? 'Friday checkpoint C' : 'Friday no-model preflight'),
       })) as {
         id?: unknown;
         directory?: unknown;
@@ -166,6 +176,12 @@ export class OpenCodeSpawnAdapter {
       if (typeof session.id !== 'string' || !session.id || session.directory !== cwd)
         throw new Error('OpenCode returned no bound session');
       this.sessionId = session.id;
+      if (this.opts.register === false) {
+        // The worker's attempt: the worker is the harness; the session is bound before any call.
+        this.#bridge.bind(session.id);
+        profile.verify();
+        return { session_id: session.id, level: LEVEL_NOTE, model_calls: 0 };
+      }
       this.#client = new GenericHarnessClient(this.opts.bootstrap, {
         harness_key: `opencode:${this.opts.projectId}:${this.opts.agentKey}`,
         vendor: 'opencode',
