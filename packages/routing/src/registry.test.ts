@@ -294,6 +294,34 @@ describe('static registry validation', () => {
 });
 
 describe('decision-model role output', () => {
+  it('rewrites positional and role-name dependency labels to the keys a split uses (review 2026-10-22 R6)', () => {
+    const roles = new Set(['implementation', 'qa_and_debugging', 'code_reviewer_and_security']);
+    const parsed = parseRoleDecision(
+      {
+        status: 'classified',
+        roles: [
+          { role: 'implementation', task_summary: 'make the change', depends_on: [], confidence: 0.9 },
+          { role: 'qa_and_debugging', task_summary: 'run the checks', depends_on: ['role-1'], confidence: 0.9 },
+          { role: 'implementation', task_summary: 'fix what failed', depends_on: ['role-2'], confidence: 0.9 },
+          {
+            role: 'code_reviewer_and_security',
+            task_summary: 'review',
+            depends_on: ['implementation', 'role-3'],
+            confidence: 0.9,
+          },
+        ],
+        assumptions: [],
+      },
+      roles,
+    );
+    expect(parsed.status === 'classified' && parsed.roles.map((r) => r.depends_on)).toEqual([
+      [],
+      ['implementation'],
+      ['qa_and_debugging'],
+      ['implementation', 'implementation-2'],
+    ]);
+  });
+
   it('accepts a known multi-role DAG and rejects unsupported or cyclic output', () => {
     const roles = new Set(['implementation', 'qa_and_debugging', 'code_reviewer_and_security']);
     expect(

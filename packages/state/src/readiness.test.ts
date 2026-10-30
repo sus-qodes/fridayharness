@@ -375,6 +375,51 @@ describe('host failures bench the host or model; work failures never (ADR-0035 Â
     expect(state.readiness.assess(PROJECT, 'codex', ASTRA).dispatchable).toBe(true);
   });
 
+  it('a sign-in failure newer than a modelâ€™s pass blocks that model too (review 2026-10-22 R4)', () => {
+    // A claim on SOL: signed in, for seven days.
+    const a = attempt('cx-1', 'codex');
+    state.submitResult(PROJECT, a.caller, {
+      idempotency_key: 'claim-a',
+      task_id: a.task_id,
+      run_id: a.run_id,
+      status: 'completed_claim',
+      summary: 'done',
+      changed_paths: [],
+      checks: [],
+      notes: [],
+      risks: [],
+    });
+    expect(state.readiness.assess(PROJECT, 'codex', SOL).dispatchable).toBe(true);
+    // An hour on, the host cannot sign in: the newer fact wins over the older pass, for every model.
+    clock.advance(3_600_000);
+    const b = attempt('cx-2', 'codex');
+    fail(b, 'Codex stopped: not logged in', { kind: 'auth' });
+    for (const model of [SOL, ASTRA]) {
+      expect(state.readiness.assess(PROJECT, 'codex', model)).toMatchObject({
+        dispatchable: false,
+        blocking: { stage: 'authenticated', status: 'failed' },
+      });
+    }
+    // A week later the pass has expired and the failure has not: still out, not "tried".
+    clock.advance(7 * 86_400_000);
+    expect(state.readiness.assess(PROJECT, 'codex', SOL).dispatchable).toBe(false);
+    // Seen signed in again on SOL: that model is back; ASTRA still waits for the host.
+    const c = attempt('cx-3', 'codex');
+    state.submitResult(PROJECT, c.caller, {
+      idempotency_key: 'claim-c',
+      task_id: c.task_id,
+      run_id: c.run_id,
+      status: 'completed_claim',
+      summary: 'done',
+      changed_paths: [],
+      checks: [],
+      notes: [],
+      risks: [],
+    });
+    expect(state.readiness.assess(PROJECT, 'codex', SOL).dispatchable).toBe(true);
+    expect(state.readiness.assess(PROJECT, 'codex', ASTRA).dispatchable).toBe(false);
+  });
+
   it('a lost process benches the host and model for 10 minutes; a work error or a failed verification benches nothing', () => {
     const a = attempt('cc-1', 'claude-code');
     fail(a, 'Claude Code stopped: it exited (1)', { kind: 'transport' });

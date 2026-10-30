@@ -40,7 +40,8 @@ function proposed(extra: { ready?: boolean } = {}) {
     assumptions: ['the page and the API can ship together'],
     roles: [
       { role: 'frontend_engineer', task_summary: 'Build the page', depends_on: [], confidence: 0.9 },
-      { role: 'backend_engineer', task_summary: 'Build the API', depends_on: ['frontend_engineer'], confidence: 0.85 },
+      // A positional label from the model: the parser rewrites it to the role's key (review R6).
+      { role: 'backend_engineer', task_summary: 'Build the API', depends_on: ['role-1'], confidence: 0.85 },
     ],
   });
   expect(state.q.latestTaskRoleDecision(PROJECT, task.task_id)?.status).toBe('proposed');

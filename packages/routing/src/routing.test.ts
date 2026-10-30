@@ -172,6 +172,26 @@ describe('decideRoute', () => {
     );
     expect(blocked).toMatchObject({ blocked: true, role: null, role_source: 'missing', model: null });
     expect(blocked.reason_codes).toContain('role.classification_required');
+    // A pinned model is no approval of a split or a substitute for a role (review 2026-10-22 R3).
+    for (const [role_source, code] of [
+      ['decision_model', 'role.proposed_dag'],
+      ['missing', 'role.classification_required'],
+    ] as const) {
+      const pinnedToo = decideRoute(
+        base({
+          pins: [pin({ model: 'claude-sonnet-5-5' })],
+          task: {
+            ...base().task,
+            role: null,
+            role_source,
+            role_decision_id: 'rdec_00000000000000000000000003',
+          },
+        }),
+      );
+      expect(pinnedToo).toMatchObject({ blocked: true, role: null, model: null, source: 'none' });
+      expect(pinnedToo.reason_codes).toContain(code);
+      expect(pinnedToo.reason_codes).not.toContain('pin');
+    }
   });
 
   it('applies a role pin to the resolved fallback role', () => {

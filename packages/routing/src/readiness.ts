@@ -94,6 +94,25 @@ function evidenceFor(
   return newest(forHost.filter((e) => e.model === null));
 }
 
+/**
+ * The sign-in evidence that counts for a model: the newest fresh observation among the model's own
+ * and the host's (an indefinite failure stays fresh); with none fresh, the newest of all, so an
+ * expired pass reads as stale rather than as a sign-in.
+ */
+function authEvidenceFor(
+  evidence: readonly ReadinessEvidence[],
+  host: string,
+  model: string | null,
+  nowMs: number,
+): ReadinessEvidence | null {
+  const byTime = (xs: ReadinessEvidence[]) =>
+    [...xs].sort((a, b) => Date.parse(b.checked_at) - Date.parse(a.checked_at))[0] ?? null;
+  const rows = evidence.filter(
+    (e) => e.host === host && e.stage === 'authenticated' && (e.model === null || e.model === model),
+  );
+  return byTime(rows.filter((e) => isFresh(e, nowMs))) ?? byTime(rows);
+}
+
 const view = (stage: ReadinessStage, status: ReadinessStageStatus, e: ReadinessEvidence | null, detail?: string) => ({
   stage,
   status,
@@ -142,7 +161,10 @@ export function assessReadiness(
   }
 
   // Sign-in: a recent failure blocks; never seen, or a pass that expired, is tried (the loose rule).
-  const auth = evidenceFor(evidence, input.host, input.model, 'authenticated');
+  // The model's own evidence and the host's are read by time, not by level (review 2026-10-22 R4):
+  // a host-wide sign-in failure newer than a model's pass blocks that model; a model's pass newer
+  // than the failure lets that model back, and the host's other models wait.
+  const auth = authEvidenceFor(evidence, input.host, input.model, nowMs);
   const authStatus: ReadinessStageStatus = !auth
     ? 'unknown'
     : !isFresh(auth, nowMs)

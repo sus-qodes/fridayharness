@@ -397,6 +397,28 @@ describe('symbolic patching (ADR-0039)', () => {
     const sym = await be.client.call('graph.query', { name: 'totalOf' });
     expect(sym.symbol?.matches[0]?.symbol).toMatchObject({ line: 6, end_line: 11 });
 
+    // Two patches of the same file side by side: both land, neither overwrites the other (review R2).
+    const bodyA = [
+      'export function totalOf(request: CheckoutRequest): Money {',
+      "  return { amount: 1, currency: 'EUR' };",
+      '}',
+    ].join('\n');
+    const bodyB = [
+      'export function checkout(request: CheckoutRequest): CheckoutResponse {',
+      "  return { orderId: 'ord_000000', total: totalOf(request) };",
+      '}',
+    ].join('\n');
+    const [ra, rb] = await Promise.all([
+      be.client.call('symbol.patch', { path: file, symbol: 'totalOf', body: bodyA }),
+      be.client.call('symbol.patch', { path: file, symbol: 'checkout', body: bodyB }),
+    ]);
+    expect([ra.status, rb.status]).toEqual(['written', 'written']);
+    const both = readFileSync(path.join(dir, file), 'utf8');
+    expect(both).toContain("return { amount: 1, currency: 'EUR' };");
+    expect(both).toContain("return { orderId: 'ord_000000', total: totalOf(request) };");
+    // Later checks start from this content.
+    const after2 = both;
+
     // Outside the task's write scope: the policy's answer, not a patch. Then the refusals.
     const outside = await be.client.call('symbol.patch', {
       path: 'shared/src/api.ts',
@@ -436,7 +458,7 @@ describe('symbolic patching (ADR-0039)', () => {
       status: 'refused',
       reason: expect.stringContaining('not a TypeScript or JavaScript file'),
     });
-    expect(readFileSync(path.join(dir, file), 'utf8')).toBe(after);
+    expect(readFileSync(path.join(dir, file), 'utf8')).toBe(after2);
 
     // The tool says what happened.
     const tools = toolsOver(be.client, { agent: { agent_key: 'be-1' }, current_task: task, claimable: [] });

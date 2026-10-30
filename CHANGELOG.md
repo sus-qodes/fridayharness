@@ -2,6 +2,20 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — review of 2026-10-22, R5 and R6: stale classifications dropped, dependency labels made stable
+
+- **A classification answers the decision it was asked for, under the intent it was made for:** the Master Brain records its answer with the blocked decision's id and intent version, and the state refuses it as stale when the contract moved on meanwhile (an intent change reopened it, a human chose); the job ends saying so and the contract in force has already queued its own question. An intent change now also reopens a classification still awaited, not only a role a model chose (R5). The classifier's input carries the project's objective, constraints and outcomes beside the goal's.
+- **Dependency labels are rewritten to stable keys at validation:** `role-2` or a role name becomes the node's key, the role or `<role>-<n>` for a repeat, the same key a split names its parts by, so a stored proposal with positional labels can be approved (R6; it used to be refused at the split).
+
+## Unreleased — review of 2026-10-22, R3 and R4: no pin past a role decision, no old sign-in over a new failure
+
+- **A pinned model no longer dispatches a task whose role is unresolved:** the role decision (a proposed multi-role DAG awaiting a split, a classification still required, no role at all) is checked before any pin, so choosing a model is no approval of a decomposition (R3; the project pin used to return first).
+- **Sign-in evidence is read by time, not by level:** a host-wide sign-in failure newer than a model's seven-day pass blocks that model too, an expired pass never shadows an indefinite failure, and a model's pass newer than the failure lets that model back while the host's other models wait (R4; a model's old pass used to win over the host's newer failure). `docs/routing.md` says so.
+
+## Unreleased — review of 2026-10-22, R2: a symbolic patch never loses another's write
+
+- **Friday's patches of one file run one at a time** (a per-file lock in the daemon), so two planned side by side land one after the other, each on the other's result: the review's parallel patches of `a` and `b` had both answered `written` while `a`'s was overwritten. **Before writing, the file is read again** and must equal what the plan was made from, else the patch is refused as changed meanwhile and nothing is written; **the task must still be the agent's** with a live attempt after the planning's awaits, else `denied`; the file is **replaced in one step** (written beside it, renamed over it). ADR-0039 §3 records the commit boundary.
+
 ## Unreleased — review of 2026-10-22, R1: graph answers under the recipient's read permission
 
 - **One read rule for every projection of code:** the context compiler's permission check (the task's and team's read scopes, `deny.read`, the protected locations, a link judged by its target) is now `createReadFilter` in `@friday/context`, and the daemon's `graph.query`, `graph.blast_radius` and `graph.skeleton` apply it to the caller, judged after the graph work under the policy as it is then. A symbol in a withheld file is withheld whole; a shown symbol names only readable callers, callees and tests; a file query of a withheld file is `permission_denied`; a search never lists one; a blast radius never names one and a withheld seed is no seed; a skeleton of one comes back as "not a file you may read", and skeleton text is redacted as a packet excerpt is. A human's read grant opens a file through `friday_request_context`, never through the graph, so none is spent there (review R1, reproduced with a sentinel in `.claude/hidden.ts` and a `deny.read` on the frontend).

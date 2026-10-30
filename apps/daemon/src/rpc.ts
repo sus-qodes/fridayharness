@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
+import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { blastRadius, type CodeGraph, languageOf, lookupSymbol, planPatch, skeletonOf } from '@friday/code-graph';
@@ -122,6 +122,39 @@ const cleanPath = (p: string) => p.replace(/\\/g, '/').replace(/^\.\//, '');
 const sha256 = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
 
 /**
+ * Friday's own writes to one file run one at a time (review 2026-10-22 R2): two patches of the same
+ * file planned side by side would each write the whole file and the first would be lost. The key
+ * is the file's absolute path, folded on Windows.
+ */
+const fileLocks = new Map<string, Promise<unknown>>();
+async function withFileLock<T>(abs: string, fn: () => Promise<T>): Promise<T> {
+  const key = process.platform === 'win32' ? abs.toLowerCase() : abs;
+  const previous = fileLocks.get(key) ?? Promise.resolve();
+  const run = previous.then(fn, fn);
+  fileLocks.set(
+    key,
+    run.catch(() => undefined),
+  );
+  try {
+    return await run;
+  } finally {
+    if (fileLocks.get(key) === run.catch(() => undefined)) fileLocks.delete(key);
+  }
+}
+
+/** The whole file replaced in one step: written beside it, then renamed over it. */
+async function replaceFile(abs: string, content: string): Promise<void> {
+  const tmp = `${abs}.friday-${randomBytes(4).toString('hex')}.tmp`;
+  await writeFile(tmp, content, 'utf8');
+  try {
+    await rename(tmp, abs);
+  } catch (e) {
+    await unlink(tmp).catch(() => undefined);
+    throw e;
+  }
+}
+
+/**
  * One declaration replaced by name (ADR-0039): judged as a write of the held task by the one tool
  * judge, planned by the code graph's parser on the file as it is now, previewed or written, and a
  * written patch recorded as a completed tool call of the attempt with its changed path.
@@ -172,56 +205,80 @@ async function patchSymbol(
       approval_id: judged.approval_id,
     });
   }
-  let source: string;
-  try {
-    source = await readFile(abs, 'utf8');
-  } catch {
-    return base({ reason: `${rel} cannot be read in your checkout` });
-  }
-  const planned = await planPatch(
-    lang,
-    source,
-    { symbol: p.symbol, ...(p.kind ? { kind: p.kind } : {}), ...(p.line ? { line: p.line } : {}) },
-    p.body,
-  );
-  if (!planned.ok)
+  // Read, plan and write under the file's lock: no other patch of Friday's interleaves, and the
+  // file is checked against what the plan was made from before anything is written.
+  return withFileLock(abs, async () => {
+    let source: string;
+    try {
+      source = await readFile(abs, 'utf8');
+    } catch {
+      return base({ reason: `${rel} cannot be read in your checkout` });
+    }
+    const planned = await planPatch(
+      lang,
+      source,
+      { symbol: p.symbol, ...(p.kind ? { kind: p.kind } : {}), ...(p.line ? { line: p.line } : {}) },
+      p.body,
+    );
+    if (!planned.ok)
+      return base({
+        reason: `${planned.reason}; the editor is the way when a patch is refused`,
+        candidates: planned.candidates,
+      });
+    const { plan } = planned;
+    const found = { kind: plan.found.kind, exported: plan.found.exported, lines: plan.lines };
+    const before = sha256(source);
+    if (p.dry_run) {
+      return base({ status: 'preview', found, preview: plan.preview, sha256: { before, after: before } });
+    }
+    // The authority the write was judged by must still hold after the planning's awaits: the task
+    // still this agent's and the attempt still live (a cancel, a release or a reassignment ends both).
+    const task = judged.task ? state.q.findTask(pid, judged.task.task_id) : null;
+    if (judged.task && (!task || task.assigned_agent_id !== c.agent_id || !task.current_run_id)) {
+      return base({
+        status: 'denied',
+        reason: `${judged.task.task_id} is no longer yours to change; nothing was written`,
+      });
+    }
+    // The file as it is now must be the file the plan was made from (an editor may have written meanwhile).
+    const current = await readFile(abs, 'utf8').catch(() => null);
+    if (current !== source) {
+      return base({
+        reason: `${rel} changed while the patch was planned; read it again and patch once more (nothing was written)`,
+      });
+    }
+    await replaceFile(abs, plan.new_source);
+    // Recorded as any editor's write is (the hooks' PostToolUse): the attempt's changed path, and the call.
+    const run = task?.current_run_id ? state.q.findRun(task.current_run_id) : undefined;
+    const mine = run && run.harness_id === c.harness_id && run.status === 'ACTIVE' ? run : undefined;
+    if (mine) state.observePaths(pid, { kind: 'harness', id: mine.harness_id }, mine.run_id, [rel]);
+    state.recordObservation(
+      pid,
+      { kind: 'agent', id: c.agent_id },
+      'agent.event',
+      {
+        task_id: task?.task_id ?? null,
+        run_id: mine?.run_id ?? null,
+        harness_id: c.harness_id,
+        event_type: 'tool.completed',
+        tool: 'friday_symbolic_patch',
+        summary: `${rel}: ${p.symbol} replaced (lines ${plan.lines.from}-${plan.lines.to})`,
+        changed_paths: [rel],
+        read: null,
+        error: null,
+      },
+      [
+        ...(task ? [{ kind: 'task' as const, id: task.task_id }] : []),
+        ...(mine ? [{ kind: 'run' as const, id: mine.run_id }] : []),
+      ],
+    );
     return base({
-      reason: `${planned.reason}; the editor is the way when a patch is refused`,
-      candidates: planned.candidates,
+      status: 'written',
+      found,
+      preview: plan.preview,
+      sha256: { before, after: sha256(plan.new_source) },
     });
-  const { plan } = planned;
-  const found = { kind: plan.found.kind, exported: plan.found.exported, lines: plan.lines };
-  const before = sha256(source);
-  if (p.dry_run) {
-    return base({ status: 'preview', found, preview: plan.preview, sha256: { before, after: before } });
-  }
-  await writeFile(abs, plan.new_source, 'utf8');
-  // Recorded as any editor's write is (the hooks' PostToolUse): the attempt's changed path, and the call.
-  const task = judged.task;
-  const run = task?.current_run_id ? state.q.findRun(task.current_run_id) : undefined;
-  const mine = run && run.harness_id === c.harness_id && run.status === 'ACTIVE' ? run : undefined;
-  if (mine) state.observePaths(pid, { kind: 'harness', id: mine.harness_id }, mine.run_id, [rel]);
-  state.recordObservation(
-    pid,
-    { kind: 'agent', id: c.agent_id },
-    'agent.event',
-    {
-      task_id: task?.task_id ?? null,
-      run_id: mine?.run_id ?? null,
-      harness_id: c.harness_id,
-      event_type: 'tool.completed',
-      tool: 'friday_symbolic_patch',
-      summary: `${rel}: ${p.symbol} replaced (lines ${plan.lines.from}-${plan.lines.to})`,
-      changed_paths: [rel],
-      read: null,
-      error: null,
-    },
-    [
-      ...(task ? [{ kind: 'task' as const, id: task.task_id }] : []),
-      ...(mine ? [{ kind: 'run' as const, id: mine.run_id }] : []),
-    ],
-  );
-  return base({ status: 'written', found, preview: plan.preview, sha256: { before, after: sha256(plan.new_source) } });
+  });
 }
 
 /**

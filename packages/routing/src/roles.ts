@@ -314,15 +314,12 @@ export function parseRoleDecision(value: unknown, allowedRoles: ReadonlySet<stri
       throw new Error(`role decision contains a self dependency for "${entry.role}"`);
     }
   }
-  // Role names are accepted as dependency labels for compact model output. A DFS proves the DAG.
-  const edges = roles.map((entry) =>
-    entry.depends_on
-      .map((dependency) => {
-        if (dependency.startsWith('role-')) return Number(dependency.slice(5)) - 1;
-        return roleIndexes.get(dependency) ?? -1;
-      })
-      .filter((i) => i >= 0),
-  );
+  // Role names and positional labels (`role-2`) are accepted as dependency labels for compact model
+  // output. Each is rewritten to the node's stable key, the one a split names its parts by (review
+  // 2026-10-22 R6). A DFS proves the DAG.
+  const indexOf = (dependency: string): number =>
+    dependency.startsWith('role-') ? Number(dependency.slice(5)) - 1 : (roleIndexes.get(dependency) ?? -1);
+  const edges = roles.map((entry) => entry.depends_on.map(indexOf).filter((i) => i >= 0));
   const visiting = new Set<number>();
   const visited = new Set<number>();
   const visit = (index: number): void => {
@@ -334,7 +331,41 @@ export function parseRoleDecision(value: unknown, allowedRoles: ReadonlySet<stri
     visited.add(index);
   };
   for (let index = 0; index < roles.length; index += 1) visit(index);
-  return { ...parsed, roles };
+  return normalizeDependencyLabels({ ...parsed, roles });
+}
+
+/** The stable key of the n-th node of a decision: its role, or `<role>-<n>` for a repeat; what a split names its parts by. */
+export function roleNodeKeys(roles: readonly { role: string }[]): string[] {
+  const counts = new Map<string, number>();
+  return roles.map((entry) => {
+    const n = (counts.get(entry.role) ?? 0) + 1;
+    counts.set(entry.role, n);
+    return n === 1 ? entry.role : `${entry.role}-${n}`;
+  });
+}
+
+/**
+ * Rewrites every dependency label of a classified decision to the node's stable key: a positional
+ * `role-<i>` to the i-th node's key, a role name to its first node's key; a label that names no
+ * node is left as it is for the validation to refuse (review 2026-10-22 R6).
+ */
+export function normalizeDependencyLabels(decision: RoleDecision): RoleDecision {
+  if (decision.status !== 'classified') return decision;
+  const keys = roleNodeKeys(decision.roles);
+  const first = new Map<string, number>();
+  decision.roles.forEach((entry, index) => {
+    if (!first.has(entry.role)) first.set(entry.role, index);
+  });
+  const keyOf = (label: string): string => {
+    if (keys.includes(label)) return label;
+    if (label.startsWith('role-')) return keys[Number(label.slice(5)) - 1] ?? label;
+    const i = first.get(label);
+    return i === undefined ? label : (keys[i] ?? label);
+  };
+  return {
+    ...decision,
+    roles: decision.roles.map((entry) => ({ ...entry, depends_on: [...new Set(entry.depends_on.map(keyOf))] })),
+  };
 }
 
 /**

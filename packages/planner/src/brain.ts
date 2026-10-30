@@ -7,7 +7,7 @@ import {
   type PlanVersionView,
   type TaskView,
 } from '@friday/protocol';
-import { ROLE_REGISTRY_SOURCE, type RoleDecisionInput } from '@friday/routing';
+import { ROLE_REGISTRY_SOURCE, type RoleDecision, type RoleDecisionInput } from '@friday/routing';
 import type { BrainJob, BrainJobInput, FridayState } from '@friday/state';
 import { consolidatePlan } from './consolidate.js';
 import { type DelegationCandidate, delegate } from './delegate.js';
@@ -785,6 +785,33 @@ export class MasterBrain {
   }
 
   /**
+   * Records a classification for the decision it answered, under the intent it was made for; when
+   * the contract moved on while the model was thinking (an intent change reopened it, a human
+   * chose), the answer is dropped and the job ends saying so: the contract in force has queued
+   * its own question (review 2026-10-22 R5). Null when recorded.
+   */
+  #recordClassification(
+    taskId: string,
+    latest: { decision_id: string; intent_version: string | null },
+    decision: RoleDecision,
+  ): JobOutcome | null {
+    const { state, projectId } = this.#deps;
+    try {
+      state.recordTaskRoleDecision(projectId, MASTER_BRAIN, taskId, decision, {
+        intent_version: latest.intent_version,
+        expected_decision_id: latest.decision_id,
+        idempotency_key: `role:${taskId}:${latest.decision_id}`,
+      });
+      return null;
+    } catch (e) {
+      if (isFridayError(e) && e.errorName === 'invalid_state_transition' && /stale/.test(e.message)) {
+        return { status: 'done', result: `dropped a stale classification: ${e.message}` };
+      }
+      throw e;
+    }
+  }
+
+  /**
    * R3: the decision model is asked only when the persisted contract is blocked. Its answer is
    * recorded through the same R2 path as a human assignment, so a single role resolves the task,
    * a multi-role answer becomes a proposed DAG, and a clarification becomes a human question.
@@ -821,9 +848,14 @@ export class MasterBrain {
       ...(project?.definition_of_done.map((i) => i.text) ?? []),
     ];
     const input: RoleDecisionInput = {
-      objective: goal?.objective ?? goal?.request ?? task.summary,
-      constraints: [...(goal?.constraints ?? []), ...(goal?.inferred_constraints ?? [])],
-      outcomes,
+      objective: goal?.objective ?? goal?.request ?? project?.objective ?? task.summary,
+      // The goal's constraints and outcomes first, then the project's (ADR-0034 §4; review R5).
+      constraints: [
+        ...(goal?.constraints ?? []),
+        ...(goal?.inferred_constraints ?? []),
+        ...(project?.constraints.map((i) => i.text) ?? []),
+      ],
+      outcomes: [...outcomes, ...(project?.outcomes.map((i) => i.text) ?? [])],
       non_goals: nonGoals,
       definition_of_done: done.length ? done : task.acceptance_criteria.length ? task.acceptance_criteria : outcomes,
       task_summary: task.summary,
@@ -868,23 +900,16 @@ export class MasterBrain {
       // The model answered twice with an unusable classification. Persist the question so the task
       // stays blocked visibly instead of silently reverting to the generic role question.
       const question = `The role classifier could not choose one role (${outcome.message}). Which role should do this work?`;
-      state.recordTaskRoleDecision(
-        projectId,
-        MASTER_BRAIN,
-        taskId,
-        {
+      return (
+        this.#recordClassification(taskId, latest, {
           status: 'clarification_required',
           missing_facts: outcome.errors.length ? outcome.errors : [outcome.message],
           questions: [question],
-        },
-        { intent_version: latest.intent_version, idempotency_key: `role:${taskId}:${latest.decision_id}` },
+        }) ?? { status: 'done', result: `asked a human: ${question}` }
       );
-      return { status: 'done', result: `asked a human: ${question}` };
     }
-    state.recordTaskRoleDecision(projectId, MASTER_BRAIN, taskId, outcome.draft, {
-      intent_version: latest.intent_version,
-      idempotency_key: `role:${taskId}:${latest.decision_id}`,
-    });
+    const stale = this.#recordClassification(taskId, latest, outcome.draft);
+    if (stale) return stale;
     if (outcome.draft.status === 'clarification_required') {
       return { status: 'done', result: `asked a human: ${outcome.draft.questions.join('; ')}` };
     }

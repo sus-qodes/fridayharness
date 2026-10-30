@@ -67,9 +67,11 @@ import {
   type WorktreeView,
 } from '@friday/protocol';
 import {
+  normalizeDependencyLabels,
   ROLE_REGISTRY_SOURCE,
   type RoleDecision,
   resolveTaskRoleContract,
+  roleNodeKeys,
   type TaskRoleOrigin,
   taskRoleIntentVersion,
 } from '@friday/routing';
@@ -1575,7 +1577,8 @@ export class FridayState {
       origin,
       explicit_role: explicitRole,
       registry: ROLE_REGISTRY_SOURCE,
-      decision: opts.decision ?? null,
+      // Stored with the keys a split names its parts by (review 2026-10-22 R6).
+      decision: opts.decision ? normalizeDependencyLabels(opts.decision) : null,
       prefer_decision: opts.preferDecision ?? false,
       intent_version: opts.intentVersion ?? `${effective}:${taskRoleIntentVersion(task)}`,
     });
@@ -1612,8 +1615,12 @@ export class FridayState {
     const tasks = goalId ? this.q.goalTasks(pid, goalId) : this.q.tasks(pid, { limit: 5000 });
     for (const t of tasks) {
       if (TERMINAL_TASK.has(t.status)) continue;
+      // A role a model chose, or a classification still awaited (a blocked contract with no role),
+      // is asked again under the new intent (review 2026-10-22 R5 for the second case).
+      const awaiting =
+        t.role_source === 'missing' && !t.role && this.q.latestTaskRoleDecision(pid, t.task_id)?.status === 'blocked';
       if (
-        t.role_source === 'decision_model' &&
+        (t.role_source === 'decision_model' || awaiting) &&
         (t.status === 'PROPOSED' || t.status === 'READY') &&
         !t.assigned_agent_id
       ) {
@@ -1782,12 +1789,8 @@ export class FridayState {
     task: TaskView,
     decision: TaskRoleDecisionView,
   ): { key: string; role: string; summary: string; description: string; depends_on_keys: string[] }[] {
-    const counts = new Map<string, number>();
-    const keyed = decision.roles.map((r) => {
-      const n = (counts.get(r.role) ?? 0) + 1;
-      counts.set(r.role, n);
-      return { ...r, key: n === 1 ? r.role : `${r.role}-${n}` };
-    });
+    const nodeKeys = roleNodeKeys(decision.roles);
+    const keyed = decision.roles.map((r, i) => ({ ...r, key: nodeKeys[i] as string }));
     const keys = new Set(keyed.map((k) => k.key));
     for (const k of keyed) {
       for (const d of k.depends_on) {
@@ -1877,7 +1880,12 @@ export class FridayState {
     actor: Actor,
     taskId: string,
     decision: RoleDecision,
-    opts: { intent_version?: string | null; idempotency_key?: string } = {},
+    opts: {
+      intent_version?: string | null;
+      /** The blocked decision this answer is for: a contract that moved on since is not answered (review 2026-10-22 R5). */
+      expected_decision_id?: string | null;
+      idempotency_key?: string;
+    } = {},
   ): TaskView {
     return this.exec(
       {
@@ -1894,6 +1902,28 @@ export class FridayState {
             'invalid_state_transition',
             `task ${taskId} already has a ${task.role_source ?? 'task'} role (${task.role}); a classifier may not override it`,
           );
+        }
+        // An answer made for an earlier contract or under an earlier intent is stale: the contract
+        // in force asks its own question again (review 2026-10-22 R5).
+        const latest = this.q.latestTaskRoleDecision(projectId, taskId);
+        if (opts.expected_decision_id && latest?.decision_id !== opts.expected_decision_id) {
+          throw new FridayError(
+            'invalid_state_transition',
+            `task ${taskId}: the classification answers ${opts.expected_decision_id}, but the contract in force is ${latest?.decision_id ?? 'none'}; it is stale`,
+          );
+        }
+        if (opts.intent_version) {
+          const effective = this.intent.effectiveVersion(
+            projectId,
+            task.goal_id ? this.q.findGoal(projectId, task.goal_id) : null,
+          );
+          const current = `${effective}:${taskRoleIntentVersion(task)}`;
+          if (opts.intent_version !== current) {
+            throw new FridayError(
+              'invalid_state_transition',
+              `task ${taskId}: the classification was made under intent ${opts.intent_version}, but ${current} is in force; it is stale`,
+            );
+          }
         }
         this.resolveTaskRoleWithin(ctx, taskId, 'none', null, {
           decision,

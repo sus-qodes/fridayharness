@@ -508,6 +508,51 @@ describe('intent versions and changes (ADR-0034 §4, §8)', () => {
     expect(state.peekInbox(PROJECT, fe?.agent_id as string, 10).items).toEqual([]);
   });
 
+  it('drops a classification made under an earlier intent, and reopens a classification still awaited (review 2026-10-22 R5)', () => {
+    const brainActor = { kind: 'master_brain' as const, id: 'master-brain' };
+    const t = state.createTask(PROJECT, H, {
+      summary: 'Split a change',
+      scope: { write: ['apps/web/src/App.tsx', 'server/src/api.ts'], read: [] },
+    });
+    const before = state.q.latestTaskRoleDecision(PROJECT, t.task_id);
+    expect(before).toMatchObject({ status: 'blocked' });
+    expect(before?.intent_version).toMatch(/^p0\./);
+    // The project intent is approved while the model thinks: the awaited classification is reopened.
+    state.intent.propose(PROJECT, H, draft);
+    state.intent.approve(PROJECT, H, 1);
+    const reopened = state.q.latestTaskRoleDecision(PROJECT, t.task_id);
+    expect(reopened?.decision_id).not.toBe(before?.decision_id);
+    expect(reopened?.intent_version).toMatch(/^p1\./);
+    const answer = {
+      status: 'classified' as const,
+      roles: [{ role: 'backend_engineer', task_summary: 'x', depends_on: [], confidence: 0.9 }],
+      assumptions: [],
+    };
+    // The late answer names the old decision, or the old intent: refused as stale, the task still blocked.
+    expect(
+      code(() =>
+        state.recordTaskRoleDecision(PROJECT, brainActor, t.task_id, answer, {
+          expected_decision_id: before?.decision_id,
+          intent_version: before?.intent_version,
+        }),
+      ),
+    ).toBe('COS-2002');
+    expect(
+      code(() =>
+        state.recordTaskRoleDecision(PROJECT, brainActor, t.task_id, answer, {
+          intent_version: before?.intent_version,
+        }),
+      ),
+    ).toBe('COS-2002');
+    expect(state.q.task(PROJECT, t.task_id).role).toBeNull();
+    // An answer for the contract in force, under the intent in force, is taken.
+    state.recordTaskRoleDecision(PROJECT, brainActor, t.task_id, answer, {
+      expected_decision_id: reopened?.decision_id,
+      intent_version: reopened?.intent_version,
+    });
+    expect(state.q.task(PROJECT, t.task_id)).toMatchObject({ role: 'backend_engineer', role_source: 'decision_model' });
+  });
+
   it('reopens a model-chosen role of work not started, so the classifier decides again', () => {
     const t = state.createTask(PROJECT, H, {
       summary: 'Split a change',

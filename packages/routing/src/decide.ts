@@ -330,6 +330,22 @@ export function decideRoute(input: RouteInput): RoutingDecision {
   const blocked = (reason: string, extra: Partial<RoutingDecision> = {}) =>
     assemble(null, 'none', reason, { ...extra, blocked: true, failover_policy: 'none' });
 
+  // A task whose persisted role resolution is blocked or still a proposed multi-role DAG does not
+  // dispatch on a guess, pinned or not: choosing a model is no approval of a split (review
+  // 2026-10-22 R3, which found a project pin returning before this check).
+  if (!role) {
+    if (roleSource === 'decision_model') {
+      codes.push('role.proposed_dag');
+      return blocked(resolved.reason);
+    }
+    if (roleSource === 'missing' && resolved.decision_id) {
+      codes.push('role.classification_required');
+      return blocked(resolved.reason);
+    }
+    codes.push('role.missing');
+    return blocked('role classification is required before static registry dispatch; clarification is required');
+  }
+
   // A human's pinned model is never silently replaced. Sensitive work takes only a pin made for it:
   // a general pin is no consent.
   const chosen = sensitive ? pins.find((p) => p.model && p.sensitive) : pinModel;
@@ -373,21 +389,6 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     return blocked(
       'sensitive work runs only on a local model a human pinned for it ("friday routing pin --sensitive --model <local model>")',
     );
-  }
-
-  // A task whose persisted role resolution is blocked or still a proposed multi-role DAG does not
-  // dispatch on a guess.
-  if (!role) {
-    if (roleSource === 'decision_model') {
-      codes.push('role.proposed_dag');
-      return blocked(resolved.reason);
-    }
-    if (roleSource === 'missing' && resolved.decision_id) {
-      codes.push('role.classification_required');
-      return blocked(resolved.reason);
-    }
-    codes.push('role.missing');
-    return blocked('role classification is required before static registry dispatch; clarification is required');
   }
 
   const registryRole = canonicalRole(role, registry);
