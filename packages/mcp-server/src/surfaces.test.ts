@@ -14,6 +14,7 @@ const SURFACES = [
   'friday_graph_query',
   'friday_blast_radius',
   'friday_skeleton_read',
+  'friday_symbolic_patch',
   'friday_ccr_retrieve',
   'friday_mem_learn_from_failure',
 ];
@@ -47,7 +48,7 @@ const edge = (
 });
 
 describe('the surface tools (ADR-0038 §1)', () => {
-  it('are five, deferred, and none of them is a spawned tool', () => {
+  it('are six, deferred, and none of them is a spawned tool', () => {
     const tools = createSurfaceTools({} as FridaySession);
     expect(tools.map((t) => t.name)).toEqual(SURFACES);
     for (const t of tools) expect(t.alwaysLoad, t.name).toBe(false);

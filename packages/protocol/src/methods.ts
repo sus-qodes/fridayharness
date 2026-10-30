@@ -799,6 +799,47 @@ export const ArtifactReadResult = z.object({
   matched: z.number().int().nullable(),
 });
 
+/**
+ * One declaration replaced by name (ADR-0039): the boundary from a fresh parse, the new text one
+ * declaration of the same name and kind, the file still parsing afterwards; judged as a write of the
+ * agent's held task and recorded as one. `dry_run` previews without writing.
+ */
+export const SymbolPatchParams = z.object({
+  ...Base,
+  path: z.string().trim().min(1).max(500),
+  /** `name`, or `Parent.member` for a class, interface or namespace member. */
+  symbol: z.string().trim().min(1).max(300),
+  kind: z
+    .enum(['function', 'class', 'method', 'field', 'interface', 'type', 'enum', 'variable', 'namespace'])
+    .optional(),
+  /** The line the declaration starts at, as a graph answer gave it; the patch is refused when it moved. */
+  line: z.number().int().min(1).optional(),
+  /** The whole new declaration (its `export` prefix may be left out; it stays as it is). */
+  body: z.string().min(1).max(200_000),
+  dry_run: z.boolean().default(false),
+});
+export const SymbolPatchResult = z.object({
+  status: z.enum(['written', 'preview', 'refused', 'denied', 'approval_required']),
+  path: z.string(),
+  symbol: z.string(),
+  /** Why it was refused or denied; for an approval, what a human decides. */
+  reason: z.string().nullable(),
+  approval_id: z.string().nullable(),
+  /** What was (or would be) replaced: the kind found, its lines before and after, and the preview. */
+  found: z
+    .object({
+      kind: z.string(),
+      exported: z.string(),
+      lines: z.object({ from: z.number().int(), to: z.number().int(), new_to: z.number().int() }),
+    })
+    .nullable(),
+  preview: z.string().nullable(),
+  /** The file's SHA-256 before and after a write (the same twice for a preview). */
+  sha256: z.object({ before: z.string(), after: z.string() }).nullable(),
+  /** Declarations the name could have meant, when it was not one. */
+  candidates: z.array(z.string()),
+});
+
 export const METHODS = {
   'harness.register': { params: HarnessRegisterParams, result: HarnessRegisterResult },
   'harness.heartbeat': { params: HarnessHeartbeatParams, result: HarnessHeartbeatResult },
@@ -830,6 +871,7 @@ export const METHODS = {
   'graph.blast_radius': { params: GraphBlastRadiusParams, result: GraphBlastRadiusResult },
   'graph.skeleton': { params: GraphSkeletonParams, result: GraphSkeletonResult },
   'artifact.read': { params: ArtifactReadParams, result: ArtifactReadResult },
+  'symbol.patch': { params: SymbolPatchParams, result: SymbolPatchResult },
 } as const;
 
 export type MethodName = keyof typeof METHODS;

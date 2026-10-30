@@ -18,6 +18,11 @@ export interface TsNode {
   text: string;
   startPosition: TsPoint;
   endPosition: TsPoint;
+  /** Character offsets in the source string (ADR-0039: a patch's boundary). */
+  startIndex: number;
+  endIndex: number;
+  /** A node the parser had to invent to go on (an error). */
+  isMissing?: boolean;
   namedChildren: (TsNode | null)[];
   children: (TsNode | null)[];
   childForFieldName(name: string): TsNode | null;

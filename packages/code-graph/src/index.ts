@@ -21,7 +21,7 @@ export {
   type SymbolNode,
   type SymbolRef,
 } from './graph.js';
-export { LANGUAGES, type LanguageId, type LanguageSpec, languageOf } from './languages.js';
+export { LANGUAGES, type LanguageId, type LanguageSpec, languageOf, withTree } from './languages.js';
 export {
   hashBytes,
   MERKLE_FORMAT,
@@ -31,6 +31,19 @@ export {
   type TreeScan,
   treeHash,
 } from './merkle.js';
+export {
+  checkRanges,
+  collectDeclarations,
+  countErrors,
+  type Declaration,
+  locateDeclaration,
+  type PatchKind,
+  type PatchPlan,
+  type PatchResult,
+  planPatch,
+  type RangeStatus,
+  type Want,
+} from './patch.js';
 export {
   type Affected,
   type BlastRadius,

@@ -30,6 +30,7 @@ export {
   blastRadiusText,
   createSurfaceTools,
   graphQueryText,
+  patchText,
   SURFACE_TOOL_CAPABILITY,
   skeletonText,
 } from './surfaces.js';

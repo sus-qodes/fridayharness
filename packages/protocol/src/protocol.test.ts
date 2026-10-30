@@ -153,7 +153,8 @@ describe('method schemas', () => {
     expect(isMethodName('learning.propose')).toBe(true);
     expect(isMethodName('graph.query')).toBe(true);
     expect(isMethodName('artifact.read')).toBe(true);
-    expect(Object.keys(METHODS)).toHaveLength(30);
+    expect(isMethodName('symbol.patch')).toBe(true);
+    expect(Object.keys(METHODS)).toHaveLength(31);
   });
 });
 

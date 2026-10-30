@@ -27,11 +27,11 @@ describe('friday MCP server definition', () => {
     expect(SERVER_INSTRUCTIONS.indexOf('friday_whoami')).toBeLessThan(SERVER_INSTRUCTIONS.indexOf('friday_claim_done'));
   });
 
-  it('defines the 19 tools of plan Appendix 3 and M12.4 plus the five of ADR-0038, five always loaded', () => {
+  it('defines the 19 tools of plan Appendix 3 and M12.4 plus the five of ADR-0038 and the one of ADR-0039', () => {
     const tools = createFridayTools({} as FridaySession);
     const names = tools.map((t) => t.name);
-    expect(names).toHaveLength(24);
-    expect(new Set(names).size).toBe(24);
+    expect(names).toHaveLength(25);
+    expect(new Set(names).size).toBe(25);
     expect(names.every((n) => /^friday_[a-z_]+$/.test(n))).toBe(true);
     expect(
       tools
@@ -63,9 +63,11 @@ describe('friday MCP server definition', () => {
       'friday_skeleton_read',
       'friday_ccr_retrieve',
       'friday_mem_learn_from_failure',
+      'friday_symbolic_patch',
     ]) {
       expect(byName[name]?.alwaysLoad, name).toBe(false);
     }
+    expect(byName.friday_symbolic_patch?.readOnly).toBe(false);
     for (const name of ['friday_graph_query', 'friday_blast_radius', 'friday_skeleton_read', 'friday_ccr_retrieve']) {
       expect(byName[name]?.readOnly, name).toBe(true);
     }

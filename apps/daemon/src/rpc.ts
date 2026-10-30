@@ -1,5 +1,8 @@
+import { createHash } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { blastRadius, type CodeGraph, lookupSymbol, skeletonOf } from '@friday/code-graph';
+import { blastRadius, type CodeGraph, languageOf, lookupSymbol, planPatch, skeletonOf } from '@friday/code-graph';
 import { GitRoot, type SourceIdentity } from '@friday/git';
 import {
   type Autonomy,
@@ -101,6 +104,111 @@ async function graphFor(deps: RpcDeps, c: Caller): Promise<CodeGraph> {
 }
 
 const cleanPath = (p: string) => p.replace(/\\/g, '/').replace(/^\.\//, '');
+
+const sha256 = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
+
+/**
+ * One declaration replaced by name (ADR-0039): judged as a write of the held task by the one tool
+ * judge, planned by the code graph's parser on the file as it is now, previewed or written, and a
+ * written patch recorded as a completed tool call of the attempt with its changed path.
+ */
+async function patchSymbol(
+  deps: RpcDeps,
+  c: Caller,
+  p: ParsedParamsOf<'symbol.patch'>,
+): Promise<ResultOf<'symbol.patch'>> {
+  const { state, project } = deps;
+  const pid = project.project_id;
+  const rel = cleanPath(p.path);
+  const base = (field: Partial<ResultOf<'symbol.patch'>> = {}): ResultOf<'symbol.patch'> => ({
+    status: 'refused',
+    path: rel,
+    symbol: p.symbol,
+    reason: null,
+    approval_id: null,
+    found: null,
+    preview: null,
+    sha256: null,
+    candidates: [],
+    ...field,
+  });
+  if (!deps.judgeTool) throw new FridayError('capability_unsupported', 'this daemon judges no host tool calls');
+  const lang = languageOf(rel);
+  if (!lang) return base({ reason: `${rel} is not a TypeScript or JavaScript file; edit it in the editor` });
+  const root = executionRootOf(deps, c);
+  const abs = path.resolve(root, rel);
+  const inside = path.relative(root, abs);
+  if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) {
+    return base({ reason: `${rel} is outside your checkout` });
+  }
+  // The same judgment as a host's own edit (ADR-0032 §4): scope, protected paths, a human where asked.
+  const agent = state.q.findAgent(c.agent_id);
+  const judged = deps.judgeTool({
+    harness: state.q.harness(c.harness_id),
+    agent: agent ? { agent_id: agent.agent_id, role: agent.role } : undefined,
+    action: { tool: 'friday_symbolic_patch', kind: 'write', paths: [abs] },
+    actor: { kind: 'agent', id: c.agent_id },
+    askHuman: true,
+  });
+  if (judged.result.decision === 'deny') return base({ status: 'denied', reason: judged.result.reason });
+  if (judged.result.decision === 'ask') {
+    return base({
+      status: 'approval_required',
+      reason: `${judged.result.reason}${judged.approval_id ? ` (${judged.approval_id}; ask again once it is granted)` : ''}`,
+      approval_id: judged.approval_id,
+    });
+  }
+  let source: string;
+  try {
+    source = await readFile(abs, 'utf8');
+  } catch {
+    return base({ reason: `${rel} cannot be read in your checkout` });
+  }
+  const planned = await planPatch(
+    lang,
+    source,
+    { symbol: p.symbol, ...(p.kind ? { kind: p.kind } : {}), ...(p.line ? { line: p.line } : {}) },
+    p.body,
+  );
+  if (!planned.ok)
+    return base({
+      reason: `${planned.reason}; the editor is the way when a patch is refused`,
+      candidates: planned.candidates,
+    });
+  const { plan } = planned;
+  const found = { kind: plan.found.kind, exported: plan.found.exported, lines: plan.lines };
+  const before = sha256(source);
+  if (p.dry_run) {
+    return base({ status: 'preview', found, preview: plan.preview, sha256: { before, after: before } });
+  }
+  await writeFile(abs, plan.new_source, 'utf8');
+  // Recorded as any editor's write is (the hooks' PostToolUse): the attempt's changed path, and the call.
+  const task = judged.task;
+  const run = task?.current_run_id ? state.q.findRun(task.current_run_id) : undefined;
+  const mine = run && run.harness_id === c.harness_id && run.status === 'ACTIVE' ? run : undefined;
+  if (mine) state.observePaths(pid, { kind: 'harness', id: mine.harness_id }, mine.run_id, [rel]);
+  state.recordObservation(
+    pid,
+    { kind: 'agent', id: c.agent_id },
+    'agent.event',
+    {
+      task_id: task?.task_id ?? null,
+      run_id: mine?.run_id ?? null,
+      harness_id: c.harness_id,
+      event_type: 'tool.completed',
+      tool: 'friday_symbolic_patch',
+      summary: `${rel}: ${p.symbol} replaced (lines ${plan.lines.from}-${plan.lines.to})`,
+      changed_paths: [rel],
+      read: null,
+      error: null,
+    },
+    [
+      ...(task ? [{ kind: 'task' as const, id: task.task_id }] : []),
+      ...(mine ? [{ kind: 'run' as const, id: mine.run_id }] : []),
+    ],
+  );
+  return base({ status: 'written', found, preview: plan.preview, sha256: { before, after: sha256(plan.new_source) } });
+}
 
 /**
  * Lines of an artifact the caller may read (ADR-0038 §3): it belongs to a task the caller holds or
@@ -722,6 +830,10 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
     case 'artifact.read': {
       const p = METHODS[method].params.parse(raw);
       return readArtifact(deps, caller(), p);
+    }
+    case 'symbol.patch': {
+      const p = METHODS[method].params.parse(raw);
+      return patchSymbol(deps, caller(), p);
     }
   }
   throw new FridayError('invalid_request', `unhandled method ${method}`);

@@ -107,6 +107,21 @@ export function artifactText(r: ResultOf<'artifact.read'>): string {
   return r.text ? `${head}\n${r.text}` : head;
 }
 
+export function patchText(r: ResultOf<'symbol.patch'>): string {
+  switch (r.status) {
+    case 'written':
+      return `Replaced ${r.symbol} in ${r.path} (${r.found?.kind}, lines ${r.found?.lines.from}-${r.found?.lines.to}, now to ${r.found?.lines.new_to}). The file is written; it is verified with your claim like any edit.\n${r.preview ?? ''}`;
+    case 'preview':
+      return `Preview only, nothing written: ${r.symbol} in ${r.path} (${r.found?.kind}, lines ${r.found?.lines.from}-${r.found?.lines.to} would become ${r.found?.lines.from}-${r.found?.lines.new_to}).\n${r.preview ?? ''}`;
+    case 'denied':
+      return `Friday refused to write ${r.path}: ${r.reason}. Do not get the same effect another way.`;
+    case 'approval_required':
+      return `Writing ${r.path} needs a human's decision: ${r.reason}.`;
+    default:
+      return `Not patched: ${r.reason}${r.candidates.length ? ` Candidates: ${r.candidates.join('; ')}.` : ''}`;
+  }
+}
+
 /** The kinds a lesson from a failure may have (ADR-0038 §5). */
 const FAILURE_LESSON_KINDS = ['learned-risk', 'bug-pattern', 'operational-runbook'] as const;
 
@@ -198,6 +213,37 @@ export function createSurfaceTools(session: FridaySession): FridayTool[] {
       },
     },
     {
+      name: 'friday_symbolic_patch',
+      title: 'Replace one declaration by name',
+      description:
+        'Replace one function, class, method, field, interface, type, enum, namespace or single-variable statement by its name (Parent.member for a member), without rewriting the file. body: the whole new declaration (the export prefix stays as it is). The boundary comes from a fresh parse of the file; the patch is refused, with the reason, unless exactly one declaration matches, the new text is one declaration of the same name and kind, and the file still parses. It is judged like any edit (your task’s write scope; a human where the policy asks) and verified with your claim. Use dry_run: true to preview first; when it is refused, edit the file in your editor instead.',
+      shape: {
+        path: z.string().min(1).max(500),
+        symbol: z.string().min(1).max(300),
+        body: z.string().min(1).max(200_000),
+        kind: z
+          .enum(['function', 'class', 'method', 'field', 'interface', 'type', 'enum', 'variable', 'namespace'])
+          .optional(),
+        line: z.number().int().min(1).optional().describe('the line it starts at, from a graph answer'),
+        dry_run: z.boolean().optional(),
+      },
+      alwaysLoad: false,
+      readOnly: false,
+      handler: async (a): Promise<ToolResult> => {
+        const res = await call((c) =>
+          c.call('symbol.patch', {
+            path: a.path as string,
+            symbol: a.symbol as string,
+            body: a.body as string,
+            ...(a.kind ? { kind: a.kind as 'function' } : {}),
+            ...(a.line ? { line: a.line as number } : {}),
+            dry_run: Boolean(a.dry_run),
+          }),
+        );
+        return { text: patchText(res), structured: res as unknown as Record<string, unknown> };
+      },
+    },
+    {
       name: 'friday_ccr_retrieve',
       title: 'Read raw output',
       description:
@@ -276,5 +322,6 @@ export const SURFACE_TOOL_CAPABILITY: Record<string, 'graph' | 'artifacts'> = {
   friday_graph_query: 'graph',
   friday_blast_radius: 'graph',
   friday_skeleton_read: 'graph',
+  friday_symbolic_patch: 'graph',
   friday_ccr_retrieve: 'artifacts',
 };

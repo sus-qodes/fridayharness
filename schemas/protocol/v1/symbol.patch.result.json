@@ -1,0 +1,128 @@
+{
+  "$id": "urn:friday:protocol:v1:symbol.patch:result",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "written",
+        "preview",
+        "refused",
+        "denied",
+        "approval_required"
+      ]
+    },
+    "path": {
+      "type": "string"
+    },
+    "symbol": {
+      "type": "string"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "approval_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "found": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "exported": {
+              "type": "string"
+            },
+            "lines": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "to": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "new_to": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "from",
+                "to",
+                "new_to"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "exported",
+            "lines"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "preview": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sha256": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "before": {
+              "type": "string"
+            },
+            "after": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "before",
+            "after"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "status",
+    "path",
+    "symbol",
+    "reason",
+    "approval_id",
+    "found",
+    "preview",
+    "sha256",
+    "candidates"
+  ]
+}
