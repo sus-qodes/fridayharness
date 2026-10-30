@@ -122,7 +122,6 @@ export interface AgentRow {
   agent_key: string;
   harness_id: string | null;
   role: string;
-  display_name: string | null;
   status: string;
   current_task_id: string | null;
   current_run_id: string | null;

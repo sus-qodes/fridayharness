@@ -125,7 +125,7 @@ const section = (packet: { sections: { kind: string; content: string }[] }, kind
 
 describe('what a backend task receives (Part 12 §13)', () => {
   it('gets its task, what it may change and one line against exploring, and no list of files (plan M14.7)', async () => {
-    const { packet, explanation } = await compile(backendTask());
+    const { packet } = await compile(backendTask());
     for (const kind of [
       'agent.identity',
       'task.contract',
@@ -143,11 +143,9 @@ describe('what a backend task receives (Part 12 §13)', () => {
     // The files the graph relates to the task are not named: a file named gets opened whether the
     // task needs it or not, which cost more than it helped when measured.
     expect(packet.sections.map((s) => s.kind)).not.toContain('code.related');
-    expect(packet.sections.map((s) => s.kind)).not.toContain('repo.recent_commits');
     expect(JSON.stringify(packet)).not.toContain('shared/src/api.ts');
     expect(JSON.stringify(packet)).not.toContain('infra/');
     expect(packet.source_version).toMatch(/^[0-9a-f]{40}$/);
-    expect(explanation.semantic_fallback).toEqual({ enabled: false, results: 0 });
   });
 
   it('gets the shared contract, the frontend that consumes it and the tests on request, never the infra config', async () => {
@@ -355,7 +353,6 @@ describe('cache and staleness', () => {
     const edited = await compile(taskId);
     expect(edited.cached).toBe(false);
     // The first packet names no files, the changed one included: the head line counts it.
-    expect(edited.packet.sections.map((s) => s.kind)).not.toContain('repo.dirty');
     expect(section(edited.packet, 'repo.head')).toContain('with 1 uncommitted change');
     // So does a new memory.
     state.memory.record(
@@ -724,7 +721,7 @@ describe('authority at delivery (review M7.1 R02, R06)', () => {
       expect(
         recent.packet.sections.map((s) => s.kind),
         policy.version,
-      ).not.toContain('repo.recent_commits');
+      ).not.toContain('repo.history');
     }
   });
 });
@@ -1036,7 +1033,6 @@ describe('intent, learnings and notes as separate layers (ADR-0034 §5–§6)', 
     expect(goal).toContain('Not a goal: No new npm packages.');
     expect(goal).toContain('Done when: node --test passes.');
     // The goal's requirements are no longer repeated in the task layer.
-    expect(kinds).not.toContain('task.requirements');
     expect(section(packet, 'task.plan')).toContain(`This task serves goal ${goalId}, whose intent is above.`);
     // Both intent layers are protected and the explanation says why each is there.
     const rules = explanation.included.map((i) => i.rule ?? '');

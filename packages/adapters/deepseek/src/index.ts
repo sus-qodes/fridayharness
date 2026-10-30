@@ -97,34 +97,3 @@ export function mergeDeepSeekConfig(
   const base = rest.trim() === '' ? '' : rest.endsWith('\n') ? rest : `${rest}\n`;
   return `${base}${base ? '\n' : ''}${deepseekBlock(launcher)}`;
 }
-
-export interface DeepSeekCheck {
-  id: string;
-  status: 'ok' | 'warn' | 'info';
-  message: string;
-}
-
-/** What Friday can say about DeepSeek Harness on this machine, without starting it. */
-export function deepseekDoctor(opts: {
-  env?: NodeJS.ProcessEnv;
-  home?: string;
-  read: (file: string) => string | null;
-}): DeepSeekCheck[] {
-  const install = findDeepSeekHarness(opts.env ?? process.env);
-  const file = deepseekConfigPath(opts.home);
-  const text = opts.read(file);
-  const configured = text !== null && BLOCK_RE.test(text);
-  return [
-    install.binary
-      ? { id: 'dsh.binary', status: 'ok', message: `${install.binary} (version not asked for)` }
-      : { id: 'dsh.binary', status: 'warn', message: install.problem ?? 'not found' },
-    configured
-      ? { id: 'dsh.config', status: 'ok', message: `${file} holds Friday's block` }
-      : {
-          id: 'dsh.config',
-          status: 'warn',
-          message: `${file} has no Friday block (friday hosts setup --host deepseek)`,
-        },
-    { id: 'dsh.status', status: 'info', message: DEEPSEEK_STATUS },
-  ];
-}

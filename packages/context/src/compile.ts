@@ -32,7 +32,7 @@ export interface ContextProject {
   name: string;
   root: string;
   config: {
-    context: { session_start_max_chars: number; semantic_fallback?: boolean };
+    context: { session_start_max_chars: number };
     [key: string]: unknown;
   };
 }
@@ -136,13 +136,10 @@ const SECTION_ORDER = [
   'task.contract',
   'task.acceptance',
   'task.scope',
-  'task.requirements',
   'task.plan',
   'task.progress',
   'learnings.relevant',
   'repo.head',
-  'repo.dirty',
-  'repo.recent_commits',
   'repo.history',
   'code.requested',
   'code.related',
@@ -163,12 +160,9 @@ const SECTION_AUTHORITY: Record<string, Authority> = {
   'task.contract': 'task',
   'task.acceptance': 'task',
   'task.scope': 'task',
-  'task.requirements': 'human',
   'task.plan': 'human',
   'task.progress': 'agent',
   'repo.head': 'git',
-  'repo.dirty': 'git',
-  'repo.recent_commits': 'git',
   'code.related': 'graph',
   'memory.notes': 'memory',
   'inbox.summary': 'agent',
@@ -1289,8 +1283,6 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
     rule: 'protected: protocol reminder',
   });
 
-  // 7. Semantic fallback: disabled by design until M9.
-  const semantic = { enabled: project.config.context.semantic_fallback === true, results: 0 };
   // 8. Nothing related found for a task that changes code: a human or the Master Brain should look.
   const escalate = request?.kind === 'scope_files' && Boolean(task?.scope?.write.length) && related === 0;
   if (escalate) notes.push("nothing in the code graph relates to the task's write scope");
@@ -1406,7 +1398,6 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
     withheld_by_permission: withheld,
     unsupported_edges: unsupportedEdges.slice(0, 50),
     memory_conflicts: memoryConflicts,
-    semantic_fallback: semantic,
     escalate,
     notes,
     timings_ms: timings,

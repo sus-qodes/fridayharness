@@ -16,8 +16,7 @@
             "enum": [
               "task.start",
               "task.resume",
-              "task.cancel",
-              "context.deliver"
+              "task.cancel"
             ]
           },
           "params": {

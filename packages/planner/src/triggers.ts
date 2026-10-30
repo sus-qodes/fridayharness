@@ -121,9 +121,6 @@ export function triggersFor(e: TriggerEvent, f: TriggerFacts): BrainAction[] {
     case 'task.released':
     case 'task.reservation_released':
     case 'harness.registered':
-    // Laya answered, or did not in time: the task that waited for it can be routed (review F11).
-    case 'laya.answered':
-    case 'laya.unavailable':
     // A human resumed Friday: delegation, and the planning lane, start again (plan M9 §5.5).
     case 'control.resumed':
       return [{ kind: 'delegate' }];

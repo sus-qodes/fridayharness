@@ -406,7 +406,6 @@ const EXPLANATION: ContextExplanation = {
   withheld_by_permission: 2,
   unsupported_edges: [],
   memory_conflicts: [],
-  semantic_fallback: { enabled: false, results: 0 },
   escalate: false,
   notes: [`note ${IMG}`],
   timings_ms: {},

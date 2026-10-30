@@ -6,7 +6,6 @@
     "status": {
       "type": "string",
       "enum": [
-        "DISCOVERING",
         "REGISTERED",
         "READY",
         "BUSY",

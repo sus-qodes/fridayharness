@@ -122,14 +122,11 @@ interface Attempt {
   runId: string;
   cwd: string;
   sessionId: string;
-  resuming: boolean;
   group: ProcessGroup;
   proc: InteractiveProcess | null;
   dir: string;
   /** The assistant's text since its last tool call: the final message, once the run ends. */
   text: string;
-  /** Tool calls the stream announced (`tool_use`), the host's own count beside the hooks' records. */
-  toolUses: number;
   /** The model `init` named. */
   model: string | null;
   /** The last error the stream reported (`error`, severity error). */
@@ -425,12 +422,10 @@ export class GeminiSpawnAdapter {
       runId: p.run_id,
       cwd: p.working_directory,
       sessionId,
-      resuming,
       group: this.#groups.create(),
       proc: null,
       dir,
       text: '',
-      toolUses: 0,
       model: null,
       lastError: null,
       verdict: null,
@@ -593,7 +588,6 @@ export class GeminiSpawnAdapter {
     }
     if (m.type === 'tool_use') {
       // What the model said before a tool call is not its final answer.
-      a.toolUses += 1;
       a.text = '';
       return;
     }

@@ -63,7 +63,6 @@ export {
   LAUNCH_MCP_PATH,
   launcherBudgetMs,
   MCP_ENTRY,
-  TEMPLATE_VERSION,
   TOOL_MATCHER,
   VENDOR,
 } from './templates.js';

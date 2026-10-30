@@ -99,7 +99,6 @@ export interface BrainDeps {
 }
 
 export interface BrainStep {
-  event?: string;
   sequence?: number;
   action: string;
   result: string;

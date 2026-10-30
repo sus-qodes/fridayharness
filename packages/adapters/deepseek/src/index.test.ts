@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deepseekBlock, deepseekDoctor, findOnPath, mergeDeepSeekConfig } from './index.js';
+import { deepseekBlock, findDeepSeekHarness, findOnPath, mergeDeepSeekConfig } from './index.js';
 
 const L = 'C:/state/hosts/friday-local-mcp.mjs';
 
@@ -27,15 +27,12 @@ describe('the DeepSeek Harness skeleton (ADR-0036)', () => {
     expect(mergeDeepSeekConfig('mcp_servers:\n  other: {}\n', L, true)).toBe('manual');
   });
 
-  it('reports what it found without starting anything', () => {
-    const checks = deepseekDoctor({ env: { PATH: '' }, home: 'C:/home', read: () => null });
-    expect(checks.map((c) => [c.id, c.status])).toEqual([
-      ['dsh.binary', 'warn'],
-      ['dsh.config', 'warn'],
-      ['dsh.status', 'info'],
-    ]);
-    const ok = deepseekDoctor({ env: { PATH: '' }, home: 'C:/home', read: () => deepseekBlock(L) });
-    expect(ok[1]).toMatchObject({ status: 'ok' });
+  it('detects installation without starting the host', () => {
+    expect(findDeepSeekHarness({ PATH: '' })).toEqual({
+      binary: null,
+      version: null,
+      problem: 'dsh is not on PATH',
+    });
     expect(findOnPath('surely-not-a-binary-on-this-machine', process.env)).toBeNull();
   });
 });

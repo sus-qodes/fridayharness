@@ -512,9 +512,6 @@ importers:
       '@friday/git':
         specifier: workspace:*
         version: link:../git
-      '@friday/protocol':
-        specifier: workspace:*
-        version: link:../protocol
       '@noble/hashes':
         specifier: 2.4.0
         version: 2.4.0
@@ -620,9 +617,6 @@ importers:
       '@friday/adapter-generic':
         specifier: workspace:*
         version: link:../adapters/generic
-      '@friday/policy':
-        specifier: workspace:*
-        version: link:../policy
       '@friday/protocol':
         specifier: workspace:*
         version: link:../protocol

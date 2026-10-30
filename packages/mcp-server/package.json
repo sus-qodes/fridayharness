@@ -22,7 +22,6 @@
   },
   "dependencies": {
     "@friday/adapter-generic": "workspace:*",
-    "@friday/policy": "workspace:*",
     "@friday/protocol": "workspace:*",
     "@friday/sdk": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.32.1",

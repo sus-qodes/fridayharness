@@ -47,10 +47,7 @@ export function renderExplanation(packet: ContextPacket, e: ContextExplanation):
       ),
     );
   }
-  lines.push(
-    '',
-    `Semantic fallback: ${e.semantic_fallback.enabled ? `on, ${e.semantic_fallback.results} result(s)` : 'off'}.`,
-  );
+  lines.push('');
   if (e.escalate)
     lines.push('Escalate: nothing in the code relates to this task; a human or the Master Brain should look.');
   for (const n of e.notes) lines.push(`Note: ${n}`);

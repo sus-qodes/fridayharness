@@ -48,12 +48,12 @@ const edge = (
 });
 
 describe('the surface tools (ADR-0038 §1)', () => {
-  it('are six, deferred; two of them are spawned tools since the owner’s decision of 2026-10-22', () => {
+  it('are six, deferred and attached-only; spawned sessions use five compact tools', () => {
     const tools = createSurfaceTools({} as FridaySession);
     expect(tools.map((t) => t.name)).toEqual(SURFACES);
     for (const t of tools) expect(t.alwaysLoad, t.name).toBe(false);
     const inSpawned = SURFACES.filter((n) => (SPAWNED_AGENT_TOOLS as readonly string[]).includes(n));
-    expect(inSpawned).toEqual(['friday_blast_radius', 'friday_symbolic_patch']);
+    expect(inSpawned).toEqual([]);
     const spawned = spawnedAgentTools({
       client: () => ({}) as GenericHarnessClient,
       agentKey: 'a',
@@ -61,24 +61,24 @@ describe('the surface tools (ADR-0038 §1)', () => {
       runId: 'r',
     });
     expect(spawned.map((t) => t.name)).toEqual([...SPAWNED_AGENT_TOOLS]);
+    expect(spawned.map((t) => t.name)).toEqual([
+      'friday_request_context',
+      'friday_communicate',
+      'friday_request_permission',
+      'friday_run_operation',
+      'friday_remember',
+    ]);
     // The spawned forms are short: one line each, only the fields an agent needs.
     for (const t of spawned) expect(t.description.length, t.name).toBeLessThan(300);
-    expect(Object.keys(spawned.find((t) => t.name === 'friday_symbolic_patch')?.shape ?? {})).toEqual([
-      'path',
-      'symbol',
-      'body',
-      'kind',
-      'line',
-      'dry_run',
-    ]);
     // The rules of a spawned session name only the tools it has (ADR-0038 §6).
     const subset = spawnedToolsRule(spawned.filter((t) => t.name !== 'friday_run_operation'));
     expect(subset).not.toContain('friday_run_operation');
     expect(subset).toContain('friday_request_context');
-    expect(subset).toContain('friday_symbolic_patch replaces one declaration by name');
     for (const name of [
       'friday_graph_query',
+      'friday_blast_radius',
       'friday_skeleton_read',
+      'friday_symbolic_patch',
       'friday_ccr_retrieve',
       'friday_mem_learn_from_failure',
     ]) {

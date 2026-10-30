@@ -104,7 +104,6 @@ export const ContextExplanation = z.object({
   withheld_by_permission: z.number().int(),
   unsupported_edges: z.array(z.object({ from: z.string(), specifier: z.string().nullable(), reason: z.string() })),
   memory_conflicts: z.array(z.object({ memory_id: z.string(), contradicts: z.array(z.string()), kept: z.string() })),
-  semantic_fallback: z.object({ enabled: z.boolean(), results: z.number().int() }),
   escalate: z.boolean(),
   notes: z.array(z.string()),
   timings_ms: z.record(z.string(), z.number()),

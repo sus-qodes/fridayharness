@@ -5,9 +5,6 @@
  */
 import { LAUNCHER_BUDGET_MS, LAUNCHER_DEFAULT_BUDGET_MS } from '@friday/adapter-claude';
 
-/** Bumped whenever a file below changes, so the doctor can say a project's copy is outdated. */
-export const TEMPLATE_VERSION = 1;
-
 /** The vendor id the launcher takes as its first argument. */
 export const VENDOR = 'antigravity';
 

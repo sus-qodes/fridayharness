@@ -102,32 +102,6 @@ const toRecord = (row: HarnessRow): HarnessRecord => ({
   observed_model: (row as { observed_model?: string | null }).observed_model ?? null,
 });
 
-/** Laya's answer to a task's routing question (ADR-0031 §10). */
-export interface LayaAnswerRecord {
-  answer_id: string;
-  task_id: string;
-  question_id: string;
-  checkpoint: string;
-  choice: string;
-  confidence: number;
-  basis: string;
-  options: number;
-  created_at: string;
-}
-
-/** A threshold fitted for one Laya checkpoint and question shape. */
-export interface LayaCalibrationRecord {
-  checkpoint: string;
-  shape: string;
-  threshold: number | null;
-  accuracy: number | null;
-  coverage: number;
-  support: number;
-  target: number;
-  source: string;
-  created_at: string;
-}
-
 const LIVE_HARNESS = "('REGISTERED','READY','BUSY','DEGRADED','RECONNECTING')";
 
 /** SQLite binds at most 999 variables in older builds; `IN (...)` lists stay under it. */
@@ -631,50 +605,6 @@ export class Queries {
 
   latestTaskRoleDecision(projectId: string, taskId: string): TaskRoleDecisionView | undefined {
     return this.taskRoleDecisions(projectId, { task_id: taskId, limit: 1 })[0];
-  }
-
-  /** Laya's latest answer for a task (ADR-0031 §10). */
-  layaAnswer(projectId: string, taskId: string): LayaAnswerRecord | undefined {
-    const r = this.db
-      .prepare(
-        'SELECT * FROM laya_answers WHERE project_id = ? AND task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
-      )
-      .get<Record<string, unknown>>(projectId, taskId);
-    return r
-      ? {
-          answer_id: String(r.answer_id),
-          task_id: String(r.task_id),
-          question_id: String(r.question_id),
-          checkpoint: String(r.checkpoint),
-          choice: String(r.choice),
-          confidence: Number(r.confidence),
-          basis: String(r.basis),
-          options: Number(r.options),
-          created_at: String(r.created_at),
-        }
-      : undefined;
-  }
-
-  /** The thresholds in force: the latest fit per checkpoint and question shape. */
-  layaCalibrations(projectId: string): LayaCalibrationRecord[] {
-    const rows = this.db
-      .prepare('SELECT * FROM laya_calibrations WHERE project_id = ? ORDER BY created_at, rowid')
-      .all<Record<string, unknown>>(projectId);
-    const latest = new Map<string, LayaCalibrationRecord>();
-    for (const r of rows) {
-      latest.set(`${r.checkpoint} ${r.shape}`, {
-        checkpoint: String(r.checkpoint),
-        shape: String(r.shape),
-        threshold: r.threshold === null ? null : Number(r.threshold),
-        accuracy: r.accuracy === null ? null : Number(r.accuracy),
-        coverage: Number(r.coverage),
-        support: Number(r.support),
-        target: Number(r.target),
-        source: String(r.source),
-        created_at: String(r.created_at),
-      });
-    }
-    return [...latest.values()];
   }
 
   /** Measured outcomes per model and task class (ADR-0031 §8). */

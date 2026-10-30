@@ -91,10 +91,6 @@ export const KNOWN_HARNESSES: ReadonlySet<string> = new Set([
 ]);
 
 const REGISTRY_CHECKED_AT = '2026-10-21';
-const GUIDE_COST: RoleCandidateCostProvenance = {
-  source: 'model-guide.yaml',
-  observed_at: '2026-10-20',
-};
 const DEFAULT_REQUIREMENTS: RoleCandidateRequirements = {
   mcp_required: true,
   auth_required: true,
@@ -126,7 +122,7 @@ function candidate(
     reason_if_unavailable: options.reason_if_unavailable ?? null,
     requirements: { ...DEFAULT_REQUIREMENTS, ...options.requirements },
     last_checked: options.last_checked === undefined ? REGISTRY_CHECKED_AT : options.last_checked,
-    cost: options.cost === undefined ? { ...GUIDE_COST } : options.cost,
+    cost: options.cost ?? null,
     benchmark: options.benchmark ?? null,
   };
 }

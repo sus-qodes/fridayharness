@@ -678,7 +678,6 @@ const OBSERVATION_TYPES = new Set([
   'ownership.conflict',
   'recovery.performed',
   // M7c: Laya did not answer (ADR-0031 §10).
-  'laya.unavailable',
   // The daemon noticed it had been paused (a sleeping machine); it was refused before it was listed.
   'daemon.paused',
   // M11.2: config.yaml read again; the keys applied and the keys that wait for a restart.
@@ -1297,61 +1296,6 @@ export class FridayState {
       ],
       details: { run_id: run.run_id, requested: d.model, observed, constraints: d.constraints },
     });
-  }
-
-  /** Laya's answer to a task's routing question, stored for the decision that comes later (ADR-0031 §10). */
-  recordLayaAnswer(
-    projectId: string,
-    answer: {
-      task_id: string;
-      question_id: string;
-      checkpoint: string;
-      choice: string;
-      confidence: number;
-      basis: string;
-      options: number;
-      probabilities: Record<string, number> | null;
-      latency_ms: number;
-    },
-  ): void {
-    const actor: Actor = { kind: 'system', id: 'laya' };
-    this.exec({ name: 'laya.answer', project_id: projectId, actor, params: { task_id: answer.task_id } }, (ctx) => {
-      ctx.emit({
-        type: 'laya.answered',
-        payload: { answer: { answer_id: this.ids.next('route'), ...answer } },
-        refs: [{ kind: 'task', id: answer.task_id }],
-      });
-    });
-  }
-
-  /** A human records thresholds fitted on labelled answers (`friday laya calibrate`). */
-  recordLayaCalibrations(
-    projectId: string,
-    actor: Actor,
-    calibrations: {
-      checkpoint: string;
-      shape: string;
-      threshold: number | null;
-      accuracy: number | null;
-      coverage: number;
-      support: number;
-      target: number;
-    }[],
-    source: string,
-  ): void {
-    if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human calibrates Laya');
-    this.exec(
-      { name: 'laya.calibrate', project_id: projectId, actor, params: { count: calibrations.length } },
-      (ctx) => {
-        ctx.emit({
-          type: 'laya.calibrated',
-          payload: {
-            source: source.slice(0, 200),
-            calibrations: calibrations.map((c) => ({ calibration_id: this.ids.next('route'), ...c })),
-          },
-        });
-      },
-    );
   }
 
   /**
@@ -4150,7 +4094,6 @@ export class FridayState {
               agent_key: agentKey,
               harness_id,
               role: params.agent?.role ?? 'developer',
-              display_name: params.agent?.display_name ?? null,
             },
           },
           refs: [

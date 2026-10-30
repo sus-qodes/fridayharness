@@ -22,7 +22,6 @@ import {
   isMethodName,
   METHODS,
   type ParsedParamsOf,
-  RESERVED_METHODS,
   type ResultOf,
   RpcRequest,
   type RpcResponse,
@@ -574,9 +573,6 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
   const { state, project } = deps;
   const pid = project.project_id;
   if (!isMethodName(method)) {
-    if ((RESERVED_METHODS as readonly string[]).includes(method)) {
-      throw new FridayError('capability_unsupported', `${method} is reserved and not served in this version`);
-    }
     throw new FridayError('invalid_request', `unknown method ${method}`);
   }
   const res = METHODS[method].params.safeParse(raw);

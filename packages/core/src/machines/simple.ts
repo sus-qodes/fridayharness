@@ -19,7 +19,6 @@ export const AGENT_TRANSITIONS: Table<AgentStatus> = {
 
 /** Harness states (spec Part 14 §6). Any state may also move to TERMINATED. */
 export const HARNESS_TRANSITIONS: Table<HarnessStatus> = {
-  DISCOVERING: ['REGISTERED'],
   REGISTERED: ['READY', 'DISCONNECTED'],
   READY: ['BUSY', 'DEGRADED', 'DISCONNECTED'],
   BUSY: ['READY', 'DEGRADED', 'DISCONNECTED'],

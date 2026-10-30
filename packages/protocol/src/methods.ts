@@ -49,7 +49,6 @@ export const HarnessRegisterParams = z.object({
         .regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/)
         .optional(),
       role: z.string().max(64).default('developer'),
-      display_name: z.string().max(100).optional(),
     })
     .optional(),
   enforcement_level: EnforcementLevel.optional(),
@@ -86,7 +85,7 @@ export const HarnessDisconnectParams = z.object({
 
 export const OutboundMessage = z.object({
   message_id: z.string(),
-  method: z.enum(['task.start', 'task.resume', 'task.cancel', 'context.deliver']),
+  method: z.enum(['task.start', 'task.resume', 'task.cancel']),
   params: z.record(z.string(), z.unknown()),
   sent_at: z.string(),
   expires_at: z.string(),
@@ -172,7 +171,6 @@ export const TaskStartParams = z.object({
 });
 export type TaskStartParams = z.infer<typeof TaskStartParams>;
 export const TaskCancelParams = z.object({ task_id: z.string(), run_id: z.string(), reason: z.string().optional() });
-export const ContextDeliverParams = z.object({ task_id: z.string(), run_id: z.string(), packet: ContextPacket });
 
 // ---- task work -----------------------------------------------------------------------------
 
@@ -891,11 +889,7 @@ export const OUTBOUND_METHODS = {
   'task.start': TaskStartParams,
   'task.resume': TaskStartParams,
   'task.cancel': TaskCancelParams,
-  'context.deliver': ContextDeliverParams,
 } as const;
-
-/** Reserved by spec Part 06 but not served until a later milestone. */
-export const RESERVED_METHODS = ['harness.list_sessions', 'verification.request'] as const;
 
 export function isMethodName(value: string): value is MethodName {
   return Object.hasOwn(METHODS, value);

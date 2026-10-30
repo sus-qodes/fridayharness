@@ -105,7 +105,7 @@ describe('the final message', () => {
 describe('the usage record (plan M11.4)', () => {
   it("reads the thread's last token count into the shape every host's usage is recorded in", () => {
     // The `total` of the sixth and last `thread/tokenUsage/updated` of the recorded live turn
-    // (0.162.1, tests/fixtures/codex/v0.162.1/live-adapter-transcript.jsonl): the thread's count so
+    // (Codex 0.162.1): the thread's count so
     // far, in which `inputTokens` holds the whole prompt, the cached part included.
     const total = {
       totalTokens: 64866,

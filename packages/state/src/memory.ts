@@ -457,58 +457,84 @@ export class MemoryService {
 
   /** Ranked memories within the reader's scopes (ADR-0021 §6). */
   search(projectId: string, who: MemoryActor, q: SearchQuery = {}, nowIso = this.state.clock.now()): SearchHit[] {
-    const allowed = this.readScopes(projectId, who);
-    let scopes = q.scopes ?? allowed;
-    if (allowed && q.scopes) {
-      scopes = q.scopes.filter((s) => allowed.some((a) => a.scope_type === s.scope_type && a.scope_id === s.scope_id));
-    }
-    const where: string[] = ['m.project_id = ?'];
-    const args: (string | number)[] = [projectId];
-    if (!q.include_inactive) where.push("m.status = 'active'");
-    if (q.kinds?.length) {
-      where.push(`m.kind IN (${q.kinds.map(() => '?').join(', ')})`);
-      args.push(...q.kinds);
-    }
-    if (scopes) {
-      if (!scopes.length) return [];
-      where.push(`(${scopes.map(() => '(m.scope_type = ? AND m.scope_id = ?)').join(' OR ')})`);
-      for (const s of scopes) args.push(s.scope_type, s.scope_id);
-    }
-    const match = ftsQuery(q.query);
-    const rows = match
-      ? this.state.db
-          .prepare(
-            `SELECT m.*, -bm25(memories_fts, 4.0, 1.0, 2.0) AS rank, COALESCE(u.uses, 0) AS uses
+    type ScoringRow = Pick<
+      MemoryRow,
+      'memory_id' | 'authority' | 'verification_status' | 'updated_at' | 'needs_review' | 'status'
+    > & { rank: number; uses: number };
+    const db = this.state.db;
+    const read = (): SearchHit[] => {
+      const allowed = this.readScopes(projectId, who);
+      let scopes = q.scopes ?? allowed;
+      if (allowed && q.scopes) {
+        scopes = q.scopes.filter((s) =>
+          allowed.some((a) => a.scope_type === s.scope_type && a.scope_id === s.scope_id),
+        );
+      }
+      const where: string[] = ['m.project_id = ?'];
+      const args: (string | number)[] = [projectId];
+      if (!q.include_inactive) where.push("m.status = 'active'");
+      if (q.kinds?.length) {
+        where.push(`m.kind IN (${q.kinds.map(() => '?').join(', ')})`);
+        args.push(...q.kinds);
+      }
+      if (scopes) {
+        if (!scopes.length) return [];
+        where.push(`(${scopes.map(() => '(m.scope_type = ? AND m.scope_id = ?)').join(' OR ')})`);
+        for (const s of scopes) args.push(s.scope_type, s.scope_id);
+      }
+      const match = ftsQuery(q.query);
+      const columns = 'm.memory_id, m.authority, m.verification_status, m.updated_at, m.needs_review, m.status';
+      const rows = match
+        ? db
+            .prepare(
+              `SELECT ${columns}, -bm25(memories_fts, 4.0, 1.0, 2.0) AS rank, COALESCE(u.uses, 0) AS uses
                FROM memories_fts JOIN memories m ON m.rowid = memories_fts.rowid
                LEFT JOIN memory_usage u ON u.memory_id = m.memory_id
               WHERE memories_fts MATCH ? AND ${where.join(' AND ')}`,
-          )
-          .all<MemoryRow & { rank: number; uses: number }>(match, ...args)
-      : q.query?.trim()
-        ? []
-        : this.state.db
-            .prepare(
-              `SELECT m.*, 0 AS rank, COALESCE(u.uses, 0) AS uses FROM memories m
-                 LEFT JOIN memory_usage u ON u.memory_id = m.memory_id WHERE ${where.join(' AND ')}`,
             )
-            .all<MemoryRow & { rank: number; uses: number }>(...args);
-    const now = Date.parse(nowIso);
-    // bm25 values are small and vary by orders of magnitude with the size of the collection, so
-    // text relevance is relative to the best match of this search: authority and decay then
-    // decide between comparable matches instead of being swamped by raw scores.
-    const best = Math.max(0, ...rows.map((r) => r.rank));
-    return rows
-      .map((r) => {
-        const weight = decayWeight(r, r.uses, now);
-        const relevance = match && best > 0 ? Math.max(0, r.rank) / best : 1;
-        return {
-          ...this.view(r),
-          score: round(relevance * weight),
-          why: { relevance: round(relevance), weight: round(weight), uses: r.uses },
-        };
-      })
-      .sort((a, b) => b.score - a.score || b.updated_at.localeCompare(a.updated_at))
-      .slice(0, Math.min(Math.max(q.limit ?? 20, 1), 200));
+            .all<ScoringRow>(match, ...args)
+        : q.query?.trim()
+          ? []
+          : db
+              .prepare(
+                `SELECT ${columns}, 0 AS rank, COALESCE(u.uses, 0) AS uses FROM memories m
+                 LEFT JOIN memory_usage u ON u.memory_id = m.memory_id WHERE ${where.join(' AND ')}`,
+              )
+              .all<ScoringRow>(...args);
+      const now = Date.parse(nowIso);
+      // Normalize against every permitted match before applying authority and decay. An early
+      // SQL limit would change the result; only full records and links wait until selection.
+      const best = Math.max(0, ...rows.map((r) => r.rank));
+      return rows
+        .map((row) => {
+          const weight = decayWeight(row, row.uses, now);
+          const relevance = match && best > 0 ? Math.max(0, row.rank) / best : 1;
+          return {
+            row,
+            score: round(relevance * weight),
+            why: { relevance: round(relevance), weight: round(weight), uses: row.uses },
+          };
+        })
+        .sort((a, b) => b.score - a.score || b.row.updated_at.localeCompare(a.row.updated_at))
+        .slice(0, Math.min(Math.max(q.limit ?? 20, 1), 200))
+        .map(({ row, score, why }) => ({ ...this.view(this.row(row.memory_id)), score, why }));
+    };
+
+    if (db.inTransaction) return read();
+    // Keep scope checks, scores, bodies and links on one snapshot without taking a write lock.
+    db.exec('BEGIN');
+    try {
+      const result = read();
+      db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // Preserve the original failure if SQLite has already rolled back the transaction.
+      }
+      throw error;
+    }
   }
 
   /** Counts a use of each memory (when a context packet includes it; M4d). */

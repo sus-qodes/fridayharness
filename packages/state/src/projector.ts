@@ -67,7 +67,6 @@ const AGENT_CHANGES: Record<string, Encoder> = {
   current_task_id: 'current_task_id',
   current_run_id: 'current_run_id',
   role: 'role',
-  display_name: 'display_name',
 };
 
 type Payload = Record<string, unknown>;
@@ -1408,8 +1407,8 @@ export class StateProjector implements Projector {
   private insertAgent(e: StoredEvent, a: Payload): void {
     this.db
       .prepare(
-        `INSERT INTO agents (agent_id, project_id, agent_key, harness_id, role, display_name, status, registered_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'REGISTERED', ?, ?)`,
+        `INSERT INTO agents (agent_id, project_id, agent_key, harness_id, role, status, registered_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'REGISTERED', ?, ?)`,
       )
       .run(
         str(a.agent_id),
@@ -1417,7 +1416,6 @@ export class StateProjector implements Projector {
         str(a.agent_key),
         opt(a.harness_id),
         str(a.role ?? 'developer'),
-        opt(a.display_name),
         e.occurred_at,
         e.occurred_at,
       );

@@ -23,7 +23,6 @@ export const ERROR_CODES = {
   learning_not_found: { code: 'COS-2010', http: 404, retryable: false },
 
   permission_denied: { code: 'COS-3000', http: 403, retryable: false },
-  capability_not_granted: { code: 'COS-3001', http: 403, retryable: false },
   approval_required: { code: 'COS-3002', http: 403, retryable: false },
   approval_expired: { code: 'COS-3003', http: 403, retryable: false },
   authentication_failed: { code: 'COS-3004', http: 401, retryable: false },
@@ -43,12 +42,8 @@ export const ERROR_CODES = {
   context_stale: { code: 'COS-5001', http: 409, retryable: true },
   context_budget_exceeded: { code: 'COS-5002', http: 413, retryable: false },
 
-  verification_failed: { code: 'COS-6000', http: 422, retryable: false },
   verification_unavailable: { code: 'COS-6001', http: 503, retryable: true },
 
-  routing_unavailable: { code: 'COS-7000', http: 503, retryable: true },
-  model_unavailable: { code: 'COS-7001', http: 503, retryable: true },
-  routing_confidence_low: { code: 'COS-7002', http: 409, retryable: false },
   /** Routing does not let the work start on this harness (review F01); a human can change that. */
   routing_blocked: { code: 'COS-7003', http: 409, retryable: true },
 

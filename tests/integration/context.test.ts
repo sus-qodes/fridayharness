@@ -57,7 +57,6 @@ describe('friday context explain (M4 gate, Part 12 §13)', () => {
     // The human's project decision is a checked learning (ADR-0034 §6), next to the intent layer.
     expect(out).toContain('learnings.relevant');
     expect(out).toContain('intent.project');
-    expect(out).toContain('Semantic fallback: off.');
 
     // The agent's own packet arrives with the claim, and it can remember and recall through Friday.
     const claim = await be.client.call('task.claim', { task_id: task.task_id });

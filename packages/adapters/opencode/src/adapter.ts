@@ -194,7 +194,7 @@ export class OpenCodeSpawnAdapter {
         project_id: this.opts.projectId,
         agent_key: this.opts.agentKey,
         enforcement_level: 'L1',
-        capabilities: { experimental: true, model_calls: Boolean(this.opts.inference), accepts_tasks: false },
+        capabilities: { experimental: true, model_calls: Boolean(this.opts.inference) },
         host: { session_id: session.id, cwd },
       });
       await this.#client.register();

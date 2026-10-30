@@ -198,8 +198,8 @@ describe('payload limits (plan B23)', () => {
     expect(((await notRpc.json()) as { error: { data: { code: string } } }).error.data.code).toBe('COS-1001');
     const badParams = await h.rawRpc('task.update', { task_id: 1 });
     expect((badParams.body.error as { data: { code: string } }).data.code).toBe('COS-1001');
-    const reserved = await h.rawRpc('verification.request', {});
-    expect((reserved.body.error as { data: { code: string } }).data.code).toBe('COS-4002');
+    const unknown = await h.rawRpc('unknown.example', {});
+    expect((unknown.body.error as { data: { code: string } }).data.code).toBe('COS-1000');
   });
 });
 

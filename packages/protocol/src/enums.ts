@@ -41,7 +41,6 @@ export const AgentStatus = z.enum([
 export type AgentStatus = z.infer<typeof AgentStatus>;
 
 export const HarnessStatus = z.enum([
-  'DISCOVERING',
   'REGISTERED',
   'READY',
   'BUSY',
@@ -127,9 +126,6 @@ export type EnforcementStatus = z.infer<typeof EnforcementStatus>;
 /** ADR-0008. */
 export const TokenClass = z.enum(['operator', 'bootstrap', 'harness']);
 export type TokenClass = z.infer<typeof TokenClass>;
-
-export const PolicyDecision = z.enum(['allow', 'deny', 'ask']);
-export type PolicyDecision = z.infer<typeof PolicyDecision>;
 
 export const ApprovalStatus = z.enum(['pending', 'granted', 'denied', 'expired']);
 export type ApprovalStatus = z.infer<typeof ApprovalStatus>;

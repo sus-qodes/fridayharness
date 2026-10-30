@@ -37,7 +37,7 @@ export {
   STATE_MIGRATIONS,
 } from './migrations.js';
 export { StateProjector } from './projector.js';
-export { type HarnessRecord, type LayaAnswerRecord, type LayaCalibrationRecord, Queries } from './queries.js';
+export { type HarnessRecord, Queries } from './queries.js';
 export {
   AUTHENTICATED_TTL_MS,
   DOCTOR_TTL_MS,

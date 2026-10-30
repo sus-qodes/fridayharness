@@ -190,7 +190,7 @@ describe('renderContextMarkdown', () => {
     budget: { tokens: 2000, latency_ms: 300, chars: 9000 },
     sections: [
       { kind: 'task.contract', content: 'Add discount codes', sources: [src], authority: 'human' },
-      { kind: 'repo.dirty', content: 'x'.repeat(5000), sources: [src], authority: 'git' },
+      { kind: 'code.related', content: 'x'.repeat(5000), sources: [src], authority: 'git' },
       { kind: 'protocol.reminder', content: 'Claim before editing.', sources: [], authority: 'system' },
     ],
     staleness: { is_stale: false },

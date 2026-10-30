@@ -109,7 +109,7 @@ export interface AppDeps {
   uiInfo?: () => UiSnapshotInfo;
 }
 
-type Env = { Variables: { auth: AuthInfo; requestId: string } };
+type Env = { Variables: { auth: AuthInfo } };
 export type AppEnv = Env;
 
 const OPERATOR: TokenClass[] = ['operator'];
@@ -129,11 +129,6 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   const compile = (input: CompileInput, actor: Actor) => deps.context.compile(input, actor);
 
   // ---- middleware --------------------------------------------------------------------------
-
-  app.use('*', async (c, next) => {
-    c.set('requestId', state.ids.next('aud'));
-    await next();
-  });
 
   // Host and Origin policy (plan B22): blocks DNS rebinding and cross-site requests, allows the status page.
   app.use('*', async (c, next) => {

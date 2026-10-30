@@ -93,10 +93,6 @@
           "default": "developer",
           "type": "string",
           "maxLength": 64
-        },
-        "display_name": {
-          "type": "string",
-          "maxLength": 100
         }
       }
     },
