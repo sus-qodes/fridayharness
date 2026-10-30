@@ -122,7 +122,7 @@ export function openCodeOutcome(messages: unknown): { final: Final; text: string
   let final = parseFinal(text, prose);
   if (BLOCKED.test(text)) {
     const why = text.replace(BLOCKED, '').trim();
-    final = { status: 'blocked', summary: why, blocked_reason: why };
+    final = { status: 'blocked', summary: why, blocked_reason: why, checks: [] };
   } else if (json) {
     try {
       final = parseFinal(JSON.parse(json), prose);
@@ -388,7 +388,8 @@ export class OpenCodeWorker {
           status: 'completed_claim',
           summary: final.summary.slice(0, 2000) || 'done',
           changed_paths: changed.slice(0, 200),
-          checks: [],
+          // What the session says it ran: verification's evidence, bounded by what the hooks saw.
+          checks: final.checks,
         },
         spent,
       );

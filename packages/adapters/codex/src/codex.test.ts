@@ -66,18 +66,43 @@ describe('the final message', () => {
       status: 'blocked',
       summary: 's',
       blocked_reason: 'needs a key',
+      checks: [],
     });
     expect(parseFinal('  I changed src/a.ts.  ')).toEqual({
       status: 'completed',
       summary: 'I changed src/a.ts.',
       blocked_reason: '',
+      checks: [],
     });
     expect(parseFinal(JSON.stringify({ status: 'done' })).status).toBe('completed');
   });
 
+  it('takes the checks the session says it ran, well-formed ones only, bounded', () => {
+    const final = parseFinal({
+      status: 'completed',
+      summary: 's',
+      checks: [
+        { name: ' unit tests ', command: 'pytest -q', outcome: 'passed' },
+        { name: 'ran it on a sample', outcome: 'failed' },
+        { name: 'no outcome' },
+        { outcome: 'passed' },
+        { name: 'bad outcome', outcome: 'ok' },
+        'not an object',
+      ],
+    });
+    expect(final.checks).toEqual([
+      { name: 'unit tests', command: 'pytest -q', outcome: 'passed' },
+      { name: 'ran it on a sample', outcome: 'failed' },
+    ]);
+    const many = Array.from({ length: 60 }, (_, i) => ({ name: `c${i}`, outcome: 'passed' }));
+    expect(parseFinal({ status: 'completed', checks: many }).checks).toHaveLength(50);
+    expect(parseFinal({ status: 'completed', checks: 'pytest' }).checks).toEqual([]);
+  });
+
   it('asks only for what Friday cannot read from the worktree (plan M13.4)', () => {
     // Codex's structured output is strict: every field required, nothing else.
-    expect(STRICT_FINAL_SCHEMA.required).toEqual(['status', 'summary', 'blocked_reason']);
+    expect(STRICT_FINAL_SCHEMA.required).toEqual(['status', 'summary', 'blocked_reason', 'checks']);
+    expect(STRICT_FINAL_SCHEMA.properties.checks.items.required).toEqual(['name', 'command', 'outcome']);
     expect(STRICT_FINAL_SCHEMA.additionalProperties).toBe(false);
     // A host that refuses an answer that does not fit requires only the status, and takes extra fields.
     expect(FINAL_SCHEMA.required).toEqual(['status']);
@@ -88,7 +113,7 @@ describe('the final message', () => {
   it("keeps the model's summary and cuts another parameter's markup out of it (CC-35)", () => {
     expect(
       parseFinal({ status: 'completed', summary: 'Added the module.</summary> <parameter name="changed_paths">["a"]' }),
-    ).toEqual({ status: 'completed', summary: 'Added the module.', blocked_reason: '' });
+    ).toEqual({ status: 'completed', summary: 'Added the module.', blocked_reason: '', checks: [] });
     // No summary at all: the session's last text stands in for it.
     expect(parseFinal({ status: 'completed' }, ' I added backend/src/a.ts. ').summary).toBe(
       'I added backend/src/a.ts.',
@@ -98,6 +123,7 @@ describe('the final message', () => {
       status: 'completed',
       summary: 's',
       blocked_reason: '',
+      checks: [],
     });
   });
 });

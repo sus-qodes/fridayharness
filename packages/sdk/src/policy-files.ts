@@ -61,6 +61,8 @@ export interface PolicySourceData {
   daemon_port?: number;
   /** `worktrees.setup`: the project's own install command, and lifecycle scripts (loosenings, plan Phase 7). */
   worktree_setup?: { command?: string; args?: string[]; allow_scripts?: boolean };
+  /** `sandbox`: this checkout is disposable; command classes a human would review run on their own (loosening). */
+  sandbox?: boolean;
 }
 
 export const POLICY_DIR = path.join('.friday', 'policies');
@@ -83,6 +85,7 @@ export function readPolicySources(
       auto_verification: config.verification.auto_on_completion,
       mcp: config.mcp.servers,
       elicitation: config.approvals.elicitation,
+      ...(config.sandbox ? { sandbox: true } : {}),
       ...(config.daemon.port ? { daemon_port: config.daemon.port } : {}),
       ...(config.worktrees.setup.command || config.worktrees.setup.allow_scripts
         ? {

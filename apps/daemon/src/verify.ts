@@ -38,12 +38,13 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
   const { state, project, logger } = ctx;
   const pid = project.project_id;
   const configured = project.config.verification.checks;
-  // Without project checks a human's request runs Friday's own checks; nothing completes a task
-  // automatically on those alone (docs/frontend/PLAN.md §5.8).
-  if (configured.length === 0 && actor.kind !== 'human') {
+  // Without project checks Friday's own checks judge the claim (diff, evidence, credentials): for
+  // a human's request always, for the automatic actor once this clone trusts automatic
+  // verification; otherwise the task waits for a human.
+  if (configured.length === 0 && actor.kind !== 'human' && !ctx.policy().auto_verification) {
     throw new FridayError(
       'verification_unavailable',
-      "no project checks are configured, so the task waits for a human to verify it (Friday's scope and credential checks run then), or to record a result with --result passed|failed",
+      "no project checks are configured and automatic verification is not trusted here, so the task waits for a human to verify it (Friday's scope, evidence and credential checks run then), or to record a result with --result passed|failed",
     );
   }
   const task = state.q.task(pid, taskId);
@@ -157,8 +158,16 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     // shared main checkout only the task's own changes count (seen by Friday's hooks, or claimed).
     const claimed = claimedPaths(run, root);
     const observed = run?.observed_paths ?? [];
+    // An untracked file that was already there before the task's first attempt began is not the
+    // task's work: a project's own files written before any agent started (`.friday/` of a project
+    // initialized after its last commit) must not fail the claim as changes to protected files. A
+    // path the claim names or the hooks saw written counts whatever its age.
+    const firstAccepted = firstAttemptAt(state.q.runs(taskId));
+    const sinceChanges = since
+      ? since.changes.filter((c) => !preexisting(c, root, firstAccepted, observed, claimed))
+      : [];
     const changes = since
-      ? ownChanges({ changed: since.changes, shared, observed, claimed, caseInsensitive: WINDOWS }).own
+      ? ownChanges({ changed: sinceChanges, shared, observed, claimed, caseInsensitive: WINDOWS }).own
       : [];
     const pathCtx = { projectRoot: root, mainRoot: project.root, stateDir: path.dirname(path.dirname(ctx.privateDir)) };
     const write = task.scope?.write ?? null;
@@ -173,7 +182,7 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     const grants = new Map(writeGrants(policy.version).map((g) => [fold(g.target), g.approval_id]));
     const findings: Finding[] = since
       ? analyzeDiff({
-          changed: since.changes,
+          changed: sinceChanges,
           write,
           claimed,
           observed,
@@ -305,7 +314,31 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       true,
     );
 
-    // 3. The configured checks for this kind of task, in the checkout it worked in.
+    // 3. Evidence that the work was run, when no configured check judges it (a configured check is
+    // that evidence, run by Friday itself). A claim made after a minute with an untested edit is
+    // the common way an implementation task is lost: the claim names the checks the session ran
+    // (with their outcome), or the attempt ran a test, build or lint command the hooks saw.
+    if (task.kind === 'implementation' && checks.length === 0) {
+      const ev = evidenceOfRunning({
+        claimed: claimChecks(run),
+        executed: run ? executedCommands(state, pid, taskId, run) : [],
+      });
+      record(
+        {
+          name: 'friday.evidence',
+          kind: 'evidence',
+          origin: 'friday',
+          status: ev.ok ? 'PASSED' : 'FAILED',
+          exit_code: null,
+          artifact_ref: null,
+          summary: ev.summary,
+          details: { findings: ev.findings as VerificationFinding[] },
+        },
+        true,
+      );
+    }
+
+    // 4. The configured checks for this kind of task, in the checkout it worked in.
     for (const check of checks) {
       const cwd = check.cwd ? path.resolve(root, check.cwd) : root;
       if (check.targeted_args?.length && related.length) {
@@ -340,7 +373,7 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       });
     }
 
-    // 4. One revision: code that changed while it was checked was not verified (ADR-0024 §2), and
+    // 5. One revision: code that changed while it was checked was not verified (ADR-0024 §2), and
     // code git can no longer read is not known to be the same (review F05). The trees compare the
     // content itself, so an approximate identity is never taken as proof (review F13).
     if (git && before && content) {
@@ -376,7 +409,7 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
   } finally {
     ctx.verifying.delete(verification_id);
   }
-  // 5. Nor was work judged by an authority that changed while it was checked: the policy or an
+  // 6. Nor was work judged by an authority that changed while it was checked: the policy or an
   // approval the verdict relied on (review F03). This is the last decision before the verdict is
   // recorded, after every read of the checkout, with nothing awaited in between (review M7.1 R03).
   if (authority() !== judgedBy) {
@@ -463,6 +496,129 @@ async function runConfigured(
   });
   logger.info('verification check finished', { check: c.name, passed: outcome.passed, ms: outcome.duration_ms });
   return outcome.passed;
+}
+
+/** When the task's first attempt was accepted (ms), else null: nothing is older than the task then. */
+function firstAttemptAt(runs: readonly RunView[]): number | null {
+  const times = runs.map((r) => Date.parse(r.accepted_at ?? r.created_at ?? '')).filter((t) => Number.isFinite(t));
+  return times.length ? Math.min(...times) : null;
+}
+
+/** Two seconds of slack between a file written and an attempt accepted, as clocks and writes land. */
+const PREEXISTING_SLACK_MS = 2000;
+
+/**
+ * Whether an untracked file predates the task: added, never committed, written before the first
+ * attempt, and neither claimed nor seen written by the hooks.
+ */
+function preexisting(
+  c: { path: string; change: string; committed: boolean },
+  root: string,
+  firstAccepted: number | null,
+  observed: readonly string[],
+  claimed: readonly string[] | null,
+): boolean {
+  if (firstAccepted === null || c.change !== 'added' || c.committed) return false;
+  const fold = (p: string) => (WINDOWS ? p.toLowerCase() : p);
+  if (observed.some((p) => fold(p) === fold(c.path)) || (claimed ?? []).some((p) => fold(p) === fold(c.path))) {
+    return false;
+  }
+  try {
+    return statSync(path.join(root, c.path)).mtimeMs < firstAccepted - PREEXISTING_SLACK_MS;
+  } catch {
+    return false;
+  }
+}
+
+/** The checks the claim names, as the agent reported them. */
+function claimChecks(run: RunView | undefined): ClaimedCheck[] {
+  const claim = run?.claim as { checks?: unknown } | null | undefined;
+  if (!claim || !Array.isArray(claim.checks)) return [];
+  return claim.checks.flatMap((c): ClaimedCheck[] => {
+    const x = c as Partial<ClaimedCheck>;
+    return typeof x.name === 'string' && (x.outcome === 'passed' || x.outcome === 'failed' || x.outcome === 'skipped')
+      ? [{ name: x.name, outcome: x.outcome, ...(typeof x.command === 'string' ? { command: x.command } : {}) }]
+      : [];
+  });
+}
+
+interface ClaimedCheck {
+  name: string;
+  outcome: 'passed' | 'failed' | 'skipped';
+  command?: string;
+}
+
+interface ExecutedCommand {
+  text: string;
+  command_class: string | null;
+}
+
+/** Commands the hooks saw this attempt run (allowed, in the attempt's window), from the task's events. */
+function executedCommands(state: DaemonContext['state'], pid: string, taskId: string, run: RunView): ExecutedCommand[] {
+  const from = Date.parse(run.accepted_at ?? run.created_at ?? '');
+  const to = run.ended_at ? Date.parse(run.ended_at) : Number.POSITIVE_INFINITY;
+  const out: ExecutedCommand[] = [];
+  for (const e of state.store.readByRef(pid, 'task', taskId, { types: ['policy.evaluated'], limit: 5000 })) {
+    const at = Date.parse(e.occurred_at);
+    if (Number.isFinite(from) && (at < from || at > to + PREEXISTING_SLACK_MS)) continue;
+    const p = e.payload as { kind?: string; decision?: string; targets?: unknown; command_class?: string | null };
+    if (p.kind !== 'command' || p.decision !== 'allow') continue;
+    const targets = Array.isArray(p.targets) ? p.targets.filter((t): t is string => typeof t === 'string') : [];
+    for (const text of targets) out.push({ text, command_class: p.command_class ?? null });
+  }
+  return out;
+}
+
+/** Command classes whose run is evidence that the code ran: tests, a build, a lint or type check. */
+const EXECUTING_CLASSES = new Set(['test.local', 'build.local', 'lint.local']);
+
+/**
+ * Evidence that the work was run: a test, build or lint command the hooks saw, or a check the claim
+ * names with an outcome. A claimed check whose command matches no command seen is a warning, not a
+ * failure: the claim is the agent's word, bounded by what the hooks recorded.
+ */
+export function evidenceOfRunning(input: { claimed: readonly ClaimedCheck[]; executed: readonly ExecutedCommand[] }): {
+  ok: boolean;
+  summary: string;
+  findings: Finding[];
+} {
+  const ran = input.executed.filter((c) => c.command_class !== null && EXECUTING_CLASSES.has(c.command_class));
+  const claimed = input.claimed.filter((c) => c.outcome !== 'skipped');
+  const findings: Finding[] = [];
+  const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+  const seen = input.executed.map((c) => norm(c.text));
+  const unconfirmed = claimed.filter((c) => {
+    if (!c.command) return false;
+    const cmd = norm(c.command);
+    return !seen.some((t) => t.includes(cmd) || cmd.includes(t));
+  });
+  for (const c of unconfirmed) {
+    findings.push({
+      rule: 'evidence.unconfirmed',
+      severity: 'warn',
+      message: `the claim's check "${c.name}" (${c.command}) matches no command Friday saw run in this attempt`,
+      paths: [],
+    });
+  }
+  if (ran.length === 0 && claimed.length === 0) {
+    findings.push({
+      rule: 'evidence.none',
+      severity: 'fail',
+      message:
+        'no evidence the work was run: the claim lists no check, and no test, build or lint command ran in this attempt. Run the code or its tests, then claim again, listing what you ran under checks',
+      paths: [],
+    });
+    return { ok: false, summary: 'nothing shows the work was run', findings };
+  }
+  const parts = [
+    ...(ran.length ? [`${ran.length} test, build or lint command(s) ran`] : []),
+    ...(claimed.length
+      ? [
+          `the claim names ${claimed.length} check(s)${unconfirmed.length ? `, ${unconfirmed.length} not seen run` : ''}`,
+        ]
+      : []),
+  ];
+  return { ok: true, summary: parts.join('; '), findings };
 }
 
 /** The claim's paths relative to the checkout, forward slashes (absolute ones made relative). */

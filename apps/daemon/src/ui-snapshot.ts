@@ -56,7 +56,7 @@ export interface UiSnapshotInfo {
    * difference and which changed keys still need a restart (plan M11.2).
    */
   config: UiSnapshot['config'];
-  /** Claims are verified automatically (trusted, and project checks exist). */
+  /** Claims are verified automatically (`verification.auto_on_completion`, once trusted). */
   auto_verification: boolean;
   /**
    * Whether the effective policy's loosening applies on this clone (`EffectivePolicy.trusted`).

@@ -260,6 +260,15 @@ describe("the project's own checks (plan M14.6)", () => {
   it('matches the arguments exactly and still judges everything else on the line', () => {
     expect(judged('node scripts/check.mjs --fix').class).toBe('unknown');
     expect(judged('node scripts/other.mjs').class).toBe('unknown');
+    // A syntax check or a bytecode compile runs nothing.
+    expect(posix('node --check scripts/other.mjs')).toMatchObject({ class: 'lint.local', autonomy: 'auto' });
+    expect(posix('python3 -m py_compile src/worker/worker.py')).toMatchObject({
+      class: 'lint.local',
+      autonomy: 'auto',
+    });
+    expect(posix('python -m compileall -q src')).toMatchObject({ class: 'lint.local', autonomy: 'auto' });
+    expect(posix('python3 src/worker/worker.py').class).toBe('unknown');
+    expect(posix('python3 -m http.server 8000').class).toBe('unknown');
     expect(judged('node --test "**/test/*.test.ts" 2>&1 | tail -25; node scripts/check.mjs')).toMatchObject({
       class: 'test.local',
       autonomy: 'auto',

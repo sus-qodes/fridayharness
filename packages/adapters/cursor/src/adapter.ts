@@ -718,7 +718,8 @@ export class CursorSpawnAdapter {
             status: 'completed_claim',
             summary: final.summary.slice(0, 2000) || 'done',
             changed_paths: [...changed].slice(0, 200),
-            checks: [],
+            // What the session says it ran: verification's evidence, bounded by what the hooks saw.
+            checks: final.checks,
           },
           spent,
         );

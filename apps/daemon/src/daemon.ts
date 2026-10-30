@@ -550,7 +550,9 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     verify(taskId, AUTO).catch((e: unknown) =>
       logger.warn('automatic verification did not run', { task_id: taskId, message: (e as Error).message }),
     );
-  const autoVerifies = () => currentPolicy().auto_verification && project.config.verification.checks.length > 0;
+  // With no project checks Friday's own checks judge the claim (diff, evidence, credentials): a
+  // project that trusts automatic verification gets it whether or not it configured checks.
+  const autoVerifies = () => currentPolicy().auto_verification;
   const paused = () => state.q.control(project.project_id).paused;
   const stopAutoVerify = state.transport.subscribe(
     { project_id: project.project_id, types: ['task.completion_claimed'] },

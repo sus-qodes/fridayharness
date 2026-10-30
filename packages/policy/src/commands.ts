@@ -394,11 +394,19 @@ export function classifySegment(segment: string): CommandClass {
   if (cmd === 'node') {
     if (has(rest, '--test')) return 'test.local';
     if (has(rest, '--version', '-v')) return 'read.local';
+    // A syntax check runs nothing.
+    if (has(rest, '--check', '-c')) return 'lint.local';
     return 'unknown';
   }
   if (['vitest', 'jest', 'mocha', 'pytest', 'ava', 'tap', 'playwright'].includes(cmd)) return 'test.local';
-  if (cmd === 'python' || cmd === 'python3' || cmd === 'py')
-    return rest[0] === '-m' && ['pytest', 'unittest'].includes(rest[1] ?? '') ? 'test.local' : 'unknown';
+  if (cmd === 'python' || cmd === 'python3' || cmd === 'py') {
+    if (rest[0] !== '-m') return 'unknown';
+    const module = rest[1] ?? '';
+    if (['pytest', 'unittest'].includes(module)) return 'test.local';
+    // Compiling to bytecode runs nothing: a syntax check.
+    if (['py_compile', 'compileall'].includes(module)) return 'lint.local';
+    return 'unknown';
+  }
   if (
     ['tsc', 'make', 'cmake', 'msbuild', 'gradle', 'mvn', 'esbuild', 'vite', 'webpack', 'rollup', 'tsup'].includes(cmd)
   ) {

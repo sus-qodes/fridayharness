@@ -222,7 +222,8 @@ describe('the board snapshot', () => {
       status: 'completed_claim',
       summary: 'changed the readme',
       changed_paths: ['README.md'],
-      checks: [],
+      // An implementation task's claim shows the work was run (S07 §5.11.6).
+      checks: [{ name: 'read the readme back', outcome: 'passed' }],
     });
     await fake.close();
     const verified = await op.post<{ task: TaskView }>(

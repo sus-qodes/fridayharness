@@ -87,6 +87,11 @@ export interface PolicySource {
    * lifecycle scripts may run. Both run project code as Friday, so both are loosenings.
    */
   worktree_setup?: { command?: string; args?: string[]; allow_scripts?: boolean };
+  /**
+   * `sandbox`: this checkout is disposable, so every command class whose autonomy is `review`
+   * runs on its own (`manual` and `never` stay). A loosening.
+   */
+  sandbox?: boolean;
 }
 
 export interface Loosening {
@@ -125,6 +130,8 @@ export interface ProjectPolicy {
   worktree_setup_held: { source: string; reason: string } | null;
   /** Whether a worktree install may run lifecycle scripts (trusted `allow_scripts`). */
   worktree_scripts: boolean;
+  /** Whether this checkout is a trusted sandbox: reviewable command classes run on their own. */
+  sandbox: boolean;
   /** What tracked files loosen, with where each comes from. */
   loosening: Loosening[];
   /** The hash `friday policy trust` records; null when nothing loosens. */
@@ -207,6 +214,7 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     if (s.auto_verification) {
       loosening.push({ source: s.name, setting: 'verification.auto_on_completion', from: 'false', to: 'true' });
     }
+    if (s.sandbox) loosening.push({ source: s.name, setting: 'sandbox', from: 'false', to: 'true' });
     if (s.daemon_port) {
       loosening.push({ source: s.name, setting: 'daemon.port', from: 'random', to: String(s.daemon_port) });
     }
@@ -247,6 +255,14 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
       return v && isAutonomy(v) && (trusted || A[v] >= A[def]) ? [v] : [];
     });
     if (values.length) autonomy[cls] = values.reduce((a, b) => (A[b] > A[a] ? b : a));
+  }
+  // A trusted sandbox: what would wait for a review runs; what needs an exact approval, and what
+  // is never allowed, keep their level.
+  const sandbox = trusted && sources.some((s) => s.sandbox === true);
+  if (sandbox) {
+    for (const cls of Object.keys(DEFAULT_AUTONOMY) as CommandClass[]) {
+      if ((autonomy[cls] ?? DEFAULT_AUTONOMY[cls]) === 'review') autonomy[cls] = 'auto';
+    }
   }
   const risk: Partial<Record<Capability, Risk>> = {};
   for (const cap of Object.keys(DEFAULT_RISK) as Capability[]) {
@@ -356,6 +372,7 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     daemon_port,
     worktree_setup,
     worktree_scripts,
+    sandbox,
   };
   return {
     ...effective,

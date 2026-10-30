@@ -342,6 +342,13 @@ export const FridayConfig = z
       .prefault({}),
     scopes: z.record(z.string(), TaskScope).default({}),
     autonomy: z.record(z.string(), z.enum(['auto', 'review', 'manual'])).default({}),
+    /**
+     * This checkout is disposable (a container, a throwaway machine): every command class a human
+     * would review runs on its own, so an unattended agent never stalls on a command the classifier
+     * cannot read. What needs a human's exact approval (git push, publishing) and what is never
+     * allowed stay as they are. A loosening: it applies once this clone trusted it.
+     */
+    sandbox: z.boolean().default(false),
     /** Risk tiers per capability (spec Part 07 §7, ADR-0027), over Friday's defaults. */
     risk: z.record(z.string(), z.enum(['low', 'medium', 'high'])).default({}),
     security: z
@@ -629,6 +636,12 @@ daemon:
 
 # Named scopes you can reuse when creating tasks (project-relative globs).
 scopes: {}
+
+# A disposable checkout (a container, a throwaway machine): command classes a human would review
+# (unknown commands, installs, file deletion, network reads) run on their own, so an unattended agent
+# never stalls on an approval nobody answers. Pushing and publishing still need a human. A loosening:
+# it applies after "friday policy trust".
+# sandbox: true
 
 # Commands \`friday verify <task>\` runs in the checkout the task worked in. Example:
 #   checks:

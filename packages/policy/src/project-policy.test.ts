@@ -203,4 +203,27 @@ describe('the worktree install (plan Phase 7)', () => {
     expect(plain.trusted).toBe(true);
     expect([plain.worktree_setup, plain.worktree_setup_held, plain.worktree_scripts]).toEqual([null, null, false]);
   });
+
+  it('a trusted sandbox runs what a human would review, and keeps what needs an exact approval', () => {
+    const own = { name: 'config.yaml', sandbox: true, autonomy: { 'network.fetch': 'manual' } };
+    const untrusted = projectPolicy([own], null);
+    expect(untrusted.loosening.map((l) => [l.setting, l.to])).toEqual([['sandbox', 'true']]);
+    expect(untrusted.sandbox).toBe(false);
+    // Until trusted, nothing runs that would not run anyway; the manual class tightened at once.
+    expect(untrusted.autonomy).toEqual({ 'network.fetch': 'manual' });
+    const trusted = projectPolicy([own], untrusted.loosening_hash);
+    expect(trusted.sandbox).toBe(true);
+    expect(trusted.autonomy).toEqual({
+      'git.mutate': 'auto',
+      'package.install': 'auto',
+      'fs.destructive': 'auto',
+      'process.kill': 'auto',
+      unknown: 'auto',
+      // A source's stricter level for a reviewable class is kept.
+      'network.fetch': 'manual',
+    });
+    // git push, publishing and secrets are not reviewable: untouched.
+    expect(trusted.autonomy['git.push']).toBeUndefined();
+    expect(trusted.autonomy['secrets.read']).toBeUndefined();
+  });
 });
