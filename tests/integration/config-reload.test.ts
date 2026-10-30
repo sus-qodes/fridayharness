@@ -16,6 +16,7 @@ import { type ConfigApplied, reloadingConfig } from '../../apps/daemon/src/confi
 import { cli } from '../helpers/cli.js';
 import { startTestDaemon, TEST_PROJECT_ID, type TestDaemon } from '../helpers/daemon.js';
 import { decisionOf, postHook, toolHook } from '../helpers/hooks.js';
+import { hostSeen } from '../helpers/readiness.js';
 
 const ws = useTestWorkspace();
 let saved: string | undefined;
@@ -180,6 +181,7 @@ describe('config.yaml read again while Friday runs', () => {
   it('applies new checks, conflict-prone files and routing constraints while sessions run', async () => {
     const td = await startTestDaemon(ws(), { git: true, brain: false });
     const P = (p: string) => td.operator.projectPath(p);
+    await hostSeen(td, 'claude-code');
     const task = await td.operator.post<TaskView>(P('/tasks'), {
       summary: 'write the guide',
       kind: 'docs',
@@ -234,6 +236,8 @@ describe('config.yaml read again while Friday runs', () => {
   it('merges project models and role candidates on a live reload and applies the local-only constraint', async () => {
     const td = await startTestDaemon(ws(), { git: true, brain: false });
     const P = (p: string) => td.operator.projectPath(p);
+    await hostSeen(td, 'claude-code');
+    await hostSeen(td, 'generic');
     const task = await td.operator.post<TaskView>(P('/tasks'), {
       summary: 'write the guide',
       kind: 'docs',

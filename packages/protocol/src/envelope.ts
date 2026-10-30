@@ -174,5 +174,8 @@ export const EVENT_TYPES = [
   'learning.proposed',
   'learning.promoted',
   'learning.rejected',
+  // ADR-0035: what Friday observed of a host and model on this machine, and what withdrew it.
+  'readiness.recorded',
+  'readiness.invalidated',
 ] as const;
 export type KnownEventType = (typeof EVENT_TYPES)[number];

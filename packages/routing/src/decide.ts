@@ -1,3 +1,4 @@
+import { type ReadinessAssessment, readinessReasonCode } from './readiness.js';
 import type { ModelRecord } from './registry.js';
 import { canonicalRole, ROLE_REGISTRY_SOURCE, type RoleRegistry, type RoleRegistryCandidate } from './role-registry.js';
 import { type RoutingRoleSource, resolveTaskRole } from './roles.js';
@@ -70,6 +71,20 @@ export interface RouteInput {
   role_registry?: RoleRegistry;
   /** A role already assigned by the plan or a validated decision-model result. */
   resolved_role?: string | null;
+  /**
+   * What Friday has observed of a host and model on this machine (ADR-0035 §1); unset: no
+   * readiness filter (a pure decision, as in tests of the registry alone).
+   */
+  readiness?: (host: string, model: string) => ReadinessAssessment | null;
+}
+
+/** One readiness check routing made, for the receipt and `routing explain` (ADR-0035 §2). */
+export interface ReadinessCheck {
+  host: string;
+  model: string;
+  dispatchable: boolean;
+  reason: string;
+  bench_until: string | null;
 }
 
 export interface Candidate {
@@ -121,6 +136,8 @@ export interface RoutingDecision {
   decision_model: string | null;
   decision_confidence: number | null;
   failover_policy: 'host_failure' | 'none';
+  /** The readiness checks made, in the order made (ADR-0035 §2); empty without a readiness source. */
+  readiness: ReadinessCheck[];
 }
 
 const round = (n: number) => Math.round(n * 1000) / 1000;
@@ -177,6 +194,16 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     const at = excluded.findIndex((entry) => entry.model === model);
     if (at >= 0) excluded.splice(at, 1);
     excluded.push({ model, reason });
+  };
+  // Readiness filters candidates after the hard constraints and before rank (ADR-0035 §2): the
+  // host that runs the work, or the candidate's own host for a dry run.
+  const readinessChecks: ReadinessCheck[] = [];
+  const ready = (host: string, model: string): ReadinessAssessment | null => {
+    const a = input.readiness?.(host, model) ?? null;
+    if (a) {
+      readinessChecks.push({ host, model, dispatchable: a.dispatchable, reason: a.reason, bench_until: a.bench_until });
+    }
+    return a;
   };
 
   // What the harness can run: its own list, else the registry's vendors.
@@ -269,6 +296,7 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     decision_model: null,
     decision_confidence: null,
     failover_policy: model === null ? 'none' : 'host_failure',
+    readiness: [...readinessChecks],
     ...extra,
   });
   /**
@@ -309,6 +337,21 @@ export function decideRoute(input: RouteInput): RoutingDecision {
   if (wanted) {
     const pin_id = chosen?.pin_id ?? null;
     const why = excluded.find((e) => e.model === wanted)?.reason;
+    // A pinned model still needs a ready host (ADR-0035 §2): the harness that runs the work, or on
+    // a dry run any host the registry says runs the model. A model no host runs is not checked.
+    if (eligible.some((m) => m.id === wanted)) {
+      const hosts = input.vendor ? [input.vendor] : (known.get(wanted)?.vendors ?? []);
+      const checks = hosts.map((h) => ready(h, wanted)).filter((a): a is ReadinessAssessment => a !== null);
+      const unready = checks.length > 0 && !checks.some((a) => a.dispatchable) ? checks : [];
+      if (unready.length) {
+        const first = unready[0] as ReadinessAssessment;
+        codes.push('pin.unavailable', readinessReasonCode(first));
+        exclude(wanted, readinessReasonCode(first));
+        return blocked(`${wanted} is pinned, but ${unready.map((a) => a.reason).join('; ')}; a human decides`, {
+          pin_id,
+        });
+      }
+    }
     if (eligible.some((m) => m.id === wanted)) {
       codes.push(chosen ? `pin.${chosen.scope}` : 'pin');
       return result(
@@ -394,6 +437,11 @@ export function decideRoute(input: RouteInput): RoutingDecision {
       exclude(candidate.model, 'constraint.sensitive_local');
       continue;
     }
+    const readiness = ready(input.vendor ?? candidate.harness, candidate.model);
+    if (readiness && !readiness.dispatchable) {
+      exclude(candidate.model, readinessReasonCode(readiness));
+      continue;
+    }
     const preference = round(1 / candidate.rank);
     selected.push({
       candidate,
@@ -410,8 +458,10 @@ export function decideRoute(input: RouteInput): RoutingDecision {
   }
   if (!selected.length) {
     codes.push('registry.none_eligible');
+    const unready = readinessChecks.filter((c) => !c.dispatchable);
+    if (unready.length) codes.push('readiness.none_ready');
     return blocked(
-      `no dispatchable candidate for role "${role}" on this harness${constraints.length ? ` while ${constraints.join(', ')} must hold` : ''}`,
+      `no dispatchable candidate for role "${role}" on this harness${constraints.length ? ` while ${constraints.join(', ')} must hold` : ''}${unready.length ? `; not ready: ${unready.map((c) => c.reason).join('; ')}` : ''}`,
       { candidates: [] },
     );
   }

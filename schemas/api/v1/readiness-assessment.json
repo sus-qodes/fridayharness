@@ -1,0 +1,130 @@
+{
+  "$id": "urn:friday:api:v1:readiness-assessment",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "host": {
+      "type": "string"
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "live": {
+      "type": "boolean"
+    },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "stage": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "stage",
+          "status",
+          "checked_at",
+          "expires_at",
+          "source",
+          "detail"
+        ]
+      }
+    },
+    "dispatchable": {
+      "type": "boolean"
+    },
+    "blocking": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "stage": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "stage",
+            "status"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "bench_until": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "rank": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "role",
+          "rank"
+        ]
+      }
+    }
+  },
+  "required": [
+    "host",
+    "model",
+    "live",
+    "stages",
+    "dispatchable",
+    "blocking",
+    "bench_until",
+    "reason",
+    "roles"
+  ]
+}

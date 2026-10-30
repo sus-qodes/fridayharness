@@ -313,8 +313,9 @@ export async function doctorCodex(
   g: () => GlobalOptions,
   sandbox: CodexSandbox,
   windowsSandbox?: 'elevated' | 'unelevated',
-): Promise<void> {
+): Promise<Awaited<ReturnType<typeof codexDoctor>>> {
   const report = await codexDoctor({ sandbox, ...(windowsSandbox ? { windowsSandbox } : {}) });
   out(g(), report, () => `${renderDoctor(report.checks)}\n\nEnforcement: ${report.achieved}`);
   if (report.checks.some((c) => c.status === 'fail')) process.exitCode = 1;
+  return report;
 }

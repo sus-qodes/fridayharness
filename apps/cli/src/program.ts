@@ -27,6 +27,7 @@ import { openTarget, runningDaemon, startDetached } from './open-link.js';
 import { registerOperationCommands } from './operations.js';
 import { clip, describeEvent, kv, shortTime, table, verificationLines } from './output.js';
 import { registerPolicyCommands } from './policy.js';
+import { registerReadinessCommands } from './readiness.js';
 import { registerRecoveryCommands } from './recovery.js';
 import { registerRegistryCommands } from './registry.js';
 import { registerReservationCommands } from './reservations.js';
@@ -866,6 +867,7 @@ export function buildProgram(): Command {
   registerPolicyCommands(program, g);
   registerOperationCommands(program, g);
   registerRoutingCommands(program, g);
+  registerReadinessCommands(program, g);
   registerRegistryCommands(program, g);
   registerUsageCommands(program, g);
   registerMemoryCommands(program, g);

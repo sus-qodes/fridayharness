@@ -11,6 +11,8 @@ export const TEST_HOST_MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude
 
 export interface FakeHarnessOptions {
   key?: string;
+  /** The host it registers as; `generic` unless a test is about one host's readiness. */
+  vendor?: HarnessDescriptor['vendor'];
   agentKey?: string;
   /** Agent role the Master Brain's delegation matches against ("backend", "qa", …). */
   role?: string;
@@ -57,7 +59,7 @@ export class FakeHarness implements ConformanceHarness {
     counter += 1;
     const descriptor: HarnessDescriptor = {
       harness_key: opts.key ?? `fake:${process.pid}:${counter}`,
-      vendor: 'generic',
+      vendor: opts.vendor ?? 'generic',
       name: 'FakeHarness',
       version: '0.0.0-test',
       attach_mode: opts.mode ?? 'spawn',

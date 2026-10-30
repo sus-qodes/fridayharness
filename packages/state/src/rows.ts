@@ -13,6 +13,7 @@ import type {
   PlanTaskView,
   PlanVersionView,
   ProjectIntentView,
+  ReadinessEvidenceView,
   RunView,
   TaskScope,
   TaskView,
@@ -433,6 +434,42 @@ export function toLearningProposalView(row: LearningProposalRow): LearningPropos
     decision_note: row.decision_note,
     created_at: row.created_at,
     decided_at: row.decided_at,
+  };
+}
+
+export interface ReadinessEvidenceRow {
+  evidence_id: string;
+  project_id: string;
+  host: string;
+  model: string | null;
+  stage: string;
+  status: string;
+  checked_at: string;
+  expires_at: string | null;
+  source: string;
+  version: string | null;
+  detail: string | null;
+  harness_id: string | null;
+  ended_at: string | null;
+  ended_reason: string | null;
+}
+
+export function toReadinessEvidenceView(row: ReadinessEvidenceRow): ReadinessEvidenceView {
+  return {
+    evidence_id: row.evidence_id,
+    project_id: row.project_id,
+    host: row.host,
+    model: row.model,
+    stage: row.stage as ReadinessEvidenceView['stage'],
+    status: row.status as ReadinessEvidenceView['status'],
+    checked_at: row.checked_at,
+    expires_at: row.expires_at,
+    source: row.source,
+    version: row.version,
+    detail: row.detail,
+    harness_id: row.harness_id,
+    ended_at: row.ended_at,
+    ended_reason: row.ended_reason,
   };
 }
 

@@ -57,6 +57,10 @@ function decisionLines(
     );
   }
   for (const e of d.excluded.slice(0, 8)) lines.push(`    excluded ${e.model}: ${e.reason}`);
+  // What this machine had seen of each candidate's host and model (ADR-0035 §2).
+  for (const r of (d.readiness ?? []).slice(0, 8)) {
+    lines.push(`    readiness ${r.host}/${r.model}: ${r.dispatchable ? 'ready' : `not ready, ${r.reason}`}`);
+  }
   if (d.fallback_chain.length) {
     lines.push(`  fallback: ${d.fallback_chain.map((f) => f.model ?? 'a human').join(' -> ')}`);
   }

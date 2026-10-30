@@ -208,6 +208,14 @@ export class StateProjector implements Projector {
         this.update('harnesses', 'harness_id', str(p.harness_id), (p.changes as Payload) ?? {}, HARNESS_CHANGES, e, {
           status: (p.transition as Payload | undefined)?.to,
         });
+        // A session's readiness evidence counts while the session is live (ADR-0035 §1).
+        if ((p.transition as Payload | undefined)?.to === 'TERMINATED') {
+          this.db
+            .prepare(
+              "UPDATE readiness_evidence SET ended_at = ?, ended_reason = 'the session ended' WHERE harness_id = ? AND ended_at IS NULL",
+            )
+            .run(e.occurred_at, str(p.harness_id));
+        }
         return;
       case 'harness.session_bound':
         this.db
@@ -654,6 +662,47 @@ export class StateProjector implements Projector {
         return;
       case 'learning.proposed':
         this.insertLearningProposal(e, p.proposal as Payload);
+        return;
+      case 'readiness.recorded': {
+        // The newest observation of a stage is the one that counts: earlier open ones end with it.
+        for (const raw of p.evidence as Payload[]) {
+          const model = opt(raw.model);
+          this.db
+            .prepare(
+              `UPDATE readiness_evidence SET ended_at = ?, ended_reason = 'superseded'
+               WHERE project_id = ? AND host = ? AND stage = ? AND ended_at IS NULL AND ${model === null ? 'model IS NULL' : 'model = ?'}`,
+            )
+            .run(e.occurred_at, e.project_id, str(raw.host), str(raw.stage), ...(model === null ? [] : [model]));
+          this.db
+            .prepare(
+              `INSERT INTO readiness_evidence (evidence_id, project_id, host, model, stage, status, checked_at, expires_at,
+                 source, version, detail, harness_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              str(raw.evidence_id),
+              e.project_id,
+              str(raw.host),
+              model,
+              str(raw.stage),
+              str(raw.status),
+              str(raw.checked_at),
+              opt(raw.expires_at),
+              str(raw.source),
+              opt(raw.version),
+              opt(raw.detail),
+              opt(raw.harness_id),
+            );
+        }
+        return;
+      }
+      case 'readiness.invalidated':
+        for (const id of p.evidence_ids as unknown[]) {
+          this.db
+            .prepare(
+              'UPDATE readiness_evidence SET ended_at = ?, ended_reason = ? WHERE evidence_id = ? AND ended_at IS NULL',
+            )
+            .run(e.occurred_at, str(p.reason), str(id));
+        }
         return;
       case 'learning.promoted': {
         const res = this.db

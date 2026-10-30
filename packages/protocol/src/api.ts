@@ -262,6 +262,16 @@ export const OperationRunView = z.object({
 });
 export type OperationRunView = z.infer<typeof OperationRunView>;
 
+/** One readiness check routing made for a candidate, in the order made (ADR-0035 §2). */
+export const ReadinessCheckView = z.object({
+  host: z.string(),
+  model: z.string(),
+  dispatchable: z.boolean(),
+  reason: z.string(),
+  bench_until: z.string().nullable(),
+});
+export type ReadinessCheckView = z.infer<typeof ReadinessCheckView>;
+
 /** One routing decision (ADR-0031 §4–§6): what was chosen, why, from what, and how binding it is. */
 export const RoutingDecisionView = z.object({
   decision_id: z.string(),
@@ -305,9 +315,128 @@ export const RoutingDecisionView = z.object({
   decision_model: z.string().nullable().default(null),
   decision_confidence: z.number().nullable().default(null),
   failover_policy: z.enum(['host_failure', 'none']).default('none'),
+  /** The readiness checks made (ADR-0035 §2); empty for a decision older than them. */
+  readiness: z.array(ReadinessCheckView).default([]),
   created_at: z.string(),
 });
 export type RoutingDecisionView = z.infer<typeof RoutingDecisionView>;
+
+// ---------------------------------------------------------------- readiness (ADR-0035)
+
+/** The stages Friday observes; `dispatchable` is computed from them and never stored. */
+export const ReadinessEvidenceStage = z.enum([
+  'detected',
+  'configured',
+  'handshake',
+  'authenticated',
+  'live_verified',
+  'benched',
+]);
+export type ReadinessEvidenceStage = z.infer<typeof ReadinessEvidenceStage>;
+export const ReadinessEvidenceStatus = z.enum(['passed', 'failed']);
+export type ReadinessEvidenceStatus = z.infer<typeof ReadinessEvidenceStatus>;
+
+/**
+ * One observation of a host (and, where it matters, one model) on this machine (ADR-0035 §1):
+ * never a credential or token. It counts until it expires, until a later observation of the same
+ * stage replaces it, or until the session it came from ends.
+ */
+export const ReadinessEvidenceView = z.object({
+  evidence_id: z.string(),
+  project_id: z.string(),
+  /** The harness vendor: `claude-code`, `codex`, `gemini`, `opencode`, `cursor`, `deepseek`, … */
+  host: z.string(),
+  /** The model the evidence is about; null for a host-level observation. */
+  model: z.string().nullable(),
+  stage: ReadinessEvidenceStage,
+  status: ReadinessEvidenceStatus,
+  checked_at: z.string(),
+  /** When it stops counting; null means it does not expire on its own. */
+  expires_at: z.string().nullable(),
+  /** Where it came from: `harness.register`, `harness doctor`, `run:<run_id>`, a host failure, a human. */
+  source: z.string(),
+  /** The host or model version the check saw; null when unknown. */
+  version: z.string().nullable(),
+  /** A short, credential-free explanation. */
+  detail: z.string().nullable(),
+  /** The session it came from, when one did; its evidence ends with the session. */
+  harness_id: z.string().nullable(),
+  /** Set once it stopped counting before its expiry, and why. */
+  ended_at: z.string().nullable(),
+  ended_reason: z.string().nullable(),
+});
+export type ReadinessEvidenceView = z.infer<typeof ReadinessEvidenceView>;
+
+/** Observations a host check made outside the daemon (`friday harness doctor <host>`), recorded through it. */
+export const ReadinessRecordRequest = z.object({
+  host: z.string().trim().min(1).max(40),
+  version: z.string().trim().max(100).nullable().default(null),
+  source: z.string().trim().min(1).max(100),
+  stages: z
+    .array(
+      z.object({
+        stage: ReadinessEvidenceStage.exclude(['benched']),
+        status: ReadinessEvidenceStatus,
+        model: z.string().trim().min(1).max(200).nullable().default(null),
+        detail: z.string().trim().max(300).nullable().default(null),
+      }),
+    )
+    .min(1)
+    .max(12),
+  /** How long the observations count, in seconds; at most 7 days. */
+  ttl_s: z
+    .number()
+    .int()
+    .positive()
+    .max(7 * 86_400)
+    .default(86_400),
+});
+export type ReadinessRecordRequest = z.input<typeof ReadinessRecordRequest>;
+
+export const ReadinessStageView = z.object({
+  stage: z.string(),
+  /** `passed`, `failed`, `missing` (never observed and needed), `stale` (expired) or `unknown` (never observed, allowed). */
+  status: z.string(),
+  checked_at: z.string().nullable(),
+  expires_at: z.string().nullable(),
+  source: z.string().nullable(),
+  detail: z.string().nullable(),
+});
+export type ReadinessStageView = z.infer<typeof ReadinessStageView>;
+
+/** The loose-rule verdict for one host and model now (ADR-0035 §1), with where the ranking names them. */
+export const ReadinessAssessmentView = z.object({
+  host: z.string(),
+  model: z.string().nullable(),
+  /** A session of this host is connected to Friday now. */
+  live: z.boolean(),
+  stages: z.array(ReadinessStageView),
+  dispatchable: z.boolean(),
+  blocking: z.object({ stage: z.string(), status: z.string() }).nullable(),
+  bench_until: z.string().nullable(),
+  reason: z.string(),
+  /** The roles whose ranking names this host and model, with the rank. */
+  roles: z.array(z.object({ role: z.string(), rank: z.number().int() })),
+});
+export type ReadinessAssessmentView = z.infer<typeof ReadinessAssessmentView>;
+
+/** `GET readiness`: every host and model the ranking names, and every host seen, as of `checked_at`. */
+export const ReadinessReport = z.object({
+  checked_at: z.string(),
+  hosts: z.array(
+    z.object({
+      host: z.string(),
+      live: z.boolean(),
+      /** Sessions of this host connected now. */
+      sessions: z.number().int(),
+      /** Whether the ranking names this host at all. */
+      ranked: z.boolean(),
+      /** The host-level verdict (no model), then one per model the ranking names for it. */
+      assessments: z.array(ReadinessAssessmentView),
+    }),
+  ),
+});
+export type ReadinessReport = z.infer<typeof ReadinessReport>;
 
 /** A human's routing policy (spec Part 12 §11): a model for a scope, with source and expiry. */
 export const RoutingPinView = z.object({

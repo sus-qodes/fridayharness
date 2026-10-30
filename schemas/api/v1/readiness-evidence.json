@@ -1,0 +1,98 @@
+{
+  "$id": "urn:friday:api:v1:readiness-evidence",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "evidence_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "host": {
+      "type": "string"
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "detected",
+        "configured",
+        "handshake",
+        "authenticated",
+        "live_verified",
+        "benched"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "failed"
+      ]
+    },
+    "checked_at": {
+      "type": "string"
+    },
+    "expires_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source": {
+      "type": "string"
+    },
+    "version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "detail": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "harness_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ended_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ended_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "evidence_id",
+    "project_id",
+    "host",
+    "model",
+    "stage",
+    "status",
+    "checked_at",
+    "expires_at",
+    "source",
+    "version",
+    "detail",
+    "harness_id",
+    "ended_at",
+    "ended_reason"
+  ]
+}

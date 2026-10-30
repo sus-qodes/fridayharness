@@ -1017,6 +1017,38 @@ ALTER TABLE task_runs ADD COLUMN intent_snapshot_json TEXT;
   },
 ];
 
+/**
+ * ADR-0035 §1: what Friday has observed of each host and model on this machine. One row per
+ * observation; a later observation of the same stage ends the earlier one, and a session's rows
+ * end with the session. `dispatchable` is computed, never stored.
+ */
+export const READINESS_MIGRATIONS: Migration[] = [
+  {
+    version: 26,
+    name: 'readiness_evidence',
+    up: `
+CREATE TABLE readiness_evidence (
+  evidence_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  host TEXT NOT NULL,
+  model TEXT,
+  stage TEXT NOT NULL CHECK (stage IN ('detected', 'configured', 'handshake', 'authenticated', 'live_verified', 'benched')),
+  status TEXT NOT NULL CHECK (status IN ('passed', 'failed')),
+  checked_at TEXT NOT NULL,
+  expires_at TEXT,
+  source TEXT NOT NULL,
+  version TEXT,
+  detail TEXT,
+  harness_id TEXT,
+  ended_at TEXT,
+  ended_reason TEXT
+);
+CREATE INDEX ix_readiness_evidence ON readiness_evidence(project_id, host, stage, ended_at);
+CREATE INDEX ix_readiness_evidence_harness ON readiness_evidence(harness_id);
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -1041,10 +1073,12 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...ROLE_RESOLUTION_MIGRATIONS,
   ...INTENT_MIGRATIONS,
   ...RUN_INTENT_MIGRATIONS,
+  ...READINESS_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */
 export const DOMAIN_TABLES = [
+  'readiness_evidence',
   'learning_proposals',
   'project_intents',
   'project_controls',

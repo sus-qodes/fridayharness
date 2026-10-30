@@ -17,6 +17,7 @@ import {
   type OperationRunView,
   type PlanVersionView,
   type ProjectIntentView,
+  type ReadinessEvidenceView,
   type RoutingDecisionView,
   type RoutingPinView,
   type RunView,
@@ -41,6 +42,7 @@ import {
   type PlanRow,
   type PlanTaskRow,
   type ProjectIntentRow,
+  type ReadinessEvidenceRow,
   type RunRow,
   type TaskRow,
   toAgentView,
@@ -52,6 +54,7 @@ import {
   toModelCallView,
   toPlanVersionView,
   toProjectIntentView,
+  toReadinessEvidenceView,
   toRunView,
   toTaskView,
   toVerificationView,
@@ -347,6 +350,49 @@ export class Queries {
       .prepare(`${this.harnessSelect} WHERE h.project_id = ?${filter} ORDER BY h.registered_at`)
       .all<HarnessRow>(projectId)
       .map(toHarnessView);
+  }
+
+  /** Live sessions now, counted by host (vendor): what readiness calls a connected host (ADR-0035 §1). */
+  liveHarnessesByVendor(projectId: string, nowIso: string): Map<string, number> {
+    const rows = this.db
+      .prepare(
+        `SELECT h.vendor AS vendor, COUNT(*) AS n FROM harnesses h JOIN harness_leases l ON l.harness_id = h.harness_id
+         WHERE h.project_id = ? AND h.status IN ${LIVE_HARNESS} AND l.lease_expires_at > ? GROUP BY h.vendor`,
+      )
+      .all<{ vendor: string; n: number }>(projectId, nowIso);
+    return new Map(rows.map((r) => [r.vendor, Number(r.n)]));
+  }
+
+  /**
+   * Readiness evidence (ADR-0035 §1), newest first: the observations still in force, or with `all`
+   * also those a later observation, a session's end or a human ended. Expiry is judged by the
+   * reader, so a stale observation can still be shown as stale.
+   */
+  readinessEvidence(
+    projectId: string,
+    filter: { host?: string; model?: string | null; all?: boolean; limit?: number } = {},
+  ): ReadinessEvidenceView[] {
+    const where = ['project_id = ?'];
+    const args: (string | number)[] = [projectId];
+    if (filter.host) {
+      where.push('host = ?');
+      args.push(filter.host);
+    }
+    if (filter.model !== undefined) {
+      if (filter.model === null) where.push('model IS NULL');
+      else {
+        where.push('(model = ? OR model IS NULL)');
+        args.push(filter.model);
+      }
+    }
+    if (!filter.all) where.push('ended_at IS NULL');
+    args.push(filter.limit ?? 1000);
+    return this.db
+      .prepare(
+        `SELECT * FROM readiness_evidence WHERE ${where.join(' AND ')} ORDER BY checked_at DESC, rowid DESC LIMIT ?`,
+      )
+      .all<ReadinessEvidenceRow>(...args)
+      .map(toReadinessEvidenceView);
   }
 
   isHarnessLive(harnessId: string, nowIso: string): boolean {

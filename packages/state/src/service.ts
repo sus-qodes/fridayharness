@@ -80,6 +80,7 @@ import { MemoryService } from './memory.js';
 import { ALL_MIGRATIONS } from './migrations.js';
 import { StateProjector } from './projector.js';
 import { type HarnessRecord, Queries } from './queries.js';
+import { ReadinessService } from './readiness.js';
 import type { DeliveryRow, MessageRow } from './rows.js';
 
 /**
@@ -759,6 +760,8 @@ export class FridayState {
   readonly intent: IntentService;
   /** Learnings agents propose for the project (ADR-0034 §7). */
   readonly learnings: LearningService;
+  /** Runtime readiness: what Friday has seen of each host and model here (ADR-0035). */
+  readonly readiness: ReadinessService;
   /**
    * Per project: sessions that last reported at or before `since` are not judged until `until`
    * (daemon start, after a pause), because they could not report in between.
@@ -806,6 +809,7 @@ export class FridayState {
     this.memory = new MemoryService(this);
     this.intent = new IntentService(this);
     this.learnings = new LearningService(this);
+    this.readiness = new ReadinessService(this);
     this.artifacts = deps.artifactsDir
       ? new ArtifactStore(this.db, deps.artifactsDir, { ids: this.ids, clock: this.clock, redactor: this.redactor })
       : undefined;
@@ -2324,6 +2328,8 @@ export class FridayState {
           },
         });
         task = this.moveTask(ctx, task, 'agent.completion_claim', { reason: p.summary.slice(0, 200) });
+        // The host and model took the work to a claim: signed in, for seven days (ADR-0035 §1).
+        this.readiness.observeCompletion(ctx, projectId, this.q.run(run.run_id), this.q.harness(caller.harness_id));
         this.releaseAgent(ctx, caller.agent_id, task.task_id);
         this.syncHarnessBusy(ctx, caller.harness_id);
         return {
@@ -3833,6 +3839,8 @@ export class FridayState {
         });
         this.moveHarness(ctx, this.q.harness(harness_id), 'READY', 'registered');
       }
+      // The host is installed, configured and connected to Friday while this session lives (ADR-0035 §1).
+      this.readiness.observeRegistration(ctx, projectId, this.q.harness(harness_id));
 
       const agentKey = params.agent?.agent_key ?? this.config.defaultAgentKey;
       let agent = this.q.agentByKey(projectId, agentKey);

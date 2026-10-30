@@ -14,6 +14,7 @@ import { cli } from '../helpers/cli.js';
 import { startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
 import { FakeHarness } from '../helpers/fake-harness.js';
 import { postHook } from '../helpers/hooks.js';
+import { hostSeen } from '../helpers/readiness.js';
 
 const ws = useTestWorkspace();
 let saved: string | undefined;
@@ -32,6 +33,8 @@ const inspect = (td: TestDaemon, id: string) =>
 describe('model routing', () => {
   it('dispatches by static role registry and preserves a pin over registry rank', async () => {
     const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
+    // A dry run judges each candidate on its own host; this machine has seen Claude Code (ADR-0035).
+    await hostSeen(td, 'claude-code');
     const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
       summary: 'Fix one file',
       kind: 'implementation',

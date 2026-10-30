@@ -1229,6 +1229,28 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     c.json({ pin: state.unpinRouting(pid, HUMAN, c.req.param('pin')) }),
   );
 
+  // Runtime readiness (ADR-0035): what this machine has seen of each host and model, and the verdict.
+  app.get(`${P}/readiness`, allow(...OPERATOR), (c) => c.json(routingOf().readinessReport()));
+  app.get(`${P}/readiness/evidence`, allow(...OPERATOR), (c) =>
+    c.json({
+      evidence: state.q.readinessEvidence(pid, {
+        ...(c.req.query('host') ? { host: c.req.query('host') as string } : {}),
+        all: c.req.query('all') === 'true',
+        limit: Math.min(Number(c.req.query('limit') ?? 200) || 200, 2000),
+      }),
+    }),
+  );
+  // What a host check outside the daemon saw (`friday harness doctor <host>`): a day's evidence.
+  app.post(`${P}/readiness/evidence`, allow(...OPERATOR), async (c) =>
+    c.json({ evidence: state.readiness.record(pid, HUMAN, await c.req.json().catch(() => ({}))) }, 201),
+  );
+  app.post(`${P}/readiness/clear`, allow(...OPERATOR), async (c) => {
+    const body = z
+      .object({ host: z.string().min(1).max(40), model: z.string().min(1).max(200).nullable().default(null) })
+      .parse(await c.req.json().catch(() => ({})));
+    return c.json({ ended: state.readiness.clear(pid, HUMAN, body.host, body.model) });
+  });
+
   // Operations the gateway runs, and their runs (M6c, ADR-0029). Secret names only, never values.
   app.get(`${P}/operations`, allow(...OPERATOR), (c) => {
     const p = deps.policy?.();

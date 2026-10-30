@@ -6,6 +6,7 @@
 export const PACKAGE_NAME = '@friday/routing';
 
 export * from './decide.js';
+export * from './readiness.js';
 export * from './registry.js';
 export * from './registry-artifact.js';
 export * from './role-registry.js';

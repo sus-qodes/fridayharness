@@ -26,6 +26,7 @@ import { type GlobalOptions, out, project, UsageError } from './context.js';
 import { extraDoctorChecks, renderDoctor } from './doctor.js';
 import { materializeFixtureShop } from './fixture.js';
 import { commandPlugins } from './program.js';
+import { recordDoctorEvidence } from './readiness.js';
 import { daemonPlugins } from './run.js';
 import { FRIDAY_DIR_GITIGNORE } from './templates.js';
 
@@ -254,7 +255,11 @@ function registerHarness(program: Command): void {
         },
       ) => {
         // A spawn-mode host writes nothing into the project: its doctor checks the host itself (ADR-0032).
-        if (host === 'codex') return doctorCodex(g, opts.sandbox, opts.windowsSandbox);
+        if (host === 'codex') {
+          const report = await doctorCodex(g, opts.sandbox, opts.windowsSandbox);
+          await recordDoctorEvidence(g, 'codex', report.checks, null);
+          return;
+        }
         if (host === 'antigravity') return antigravityDoctorCli(project(g()), opts, hostIo(g));
         if (host === 'opencode') return opencodeDoctorCli(project(g()), opts, hostIo(g));
         if (host === 'cursor') return cursorDoctorCli(project(g()), opts, hostIo(g));
@@ -264,6 +269,8 @@ function registerHarness(program: Command): void {
         const report = await claudeDoctor(ref, { ...(opts.quick ? { skipMcp: true } : {}) });
         out(g(), report, () => `${renderDoctor(report.checks)}\n\nEnforcement achieved: ${report.achieved}`);
         if (report.checks.some((c) => c.status === 'fail')) process.exitCode = 1;
+        // What the check saw counts for a day in routing (ADR-0035 §1), when the daemon is up to record it.
+        await recordDoctorEvidence(g, 'claude-code', report.checks, report.install?.version ?? null);
       },
     );
 

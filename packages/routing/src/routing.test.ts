@@ -5,10 +5,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   applicablePins,
+  assessReadiness,
   DEFAULT_ROUTING,
   decideRoute,
   loadModelCatalog,
   mergeModels,
+  type ReadinessEvidence,
   ROLE_REGISTRY_SOURCE,
   type RouteInput,
   type RoutingPin,
@@ -357,5 +359,130 @@ describe('decideRoute', () => {
     const bound = decideRoute(base({ model_control: 'set' }));
     expect(bound.binding).toBe(true);
     expect(bound.reason).not.toContain('advisory');
+  });
+});
+
+describe('readiness filters candidates and never reorders (ADR-0035 §2)', () => {
+  const NOW = '2026-10-22T12:00:00.000Z';
+  const bench = (host: string, model: string | null, until: string, detail = 'rate limited'): ReadinessEvidence => ({
+    host,
+    model,
+    stage: 'benched',
+    status: 'failed',
+    checked_at: NOW,
+    expires_at: until,
+    source: 'test',
+    version: null,
+    detail,
+  });
+  /** Every host connected now, with the given evidence. */
+  const readiness =
+    (evidence: ReadinessEvidence[], live = true) =>
+    (host: string, model: string) =>
+      assessReadiness(evidence, { host, model, live, now: NOW });
+  const architect = (extra: Partial<RouteInput> = {}) =>
+    base({ task: { ...base().task, kind: 'research', role: 'architect' }, ...extra });
+
+  it('without a readiness source the decision is pure, and records no checks', () => {
+    const d = decideRoute(architect());
+    expect(d).toMatchObject({ model: 'claude-opus-5-5', selected_rank: 1, readiness: [] });
+  });
+
+  it('skips a benched rank 1 for the next rank the harness can run, and records every check made', () => {
+    const until = '2026-10-22T12:30:00.000Z';
+    const d = decideRoute(architect({ readiness: readiness([bench('claude-code', 'claude-opus-5-5', until)]) }));
+    expect(d).toMatchObject({ model: 'claude-fable-5-1', source: 'registry', selected_rank: 2, blocked: false });
+    expect(d.excluded).toContainEqual({ model: 'claude-opus-5-5', reason: 'readiness.benched' });
+    expect(d.readiness).toEqual([
+      {
+        host: 'claude-code',
+        model: 'claude-opus-5-5',
+        dispatchable: false,
+        reason: `claude-code/claude-opus-5-5 is benched until ${until}: rate limited`,
+        bench_until: until,
+      },
+      { host: 'claude-code', model: 'claude-fable-5-1', dispatchable: true, reason: 'ready', bench_until: null },
+    ]);
+    // Rank is untouched: the chain still names what readiness skipped nowhere, and what is next.
+    expect(d.fallback_chain).toEqual([{ model: null, reason: 'human' }]);
+  });
+
+  it('blocks with the readiness reasons when every candidate is out, never falling back to an unready one', () => {
+    const d = decideRoute(
+      architect({
+        readiness: readiness([bench('claude-code', null, '2026-10-22T12:10:00.000Z', 'crashed')]),
+      }),
+    );
+    expect(d.blocked).toBe(true);
+    expect(d.reason_codes).toEqual(expect.arrayContaining(['registry.none_eligible', 'readiness.none_ready']));
+    expect(d.reason).toContain(
+      'not ready: claude-code/claude-opus-5-5 is benched until 2026-10-22T12:10:00.000Z: crashed',
+    );
+    expect(d.excluded.map((e) => e.reason).filter((r) => r === 'readiness.benched')).toHaveLength(2);
+  });
+
+  it('a host nobody has seen is out on a dry run, so the next host that was seen takes the rank', () => {
+    // A dry run (no harness): each candidate is judged on its own host; nothing is connected, and
+    // only Codex was seen by a doctor check within the day.
+    const doctor = (['detected', 'configured', 'handshake'] as const).map(
+      (stage): ReadinessEvidence => ({
+        host: 'codex',
+        model: null,
+        stage,
+        status: 'passed',
+        checked_at: NOW,
+        expires_at: '2026-10-23T12:00:00.000Z',
+        source: 'harness doctor',
+        version: null,
+        detail: null,
+      }),
+    );
+    const d = decideRoute(base({ vendor: null, readiness: readiness(doctor, false) }));
+    expect(d).toMatchObject({ model: 'openai/gpt-6.1-sol', selected_rank: 4, selected_harness: 'codex' });
+    expect(d.excluded).toContainEqual({ model: 'claude-sonnet-5-5', reason: 'readiness.detected.missing' });
+  });
+
+  it('a pinned model still needs a ready host: a human decides, nothing else is used', () => {
+    const d = decideRoute(
+      base({
+        pins: [pin({ model: 'claude-sonnet-5-5' })],
+        readiness: readiness([
+          {
+            host: 'claude-code',
+            model: null,
+            stage: 'authenticated',
+            status: 'failed',
+            checked_at: NOW,
+            expires_at: null,
+            source: 'test',
+            version: null,
+            detail: 'not logged in',
+          },
+        ]),
+      }),
+    );
+    expect(d).toMatchObject({ blocked: true, model: null, pin_id: 'pin_1' });
+    expect(d.reason_codes).toEqual(expect.arrayContaining(['pin.unavailable', 'readiness.authenticated.failed']));
+    expect(d.reason).toContain(
+      'claude-sonnet-5-5 is pinned, but claude-code/claude-sonnet-5-5 is not signed in: not logged in',
+    );
+  });
+
+  it('a failed verification or a work error is never readiness: only host evidence excludes', () => {
+    // Nothing about outcomes reaches the readiness source; a host seen signed in stays in.
+    const seen: ReadinessEvidence = {
+      host: 'claude-code',
+      model: 'claude-opus-5-5',
+      stage: 'authenticated',
+      status: 'passed',
+      checked_at: NOW,
+      expires_at: '2026-10-29T12:00:00.000Z',
+      source: 'run:run_1',
+      version: null,
+      detail: null,
+    };
+    const d = decideRoute(architect({ readiness: readiness([seen]) }));
+    expect(d).toMatchObject({ model: 'claude-opus-5-5', selected_rank: 1 });
+    expect(d.readiness[0]).toMatchObject({ dispatchable: true, reason: 'ready' });
   });
 });

@@ -1,4 +1,4 @@
-import { CostClass, type TaskView } from '@friday/protocol';
+import { CostClass, type ReadinessAssessmentView, type ReadinessReport, type TaskView } from '@friday/protocol';
 import {
   decideRoute,
   loadModelCatalog,
@@ -69,6 +69,43 @@ export class RoutingService {
       settings: this.settings,
       pins: this.pins(),
       role_registry: this.roleRegistry,
+      // What this machine has seen of the host and model (ADR-0035 §2): filters, never reorders.
+      readiness: (host, model) => this.deps.state.readiness.assess(this.pid, host, model),
+    };
+  }
+
+  /**
+   * `GET readiness` (ADR-0035 §1, §3): every host the ranking names and every host seen here, each
+   * with its host-level verdict and one per model the ranking names for it, as of now.
+   */
+  readinessReport(): ReadinessReport {
+    const { state } = this.deps;
+    const checked_at = state.clock.now();
+    const live = state.q.liveHarnessesByVendor(this.pid, checked_at);
+    // host -> model -> the roles that rank it there.
+    const named = new Map<string, Map<string, { role: string; rank: number }[]>>();
+    for (const role of Object.values(this.roleRegistry.roles)) {
+      for (const c of role.candidates) {
+        const models = named.get(c.harness) ?? new Map<string, { role: string; rank: number }[]>();
+        models.set(c.model, [...(models.get(c.model) ?? []), { role: role.role, rank: c.rank }]);
+        named.set(c.harness, models);
+      }
+    }
+    const seen = new Set(state.q.readinessEvidence(this.pid, { all: true }).map((e) => e.host));
+    const hosts = [...new Set([...named.keys(), ...live.keys(), ...seen])].sort();
+    const assess = (host: string, model: string | null): ReadinessAssessmentView => ({
+      ...state.readiness.assess(this.pid, host, model, checked_at),
+      roles: model === null ? [] : (named.get(host)?.get(model) ?? []),
+    });
+    return {
+      checked_at,
+      hosts: hosts.map((host) => ({
+        host,
+        live: (live.get(host) ?? 0) > 0,
+        sessions: live.get(host) ?? 0,
+        ranked: named.has(host),
+        assessments: [assess(host, null), ...[...(named.get(host)?.keys() ?? [])].sort().map((m) => assess(host, m))],
+      })),
     };
   }
 
