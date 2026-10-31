@@ -203,11 +203,11 @@ describe('Challenger 3: Adversarial Lifecycle & State Cycling Verification', () 
         expect(svgs.length).toBe(1);
 
         // Required structural elements must exist
-        expect(mascot.el.querySelector('#friday-body')).not.toBeNull();
-        expect(mascot.el.querySelector('#friday-beak')).not.toBeNull();
-        expect(mascot.el.querySelector('#friday-pos')).not.toBeNull();
-        expect(mascot.el.querySelector('#friday-rot')).not.toBeNull();
-        expect(mascot.el.querySelector('#friday-squash')).not.toBeNull();
+        expect(mascot.el.querySelector(`#${mascot.idPrefix}body`)).not.toBeNull();
+        expect(mascot.el.querySelector(`#${mascot.idPrefix}beak`)).not.toBeNull();
+        expect(mascot.el.querySelector(`#${mascot.idPrefix}pos`)).not.toBeNull();
+        expect(mascot.el.querySelector(`#${mascot.idPrefix}rot`)).not.toBeNull();
+        expect(mascot.el.querySelector(`#${mascot.idPrefix}squash`)).not.toBeNull();
       }
 
       // Verify coordinates remain non-NaN after thrashing
@@ -248,9 +248,9 @@ describe('Challenger 3: Adversarial Lifecycle & State Cycling Verification', () 
       }
 
       // Verify transform attributes on SVG elements do not contain NaN or undefined
-      const posEl = mascot.el.querySelector<SVGElement>('#friday-pos');
-      const rotEl = mascot.el.querySelector<SVGElement>('#friday-rot');
-      const squashEl = mascot.el.querySelector<SVGElement>('#friday-squash');
+      const posEl = mascot.el.querySelector<SVGElement>(`#${mascot.idPrefix}pos`);
+      const rotEl = mascot.el.querySelector<SVGElement>(`#${mascot.idPrefix}rot`);
+      const squashEl = mascot.el.querySelector<SVGElement>(`#${mascot.idPrefix}squash`);
 
       expect(posEl?.getAttribute('transform')).not.toContain('NaN');
       expect(posEl?.getAttribute('transform')).not.toContain('undefined');

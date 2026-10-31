@@ -307,5 +307,7 @@ export function createTour(
     completedBefore = true;
     stage.say(null);
     teardown();
+    // Skipped: Friday leaves at once. (Only the completed farewell lingers; plan §7.10.)
+    stage.hide();
   }
 }

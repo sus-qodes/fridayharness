@@ -44,6 +44,15 @@ const DEFAULT_SIZE = 36;
 const CLICK_IMPULSE_Y = -18;
 
 /**
+ * Every component mascot gets its own id namespace: the SVG's gradients and clip paths are
+ * referenced by id (`url(#<prefix>body-grad)`), and several mascots live on one page (the stage,
+ * the notch pill, the hub). A shared prefix would make every duck resolve the first-in-document
+ * defs — which sit inside a hidden view whenever another view is active, and Chromium refuses
+ * paint servers in a `display: none` subtree: the mascot then loses its body.
+ */
+let instanceCounter = 0;
+
+/**
  * Creates and mounts an interactive Friday mascot DOM component.
  *
  * Conforms to Friday's native Component interface ({ el, destroy })
@@ -72,7 +81,7 @@ export function createFridayMascot(
   let currentState: MascotState = toCanonicalState(options?.state ?? 'idle');
   let currentAccessories: MascotAccessory[] = options?.accessories ? [...options.accessories] : [];
   let currentTint: string | undefined = options?.tint;
-  const prefix = options?.idPrefix ?? 'friday-';
+  const prefix = options?.idPrefix ?? `friday-${(instanceCounter += 1)}-`;
   const interactive = options?.interactive !== false;
   let destroyed = false;
 
@@ -274,6 +283,9 @@ export function createFridayMascot(
   const handle: FridayMascotHandle & Component = {
     get el(): HTMLElement {
       return host;
+    },
+    get idPrefix(): string {
+      return prefix;
     },
     getState(): MascotState {
       return currentState;

@@ -69,9 +69,9 @@ describe('m3_challenger_6: Adversarial Stress & Verification Harness', () => {
           expect(svg.style.overflow).toBe('visible');
 
           // Core geometric silhouette elements
-          expect(svg.querySelector('#friday-body-silhouette')).not.toBeNull();
-          expect(svg.querySelector('#friday-beak')).not.toBeNull();
-          expect(svg.querySelector('#friday-face')).not.toBeNull();
+          expect(svg.querySelector(`#${m.idPrefix}body-silhouette`)).not.toBeNull();
+          expect(svg.querySelector(`#${m.idPrefix}beak`)).not.toBeNull();
+          expect(svg.querySelector(`#${m.idPrefix}face`)).not.toBeNull();
         }
       }
     });

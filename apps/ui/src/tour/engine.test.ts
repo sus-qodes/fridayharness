@@ -224,6 +224,8 @@ describe('the tour engine', () => {
     expect(tour.active).toBe(false);
     expect(env.saved).toEqual({ done: true, step: 0 });
     expect(spot.clear).toHaveBeenCalled();
+    // Friday leaves the screen at once — the stage used to linger after a skip.
+    expect(stage.hidden).toBeGreaterThan(0);
   });
 
   it('auto-advances when the step condition holds, debounced', () => {

@@ -107,6 +107,11 @@ export interface FridayMascotOptions {
 /** Public control handle for the mascot component. */
 export interface FridayMascotHandle {
   readonly el: HTMLElement;
+  /**
+   * This instance's SVG id namespace (`friday-3-`): gradients and clip paths are referenced by id,
+   * so every mounted mascot carries its own prefix. Tests find parts via `#${handle.idPrefix}…`.
+   */
+  readonly idPrefix: string;
   setState(state: MascotState): void;
   getState(): MascotState;
   setAccessories(accessories: MascotAccessory[]): void;

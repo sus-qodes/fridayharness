@@ -98,7 +98,7 @@ describe('createFridayMascot Component', () => {
       mascot.setState('thinking');
       expect(mascot.getState()).toBe('thinking');
       expect(mascot.el.dataset.state).toBe('thinking');
-      expect(mascot.el.querySelector('#friday-face')).not.toBeNull();
+      expect(mascot.el.querySelector(`#${mascot.idPrefix}face`)).not.toBeNull();
 
       mascot.setState('tool_execution');
       expect(mascot.getState()).toBe('tool_execution');
@@ -143,28 +143,28 @@ describe('createFridayMascot Component', () => {
       // Set laptop and hands
       mascot.setAccessories(['laptop', 'hands']);
       expect(mascot.getAccessories()).toEqual(['laptop', 'hands']);
-      expect(mascot.el.querySelector('#friday-accessory-laptop')).not.toBeNull();
+      expect(mascot.el.querySelector(`#${mascot.idPrefix}accessory-laptop`)).not.toBeNull();
 
       // Set sunglasses
       mascot.setAccessories(['sunglasses']);
       expect(mascot.getAccessories()).toEqual(['sunglasses']);
-      expect(mascot.el.querySelector('#friday-accessory-sunglasses')).not.toBeNull();
-      expect(mascot.el.querySelector('#friday-accessory-laptop')).toBeNull();
+      expect(mascot.el.querySelector(`#${mascot.idPrefix}accessory-sunglasses`)).not.toBeNull();
+      expect(mascot.el.querySelector(`#${mascot.idPrefix}accessory-laptop`)).toBeNull();
 
       // Set headphones
       mascot.setAccessories(['headphones']);
       expect(mascot.getAccessories()).toEqual(['headphones']);
-      expect(mascot.el.querySelector('#friday-headphones-rear')).not.toBeNull();
+      expect(mascot.el.querySelector(`#${mascot.idPrefix}headphones-rear`)).not.toBeNull();
 
       // Set cloud thoughts
       mascot.setAccessories(['cloud_thoughts']);
       expect(mascot.getAccessories()).toEqual(['cloud_thoughts']);
-      expect(mascot.el.querySelector('#friday-accessory-cloud-thoughts')).not.toBeNull();
+      expect(mascot.el.querySelector(`#${mascot.idPrefix}accessory-cloud-thoughts`)).not.toBeNull();
 
       // Clear accessories
       mascot.setAccessories([]);
       expect(mascot.getAccessories()).toEqual([]);
-      expect(mascot.el.querySelector('#friday-accessory-cloud-thoughts')).toBeNull();
+      expect(mascot.el.querySelector(`#${mascot.idPrefix}accessory-cloud-thoughts`)).toBeNull();
     });
 
     it('updates size dynamically via setSize', () => {
@@ -532,6 +532,29 @@ describe('createFridayMascot Component', () => {
       mascot.engine.gesture('droop');
       expect(mascot.getState()).toBe('error');
     });
+  });
+});
+
+describe('per-instance id namespace', () => {
+  it('gives every mounted mascot its own gradient and clip ids', () => {
+    const a = createFridayMascot(undefined, { size: 36 });
+    const b = createFridayMascot(undefined, { size: 36 });
+    document.body.append(a.el, b.el);
+    try {
+      expect(a.idPrefix).not.toBe(b.idPrefix);
+      // A shared prefix made every duck resolve the first-in-document defs — which sit inside a
+      // hidden view whenever another view is active, and Chromium refuses paint servers from a
+      // display:none subtree: the touring mascot then lost its whole body.
+      for (const part of ['body-grad', 'body-clip', 'beak-grad']) {
+        expect(document.querySelectorAll(`[id="${a.idPrefix}${part}"]`).length).toBe(1);
+        expect(document.querySelectorAll(`[id="${b.idPrefix}${part}"]`).length).toBe(1);
+      }
+      expect(a.el.querySelector(`#${a.idPrefix}body-silhouette`)).not.toBeNull();
+      expect(b.el.querySelector(`#${b.idPrefix}beak`)).not.toBeNull();
+    } finally {
+      a.destroy();
+      b.destroy();
+    }
   });
 });
 

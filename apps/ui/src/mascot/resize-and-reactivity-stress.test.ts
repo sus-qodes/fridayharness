@@ -70,9 +70,9 @@ describe('Challenger 2: Dynamic Resize & Store Reactivity Adversarial Verificati
         expect(svg?.style.overflow).toBe('visible');
 
         // Verify essential SVG elements exist and are not clipped/distorted
-        expect(svg?.querySelector('#friday-body-silhouette')).not.toBeNull();
-        expect(svg?.querySelector('#friday-beak')).not.toBeNull();
-        expect(svg?.querySelector('#friday-face')).not.toBeNull();
+        expect(svg?.querySelector(`#${instance.idPrefix}body-silhouette`)).not.toBeNull();
+        expect(svg?.querySelector(`#${instance.idPrefix}beak`)).not.toBeNull();
+        expect(svg?.querySelector(`#${instance.idPrefix}face`)).not.toBeNull();
 
         instance.destroy();
       }

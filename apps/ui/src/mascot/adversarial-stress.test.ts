@@ -210,7 +210,7 @@ describe('Adversarial Challenge 2: Click Impulse Recoil & Numerical Stability St
       expect(pose.scaleX, `scaleX collapsed at frame ${frame}: ${pose.scaleX}`).toBeGreaterThan(0.2);
 
       // Check SVG transform string generation doesn't produce NaN
-      const posEl = svg?.querySelector('#friday-pos');
+      const posEl = svg?.querySelector(`#${mascot.idPrefix}pos`);
       if (posEl) {
         const transform = posEl.getAttribute('transform');
         expect(transform).not.toContain('NaN');
