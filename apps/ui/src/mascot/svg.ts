@@ -116,11 +116,6 @@ export function renderFridaySvgString(options: FridaySvgOptions = {}): string {
       <path d="${DUCK_BODY_PATH}"/>
     </clipPath>
 
-    <style>
-      @media (prefers-reduced-motion: reduce) {
-        [data-animated] { animation: none !important; }
-      }
-    </style>
   </defs>
 
   <!-- Layer 0: Ground Contact Shadow & Mood Ambient Halo -->
@@ -170,15 +165,54 @@ export function renderFridaySvgString(options: FridaySvgOptions = {}): string {
  * Creates and returns an SVGSVGElement DOM element.
  */
 export function renderFridaySvg(options: FridaySvgOptions = {}): SVGSVGElement {
-  const xml = renderFridaySvgString(options);
+  return svgFromMarkup(renderFridaySvgString(options));
+}
 
-  if (typeof DOMParser !== 'undefined') {
-    const doc = new DOMParser().parseFromString(xml, 'image/svg+xml');
-    const svg = doc.querySelector('svg');
-    if (svg) return svg as SVGSVGElement;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+const unescapeXml = (t: string) => t.replace(/&(amp|lt|gt|quot|apos);/g, (_, n: string) => ENTITIES[n] as string);
+
+/**
+ * Builds the elements of Friday's own markup one by one with `createElementNS`. The desktop app's
+ * policy (`require-trusted-types-for 'script'`) refuses `DOMParser` and `innerHTML`, which take a
+ * string, so nothing here ever hands a string to the HTML or XML parser. The markup is what
+ * `renderFridaySvgString` wrote: tags, double-quoted attributes, comments and text.
+ */
+export function svgFromMarkup(xml: string): SVGSVGElement {
+  if (typeof document === 'undefined') throw new Error('A document is needed to build the SVG element.');
+  const token =
+    /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<\/([A-Za-z][\w:-]*)\s*>|<([A-Za-z][\w:-]*)((?:\s+[^\s=/>]+\s*=\s*"[^"]*")*)\s*(\/?)>|([^<]+)/g;
+  const attr = /([^\s=/>]+)\s*=\s*"([^"]*)"/g;
+  let root: SVGSVGElement | null = null;
+  const stack: Element[] = [];
+  for (let m = token.exec(xml); m !== null; m = token.exec(xml)) {
+    const [, close, open, attrs, selfClose, text] = m;
+    if (close) {
+      stack.pop();
+    } else if (open) {
+      const el = document.createElementNS(SVG_NS, open);
+      for (let a = attr.exec(attrs ?? ''); a !== null; a = attr.exec(attrs ?? '')) {
+        const value = unescapeXml(a[2] as string);
+        if (a[1] === 'style') {
+          // Through the CSS object model: the desktop app's policy (style-src 'self') blocks a style attribute.
+          for (const decl of value.split(';')) {
+            const at = decl.indexOf(':');
+            if (at > 0) (el as SVGElement).style.setProperty(decl.slice(0, at).trim(), decl.slice(at + 1).trim());
+          }
+        } else {
+          el.setAttribute(a[1] as string, value);
+        }
+      }
+      const parent = stack[stack.length - 1];
+      if (parent) parent.appendChild(el);
+      else if (!root && open === 'svg') root = el as SVGSVGElement;
+      if (!selfClose) stack.push(el);
+    } else if (text && stack.length > 0 && text.trim() !== '') {
+      (stack[stack.length - 1] as Element).appendChild(document.createTextNode(unescapeXml(text.trim())));
+    }
   }
-
-  throw new Error('DOMParser unavailable to instantiate SVGSVGElement.');
+  if (!root) throw new Error('The markup holds no svg element.');
+  return root;
 }
 
 /** Alias for renderFridaySvgString for convenience. */

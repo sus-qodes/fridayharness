@@ -312,3 +312,15 @@
 .fb-submit-btn:active {
   transform: scale(0.96);
 }
+
+/* The duck's SVG is built element by element (no style attribute or style block: the desktop
+   app's policy refuses both), so what they carried lives here. */
+.friday-mascot {
+  overflow: visible;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .friday-mascot [data-animated] {
+    animation: none !important;
+  }
+}

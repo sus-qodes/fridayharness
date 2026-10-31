@@ -1,4 +1,4 @@
-// Draws Friday's app icon (the mark of apps/ui/public/favicon.svg) and writes
+// Draws Friday's app icon, the yellow duck leaning a little (the mark of apps/ui/public/favicon.svg), and writes
 // src-tauri/icons/icon.png (256 px) and src-tauri/icons/icon.ico (16 to 256 px, PNG entries).
 // Run it again after changing the mark: node apps/desktop/scripts/make-icons.mjs
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -9,9 +9,20 @@ import { deflateSync } from 'node:zlib';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const out = path.join(here, '..', 'src-tauri', 'icons');
 
-const BG = [0x0c, 0x12, 0x1e];
-const RING = [0x06, 0xb6, 0xd4];
-const INK = [0xe2, 0xe8, 0xf0];
+/** The duck leans clockwise by this many degrees, as in the reference picture. */
+const TILT_DEG = 14;
+const PIVOT = [60, 63];
+
+const BODY_TOP = [0xff, 0xe7, 0x66];
+const BODY_BOTTOM = [0xf2, 0xb9, 0x1a];
+const BEAK_TOP = [0xff, 0xbe, 0x3a];
+const BEAK_BOTTOM = [0xf2, 0x9a, 0x10];
+const SMILE = [0xb6, 0x5e, 0x00];
+const EYE = [0x0e, 0x2a, 0x68];
+const WHITE = [0xff, 0xff, 0xff];
+
+const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * Math.min(1, Math.max(0, t))));
+const inEllipse = (x, y, cx, cy, rx, ry) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1;
 
 function segDist(px, py, [ax, ay], [bx, by]) {
   const dx = bx - ax;
@@ -20,32 +31,51 @@ function segDist(px, py, [ax, ay], [bx, by]) {
   return Math.hypot(px - ax - t * dx, py - ay - t * dy);
 }
 
-function roundedBox(px, py, [x0, y0, x1, y1], r) {
-  const qx = Math.abs(px - (x0 + x1) / 2) - ((x1 - x0) / 2 - r);
-  const qy = Math.abs(py - (y0 + y1) / 2) - ((y1 - y0) / 2 - r);
-  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r;
+const SMILE_POINTS = [
+  [53.5, 71.5],
+  [57, 74],
+  [60, 74.8],
+  [63, 74],
+  [66.5, 71.5],
+];
+
+/** The colour of the duck at a point of its 120-unit design grid (before the tilt), or null. */
+function duckAt(x, y) {
+  const body = mix(BODY_TOP, BODY_BOTTOM, (y - 7) / 113);
+  // Front to back: smile, beak, eyes, wing, body, head, tuft.
+  for (let i = 0; i < SMILE_POINTS.length - 1; i += 1) {
+    if (segDist(x, y, SMILE_POINTS[i], SMILE_POINTS[i + 1]) <= 0.9) return SMILE;
+  }
+  if (inEllipse(x, y, 60, 70, 15, 9.5)) return mix(BEAK_TOP, BEAK_BOTTOM, (y - 60.5) / 19);
+  for (const ex of [42, 78]) {
+    if (inEllipse(x, y, ex - 1.6, 52.5, 2.3, 2.3)) return WHITE;
+    if (inEllipse(x, y, ex, 55, 5.6, 7.4)) return EYE;
+  }
+  if (inEllipse(x, y, 36, 101, 14, 11))
+    return inEllipse(x, y, 36, 101, 12.4, 9.6) ? mix(BODY_TOP, BODY_BOTTOM, 0.25) : BODY_BOTTOM;
+  if (inEllipse(x, y, 60, 100, 36, 20)) return body;
+  if (inEllipse(x, y, 60, 58, 42, 38)) return body;
+  if (inEllipse(x, y, 57, 16, 8.5, 11) || inEllipse(x, y, 71, 21, 7.5, 6.5)) return body;
+  return null;
 }
 
-/** RGBA pixels of the mark at `size` px, drawn on the favicon's 64-unit grid, 4x4 samples a pixel. */
+/** RGBA pixels of the tilted duck at `size` px, 4x4 samples a pixel, on a transparent background. */
 function draw(size) {
-  const k = 64 / size;
   const px = Buffer.alloc(size * size * 4);
+  const rad = (-TILT_DEG * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
   for (let y = 0; y < size; y += 1) {
     for (let x = 0; x < size; x += 1) {
       const acc = [0, 0, 0, 0];
       for (let sy = 0; sy < 4; sy += 1) {
         for (let sx = 0; sx < 4; sx += 1) {
-          const gx = (x + (sx + 0.5) / 4) * k;
-          const gy = (y + (sy + 0.5) / 4) * k;
-          const d = roundedBox(gx, gy, [4, 4, 60, 60], 16);
-          let c = null;
-          if (d <= 0) c = d > -4 ? RING : BG;
-          const f = Math.min(
-            segDist(gx, gy, [24, 46], [24, 18]),
-            segDist(gx, gy, [24, 18], [42, 18]),
-            segDist(gx, gy, [24, 31], [37, 31]),
-          );
-          if (f <= 3 && d < -4) c = INK;
+          // Canvas -> design grid: 132 units across, centred on the duck; then undo the tilt.
+          const dx = ((x + (sx + 0.5) / 4) / size - 0.5) * 132 + PIVOT[0];
+          const dy = ((y + (sy + 0.5) / 4) / size - 0.5) * 132 + PIVOT[1] + 1;
+          const rx = PIVOT[0] + (dx - PIVOT[0]) * cos - (dy - PIVOT[1]) * sin;
+          const ry = PIVOT[1] + (dx - PIVOT[0]) * sin + (dy - PIVOT[1]) * cos;
+          const c = duckAt(rx, ry);
           if (c) {
             acc[0] += c[0];
             acc[1] += c[1];

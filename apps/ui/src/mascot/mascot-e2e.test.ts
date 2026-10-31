@@ -8,6 +8,9 @@
  * - Tier 4: Real-World Scenarios (complete agent lifecycle workflow, 11 DOF kinematics & area preservation, DOM mounting)
  */
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   FRIDAY_CANVAS_SIZE,
@@ -475,10 +478,14 @@ describe('Tier 2: Boundary & Corner Cases', () => {
   });
 
   describe('Prefers-Reduced-Motion Accessibility', () => {
-    it('includes media query suppressing animation for reduced-motion users', () => {
+    it('suppresses animation for reduced-motion users from the stylesheet, never a <style> block', () => {
+      // The desktop app's policy (style-src 'self') refuses a <style> block inside the markup,
+      // so the rule lives in styles/mascot.css and must not come back inline.
       const markup = renderFridaySvgString();
-      expect(markup).toContain('@media (prefers-reduced-motion: reduce)');
-      expect(markup).toContain('animation: none !important');
+      expect(markup).not.toContain('<style');
+      const css = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'styles', 'mascot.css'), 'utf8');
+      expect(css).toContain('@media (prefers-reduced-motion: reduce)');
+      expect(css).toContain('animation: none !important');
     });
   });
 

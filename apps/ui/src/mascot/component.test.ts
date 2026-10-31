@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeContext, type TestContext } from '../test/context.js';
 import { makeSnapshot } from '../test/fixtures.js';
 import { createFridayMascot, type FridayMascotHandle } from './component.js';
+import { renderFridaySvg } from './svg.js';
 import type { MascotState } from './types.js';
 
 describe('createFridayMascot Component', () => {
@@ -531,5 +532,29 @@ describe('createFridayMascot Component', () => {
       mascot.engine.gesture('droop');
       expect(mascot.getState()).toBe('error');
     });
+  });
+});
+
+describe('under Trusted Types (the desktop app refuses strings turned into DOM)', () => {
+  it('draws the mascot without DOMParser, innerHTML or insertAdjacentHTML', () => {
+    const refuse = () => {
+      throw new Error("This document requires 'TrustedHTML' assignment.");
+    };
+    const parser = vi.spyOn(globalThis, 'DOMParser').mockImplementation(refuse as never);
+    const inner = vi.spyOn(Element.prototype, 'innerHTML', 'set').mockImplementation(refuse);
+    const adjacent = vi.spyOn(Element.prototype, 'insertAdjacentHTML').mockImplementation(refuse);
+    try {
+      const svg = renderFridaySvg({ state: 'thinking', accessories: ['hat', 'laptop'], title: 'a & b <c>' });
+      expect(svg.tagName.toLowerCase()).toBe('svg');
+      expect(svg.getAttribute('viewBox')).toBe('0 0 120 120');
+      expect(svg.querySelector('#friday-beak')).not.toBeNull();
+      expect(svg.querySelector('#friday-accessory-hat')).not.toBeNull();
+      expect(svg.querySelector('#friday-title')?.textContent).toBe('a & b <c>');
+      expect(svg.querySelectorAll('ellipse').length).toBeGreaterThan(5);
+    } finally {
+      parser.mockRestore();
+      inner.mockRestore();
+      adjacent.mockRestore();
+    }
   });
 });
