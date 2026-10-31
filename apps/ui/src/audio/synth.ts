@@ -481,14 +481,6 @@ export class Synth {
         this.#tone(ctx, filter, 'square', now, 0.012, 1200, null, 0.08);
         break;
       }
-      case 'open':
-      case 'close':
-      case 'attach':
-      case 'gulp':
-      case 'wink':
-      case 'yawn':
-      case 'sleep':
-      case 'work':
       default:
         this.#tone(ctx, master, 'sine', now, 0.15, 784, null, 0.16);
         this.#tone(ctx, master, 'sine', now + 0.04, 0.2, 1046.5, null, 0.18);

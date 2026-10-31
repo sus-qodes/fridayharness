@@ -120,22 +120,6 @@ export function mountHeader(ctx: AppContext, opts: HeaderOptions = {}): Componen
       },
     ],
   });
-  const settings = button(
-    icon('gear', 16),
-    () => {
-      const isSettings = ctx.store.select('ui').activeView === 'settings';
-      if (isSettings) {
-        ctx.store.patch('ui', { activeView: 'canvas', drawer: null });
-      } else {
-        openDrawer(ctx, { kind: 'settings' });
-      }
-    },
-    {
-      class: 'btn btn-ghost btn-icon sh-btn sh-settings',
-      ariaLabel: 'Settings',
-      title: 'Settings',
-    },
-  );
 
   const canvasBtn = button(
     [icon('grid', 14), h('span', null, 'Canvas')],
@@ -155,8 +139,8 @@ export function mountHeader(ctx: AppContext, opts: HeaderOptions = {}): Componen
       openDrawer(ctx, { kind: 'settings' });
     },
     {
-      class: 'sh-view-btn sh-view-settings',
-      ariaLabel: 'Settings Hub',
+      class: 'sh-view-btn sh-view-settings sh-settings',
+      ariaLabel: 'Settings',
       title: 'Switch to Settings Hub',
     },
   );
@@ -180,7 +164,7 @@ export function mountHeader(ctx: AppContext, opts: HeaderOptions = {}): Componen
     'div',
     { class: 'sh-right-zone' },
     metrics,
-    h('nav', { class: 'sh-actions', aria: { label: 'Studio' } }, search, messages, more.el, settings),
+    h('nav', { class: 'sh-actions', aria: { label: 'Studio' } }, search, messages, more.el),
   );
 
   const bar = h('div', { class: 'sh-bar' }, leftZone, centerZone, rightZone);
@@ -274,7 +258,6 @@ export function mountHeader(ctx: AppContext, opts: HeaderOptions = {}): Componen
     const active = ctx.store.select('ui').activeView;
     canvasBtn.classList.toggle('active', active === 'canvas');
     settingsBtn.classList.toggle('active', active === 'settings');
-    settings.classList.toggle('btn-active', active === 'settings');
   }
 
   const unsubscribers = [

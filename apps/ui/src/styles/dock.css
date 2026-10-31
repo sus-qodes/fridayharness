@@ -4,23 +4,25 @@
 .dk-dock {
   position: absolute;
   left: 50%;
-  bottom: 20px;
+  bottom: 24px;
   z-index: 30;
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   max-width: calc(100% - 32px);
-  padding: 5px 8px;
-  border-radius: var(--radius-pill);
-  background: rgba(18, 19, 22, 0.78);
-  backdrop-filter: blur(28px) saturate(190%);
-  -webkit-backdrop-filter: blur(28px) saturate(190%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  height: 44px;
+  padding: 4px 8px;
+  border-radius: 24px;
+  background: rgba(18, 20, 24, 0.78);
+  backdrop-filter: blur(32px) saturate(190%);
+  -webkit-backdrop-filter: blur(32px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, 0.09);
   box-shadow:
-    0 16px 40px rgba(0, 0, 0, 0.6),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    0 16px 44px rgba(0, 0, 0, 0.65),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
   transform: translateX(-50%);
-  opacity: 0.88;
+  opacity: 0.92;
+  box-sizing: border-box;
   transition:
     opacity var(--duration-base) var(--ease-standard),
     box-shadow var(--duration-base) var(--ease-standard),
@@ -32,7 +34,7 @@
   opacity: 1;
   box-shadow:
     0 20px 48px rgba(0, 0, 0, 0.75),
-    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
 }
 
 .dk-dock-paused {
@@ -43,7 +45,7 @@
 .dk-group {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
 }
 
 .dk-group[hidden] {
@@ -52,28 +54,35 @@
 
 .dk-sep {
   width: 1px;
-  height: 20px;
-  margin: 0 4px;
-  background: var(--border-subtle);
+  height: 18px;
+  margin: 0 3px;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .dk-btn {
+  height: 32px;
   min-height: 32px;
-  border-radius: var(--radius-pill);
-  font-size: var(--text-caption);
+  padding: 0 12px;
+  border-radius: 16px;
+  font-size: 12px;
+  font-weight: 500;
+  gap: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  border: none;
   transition:
-    transform var(--spring-duration) var(--spring-bounce),
+    transform var(--duration-fast) var(--ease-snappy),
     background var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard);
 }
 
 .dk-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--ink);
+  background: rgba(255, 255, 255, 0.09);
+  color: #fff;
 }
 
 .dk-btn:active {
-  transform: scale(0.94);
+  transform: scale(0.92);
 }
 
 .dk-btn[hidden] {
@@ -82,6 +91,10 @@
 
 .dk-btn.btn-icon {
   width: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .dk-icon {

@@ -182,6 +182,7 @@ describe('header', () => {
     mounted.push(header);
     const actions = [
       ...header.el.querySelectorAll<HTMLButtonElement>('.sh-actions > button, .sh-actions > * > button'),
+      ...header.el.querySelectorAll<HTMLButtonElement>('.sh-views .sh-settings'),
     ];
     for (const b of actions) expect(b.type).toBe('button');
     const names = actions.map((b) => b.getAttribute('aria-label') ?? b.querySelector('.sh-btn-label')?.textContent);

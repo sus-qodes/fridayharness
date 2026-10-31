@@ -19,6 +19,7 @@
 import { FridayApi } from '../api/client.js';
 import { decisionItems } from '../governance/tray.js';
 import { createMascotStage } from '../mascot/stage.js';
+import { feedbackSheet } from '../panels/feedback-sheet.js';
 import { mountSettingsHub } from '../panels/settings-hub.js';
 import { browserPlatform } from '../platform/browser-platform.js';
 import { HttpTransport } from '../platform/http-transport.js';
@@ -49,6 +50,7 @@ import {
   type AppContext,
   type Component,
   type ConfirmOptions,
+  openModal,
   type Platform,
   Registry,
   type Toast,
@@ -283,6 +285,7 @@ export function mountShell(
   const notchArea = areas.notch;
   if (notchArea && opts.notch !== false) mount('The Notch', notch, () => notchArea(ctx, notch, hooks));
   // Drawers and modals sit under the confirm dialogs and the toasts.
+  ctx.registry.modal('feedback', (c, _r, close) => feedbackSheet(c, close));
   mount('The drawers', overlays, () => mountDrawerHost(ctx, services.layers), services.confirms.el);
   mount('The dialogs', overlays, () => mountModalHost(ctx, services.layers), services.confirms.el);
   // The onboarding tour (plan §7.10): Friday walks first-time users through the loop. The
@@ -338,6 +341,14 @@ export function mountShell(
         ctrl: true,
         run: () => setRailCollapsed(!railCollapsed),
         description: 'Toggle Waiting for you panel',
+      },
+      {
+        key: '/',
+        ctrl: true,
+        run: () => {
+          openModal(ctx, { kind: 'feedback' });
+        },
+        description: 'Open Friday Oversight & Feedback sheet',
       },
     ],
   });

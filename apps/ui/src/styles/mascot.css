@@ -96,3 +96,219 @@
 .ms-bubble-meta[hidden] {
   display: none;
 }
+
+/* ---- Apple Interactive Feedback & Oversight Sheet (Phase 3) ---- */
+
+.fb-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+.fb-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fb-avatar-holder {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.fb-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fb-sheet-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.2;
+}
+
+.fb-sheet-sub {
+  font-size: 11.5px;
+  color: var(--color-slate-400);
+}
+
+.fb-seg {
+  display: flex;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.fb-seg-btn {
+  flex: 1;
+  text-align: center;
+  padding: 5px 0;
+  height: 26px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.65);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-snappy),
+    color var(--duration-fast) var(--ease-snappy),
+    transform var(--duration-fast) var(--ease-snappy);
+}
+
+.fb-seg-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.fb-seg-btn:active {
+  transform: scale(0.96);
+}
+
+.fb-seg-btn.active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.fb-ratings {
+  display: flex;
+  gap: 8px;
+}
+
+.fb-rate-pill {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-snappy),
+    border-color var(--duration-fast) var(--ease-snappy),
+    color var(--duration-fast) var(--ease-snappy),
+    transform var(--duration-fast) var(--ease-snappy);
+}
+
+.fb-rate-pill:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.fb-rate-pill:active {
+  transform: scale(0.96);
+}
+
+.fb-rate-pill.active {
+  background: rgba(48, 209, 88, 0.12);
+  border-color: rgba(48, 209, 88, 0.35);
+  color: #30d158;
+}
+
+.fb-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.fb-dot.dot-green {
+  background: #30d158;
+  box-shadow: 0 0 6px rgba(48, 209, 88, 0.4);
+}
+
+.fb-dot.dot-blue {
+  background: #0a84ff;
+  box-shadow: 0 0 6px rgba(10, 132, 255, 0.4);
+}
+
+.fb-dot.dot-amber {
+  background: #ff9f0a;
+  box-shadow: 0 0 6px rgba(255, 159, 10, 0.4);
+}
+
+.fb-textarea {
+  width: 100%;
+  height: 84px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #fff;
+  font-size: 12.5px;
+  line-height: 1.5;
+  resize: none;
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.fb-textarea:focus {
+  outline: none;
+  border-color: rgba(10, 132, 255, 0.5);
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.15);
+}
+
+.fb-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.fb-shortcut {
+  font-size: 11.5px;
+  color: var(--color-slate-400);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fb-submit-btn {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #0a84ff;
+  color: #fff;
+  border: none;
+  box-shadow: 0 4px 12px rgba(10, 132, 255, 0.28);
+  cursor: pointer;
+  transition:
+    transform var(--duration-fast) var(--ease-snappy),
+    background var(--duration-fast) var(--ease-standard);
+}
+
+.fb-submit-btn:hover {
+  background: #0077ed;
+}
+
+.fb-submit-btn:active {
+  transform: scale(0.96);
+}

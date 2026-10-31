@@ -16,6 +16,7 @@ tests/.reports/
 .DS_Store
 Thumbs.db
 *.log
+/.agents/
 
 # Note: there is deliberately no `.friday` rule here.
 # Each `.friday/` directory carries its own `.gitignore` listing runtime files,

@@ -150,7 +150,8 @@ export type ModalKind =
   | 'land'
   | 'claude-setup'
   | 'start-agent'
-  | 'plan-review';
+  | 'plan-review'
+  | 'feedback';
 
 /** What a modal is opened for (the store's `ui.modal`). */
 export interface ModalRequest {

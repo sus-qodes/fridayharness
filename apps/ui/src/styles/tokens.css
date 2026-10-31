@@ -37,6 +37,8 @@
   --border-medium: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.14);
   --border-accent-glow: rgba(34, 211, 238, 0.25);
+  --card-border: var(--border-medium);
+  --glass-inner-bevel: rgba(255, 255, 255, 0.08);
 
   /* Backward-compatible semantic color aliases */
   --color-cyan: var(--cyan);
@@ -52,8 +54,10 @@
   --color-slate-600: #4b5563;
   --color-slate-500: #5f646d;
   --color-slate-400: #9398a1;
+  --color-slate-300: #cbd5e1;
   --color-slate-200: #f1f2f4;
   --color-white: #ffffff;
+  --white: var(--color-white);
   --color-grid-dot: rgba(255, 255, 255, 0.06);
 
   /* Diff colours */
@@ -87,6 +91,7 @@
     system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI Variable Text", "Segoe UI",
     sans-serif;
   --font-mono: "SF Mono", "Cascadia Mono", "Consolas", ui-monospace, monospace;
+  --font: var(--font-sans);
 
   --text-micro: 10px;
   --text-caption: 11px;
@@ -126,6 +131,11 @@
   --duration-fast: 100ms;
   --duration-base: 200ms;
   --duration-slow: 340ms;
+  --spring-duration: var(--duration-slow);
+  --spring-bounce: var(--ease-elastic);
+  --spring-snappy: cubic-bezier(0.18, 0.9, 0.28, 1);
+  --spring-smooth: cubic-bezier(0.25, 1, 0.35, 1);
+  --spring-bouncy: cubic-bezier(0.34, 1.4, 0.64, 1);
 
   /* Layout */
   --header-height: 44px;

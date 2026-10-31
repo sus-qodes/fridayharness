@@ -19,11 +19,11 @@
   --hub-body: #e1e3e6;
   --hub-secondary: #8e939c;
   --hub-muted: #6b7079;
-  --hub-accent: var(--cyan);
-  --hub-on-accent: #170c04;
-  --hub-green: #34d399;
+  --hub-accent: #0a84ff;
+  --hub-on-accent: #ffffff;
+  --hub-green: #30d158;
   --hub-red: #ff453a;
-  --hub-amber: #f7b32b;
+  --hub-amber: #ff9f0a;
 }
 
 /* ── Full Window Settings Mode Transitions ──────────────────────────────────── */
@@ -34,7 +34,7 @@
 .sh-view-settings .sh-studio,
 .sh-view-settings .sh-drawer-host,
 .sh-view-settings .sh-drawer {
-  display: none !important;
+  display: none;
 }
 
 .sh-view-settings .sh-stage {
@@ -42,72 +42,19 @@
   width: 100%;
 }
 
-.sh-settings-hub {
+.sh-settings-hub:not([hidden]) {
   position: absolute;
   inset: 0;
   display: flex;
   width: 100%;
   height: 100%;
-  background: #000;
+  background: var(--bg-obsidian);
   overflow: hidden;
   z-index: 15;
 }
 
 .sh-settings-hub[hidden] {
-  display: none !important;
-}
-
-/* ── Header Segmented Switcher ────────────────────────────────────────────── */
-
-.sh-views {
-  display: inline-flex;
-  align-items: center;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 9px;
-  padding: 2px;
-  gap: 2px;
-  margin: 0;
-}
-
-.sh-view-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  height: 26px;
-  border-radius: 7px;
-  font-size: 12px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.65);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  user-select: none;
-}
-
-.sh-view-btn svg {
-  width: 14px;
-  height: 14px;
-  opacity: 0.8;
-  stroke-width: 1.8;
-}
-
-.sh-view-btn:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.sh-view-btn.active {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.14);
-  font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
-}
-
-.sh-view-btn.active svg {
-  opacity: 1;
+  display: none;
 }
 
 /* ── Sidebar (left panel layout) ─────────────────────────────────────── */
@@ -130,7 +77,7 @@
   align-items: center;
   gap: 10px;
   padding: 6px 10px 16px;
-  font: 700 17px var(--font);
+  font: 700 17px var(--font-sans);
   color: #fff;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   margin-bottom: 6px;
@@ -149,8 +96,8 @@
 }
 
 .hub-brand-canvas-wrap canvas {
-  width: 30px !important;
-  height: 30px !important;
+  width: 30px;
+  height: 30px;
 }
 
 .hub-brand-text {
@@ -171,7 +118,7 @@
 }
 
 .hub-group {
-  font: 700 10.5px var(--font);
+  font: 700 11px var(--font-sans);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--hub-muted);
@@ -188,7 +135,7 @@
   border-radius: 9px;
   background: transparent;
   color: #c7cad0;
-  font: 500 13px var(--font);
+  font: 500 13px var(--font-sans);
   text-align: start;
   cursor: pointer;
   transition:
@@ -197,13 +144,17 @@
   border: none;
 }
 
+.hub-item svg,
+.hub-btn svg {
+  stroke-width: 1.8;
+}
+
 .hub-item svg {
   width: 17px;
   height: 17px;
   flex: 0 0 17px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.8;
   opacity: 0.85;
 }
 
@@ -296,7 +247,10 @@
   overflow: hidden;
   flex: 0 0 auto;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: linear-gradient(135deg, rgba(251, 146, 60, 0.09) 0%, rgba(20, 21, 26, 0.95) 75%);
+  background: rgba(20, 21, 26, 0.85);
+  backdrop-filter: blur(32px);
+  -webkit-backdrop-filter: blur(32px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -312,7 +266,7 @@
 }
 
 .hub-hero-copy h1 {
-  font: 700 24px var(--font);
+  font: 700 24px var(--font-sans);
   letter-spacing: -0.02em;
   color: #fff;
   margin: 0;
@@ -338,8 +292,8 @@
 }
 
 .hub-hero-mascot canvas {
-  width: 80px !important;
-  height: 80px !important;
+  width: 80px;
+  height: 80px;
 }
 
 /* ── Settings Content Cards ───────────────────────────────────────────────── */
@@ -351,23 +305,27 @@
 }
 
 .hub-card {
-  background: var(--hub-card);
-  border: 1px solid var(--hub-line);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 14px;
-  padding: 20px;
+  padding: 16px 18px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-  transition: border-color 0.15s ease;
+  gap: 12px;
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  transition: border-color var(--duration-fast) var(--ease-standard);
 }
 
 .hub-card:hover {
-  border-color: rgba(255, 255, 255, 0.11);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 .hub-card-title {
-  font: 700 14px var(--font);
+  font: 700 14px var(--font-sans);
   color: #fff;
   letter-spacing: -0.01em;
   display: flex;
@@ -393,7 +351,7 @@
 }
 
 .hub-row .title {
-  font: 600 13px var(--font);
+  font: 600 13px var(--font-sans);
   color: #fff;
 }
 
@@ -412,7 +370,7 @@
 .hub-btn {
   border-radius: 9px;
   padding: 6px 14px;
-  font: 600 12.5px var(--font);
+  font: 600 13px var(--font-sans);
   background: rgba(255, 255, 255, 0.08);
   color: var(--hub-text);
   border: 1px solid rgba(255, 255, 255, 0.05);
@@ -421,10 +379,6 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-}
-
-.hub-btn svg {
-  stroke-width: 1.8;
 }
 
 .hub-btn:hover:not(:disabled) {
@@ -454,7 +408,7 @@
 }
 
 .hub-keycap {
-  font: 600 12px var(--font);
+  font: 600 12px var(--font-sans);
   padding: 2px 8px;
   height: 24px;
   display: inline-flex;

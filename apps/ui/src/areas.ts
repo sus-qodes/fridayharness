@@ -8,7 +8,7 @@ import { mountStudio, registerCanvasCommands } from './canvas/stage.js';
 import { mountDock, mountPalette, quickPrompt, registerCommands, registerDock } from './dock/index.js';
 import { registerDrawers } from './drawers/index.js';
 import { approvalCard, mountDecisionsTray, questionCard, registerGovernance, waitingCard } from './governance/index.js';
-import { createMascot } from './mascot/index.js';
+import { createFridayMascot } from './mascot/index.js';
 import { mountNotch, type NotchOptions, type NotchSlots } from './notch/index.js';
 import { startNotifier } from './notify/notifier.js';
 import { gettingStarted, registerPanels } from './panels/index.js';
@@ -20,7 +20,7 @@ export const notchSlots: NotchSlots = {
   question: (ctx, e, o) => questionCard(ctx, e, { compact: o.compact, onLater: o.onLater }),
   waiting: (ctx, t, o) => waitingCard(ctx, t, { compact: o.compact }),
   quickPrompt: (ctx, o) => quickPrompt(ctx, { onDone: o.onDone }),
-  mascot: (ctx, o) => createMascot(ctx, { size: o.size, interactive: true }),
+  mascot: (ctx, o) => createFridayMascot(ctx, { size: o.size, interactive: true }),
 };
 
 /** Drawers, modals and palette commands, in the order they are registered. */

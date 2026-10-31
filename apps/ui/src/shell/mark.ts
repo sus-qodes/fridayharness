@@ -1,4 +1,4 @@
-/** Friday's product mark: the mascot — a squishy cream silhouette (ears, egg body, ink eyes). */
+/** Friday's product mark: the mascot, a small yellow duck (round head, two-bump tuft, orange beak). */
 import { s } from '../ui/svg.js';
 
 export function productMark(size = 22, extraClass?: string): SVGSVGElement {
@@ -11,18 +11,12 @@ export function productMark(size = 22, extraClass?: string): SVGSVGElement {
       class: extraClass ? `sh-mark ${extraClass}` : 'sh-mark',
       'aria-hidden': 'true',
     },
-    s('path', {
-      d: 'M7.2 9.4 Q5.8 3.8 10 6.2 Z',
-      class: 'sh-mark-ear',
-    }),
-    s('path', {
-      d: 'M16.8 9.4 Q18.2 3.8 14 6.2 Z',
-      class: 'sh-mark-ear',
-    }),
-    s('ellipse', { cx: 12, cy: 14, rx: 7.6, ry: 6.6, class: 'sh-mark-body' }),
-    s('rect', { x: 8.7, y: 12.2, width: 2, height: 3.6, rx: 1, class: 'sh-mark-eye' }),
-    s('rect', { x: 13.3, y: 12.2, width: 2, height: 3.6, rx: 1, class: 'sh-mark-eye' }),
-    s('ellipse', { cx: 7.9, cy: 16.2, rx: 1.5, ry: 0.8, class: 'sh-mark-blush' }),
-    s('ellipse', { cx: 16.1, cy: 16.2, rx: 1.5, ry: 0.8, class: 'sh-mark-blush' }),
+    s('ellipse', { cx: 10.8, cy: 6.4, rx: 2.1, ry: 2.5, class: 'sh-mark-tuft' }),
+    s('ellipse', { cx: 14.2, cy: 7.2, rx: 1.7, ry: 1.6, class: 'sh-mark-tuft' }),
+    s('ellipse', { cx: 12, cy: 13.6, rx: 8.4, ry: 7.4, class: 'sh-mark-body' }),
+    s('ellipse', { cx: 8.8, cy: 12.6, rx: 1.15, ry: 1.6, class: 'sh-mark-eye' }),
+    s('ellipse', { cx: 15.2, cy: 12.6, rx: 1.15, ry: 1.6, class: 'sh-mark-eye' }),
+    s('ellipse', { cx: 12, cy: 16.1, rx: 3.1, ry: 2, class: 'sh-mark-beak' }),
+    s('path', { d: 'M10.9 16.3 Q12 17.2 13.1 16.3', class: 'sh-mark-smile' }),
   );
 }

@@ -10,14 +10,13 @@
  * - Right floating squircle panel (.hub-panel) with category hero header
  * - 14px rounded cards with hairline borders (.hub-card)
  */
-import type { BrainStatusView, UiSnapshot } from '@friday/protocol';
-import type { PolicyView } from '../api/client.js';
+import type { UiSnapshot } from '@friday/protocol';
 import { playSound } from '../audio/index.js';
 import { pruneWorktrees } from '../dock/commands.js';
-import { createMascot } from '../mascot/index.js';
+import { createFridayMascot } from '../mascot/index.js';
 import { visible } from '../model/text.js';
 import { clearSession } from '../platform/session.js';
-import type { AppContext, Component, DesktopCommands, DesktopShortcut, NotificationAnswer } from '../shell/context.js';
+import type { AppContext, Component, DesktopShortcut, NotificationAnswer } from '../shell/context.js';
 import { UI_API, UI_VERSION } from '../shell/version.js';
 import type { Prefs } from '../store/state.js';
 import { button, h, replace, setText } from '../ui/dom.js';
@@ -29,7 +28,6 @@ import {
   copyLine,
   errorOf,
   field,
-  fold,
   input,
   note,
   plain,
@@ -144,7 +142,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
   // ── Sidebar: Brand Header with Live Friday ─────────────────────────────────
   const side = h('nav', { class: 'hub-side' });
   const brandCanvasWrap = h('div', { class: 'hub-brand-canvas-wrap' });
-  const brandMascot = createMascot(ctx, { size: 30, interactive: true });
+  const brandMascot = createFridayMascot(ctx, { size: 30, interactive: true });
   td.add(() => brandMascot.destroy());
   brandCanvasWrap.append(brandMascot.el);
 
@@ -212,7 +210,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
   const heroCopy = h('div', { class: 'hub-hero-copy' }, heroTitle, heroSubtitle);
 
   const heroMascotWrap = h('div', { class: 'hub-hero-mascot' });
-  const heroMascot = createMascot(ctx, { size: 80, interactive: true });
+  const heroMascot = createFridayMascot(ctx, { size: 80, interactive: true });
   td.add(() => heroMascot.destroy());
   heroMascotWrap.append(heroMascot.el);
 

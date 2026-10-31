@@ -8,6 +8,7 @@ import { waitsForHuman } from '../model/status.js';
 import type { ReactionKind, RootState } from '../store/state.js';
 import type { EyeShape } from './eyes.js';
 import type { ParticleType } from './particles.js';
+import { type MascotState as CanonicalMascotState, toCanonicalState } from './types.js';
 
 export type MascotState =
   | 'idle'
@@ -155,9 +156,15 @@ function toState(c: Condition): MascotState {
 }
 
 /** The state the mascot shows now. */
-export function selectState(state: RootState, now: number): MascotState {
-  const first = conditions(state, now)[0];
+export function selectState(state: RootState, now?: number): MascotState {
+  const t = typeof now === 'number' ? now : Date.now();
+  const first = conditions(state, t)[0];
   return first ? toState(first) : 'idle';
+}
+
+/** The canonical lifecycle state derived for the Friday mascot. */
+export function selectCanonicalState(state: RootState, now?: number): CanonicalMascotState {
+  return toCanonicalState(selectState(state, now));
 }
 
 /**

@@ -83,9 +83,10 @@ describe('the first screen', () => {
     const header = root.querySelector('.sh-header') as HTMLElement;
     const headerFixed = [
       ...header.querySelectorAll('.sh-brand, .sh-project, .sh-daemon, .sh-metric'),
-      ...[...header.querySelectorAll<HTMLButtonElement>('.sh-actions button')].filter(
-        (b) => !b.closest('[role="menu"]'),
-      ),
+      ...[
+        ...header.querySelectorAll<HTMLButtonElement>('.sh-actions button'),
+        ...header.querySelectorAll<HTMLButtonElement>('.sh-views .sh-settings'),
+      ].filter((b) => !b.closest('[role="menu"]')),
     ];
     const name = (e: Element) =>
       e.classList.contains('sh-brand') ? 'mark' : text(e.querySelector('.sh-btn-label, .sh-metric-label')) || text(e);

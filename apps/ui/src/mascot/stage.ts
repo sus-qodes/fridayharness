@@ -15,8 +15,9 @@ import {
   createBubble,
   defaultBubbleEnv,
 } from './bubble.js';
+import { createFridayMascot, type FridayMascotHandle } from './component.js';
 import { Spring } from './engine.js';
-import { createMascotWith, defaultMascotEnv, type MascotHandle, type MascotOptions } from './mascot.js';
+import type { MascotHandle, MascotOptions } from './mascot.js';
 
 /** A rectangle to walk to, in this window's CSS pixels (the caller measures it). */
 export interface StageTarget {
@@ -35,7 +36,7 @@ export interface StageEnv {
   /** The window's inner size, for keeping the bubble on screen. */
   viewport(): { width: number; height: number };
   bubble: BubbleEnv;
-  mascot: (ctx: Pick<AppContext, 'store' | 'now'>, opts: MascotOptions) => MascotHandle;
+  mascot: (ctx: Pick<AppContext, 'store' | 'now'>, opts: MascotOptions) => FridayMascotHandle | MascotHandle;
 }
 
 export function defaultStageEnv(): StageEnv {
@@ -51,7 +52,8 @@ export function defaultStageEnv(): StageEnv {
     clearTimeout: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
     viewport: () => ({ width: w?.innerWidth ?? 1280, height: w?.innerHeight ?? 720 }),
     bubble: defaultBubbleEnv(),
-    mascot: (ctx, opts) => createMascotWith(ctx, opts, defaultMascotEnv()),
+    mascot: (ctx, opts) =>
+      createFridayMascot(ctx as AppContext, { size: opts.size ?? DEFAULT_SIZE, interactive: opts.interactive ?? true }),
   };
 }
 
@@ -63,7 +65,7 @@ export interface MascotStageOptions {
 
 export interface MascotStageHandle {
   readonly el: HTMLElement;
-  readonly mascot: MascotHandle;
+  readonly mascot: FridayMascotHandle | MascotHandle;
   readonly bubble: BubbleHandle;
   /** Shows the overlay. */
   show(): void;
