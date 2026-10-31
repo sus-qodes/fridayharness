@@ -260,6 +260,8 @@ export const AgentErrorParams = z.object({
   run_id: z.string(),
   message: z.string().min(1).max(2000),
   fatal: z.boolean().default(false),
+  /** The adapter confirmed that this attempt's process group stopped before reporting the error. */
+  worker_stopped: z.boolean().optional(),
   /** Why the host failed, when the adapter could tell (ADR-0035 §3); absent for a work failure. */
   failure: HostFailure.optional(),
 });

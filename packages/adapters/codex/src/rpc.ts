@@ -51,6 +51,7 @@ export class JsonRpcLines {
 
   /** One line the server wrote. */
   feed(line: string): void {
+    if (this.#closed) return;
     let msg: Record<string, unknown>;
     try {
       msg = JSON.parse(line) as Record<string, unknown>;
@@ -76,15 +77,17 @@ export class JsonRpcLines {
       return;
     }
     const id = msg.id;
-    this.opts.onRequest(msg.method, msg.params).then(
-      (result) => this.#send({ jsonrpc: '2.0', id, result: result ?? null }),
-      (e: Error) =>
-        this.#send({
-          jsonrpc: '2.0',
-          id,
-          error: { code: e instanceof MethodNotFound ? -32601 : -32603, message: e.message },
-        }),
-    );
+    Promise.resolve()
+      .then(() => (this.#closed ? undefined : this.opts.onRequest(msg.method as string, msg.params)))
+      .then(
+        (result) => this.#send({ jsonrpc: '2.0', id, result: result ?? null }),
+        (e: Error) =>
+          this.#send({
+            jsonrpc: '2.0',
+            id,
+            error: { code: e instanceof MethodNotFound ? -32601 : -32603, message: e.message },
+          }),
+      );
   }
 
   /** Sends a request and resolves with its result. */
@@ -118,6 +121,11 @@ export class JsonRpcLines {
   }
 
   #send(msg: Record<string, unknown>): void {
-    this.write(`${JSON.stringify(msg)}\n`);
+    if (this.#closed) return;
+    try {
+      this.write(`${JSON.stringify(msg)}\n`);
+    } catch (e) {
+      this.close(`transport write failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 }

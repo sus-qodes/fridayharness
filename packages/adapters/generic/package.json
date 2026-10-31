@@ -22,5 +22,8 @@
   "dependencies": {
     "@friday/protocol": "workspace:*",
     "@friday/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@friday/test-support": "workspace:*"
   }
 }

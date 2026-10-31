@@ -30,6 +30,9 @@
       "default": false,
       "type": "boolean"
     },
+    "worker_stopped": {
+      "type": "boolean"
+    },
     "failure": {
       "type": "object",
       "properties": {

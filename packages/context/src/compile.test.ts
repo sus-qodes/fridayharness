@@ -159,15 +159,32 @@ describe('the repository shape (repo.shape)', () => {
   });
 
   it('cuts the areas list, never the other lines, to stay within its size', () => {
-    const nodes = new Map<string, { path: string; language: 'typescript'; test: boolean; area: string; external: string[] }>();
+    const nodes = new Map<
+      string,
+      { path: string; language: 'typescript'; test: boolean; area: string; external: string[] }
+    >();
     for (let i = 0; i < 40; i += 1) {
       const area = `packages/a-rather-long-package-name-${i}`;
-      nodes.set(`${area}/src/index.ts`, { path: `${area}/src/index.ts`, language: 'typescript', test: false, area, external: [] });
-      nodes.set(`${area}/src/index.test.ts`, { path: `${area}/src/index.test.ts`, language: 'typescript', test: true, area, external: [] });
+      nodes.set(`${area}/src/index.ts`, {
+        path: `${area}/src/index.ts`,
+        language: 'typescript',
+        test: false,
+        area,
+        external: [],
+      });
+      nodes.set(`${area}/src/index.test.ts`, {
+        path: `${area}/src/index.test.ts`,
+        language: 'typescript',
+        test: true,
+        area,
+        external: [],
+      });
     }
     const text = repositoryShape({ nodes } as unknown as Parameters<typeof repositoryShape>[0]) as string;
     expect(text.length).toBeLessThanOrEqual(SHAPE_MAX_CHARS);
-    expect(text).toMatch(/^Languages: typescript 80 files\nAreas \(files\/tests\): packages\/a-rather-long-package-name-0 2\/1, .* and \d+ more\nTests: 40 test files, under packages\/$/);
+    expect(text).toMatch(
+      /^Languages: typescript 80 files\nAreas \(files\/tests\): packages\/a-rather-long-package-name-0 2\/1, .* and \d+ more\nTests: 40 test files, under packages\/$/,
+    );
     expect(repositoryShape({ nodes: new Map() } as unknown as Parameters<typeof repositoryShape>[0])).toBeNull();
   });
 });

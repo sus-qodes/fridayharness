@@ -95,7 +95,7 @@ describe('splitting a multi-role proposal (ADR-0035 §5)', () => {
     // The record: the cancellation names the parts, and the split names the proposal it approved.
     const events = state.store.readByRef(PROJECT, 'task', original.task_id);
     const cancelled = events.find((e) => e.type === 'task.cancelled');
-    expect((cancelled?.payload as { transition?: { reason?: string } }).transition?.reason).toBe(
+    expect((cancelled?.payload as { transition?: { reason?: string } })?.transition?.reason).toBe(
       `split into ${page?.task_id}, ${api?.task_id}`,
     );
     expect(events.at(-1)).toMatchObject({

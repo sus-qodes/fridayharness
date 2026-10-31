@@ -54,9 +54,12 @@ describe('what a Cursor attempt cost (host.usage)', () => {
 describe('the final answer of a Cursor session', () => {
   const final = { status: 'completed', summary: 'done', blocked_reason: '' };
   it('is the JSON object the last message ends with, wrapped or not', () => {
-    expect(finalFrom(JSON.stringify(final))).toEqual(final);
-    expect(finalFrom(`All set.\n\n${JSON.stringify(final)}`)).toEqual(final);
-    expect(finalFrom(`Here it is:\n\`\`\`json\n${JSON.stringify(final, null, 2)}\n\`\`\`\nThanks.`)).toEqual(final);
+    expect(finalFrom(JSON.stringify(final))).toEqual({ ...final, checks: [] });
+    expect(finalFrom(`All set.\n\n${JSON.stringify(final)}`)).toEqual({ ...final, checks: [] });
+    expect(finalFrom(`Here it is:\n\`\`\`json\n${JSON.stringify(final, null, 2)}\n\`\`\`\nThanks.`)).toEqual({
+      ...final,
+      checks: [],
+    });
     expect(
       finalFrom(
         `{"note": {"status": "draft"}} then ${JSON.stringify({ ...final, status: 'blocked', blocked_reason: 'x' })}`,
@@ -68,6 +71,7 @@ describe('the final answer of a Cursor session', () => {
       status: 'completed',
       summary: 'I changed the parser. {not json}',
       blocked_reason: '',
+      checks: [],
     });
   });
 });

@@ -478,6 +478,10 @@ importers:
       '@friday/sdk':
         specifier: workspace:*
         version: link:../../sdk
+    devDependencies:
+      '@friday/test-support':
+        specifier: workspace:*
+        version: link:../../../tests/support
 
   packages/adapters/opencode:
     dependencies:

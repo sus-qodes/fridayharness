@@ -60,34 +60,41 @@ describe('readiness under the loose rule (ADR-0035 §1)', () => {
       ev({ stage: 'authenticated', status: 'failed', checked_at: '2026-10-22T10:00:00.000Z' }),
       ev({ stage: 'authenticated', status: 'passed', model: 'openai/gpt-6.1-sol' }),
     ];
-    expect(assessReadiness(evidence, { host: 'codex', model: 'openai/gpt-6.1-sol', live: true, now: NOW }).dispatchable).toBe(
-      true,
-    );
-    expect(assessReadiness(evidence, { host: 'codex', model: 'openai/gpt-6-astra', live: true, now: NOW }).dispatchable).toBe(
-      false,
-    );
+    expect(
+      assessReadiness(evidence, { host: 'codex', model: 'openai/gpt-6.1-sol', live: true, now: NOW }).dispatchable,
+    ).toBe(true);
+    expect(
+      assessReadiness(evidence, { host: 'codex', model: 'openai/gpt-6-astra', live: true, now: NOW }).dispatchable,
+    ).toBe(false);
   });
 
-  it("keeps a bench in force until it expires, for that model or the whole host", () => {
+  it('keeps a bench in force until it expires, for that model or the whole host', () => {
     const modelBench = [
-      ev({ stage: 'benched', status: 'failed', model: 'openai/gpt-6.1-sol', expires_at: '2026-10-22T12:30:00.000Z', detail: 'rate limited' }),
+      ev({
+        stage: 'benched',
+        status: 'failed',
+        model: 'openai/gpt-6.1-sol',
+        expires_at: '2026-10-22T12:30:00.000Z',
+        detail: 'rate limited',
+      }),
     ];
     const sol = assessReadiness(modelBench, { host: 'codex', model: 'openai/gpt-6.1-sol', live: true, now: NOW });
     expect(sol).toMatchObject({ dispatchable: false, bench_until: '2026-10-22T12:30:00.000Z' });
     expect(sol.reason).toContain('rate limited');
     expect(readinessReasonCode(sol)).toBe('readiness.benched');
     // Another model of the same host is not benched by it.
-    expect(assessReadiness(modelBench, { host: 'codex', model: 'openai/gpt-6-astra', live: true, now: NOW }).dispatchable).toBe(
-      true,
-    );
+    expect(
+      assessReadiness(modelBench, { host: 'codex', model: 'openai/gpt-6-astra', live: true, now: NOW }).dispatchable,
+    ).toBe(true);
     const hostBench = [ev({ stage: 'benched', status: 'failed', expires_at: '2026-10-22T12:10:00.000Z' })];
-    expect(assessReadiness(hostBench, { host: 'codex', model: 'openai/gpt-6-astra', live: true, now: NOW }).dispatchable).toBe(
-      false,
-    );
+    expect(
+      assessReadiness(hostBench, { host: 'codex', model: 'openai/gpt-6-astra', live: true, now: NOW }).dispatchable,
+    ).toBe(false);
     // An expired bench no longer counts.
-    expect(assessReadiness(hostBench, { host: 'codex', model: null, live: true, now: '2026-10-22T12:11:00.000Z' }).dispatchable).toBe(
-      true,
-    );
+    expect(
+      assessReadiness(hostBench, { host: 'codex', model: null, live: true, now: '2026-10-22T12:11:00.000Z' })
+        .dispatchable,
+    ).toBe(true);
   });
 
   it('never requires a live check, and never lets host-level evidence stand for one', () => {

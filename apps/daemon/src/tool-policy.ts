@@ -227,6 +227,16 @@ export function createToolJudge(deps: {
         relied_on: [],
       };
     }
+    if (task && state.isTaskRecovering(task.task_id) && action.kind !== 'read' && action.kind !== 'search') {
+      result = {
+        ...result,
+        decision: 'deny',
+        rule: 'task.recovering',
+        reason: 'Friday is recovering this checkout. Stop work until the current attempt is resumed.',
+        reserve: [],
+        relied_on: [],
+      };
+    }
     if (result.decision === 'allow' && result.reserve?.length && task) {
       try {
         state.reserveFiles(pid, actor, task.task_id, result.reserve, 'write', patternsOverlap);

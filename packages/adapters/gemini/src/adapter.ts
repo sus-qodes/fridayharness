@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SPAWN_RUN_ENV, ToolEndpoints } from '@friday/adapter-claude';
 import {
+  AttemptStops,
   type GenericHarnessClient,
   type HarnessDescriptor,
   parseFinal,
@@ -273,6 +274,7 @@ export function worktreeProblem(cwd: string, env: NodeJS.ProcessEnv): string | n
  * version can change that, and Friday says so.
  */
 export class GeminiSpawnAdapter {
+  readonly #stops = new AttemptStops();
   /** Every instruction received from Friday, newest last (tests and logs). */
   readonly received: OutboundMessage[] = [];
   readonly #attempts = new Map<string, Attempt>();
@@ -345,9 +347,12 @@ export class GeminiSpawnAdapter {
     return this.#link.start();
   }
 
-  async #handle(
-    m: OutboundMessage,
-  ): Promise<{ accepted: boolean; reason?: string; session_ref?: string; afterAck?: (current: boolean) => void }> {
+  async #handle(m: OutboundMessage): Promise<{
+    accepted: boolean;
+    reason?: string;
+    session_ref?: string;
+    afterAck?: (current: boolean, reason?: 'aborted') => Promise<void> | void;
+  }> {
     this.received.push(m);
     const p = m.params as TaskStartParams & { reason?: string };
     if (m.method === 'task.resume' && this.#link.reports.has(p.run_id)) {
@@ -356,9 +361,9 @@ export class GeminiSpawnAdapter {
       return {
         accepted: true,
         ...(p.session_ref ? { session_ref: p.session_ref } : {}),
-        afterAck: (current) => {
+        afterAck: (current, reason) => {
           if (current) void this.#link.reports.deliver(p.run_id);
-          else this.#link.reports.drop(p.run_id);
+          else if (reason !== 'aborted') this.#link.reports.drop(p.run_id);
         },
       };
     }
@@ -378,7 +383,7 @@ export class GeminiSpawnAdapter {
           session_ref: sessionId,
           afterAck: (current) => {
             if (current) go();
-            else void this.#end(p.run_id);
+            else return this.#end(p.run_id);
           },
         };
       } catch (e) {
@@ -683,11 +688,15 @@ export class GeminiSpawnAdapter {
       );
     }
     a.done = true;
+    const stopped = this.#end(a.runId);
     const ids = { task_id: a.taskId, run_id: a.runId };
     // Kept until Friday records it, whatever happens to this adapter meanwhile (review M8-R05),
     // together with what the run cost, whatever it ended as (plan M11.4).
     const reports = this.#link.reports;
-    const spent = { events: [{ event_type: 'host.usage', data: geminiAttemptUsage(a.turns, a.model) }] };
+    const spent = {
+      events: [{ event_type: 'host.usage', data: geminiAttemptUsage(a.turns, a.model) }],
+      stop: () => stopped,
+    };
     if (m.status === 'success') {
       const final = finalFrom(a.text);
       if (final.status === 'blocked') {
@@ -739,34 +748,44 @@ export class GeminiSpawnAdapter {
         spent,
       );
     }
-    await this.#end(a.runId);
+    await stopped.catch((e: Error) => this.#log(`worker cleanup failed: ${e.message}`));
   }
 
   /** The session ended without a result: an agent error Friday's recovery handles. */
   async #lost(a: Attempt, why: string): Promise<void> {
     if (a.done || a.stopping) return;
     a.done = true;
-    void this.#link.reports.report('error', {
-      task_id: a.taskId,
-      run_id: a.runId,
-      message: `Gemini CLI stopped: ${why}`.slice(0, 2000),
-      fatal: true,
-    });
-    await this.#end(a.runId);
+    const stopped = this.#end(a.runId);
+    void this.#link.reports.report(
+      'error',
+      {
+        task_id: a.taskId,
+        run_id: a.runId,
+        message: `Gemini CLI stopped: ${why}`.slice(0, 2000),
+        fatal: true,
+      },
+      { stop: () => stopped },
+    );
+    await stopped.catch((e: Error) => this.#log(`worker cleanup failed: ${e.message}`));
   }
 
   /** Ends an attempt's session and everything it started, confirmed (ADR-0032 §2). */
-  async #end(runId: string): Promise<void> {
-    const a = this.#attempts.get(runId);
-    if (!a) return;
-    this.#attempts.delete(runId);
-    a.stopping = true;
-    if (a.proc) await a.proc.stop().catch((e: Error) => this.#log(`stopping ${a.taskId}'s session: ${e.message}`));
-    await a.group.close().catch(() => undefined);
-    a.done = true;
-    // The attempt's address stops answering with it.
-    await this.#tools.close(runId);
-    rmSync(a.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  #end(runId: string): Promise<void> {
+    return this.#stops.run(runId, async () => {
+      const a = this.#attempts.get(runId);
+      if (!a) return;
+      a.stopping = true;
+      try {
+        await a.proc?.stop();
+      } finally {
+        await a.group.close();
+      }
+      a.done = true;
+      // The attempt's address stops answering with it.
+      await this.#tools.close(runId);
+      rmSync(a.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      this.#attempts.delete(runId);
+    });
   }
 
   /** Stops like a crashed process: nothing is told to Friday; the sessions end with it. */

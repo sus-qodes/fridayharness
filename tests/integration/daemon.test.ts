@@ -214,7 +214,10 @@ describe('event stream', () => {
         query: { since: 0 },
       })) {
         seen.push({ id: msg.id, event: msg.event });
-        if (msg.event === 'task.created') ctrl.abort();
+        if (msg.event === 'task.created') {
+          ctrl.abort();
+          break;
+        }
       }
     })();
     await td.operator.post(td.operator.projectPath('/tasks'), { summary: 'streamed' });
@@ -227,13 +230,15 @@ describe('event stream', () => {
 
     const resume = new AbortController();
     const after: string[] = [];
-    const lastId = String(ids.at(-2));
+    // Resume after the event we deliberately stopped at, independent of network chunking.
+    const lastId = String(ids.at(-1));
     for await (const msg of td.operator.sse(td.operator.projectPath('/events/stream'), {
       signal: resume.signal,
       lastEventId: lastId,
     })) {
       after.push(msg.event);
       resume.abort();
+      break;
     }
     // Creating a task also records its role contract (R2): the event after task.created.
     expect(after).toEqual(['task.role_resolved']);

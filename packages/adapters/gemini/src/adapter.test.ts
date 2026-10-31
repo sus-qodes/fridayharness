@@ -112,8 +112,8 @@ describe('the final answer in the last message', () => {
   const answer = { status: 'completed', summary: 'did it', blocked_reason: '' };
 
   it('takes the JSON object alone, fenced, or after prose', () => {
-    expect(finalFrom(JSON.stringify(answer))).toEqual(answer);
-    expect(finalFrom(`Done.\n\`\`\`json\n${JSON.stringify(answer)}\n\`\`\``)).toEqual(answer);
+    expect(finalFrom(JSON.stringify(answer))).toEqual({ ...answer, checks: [] });
+    expect(finalFrom(`Done.\n\`\`\`json\n${JSON.stringify(answer)}\n\`\`\``)).toEqual({ ...answer, checks: [] });
     expect(
       finalFrom(`All good. ${JSON.stringify({ ...answer, status: 'blocked', blocked_reason: 'need a key' })}`),
     ).toMatchObject({
@@ -127,6 +127,7 @@ describe('the final answer in the last message', () => {
       status: 'completed',
       summary: 'I changed a.ts.',
       blocked_reason: '',
+      checks: [],
     });
   });
 });

@@ -8,8 +8,9 @@ import type { HostFailure } from '@friday/protocol';
 export type HostFailureSite = 'start' | 'exit' | 'turn';
 
 const AUTH =
-  /not (?:logged|signed) in|please (?:log|sign) in|login required|unauthori[sz]ed|\b40[13]\b|forbidden|invalid (?:api[ -]?)?key|authentication (?:failed|required|error)|expired (?:token|credentials|session)/i;
-const RATE = /rate[ -]?limit|too many requests|\b429\b|\b529\b|overloaded|quota|at capacity|try again (?:later|in)/i;
+  /not (?:logged|signed) in|please (?:log|sign) in|login required|unauthori[sz]ed|invalid (?:api[ -]?)?key|authentication(?:_| )\s*(?:failed|required|error)|expired (?:token|credentials|session)|(?:^|\n)\s*(?:HTTP\s+)?40[13]\b/i;
+const RATE =
+  /rate[ -]?limit|too many requests|(?:^|\n)\s*(?:HTTP\s+)?(?:429|529)\b|overloaded|(?:api|token|request|usage|insufficient)[ _-]quota|quota_exceeded|at capacity|try again (?:later|in)/i;
 const RETRY_AFTER = /retry[- ]after[:\s]+(\d+)/i;
 const TRY_AGAIN = /try again in (\d+)\s*(s|secs?|seconds?|m|mins?|minutes?|h|hours?)\b/i;
 const LAUNCH = /ENOENT|EACCES|spawn|not found|is not recognized|no such file|cannot execute|command not found/i;

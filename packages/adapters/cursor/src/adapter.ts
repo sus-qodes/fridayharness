@@ -12,6 +12,7 @@ import path from 'node:path';
 // Friday's tools for spawned sessions, served as the Claude spawn adapter serves them (review M8-R06).
 import { ToolEndpoints } from '@friday/adapter-claude';
 import {
+  AttemptStops,
   type Final,
   type GenericHarnessClient,
   type HarnessDescriptor,
@@ -274,6 +275,7 @@ function samePath(a: string, b: string): boolean {
  * the last message's JSON is the final answer.
  */
 export class CursorSpawnAdapter {
+  readonly #stops = new AttemptStops();
   /** Every instruction received from Friday, newest last (tests and logs). */
   readonly received: OutboundMessage[] = [];
   readonly #attempts = new Map<string, Attempt>();
@@ -345,9 +347,12 @@ export class CursorSpawnAdapter {
     return this.#link.start();
   }
 
-  async #handle(
-    m: OutboundMessage,
-  ): Promise<{ accepted: boolean; reason?: string; session_ref?: string; afterAck?: (current: boolean) => void }> {
+  async #handle(m: OutboundMessage): Promise<{
+    accepted: boolean;
+    reason?: string;
+    session_ref?: string;
+    afterAck?: (current: boolean, reason?: 'aborted') => Promise<void> | void;
+  }> {
     this.received.push(m);
     const p = m.params as TaskStartParams & { reason?: string };
     if (m.method === 'task.resume' && this.#link.reports.has(p.run_id)) {
@@ -356,9 +361,9 @@ export class CursorSpawnAdapter {
       return {
         accepted: true,
         ...(p.session_ref ? { session_ref: p.session_ref } : {}),
-        afterAck: (current) => {
+        afterAck: (current, reason) => {
           if (current) void this.#link.reports.deliver(p.run_id);
-          else this.#link.reports.drop(p.run_id);
+          else if (reason !== 'aborted') this.#link.reports.drop(p.run_id);
         },
       };
     }
@@ -378,7 +383,7 @@ export class CursorSpawnAdapter {
           session_ref: sessionId,
           afterAck: (current) => {
             if (current) go();
-            else void this.#end(p.run_id);
+            else return this.#end(p.run_id);
           },
         };
       } catch (e) {
@@ -685,11 +690,12 @@ export class CursorSpawnAdapter {
   async #finish(a: Attempt, m: Record<string, unknown>, ok: boolean): Promise<void> {
     if (a.done || a.stopping) return;
     a.done = true;
+    const stopped = this.#end(a.runId);
     const ids = { task_id: a.taskId, run_id: a.runId };
     // Kept until Friday records it, whatever happens to this adapter meanwhile (review M8-R05),
     // together with what the attempt cost, whatever it ended as (plan M10a).
     const reports = this.#link.reports;
-    const spent = this.#spent(a);
+    const spent = { ...this.#spent(a), stop: () => stopped };
     if (ok) {
       const final = finalFrom(a.lastText || str(m.result) || '');
       if (final.status === 'blocked') {
@@ -740,7 +746,7 @@ export class CursorSpawnAdapter {
         spent,
       );
     }
-    await this.#end(a.runId);
+    await stopped.catch((e: Error) => this.#log(`worker cleanup failed: ${e.message}`));
   }
 
   /** What the attempt spent, to travel with the report of how it ended. */
@@ -762,26 +768,32 @@ export class CursorSpawnAdapter {
   async #lost(a: Attempt, why: string): Promise<void> {
     if (a.done || a.stopping) return;
     a.done = true;
+    const stopped = this.#end(a.runId);
     void this.#link.reports.report(
       'error',
       { task_id: a.taskId, run_id: a.runId, message: `Cursor stopped: ${why}`.slice(0, 2000), fatal: true },
       // Runs that ended before it spent what their results say.
-      a.results.length ? this.#spent(a) : {},
+      { ...(a.results.length ? this.#spent(a) : {}), stop: () => stopped },
     );
-    await this.#end(a.runId);
+    await stopped.catch((e: Error) => this.#log(`worker cleanup failed: ${e.message}`));
   }
 
   /** Ends an attempt's session and everything it started, confirmed (ADR-0032 §2); its folder goes too. */
-  async #end(runId: string): Promise<void> {
-    await this.#tools.close(runId);
-    const a = this.#attempts.get(runId);
-    if (!a) return;
-    this.#attempts.delete(runId);
-    a.stopping = true;
-    await a.proc?.stop().catch((e: Error) => this.#log(`stopping ${a.taskId}'s session: ${e.message}`));
-    await a.group?.close().catch(() => undefined);
-    a.done = true;
-    rmSync(a.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  #end(runId: string): Promise<void> {
+    return this.#stops.run(runId, async () => {
+      await this.#tools.close(runId);
+      const a = this.#attempts.get(runId);
+      if (!a) return;
+      a.stopping = true;
+      try {
+        await a.proc?.stop();
+      } finally {
+        await a.group?.close();
+      }
+      a.done = true;
+      rmSync(a.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      this.#attempts.delete(runId);
+    });
   }
 
   /** Stops like a crashed process: nothing is told to Friday; the sessions end with it. */

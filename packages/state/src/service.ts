@@ -796,6 +796,8 @@ export class FridayState {
    * (daemon start, after a pause), because they could not report in between.
    */
   private readonly leaseGrace = new Map<string, { since: string; until: string }>();
+  private readonly recoveryLocks = new Map<string, symbol>();
+  private readonly recoveryCommands = new WeakMap<CommandContext, string>();
 
   constructor(deps: {
     db: SqlDatabase;
@@ -848,6 +850,53 @@ export class FridayState {
     return this.bus.execute(meta, fn).result;
   }
 
+  /** Identity inspected before asynchronous recovery; an updated task or run invalidates it. */
+  recoveryVersion(projectId: string, taskId: string): string {
+    const task = this.q.task(projectId, taskId);
+    const run = task.current_run_id ? this.q.findRun(task.current_run_id) : null;
+    return sha256(JSON.stringify({ task, run }));
+  }
+
+  /** Holds task/run transitions while recovery changes its checkout. The daemon owns one clone. */
+  holdTaskRecovery(projectId: string, taskId: string, expectedVersion: string): { token: symbol; release: () => void } {
+    if (this.recoveryLocks.has(taskId))
+      throw new FridayError('invalid_state_transition', `${taskId} is being recovered`);
+    if (this.recoveryVersion(projectId, taskId) !== expectedVersion) {
+      throw new FridayError(
+        'invalid_state_transition',
+        `stale recovery assessment for ${taskId}; inspect its current attempt again`,
+      );
+    }
+    const token = Symbol(taskId);
+    this.recoveryLocks.set(taskId, token);
+    return {
+      token,
+      release: () => {
+        if (this.recoveryLocks.get(taskId) === token) this.recoveryLocks.delete(taskId);
+      },
+    };
+  }
+
+  isTaskRecovering(taskId: string): boolean {
+    return this.recoveryLocks.has(taskId);
+  }
+
+  private allowRecovery(ctx: CommandContext, taskId: string, token?: symbol): void {
+    if (token === undefined) return;
+    if (this.recoveryLocks.get(taskId) !== token)
+      throw new FridayError('invalid_state_transition', 'recovery ownership ended');
+    this.recoveryCommands.set(ctx, taskId);
+  }
+
+  private assertTaskMutable(ctx: CommandContext, taskId: string): void {
+    if (this.recoveryLocks.has(taskId) && this.recoveryCommands.get(ctx) !== taskId) {
+      throw new FridayError(
+        'invalid_state_transition',
+        `${taskId} is being recovered; wait until its checkout is ready`,
+      );
+    }
+  }
+
   // ================================================================ transition helpers
 
   private moveTask(
@@ -862,6 +911,7 @@ export class FridayState {
       changes?: Record<string, unknown>;
     } = {},
   ): TaskView {
+    this.assertTaskMutable(ctx, task.task_id);
     const actor = opts.actor ?? (opts.actorKind ? { kind: opts.actorKind, id: ctx.actor.id } : ctx.actor);
     const req: Parameters<typeof transitionTask>[1] = { trigger, actor: actor.kind };
     if (opts.waiting_reason) req.waiting_reason = opts.waiting_reason;
@@ -968,6 +1018,7 @@ export class FridayState {
   }
 
   private updateTaskFields(ctx: CommandContext, taskId: string, changes: Record<string, unknown>): TaskView {
+    this.assertTaskMutable(ctx, taskId);
     ctx.emit({ type: 'task.updated', payload: { task_id: taskId, changes }, refs: [{ kind: 'task', id: taskId }] });
     return this.q.task(ctx.project_id, taskId);
   }
@@ -1365,6 +1416,7 @@ export class FridayState {
     changes: Record<string, unknown> = {},
     actor?: Actor,
   ): RunView {
+    this.assertTaskMutable(ctx, run.task_id);
     if (!canRunTransition(run.status, to)) {
       throw new FridayError('invalid_state_transition', `run ${run.run_id} cannot move from ${run.status} to ${to}`);
     }
@@ -1628,7 +1680,7 @@ export class FridayState {
     if (actor.kind !== 'human') throw new FridayError('permission_denied', 'only a human splits a task');
     const task = this.q.task(projectId, taskId);
     const decision = this.q.latestTaskRoleDecision(projectId, taskId);
-    if (!decision || decision.status !== 'proposed' || decision.roles.length < 2) {
+    if (decision?.status !== 'proposed' || decision.roles.length < 2) {
       throw new FridayError(
         'invalid_request',
         `no multi-role proposal waits for approval on ${taskId}${decision ? ` (its latest role decision is ${decision.status})` : ''}`,
@@ -2572,6 +2624,7 @@ export class FridayState {
       run_id: string;
       message: string;
       fatal: boolean;
+      worker_stopped?: boolean | undefined;
       /** Why the host failed, when the adapter could tell (ADR-0035 §3); absent for a work failure. */
       failure?: HostFailure | undefined;
       idempotency_key?: string | undefined;
@@ -2591,9 +2644,13 @@ export class FridayState {
             event_type: 'error',
             message: p.message,
             fatal: p.fatal,
+            ...(p.worker_stopped !== undefined ? { worker_stopped: p.worker_stopped } : {}),
             ...(p.failure ? { failure: p.failure } : {}),
           },
-          refs: [{ kind: 'task', id: task.task_id }],
+          refs: [
+            { kind: 'task', id: task.task_id },
+            { kind: 'run', id: run.run_id },
+          ],
         });
         if (!p.fatal) return { task_status: task.status };
         if (run.status === 'ENDED' || run.status === 'DECLINED' || task.current_run_id !== run.run_id) {
@@ -2863,11 +2920,17 @@ export class FridayState {
     actor: Actor,
     taskId: string,
     action: 'reassign' | 'restart' | 'needs_human' | 'cancel',
-    opts: { reason: string; preserved_ref?: string | null; details?: Record<string, unknown> },
+    opts: { reason: string; preserved_ref?: string | null; details?: Record<string, unknown>; recovery_token?: symbol },
   ): TaskView {
     let task: TaskView;
     if (action === 'cancel') {
-      task = this.cancelTask(projectId, actor, taskId, opts.reason);
+      task = this.exec(
+        { name: 'task.cancel', project_id: projectId, actor, params: { taskId, reason: opts.reason } },
+        (ctx) => {
+          this.allowRecovery(ctx, taskId, opts.recovery_token);
+          return this.cancelWithin(ctx, projectId, taskId, opts.reason);
+        },
+      );
     } else if (action === 'needs_human') {
       const t = this.q.task(projectId, taskId);
       this.raiseEscalation(projectId, actor, {
@@ -2887,6 +2950,7 @@ export class FridayState {
       task = this.exec(
         { name: 'task.recover', project_id: projectId, actor, params: { taskId, action, reason: opts.reason } },
         (ctx) => {
+          this.allowRecovery(ctx, taskId, opts.recovery_token);
           const before = this.q.task(projectId, taskId);
           const run = before.current_run_id ? this.q.findRun(before.current_run_id) : undefined;
           const released = this.releaseWithin(ctx, projectId, actor, taskId, `${action}: ${opts.reason}`);
@@ -2942,6 +3006,16 @@ export class FridayState {
       .map((e) => e.payload as { event_type?: string; fatal?: boolean; message?: string })
       .filter((p) => p.event_type === 'error' && p.fatal)
       .map((p) => String(p.message ?? ''));
+  }
+
+  /** Terminal error evidence is held by the adapter credential, outside the model's tool surface. */
+  workerStopped(projectId: string, runId: string): boolean {
+    return this.store
+      .readByRef(projectId, 'run', runId, { types: ['agent.event'], desc: true, limit: 100 })
+      .some((e) => {
+        const p = e.payload as { event_type?: string; fatal?: boolean; worker_stopped?: boolean; run_id?: string };
+        return p.run_id === runId && p.event_type === 'error' && p.fatal === true && p.worker_stopped === true;
+      });
   }
 
   cancelTask(projectId: string, actor: Actor, taskId: string, reason: string): TaskView {
@@ -4533,7 +4607,7 @@ export class FridayState {
       if (
         l.status === 'DISCONNECTED' &&
         l.disconnected_at &&
-        nowMs - Date.parse(l.disconnected_at) > this.config.reconnectWindowMs &&
+        nowMs - Date.parse(l.disconnected_at) >= this.config.reconnectWindowMs &&
         !hasActive
       ) {
         this.exec({ name: 'harness.terminate', project_id: projectId, actor: LEASE_MANAGER }, (ctx) => {
@@ -6941,6 +7015,13 @@ export class FridayState {
         'SELECT credential_id, project_id, token_class, harness_id FROM credentials WHERE token_hash = ? AND revoked_at IS NULL',
       )
       .get<TokenInfo>(sha256(raw));
+  }
+
+  /** Long polls must recheck the credential after each await, before taking queued work. */
+  credentialActive(credentialId: string): boolean {
+    return Boolean(
+      this.db.prepare('SELECT 1 FROM credentials WHERE credential_id = ? AND revoked_at IS NULL').get(credentialId),
+    );
   }
 
   revokeTokens(

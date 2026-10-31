@@ -1,6 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  AttemptStops,
   classifyHostFailure,
   FINAL_SCHEMA,
   type GenericHarnessClient,
@@ -216,6 +217,7 @@ async function trustKeys(cwd: string): Promise<string[]> {
  * interrupt (M3.5).
  */
 export class CodexAdapter {
+  readonly #stops = new AttemptStops();
   /** Every instruction received from Friday, newest last (tests and logs). */
   readonly received: OutboundMessage[] = [];
   readonly #attempts = new Map<string, Attempt>();
@@ -289,9 +291,12 @@ export class CodexAdapter {
     return this.#link.start();
   }
 
-  async #handle(
-    m: OutboundMessage,
-  ): Promise<{ accepted: boolean; reason?: string; session_ref?: string; afterAck?: (current: boolean) => void }> {
+  async #handle(m: OutboundMessage): Promise<{
+    accepted: boolean;
+    reason?: string;
+    session_ref?: string;
+    afterAck?: (current: boolean, reason?: 'aborted') => Promise<void> | void;
+  }> {
     this.received.push(m);
     const p = m.params as TaskStartParams & { reason?: string };
     if (m.method === 'task.resume' && this.#link.reports.has(p.run_id)) {
@@ -300,9 +305,9 @@ export class CodexAdapter {
       return {
         accepted: true,
         ...(p.session_ref ? { session_ref: p.session_ref } : {}),
-        afterAck: (current) => {
+        afterAck: (current, reason) => {
           if (current) void this.#link.reports.deliver(p.run_id);
-          else this.#link.reports.drop(p.run_id);
+          else if (reason !== 'aborted') this.#link.reports.drop(p.run_id);
         },
       };
     }
@@ -328,7 +333,7 @@ export class CodexAdapter {
           session_ref: threadId,
           afterAck: (current) => {
             if (current) go();
-            else void this.#end(p.run_id);
+            else return this.#end(p.run_id);
           },
         };
       } catch (e) {
@@ -757,13 +762,14 @@ export class CodexAdapter {
   async #finish(a: Attempt, turn: { status?: string; error?: { message?: string } | null }): Promise<void> {
     if (a.done || a.stopping) return;
     a.done = true;
+    const stopped = this.#end(a.runId);
     const ids = { task_id: a.taskId, run_id: a.runId };
     // Kept until Friday records it, whatever happens to this adapter meanwhile (review M8-R05),
     // together with what the turn cost, whatever it ended as (plan M11.4): the usage row of the
     // token baseline reads that per run, and a report lost to an outage at the end of a turn would
     // show a verified attempt as one whose host said nothing (LESSONS D-54).
     const reports = this.#link.reports;
-    const spent = this.#spent(a);
+    const spent = { ...this.#spent(a), stop: () => stopped };
     if (turn.status === 'completed') {
       const final = parseFinal(a.lastMessage);
       if (final.status === 'blocked') {
@@ -815,7 +821,7 @@ export class CodexAdapter {
         spent,
       );
     }
-    await this.#end(a.runId);
+    await stopped.catch((e: Error) => this.#log(`worker cleanup failed: ${e.message}`));
   }
 
   /** What the attempt spent, to travel with the report of how it ended: the host's last count. */
@@ -831,6 +837,7 @@ export class CodexAdapter {
   async #lost(a: Attempt, why: string): Promise<void> {
     if (a.done || a.stopping) return;
     a.done = true;
+    const stopped = this.#end(a.runId);
     const failure = classifyHostFailure(why, a.turns > 0 ? 'exit' : 'start');
     void this.#link.reports.report(
       'error',
@@ -842,9 +849,9 @@ export class CodexAdapter {
         ...(failure ? { failure } : {}),
       },
       // Once a turn ran, what the host had counted by the time it stopped was spent all the same.
-      a.turns > 0 ? this.#spent(a) : {},
+      { ...(a.turns > 0 ? this.#spent(a) : {}), stop: () => stopped },
     );
-    await this.#end(a.runId);
+    await stopped.catch((e: Error) => this.#log(`worker cleanup failed: ${e.message}`));
   }
 
   /** Ends every attempt's host: Friday is not heard, so a cancellation would not reach them (review M8-R02). */
@@ -855,18 +862,23 @@ export class CodexAdapter {
   }
 
   /** Ends an attempt's host and everything it started, confirmed (ADR-0032 §2). */
-  async #end(runId: string, cancelled = false): Promise<void> {
-    const a = this.#attempts.get(runId);
-    if (!a) return;
-    this.#attempts.delete(runId);
-    a.stopping = true;
-    if (cancelled && a.threadId && a.turnId) {
-      // A courtesy only: the group ends the work whatever the host does with it (M3.5).
-      await a.rpc.request('turn/interrupt', { threadId: a.threadId, turnId: a.turnId }, 1000).catch(() => undefined);
-    }
-    await a.proc.stop().catch((e: Error) => this.#log(`stopping ${a.taskId}'s host: ${e.message}`));
-    await a.group.close().catch(() => undefined);
-    a.done = true;
+  #end(runId: string, cancelled = false): Promise<void> {
+    return this.#stops.run(runId, async () => {
+      const a = this.#attempts.get(runId);
+      if (!a) return;
+      a.stopping = true;
+      if (cancelled && a.threadId && a.turnId) {
+        // A courtesy only: the group ends the work whatever the host does with it (M3.5).
+        await a.rpc.request('turn/interrupt', { threadId: a.threadId, turnId: a.turnId }, 1000).catch(() => undefined);
+      }
+      try {
+        await a.proc.stop();
+      } finally {
+        await a.group.close();
+      }
+      a.done = true;
+      this.#attempts.delete(runId);
+    });
   }
 
   /** Stops like a crashed process: nothing is told to Friday; the hosts end with it. */

@@ -20,13 +20,17 @@ export const PACKAGE_NAME = '@friday/adapter-generic';
 
 /** Transport seam: HTTP today, possibly MCP or another carrier later (plan M1.7). */
 export interface HarnessTransport {
-  call<M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>>;
+  call<M extends MethodName>(method: M, params: ParamsOf<M>, opts?: { signal?: AbortSignal }): Promise<ResultOf<M>>;
 }
 
 export class HttpTransport implements HarnessTransport {
   constructor(public client: DaemonClient) {}
-  call<M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
-    return this.client.rpc(method, params, method === 'harness.poll' ? { timeoutMs: 40_000 } : {});
+  call<M extends MethodName>(
+    method: M,
+    params: ParamsOf<M>,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<ResultOf<M>> {
+    return this.client.rpc(method, params, { ...(method === 'harness.poll' ? { timeoutMs: 40_000 } : {}), ...opts });
   }
 }
 
@@ -50,7 +54,10 @@ export interface HarnessDescriptor {
 }
 
 export type Registration = ResultOf<'harness.register'>;
-export type TaskHandler = (msg: OutboundMessage) => Promise<{
+export type TaskHandler = (
+  msg: OutboundMessage,
+  signal?: AbortSignal,
+) => Promise<{
   accepted: boolean;
   reason?: string;
   session_ref?: string;
@@ -59,7 +66,7 @@ export type TaskHandler = (msg: OutboundMessage) => Promise<{
    * `current` says whether the run is this harness's to work on now; a start Friday no longer wants
    * (cancelled, expired, reassigned before the answer arrived) is false, and starts nothing (review M8-R03).
    */
-  afterAck?: (current: boolean) => void;
+  afterAck?: (current: boolean, reason?: 'aborted') => unknown;
 }>;
 
 /** What the delivery loop tells its adapter about the connection (review M8-R02). */
@@ -68,6 +75,31 @@ export interface DeliveryWatch {
   onTrouble?: (error: unknown, failingForMs: number) => void;
   /** A poll succeeded after failures. */
   onRecovered?: () => void;
+  /** A preparation completed but could not start safely; the adapter must stop its worker. */
+  onHandlerError?: (error: unknown, message: OutboundMessage) => Promise<void> | void;
+}
+
+/** Stops waiting without treating a late answer as permission to start work. */
+async function untilAborted<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T | undefined> {
+  if (!signal) return pending;
+  return new Promise<T | undefined>((resolve, reject) => {
+    const aborted = () => {
+      signal.removeEventListener('abort', aborted);
+      resolve(undefined);
+    };
+    signal.addEventListener('abort', aborted, { once: true });
+    if (signal.aborted) aborted();
+    pending.then(
+      (answer) => {
+        signal.removeEventListener('abort', aborted);
+        resolve(answer);
+      },
+      (error) => {
+        signal.removeEventListener('abort', aborted);
+        reject(error);
+      },
+    );
+  });
 }
 
 /** A failure worth trying again: Friday was not reached, or answered that it will be able to. */
@@ -162,8 +194,8 @@ export class GenericHarnessClient {
     return reg;
   }
 
-  call<M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
-    return this.#transport.call(method, params);
+  call<M extends MethodName>(method: M, params: ParamsOf<M>, opts?: { signal?: AbortSignal }): Promise<ResultOf<M>> {
+    return this.#transport.call(method, params, opts);
   }
 
   heartbeat() {
@@ -186,8 +218,8 @@ export class GenericHarnessClient {
     this.#heartbeat = undefined;
   }
 
-  async poll(waitMs = 0, max = 10): Promise<OutboundMessage[]> {
-    return (await this.call('harness.poll', { wait_ms: waitMs, max })).messages;
+  async poll(waitMs = 0, max = 10, signal?: AbortSignal): Promise<OutboundMessage[]> {
+    return (await this.call('harness.poll', { wait_ms: waitMs, max }, signal ? { signal } : {})).messages;
   }
 
   ack(acks: ParamsOf<'harness.ack'>['acks']) {
@@ -206,7 +238,9 @@ export class GenericHarnessClient {
     while (!opts.signal?.aborted) {
       let messages: OutboundMessage[];
       try {
-        messages = await this.poll(opts.waitMs ?? 1000);
+        const polled = await untilAborted(this.poll(opts.waitMs ?? 1000, 10, opts.signal), opts.signal);
+        if (!polled) return;
+        messages = polled;
       } catch (e) {
         if (opts.signal?.aborted) return;
         failures += 1;
@@ -223,20 +257,52 @@ export class GenericHarnessClient {
         if (opts.signal?.aborted) return;
         let res: Awaited<ReturnType<TaskHandler>>;
         try {
-          res = await handler(m);
+          const preparation = Promise.resolve().then(() => handler(m, opts.signal));
+          const answer = await untilAborted(preparation, opts.signal);
+          if (!answer) {
+            // A host prepared after shutdown never gets an acknowledgement that starts its work.
+            void preparation
+              .then(
+                async (late) => {
+                  try {
+                    await late.afterAck?.(false, 'aborted');
+                  } catch (e) {
+                    await opts.onHandlerError?.(e, m);
+                  }
+                },
+                () => undefined,
+              )
+              .catch(() => undefined);
+            return;
+          }
+          res = answer;
         } catch (e) {
           res = { accepted: false, reason: `the adapter failed: ${(e as Error).message}`.slice(0, 1000) };
         }
-        const current = await this.#acknowledge(
-          {
-            message_id: m.message_id,
-            accepted: res.accepted,
-            ...(res.reason ? { reason: res.reason } : {}),
-            ...(res.session_ref ? { session_ref: res.session_ref } : {}),
-          },
+        const current = await untilAborted(
+          this.#acknowledge(
+            {
+              message_id: m.message_id,
+              accepted: res.accepted,
+              ...(res.reason ? { reason: res.reason } : {}),
+              ...(res.session_ref ? { session_ref: res.session_ref } : {}),
+            },
+            opts.signal,
+          ),
           opts.signal,
         );
-        res.afterAck?.(current);
+        try {
+          await res.afterAck?.(current === true && !opts.signal?.aborted, opts.signal?.aborted ? 'aborted' : undefined);
+        } catch (e) {
+          // Refuse the prepared worker, then keep the cancellation channel usable.
+          try {
+            await res.afterAck?.(false);
+          } catch {
+            /* the adapter's fence handles a broken callback */
+          }
+          await opts.onHandlerError?.(e, m);
+        }
+        if (opts.signal?.aborted) return;
       }
     }
   }
@@ -294,6 +360,7 @@ export class GenericHarnessClient {
 export { cleanSummary, FINAL_SCHEMA, type Final, type FinalCheck, parseFinal, STRICT_FINAL_SCHEMA } from './final.js';
 export { classifyHostFailure, type HostFailureSite, retryAfterSeconds } from './host-failure.js';
 export {
+  AttemptStops,
   type KeptEvent,
   type ReportOutcome,
   SpawnLink,

@@ -19,7 +19,7 @@ describe('how an OpenCode session ended its work (plan M14.4)', () => {
       { info: { role: 'user' }, parts: [{ type: 'text', text: 'task' }] },
       assistant('Wrote src/a.ts.\n{"status":"completed","summary":"added src/a.ts"}'),
     ]);
-    expect(r.final).toEqual({ status: 'completed', summary: 'added src/a.ts', blocked_reason: '' });
+    expect(r.final).toEqual({ status: 'completed', summary: 'added src/a.ts', blocked_reason: '', checks: [] });
     const blocked = openCodeOutcome([assistant('{"status":"blocked","blocked_reason":"which file?"}')]);
     expect(blocked.final).toMatchObject({ status: 'blocked', blocked_reason: 'which file?' });
     const bare = openCodeOutcome([assistant('All done.\n{"status":"completed"}')]);
@@ -31,6 +31,7 @@ describe('how an OpenCode session ended its work (plan M14.4)', () => {
       status: 'completed',
       summary: 'I changed nothing; the file was already right.',
       blocked_reason: '',
+      checks: [],
     });
   });
 
@@ -70,6 +71,7 @@ describe('how an OpenCode session ended its work (plan M14.4)', () => {
       status: 'blocked',
       summary: 'src/ is empty; what should it hold?',
       blocked_reason: 'src/ is empty; what should it hold?',
+      checks: [],
     });
   });
 

@@ -1,5 +1,6 @@
 import path from 'node:path';
 import {
+  AttemptStops,
   type Final,
   type GenericHarnessClient,
   type HarnessDescriptor,
@@ -178,6 +179,7 @@ interface Attempt {
  * still sends is dropped.
  */
 export class OpenCodeWorker {
+  readonly #stops = new AttemptStops();
   /** Every instruction received from Friday, newest last (tests and logs). */
   readonly received: OutboundMessage[] = [];
   readonly #attempts = new Map<string, Attempt>();
@@ -244,9 +246,12 @@ export class OpenCodeWorker {
     return this.#link.start();
   }
 
-  async #handle(
-    m: OutboundMessage,
-  ): Promise<{ accepted: boolean; reason?: string; session_ref?: string; afterAck?: (current: boolean) => void }> {
+  async #handle(m: OutboundMessage): Promise<{
+    accepted: boolean;
+    reason?: string;
+    session_ref?: string;
+    afterAck?: (current: boolean, reason?: 'aborted') => Promise<void> | void;
+  }> {
     this.received.push(m);
     const p = m.params as TaskStartParams;
     if (m.method === 'task.resume' && this.#link.reports.has(p.run_id)) {
@@ -255,9 +260,9 @@ export class OpenCodeWorker {
       return {
         accepted: true,
         ...(p.session_ref ? { session_ref: p.session_ref } : {}),
-        afterAck: (current) => {
+        afterAck: (current, reason) => {
           if (current) void this.#link.reports.deliver(p.run_id);
-          else this.#link.reports.drop(p.run_id);
+          else if (reason !== 'aborted') this.#link.reports.drop(p.run_id);
         },
       };
     }
@@ -273,7 +278,7 @@ export class OpenCodeWorker {
           session_ref: a.sessionId,
           afterAck: (current) => {
             if (current) void this.#work(a, p, m.method === 'task.resume' ? 'resume' : 'start');
-            else void this.#end(p.run_id);
+            else return this.#end(p.run_id);
           },
         };
       } catch (e) {
@@ -356,11 +361,12 @@ export class OpenCodeWorker {
     // Late: the attempt ended (cancelled, fenced) while the model finished; what it says is dropped.
     if (a.done || a.stopping) return;
     a.done = true;
+    const stopped = this.#end(a.runId);
     const { final, usage } = openCodeOutcome(messages);
     // What the session's tools changed, observed before the claim names it (no discrepancy to explain).
     for (const w of openCodeWrites(messages, a.cwd))
       await this.#event(a, 'tool.completed', { tool: w.tool, changed_paths: [w.path] });
-    const spent = { events: [{ event_type: 'host.usage', data: usage }] satisfies KeptEvent[] };
+    const spent = { events: [{ event_type: 'host.usage', data: usage }] satisfies KeptEvent[], stop: () => stopped };
     const ids = { task_id: a.taskId, run_id: a.runId };
     if (final.status === 'blocked') {
       void this.#link.reports.report(
@@ -394,13 +400,14 @@ export class OpenCodeWorker {
         spent,
       );
     }
-    await this.#end(a.runId);
+    await stopped.catch((e: Error) => this.#log(`worker cleanup failed: ${e.message}`));
   }
 
   /** The session failed or the model ran out of time: an agent error Friday's recovery handles. */
   async #lost(a: Attempt, why: string): Promise<void> {
     if (a.done || a.stopping) return;
     a.done = true;
+    const stopped = this.#end(a.runId);
     let spent: { events?: KeptEvent[] } = {};
     try {
       spent = { events: [{ event_type: 'host.usage', data: openCodeOutcome(await a.host.messages()).usage }] };
@@ -410,9 +417,9 @@ export class OpenCodeWorker {
     void this.#link.reports.report(
       'error',
       { task_id: a.taskId, run_id: a.runId, message: `OpenCode stopped: ${why}`.slice(0, 2000), fatal: true },
-      spent,
+      { ...spent, stop: () => stopped },
     );
-    await this.#end(a.runId);
+    await stopped.catch((e: Error) => this.#log(`worker cleanup failed: ${e.message}`));
   }
 
   /** Ends every attempt: Friday is not heard, so a cancellation would not reach them. */
@@ -426,19 +433,21 @@ export class OpenCodeWorker {
    * Ends an attempt: its session is stopped and its server, with everything it started, ends; the
    * policy bridge closes first, so a call the session still makes is refused.
    */
-  async #end(runId: string): Promise<void> {
-    const a = this.#attempts.get(runId);
-    if (!a) return;
-    this.#attempts.delete(runId);
-    a.stopping = true;
-    const ending = a.host.close().catch((e: Error) => this.#log(`stopping ${a.taskId}'s session: ${e.message}`));
-    this.#ending.add(ending);
-    try {
-      await ending;
-    } finally {
-      this.#ending.delete(ending);
-      a.done = true;
-    }
+  #end(runId: string): Promise<void> {
+    return this.#stops.run(runId, async () => {
+      const a = this.#attempts.get(runId);
+      if (!a) return;
+      a.stopping = true;
+      const ending = a.host.close();
+      this.#ending.add(ending);
+      try {
+        await ending;
+      } finally {
+        this.#ending.delete(ending);
+        a.done = true;
+      }
+      this.#attempts.delete(runId);
+    });
   }
 
   /** Stops like a crashed process: nothing is told to Friday; the sessions end with it. */

@@ -41,10 +41,12 @@ export interface KeptEvent {
 }
 
 /** How a run attempt ended, as Friday is told it; the key is the same on every try. */
-export type TerminalReport = { idempotency_key: string; created_at: string; events?: KeptEvent[] } & (
-  | { kind: 'result'; params: ResultParams }
-  | { kind: 'error'; params: ErrorParams }
-);
+export type TerminalReport = {
+  idempotency_key: string;
+  created_at: string;
+  events?: KeptEvent[];
+  cleanup_pending?: boolean;
+} & ({ kind: 'result'; params: ResultParams } | { kind: 'error'; params: ErrorParams });
 
 /**
  * What became of a report: recorded by Friday; parked until Friday resumes its run (`task.resume`),
@@ -52,6 +54,25 @@ export type TerminalReport = { idempotency_key: string; created_at: string; even
  * or is not this harness's).
  */
 export type ReportOutcome = 'recorded' | 'parked' | 'dropped';
+
+/** Concurrent cancellation and a terminal report await the same process-group cleanup. */
+export class AttemptStops {
+  readonly #pending = new Map<string, Promise<void>>();
+  run(runId: string, stop: () => Promise<void>): Promise<void> {
+    const running = this.#pending.get(runId);
+    if (running) return running;
+    const pending = Promise.resolve().then(stop);
+    this.#pending.set(runId, pending);
+    void pending.finally(() => this.#pending.delete(runId)).catch(() => undefined);
+    return pending;
+  }
+}
+
+interface ReportOptions {
+  events?: KeptEvent[];
+  /** Resolves only after the attempt's worker and descendants stopped; rejects if unconfirmed. */
+  stop?: () => Promise<void>;
+}
 
 /** Reports kept longer than this are no longer delivered: their runs are long settled. */
 const KEEP_MS = 24 * 60 * 60 * 1000;
@@ -64,6 +85,7 @@ const KEEP_MS = 24 * 60 * 60 * 1000;
 export class TerminalReports {
   readonly #pending = new Map<string, TerminalReport>();
   readonly #inFlight = new Map<string, Promise<ReportOutcome>>();
+  readonly #settling = new Map<string, Promise<void>>();
   #closed = false;
 
   constructor(private readonly opts: { dir?: string; client: () => GenericHarnessClient; log: (msg: string) => void }) {
@@ -73,7 +95,21 @@ export class TerminalReports {
       try {
         const r = JSON.parse(readFileSync(path.join(opts.dir, f), 'utf8')) as TerminalReport;
         if (Date.now() - Date.parse(r.created_at) > KEEP_MS) rmSync(path.join(opts.dir, f), { force: true });
-        else this.#pending.set(r.params.run_id, r);
+        else if (r.cleanup_pending) {
+          this.#keep({
+            ...r,
+            kind: 'error',
+            cleanup_pending: false,
+            params: {
+              task_id: r.params.task_id,
+              run_id: r.params.run_id,
+              message: 'adapter restarted before worker termination was confirmed',
+              fatal: true,
+              worker_stopped: false,
+              failure: { kind: 'transport' },
+            },
+          });
+        } else this.#pending.set(r.params.run_id, r);
       } catch {
         // not a report this adapter wrote
       }
@@ -89,20 +125,58 @@ export class TerminalReports {
    * Records how an attempt ended (on disk first, when kept there), with what it reported about
    * itself (`events`, recorded before the report), and delivers it.
    */
-  report(kind: 'result', params: ResultParams, opts?: { events?: KeptEvent[] }): Promise<ReportOutcome>;
-  report(kind: 'error', params: ErrorParams, opts?: { events?: KeptEvent[] }): Promise<ReportOutcome>;
+  report(kind: 'result', params: ResultParams, opts?: ReportOptions): Promise<ReportOutcome>;
+  report(kind: 'error', params: ErrorParams, opts?: ReportOptions): Promise<ReportOutcome>;
   report(
     kind: 'result' | 'error',
     params: ResultParams | ErrorParams,
-    opts: { events?: KeptEvent[] } = {},
+    opts: ReportOptions = {},
   ): Promise<ReportOutcome> {
     this.#keep({
       kind,
       params,
       idempotency_key: newId('msg'),
       created_at: new Date().toISOString(),
+      ...(opts.stop ? { cleanup_pending: true } : {}),
       ...(opts.events?.length ? { events: [...opts.events] } : {}),
     } as TerminalReport);
+    if (opts.stop) {
+      const kept = this.#pending.get(params.run_id) as TerminalReport;
+      const settle = Promise.resolve()
+        .then(opts.stop)
+        .then(
+          () => {
+            if (this.#pending.get(params.run_id) !== kept) return;
+            kept.cleanup_pending = false;
+            if (kept.kind === 'error') kept.params.worker_stopped = true;
+            this.#keep(kept);
+          },
+          (e: Error) => {
+            this.opts.log(`worker termination for ${params.task_id} is unconfirmed: ${e.message}`);
+            if (this.#pending.get(params.run_id) !== kept) return;
+            kept.cleanup_pending = false;
+            if (kept.kind === 'error') {
+              kept.params.worker_stopped = false;
+              this.#keep(kept);
+            } else {
+              // A worker that can still change the tree cannot submit it for verification.
+              this.#keep({
+                ...kept,
+                kind: 'error',
+                params: {
+                  task_id: params.task_id,
+                  run_id: params.run_id,
+                  message: `worker termination is unconfirmed: ${e.message}`.slice(0, 2000),
+                  fatal: true,
+                  worker_stopped: false,
+                  failure: { kind: 'transport' },
+                },
+              });
+            }
+          },
+        );
+      this.#settling.set(params.run_id, settle);
+    }
     return this.deliver(params.run_id);
   }
 
@@ -116,6 +190,8 @@ export class TerminalReports {
   }
 
   async #deliver(runId: string): Promise<ReportOutcome> {
+    await this.#settling.get(runId);
+    this.#settling.delete(runId);
     for (let attempt = 1; ; attempt += 1) {
       const r = this.#pending.get(runId);
       if (!r) return 'dropped';
@@ -229,6 +305,7 @@ export class SpawnLink {
   #reconnecting: Promise<void> | undefined;
   #fenced = false;
   #closed = false;
+  readonly #preparing = new Map<string, Promise<Awaited<ReturnType<TaskHandler>>>>();
 
   constructor(private readonly opts: SpawnLinkOptions) {
     this.client = new GenericHarnessClient(opts.bootstrap, opts.descriptor());
@@ -263,7 +340,7 @@ export class SpawnLink {
     const ctrl = new AbortController();
     this.#loop = ctrl;
     this.#loopDone = this.client
-      .run(this.opts.handle, {
+      .run((message, signal) => this.#handle(message, signal), {
         signal: ctrl.signal,
         waitMs: this.opts.waitMs ?? 500,
         onTrouble: (e, failingForMs) => {
@@ -284,8 +361,20 @@ export class SpawnLink {
         onRecovered: () => {
           if (this.#fenced) void this.#renew();
         },
+        onHandlerError: async (error, message) => {
+          this.#fenced = true;
+          this.client.stopHeartbeat();
+          this.opts.log(`could not start ${message.message_id}: ${(error as Error).message}; stopping workers`);
+          await this.opts.fence('the start callback failed');
+          if (!this.#closed) void this.#renew();
+        },
       })
-      .catch((e: Error) => this.opts.log(`delivery loop stopped: ${e.message}`));
+      .catch(async (e: Error) => {
+        this.#fenced = true;
+        this.client.stopHeartbeat();
+        this.opts.log(`delivery loop stopped: ${e.message}; stopping workers`);
+        await this.opts.fence('the instruction channel stopped');
+      });
   }
 
   async #stopLoop(): Promise<void> {
@@ -293,6 +382,30 @@ export class SpawnLink {
     await this.#loopDone;
     this.#loop = undefined;
     this.#loopDone = undefined;
+  }
+
+  /** A renewal cannot prepare the same run before its abandoned startup has cleaned up. */
+  #handle(message: Parameters<TaskHandler>[0], signal?: AbortSignal): ReturnType<TaskHandler> {
+    if (message.method === 'task.cancel') return this.opts.handle(message, signal);
+    const runId = String(message.params.run_id ?? message.message_id);
+    const earlier = this.#preparing.get(runId);
+    const prepared = (async () => {
+      await earlier?.catch(() => undefined);
+      if (signal?.aborted) return { accepted: false };
+      const answer = await this.opts.handle(message, signal);
+      if (signal?.aborted) {
+        await answer.afterAck?.(false, 'aborted');
+        return { accepted: false };
+      }
+      return answer;
+    })();
+    this.#preparing.set(runId, prepared);
+    void prepared
+      .finally(() => {
+        if (this.#preparing.get(runId) === prepared) this.#preparing.delete(runId);
+      })
+      .catch(() => undefined);
+    return prepared;
   }
 
   /**

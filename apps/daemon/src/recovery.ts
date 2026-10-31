@@ -112,10 +112,12 @@ export class RecoveryManager {
     const run = (task.current_run_id ? state.q.findRun(task.current_run_id) : undefined) ?? state.q.runs(taskId).at(-1);
     const harness = run ? state.q.findHarness(run.harness_id) : undefined;
     const reconnectUntil =
-      harness?.status === 'DISCONNECTED' && harness.lease_expires_at
-        ? new Date(Date.parse(harness.lease_expires_at) + settings.reconnectWindowMs).toISOString()
+      harness?.status === 'DISCONNECTED' && harness.disconnected_at
+        ? new Date(Date.parse(harness.disconnected_at) + settings.reconnectWindowMs).toISOString()
         : null;
     const alive = harness ? (this.opts.alive ?? processAlive)(harness.host_pid) : null;
+    const workerStopped =
+      harness?.attach_mode === 'spawn' && run?.status === 'ENDED' && state.workerStopped(this.pid, run.run_id);
     const lastEvent = run ? state.store.readByRef(this.pid, 'run', run.run_id).at(-1) : undefined;
 
     const tree = state.q.worktreeForTask(taskId);
@@ -177,7 +179,7 @@ export class RecoveryManager {
           ? missingCode
           : ranElsewhere
             ? `its last attempt worked in ${ranElsewhere}, which is not a checkout of this clone, so changes it did not commit to a branch this clone has are not here; a backup does not copy a main checkout. Continue in this clone as it is with "friday recover ${taskId} --action reassign"`
-            : alive === true
+            : alive === true && !workerStopped
               ? `its host process (pid ${harness?.host_pid}) is still running on this machine, so it may still be writing`
               : exhausted
                 ? `it has had ${attempts} attempt(s), and recovery.max_retries is ${settings.maxRetries}`
@@ -291,17 +293,30 @@ export class RecoveryManager {
   }
 
   /** Performs one recovery action, preserving the worktree's state first where work could be lost. */
-  async perform(
+  perform(
     taskId: string,
     action: Exclude<RecoveryAction, 'reconnect'>,
     actor: Actor,
     reason?: string,
   ): Promise<{ task: TaskView; preserved_ref: string | null; assessment: RecoveryAssessment }> {
+    return this.#perform(taskId, action, actor, reason);
+  }
+
+  async #perform(
+    taskId: string,
+    action: Exclude<RecoveryAction, 'reconnect'>,
+    actor: Actor,
+    reason?: string,
+    prepared?: { assessment: RecoveryAssessment; version: string },
+  ): Promise<{ task: TaskView; preserved_ref: string | null; assessment: RecoveryAssessment }> {
     const { state, project, logger } = this.opts;
     if (this.#busy.has(taskId)) throw new FridayError('invalid_request', `${taskId} is being recovered already`);
     this.#busy.add(taskId);
+    let ownership: ReturnType<FridayState['holdTaskRecovery']> | undefined;
     try {
-      const a = await this.assess(taskId);
+      const version = prepared?.version ?? state.recoveryVersion(this.pid, taskId);
+      const a = prepared?.assessment ?? (await this.assess(taskId));
+      ownership = state.holdTaskRecovery(this.pid, taskId, version);
       const option = a.options.find((o) => o.action === action);
       if (!option?.available) {
         throw new FridayError(
@@ -374,6 +389,7 @@ export class RecoveryManager {
       }
       if (action === 'restart' && a.worktree?.exists && !a.worktree.elsewhere) await resetWorktree(a.worktree.path);
       const task = state.recoverTask(this.pid, actor, taskId, action, {
+        recovery_token: ownership.token,
         reason: why,
         preserved_ref: preserved,
         details: {
@@ -393,6 +409,7 @@ export class RecoveryManager {
       }
       return { task, preserved_ref: preserved, assessment: a };
     } finally {
+      ownership?.release();
       this.#busy.delete(taskId);
     }
   }
@@ -477,11 +494,15 @@ export class RecoveryManager {
         if (h && h.status !== 'TERMINATED') continue;
       }
       try {
+        const version = state.recoveryVersion(this.pid, t.task_id);
         const a = await this.assess(t.task_id);
         const pick = a.options.find((o) => o.recommended && (o.action === 'reassign' || o.action === 'needs_human'));
         if (!pick) continue;
         if (pick.action === 'needs_human' && this.#asked(t.task_id)) continue;
-        await this.perform(t.task_id, pick.action as 'reassign' | 'needs_human', SYSTEM, `automatic: ${pick.reason}`);
+        await this.#perform(t.task_id, pick.action as 'reassign' | 'needs_human', SYSTEM, `automatic: ${pick.reason}`, {
+          assessment: a,
+          version,
+        });
         done.push(`${t.task_id}: ${pick.action}`);
       } catch (e) {
         logger.warn('automatic recovery failed', { task_id: t.task_id, message: (e as Error).message });

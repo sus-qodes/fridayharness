@@ -67,6 +67,7 @@ export class OpenCodeSpawnAdapter {
   #url = '';
   #password = randomBytes(32).toString('hex');
   #closed = false;
+  #closing: Promise<void> | undefined;
   sessionId: string | undefined;
   constructor(private readonly opts: OpenCodeSpawnOptions) {
     this.#bridge = new PolicyBridge(async (params) => {
@@ -326,17 +327,28 @@ export class OpenCodeSpawnAdapter {
     const answer = await response.text();
     return answer ? JSON.parse(answer) : null;
   }
-  async close(): Promise<void> {
-    if (this.#closed) return;
+  close(): Promise<void> {
+    this.#closing ??= this.#close();
+    return this.#closing;
+  }
+
+  async #close(): Promise<void> {
     this.#closed = true;
     await this.#bridge.close();
-    if (this.#url && this.#profile) {
-      if (this.sessionId)
-        await this.#request(`/session/${encodeURIComponent(this.sessionId)}/abort`, 'POST').catch(() => undefined);
-      await this.#request('/global/dispose', 'POST').catch(() => undefined);
+    try {
+      if (this.#url) {
+        // Courtesy requests are bounded; process-group termination still confirms the stop.
+        if (this.sessionId)
+          await this.#request(`/session/${encodeURIComponent(this.sessionId)}/abort`, 'POST', undefined, 1000).catch(
+            () => undefined,
+          );
+        await this.#request('/global/dispose', 'POST', undefined, 1000).catch(() => undefined);
+      }
+      await this.#process?.stop();
+    } finally {
+      await this.#groups.close();
+      await this.#client?.disconnect('opencode_preflight_finished', true).catch(() => undefined);
+      if (this.#profile) rmSync(this.#profile.dir, { recursive: true, force: true, maxRetries: 3 });
     }
-    await this.#groups.close();
-    await this.#client?.disconnect('opencode_preflight_finished', true).catch(() => undefined);
-    if (this.#profile) rmSync(this.#profile.dir, { recursive: true, force: true, maxRetries: 3 });
   }
 }

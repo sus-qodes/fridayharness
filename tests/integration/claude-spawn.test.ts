@@ -115,7 +115,7 @@ async function eventually<T>(fn: () => T | Promise<T>, ok: (v: T) => boolean, wh
   for (;;) {
     const v = await fn();
     if (ok(v)) return v;
-    if (Date.now() > end) throw new Error(`timed out waiting for ${what}: ${JSON.stringify(v).slice(0, 400)}`);
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}: ${String(JSON.stringify(v)).slice(0, 400)}`);
     await new Promise((r) => setTimeout(r, 50));
   }
 }

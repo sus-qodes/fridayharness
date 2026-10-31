@@ -609,6 +609,10 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
       const p = METHODS[method].params.parse(raw);
       const deadline = Date.now() + p.wait_ms;
       for (;;) {
+        if (deps.signal?.aborted) return { messages: [] };
+        if (!state.credentialActive(auth.credential_id)) {
+          throw new FridayError('token_revoked', 'this poll belongs to an expired registration');
+        }
         const messages = state.pollOutbox(pid, harnessId, p.max);
         if (messages.length > 0 || Date.now() >= deadline || deps.signal?.aborted) return { messages };
         await sleep(Math.min(deps.pollIntervalMs ?? 200, Math.max(0, deadline - Date.now())));

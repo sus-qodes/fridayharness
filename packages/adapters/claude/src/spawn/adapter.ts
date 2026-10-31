@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  AttemptStops,
   classifyHostFailure,
   FINAL_SCHEMA,
   type GenericHarnessClient,
@@ -191,6 +192,7 @@ function reportedModel(modelUsage: unknown): string | null {
  * cancel, or with this adapter.
  */
 export class ClaudeSpawnAdapter {
+  readonly #stops = new AttemptStops();
   /** Every instruction received from Friday, newest last (tests and logs). */
   readonly received: OutboundMessage[] = [];
   readonly #attempts = new Map<string, Attempt>();
@@ -268,9 +270,12 @@ export class ClaudeSpawnAdapter {
     return this.#link.start();
   }
 
-  async #handle(
-    m: OutboundMessage,
-  ): Promise<{ accepted: boolean; reason?: string; session_ref?: string; afterAck?: (current: boolean) => void }> {
+  async #handle(m: OutboundMessage): Promise<{
+    accepted: boolean;
+    reason?: string;
+    session_ref?: string;
+    afterAck?: (current: boolean, reason?: 'aborted') => Promise<void> | void;
+  }> {
     this.received.push(m);
     const p = m.params as TaskStartParams & { reason?: string };
     if (m.method === 'task.resume' && this.#link.reports.has(p.run_id)) {
@@ -279,9 +284,9 @@ export class ClaudeSpawnAdapter {
       return {
         accepted: true,
         ...(p.session_ref ? { session_ref: p.session_ref } : {}),
-        afterAck: (current) => {
+        afterAck: (current, reason) => {
           if (current) void this.#link.reports.deliver(p.run_id);
-          else this.#link.reports.drop(p.run_id);
+          else if (reason !== 'aborted') this.#link.reports.drop(p.run_id);
         },
       };
     }
@@ -307,7 +312,7 @@ export class ClaudeSpawnAdapter {
           session_ref: sessionId,
           afterAck: (current) => {
             if (current) go();
-            else void this.#end(p.run_id);
+            else return this.#end(p.run_id);
           },
         };
       } catch (e) {
@@ -705,13 +710,14 @@ export class ClaudeSpawnAdapter {
       );
     }
     a.done = true;
+    const stopped = this.#end(a.runId);
     const ids = { task_id: a.taskId, run_id: a.runId };
     // Kept until Friday records it, whatever happens to this adapter meanwhile (review M8-R05),
     // together with what the turn cost, whatever it ended as: the usage row of the token baseline
     // reads that per run, and a report lost to an outage at the end of a turn would show a verified
     // attempt as one whose host said nothing.
     const reports = this.#link.reports;
-    const spent = { events: [{ event_type: 'host.usage', data: hostUsage(m) }] };
+    const spent = { events: [{ event_type: 'host.usage', data: hostUsage(m) }], stop: () => stopped };
     if (m.subtype === 'success' && m.is_error !== true) {
       const final = parseFinal(m.structured_output ?? str(m.result) ?? a.lastText, a.lastText);
       if (final.status === 'blocked') {
@@ -763,7 +769,7 @@ export class ClaudeSpawnAdapter {
         spent,
       );
     }
-    await this.#end(a.runId);
+    await stopped.catch((e: Error) => this.#log(`worker cleanup failed: ${e.message}`));
   }
 
   /**
@@ -774,28 +780,38 @@ export class ClaudeSpawnAdapter {
   async #lost(a: Attempt, why: string, site: HostFailureSite = a.started ? 'exit' : 'start'): Promise<void> {
     if (a.done || a.stopping) return;
     a.done = true;
+    const stopped = this.#end(a.runId);
     const failure = classifyHostFailure(why, site);
-    void this.#link.reports.report('error', {
-      task_id: a.taskId,
-      run_id: a.runId,
-      message: `Claude Code stopped: ${why}`.slice(0, 2000),
-      fatal: true,
-      ...(failure ? { failure } : {}),
-    });
-    await this.#end(a.runId);
+    void this.#link.reports.report(
+      'error',
+      {
+        task_id: a.taskId,
+        run_id: a.runId,
+        message: `Claude Code stopped: ${why}`.slice(0, 2000),
+        fatal: true,
+        ...(failure ? { failure } : {}),
+      },
+      { stop: () => stopped },
+    );
+    await stopped.catch((e: Error) => this.#log(`worker cleanup failed: ${e.message}`));
   }
 
   /** Ends an attempt's session and everything it started, confirmed (ADR-0032 §2). */
-  async #end(runId: string): Promise<void> {
-    await this.#tools.close(runId);
-    const a = this.#attempts.get(runId);
-    if (!a) return;
-    this.#attempts.delete(runId);
-    a.stopping = true;
-    await a.proc.stop().catch((e: Error) => this.#log(`stopping ${a.taskId}'s session: ${e.message}`));
-    await a.group.close().catch(() => undefined);
-    a.done = true;
-    for (const f of a.files) rmSync(f, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  #end(runId: string): Promise<void> {
+    return this.#stops.run(runId, async () => {
+      await this.#tools.close(runId);
+      const a = this.#attempts.get(runId);
+      if (!a) return;
+      a.stopping = true;
+      try {
+        await a.proc.stop();
+      } finally {
+        await a.group.close();
+      }
+      a.done = true;
+      for (const f of a.files) rmSync(f, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      this.#attempts.delete(runId);
+    });
   }
 
   /** Stops like a crashed process: nothing is told to Friday; the sessions end with it. */

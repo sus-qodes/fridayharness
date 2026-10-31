@@ -84,6 +84,8 @@ function toTaskRoleDecisionView(r: Record<string, unknown>): TaskRoleDecisionVie
 
 /** Harness view plus internal fields the service needs. */
 export type HarnessRecord = HarnessView & {
+  /** The lease manager's reconnect window begins when disconnection is observed. */
+  disconnected_at: string | null;
   shadow: boolean;
   requested_agent_key: string | null;
   /** When a Friday hook first reached the daemon from this harness (review F09). */
@@ -95,6 +97,7 @@ export type HarnessRecord = HarnessView & {
 };
 const toRecord = (row: HarnessRow): HarnessRecord => ({
   ...toHarnessView(row),
+  disconnected_at: row.disconnected_at,
   shadow: Boolean(row.shadow),
   requested_agent_key: row.requested_agent_key,
   hooks_seen_at: row.hooks_seen_at ?? null,
