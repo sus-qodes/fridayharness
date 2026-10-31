@@ -119,7 +119,7 @@ During development, `pnpm friday <command>` runs the CLI from workspace sources.
 
 [apps/desktop](apps/desktop) is the Tauri 2 Windows shell: the always-on-top, click-through Notch over the editor and the Studio window. Its Rust core is the only HTTP client of the daemon — the operator token never reaches the webview. Build it with cargo outside turbo; the toolchain and packaging are in [apps/desktop/README.md](apps/desktop/README.md).
 
-[site/](site) is the landing page: a single static page with zero dependencies and no build step, porting the Studio's tokens, springs and components to a marketing page. Open `site/index.html` directly or serve the folder with `npx serve site`; its structure and design rules are in [site/README.md](site/README.md). The [vercel.json](vercel.json) at the repository root deploys it on Vercel as-is: static output directory `site`, no build, with security headers.
+[site/](site) is the landing page: a single static page with zero dependencies and no build step, porting the Studio's tokens, springs and components to a marketing page. Open `site/index.html` directly or serve the folder with `npx serve site`; its structure and design rules are in [site/README.md](site/README.md). To deploy it on Vercel, set the project's **Root Directory** to `site` (or run `npx vercel site`); the [vercel.json](site/vercel.json) inside it adds security headers and clean URLs — no build step.
 
 ## Documentation
 
