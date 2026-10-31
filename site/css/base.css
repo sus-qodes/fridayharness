@@ -1,0 +1,124 @@
+/* Base: reset, page canvas, focus, selection, reduced motion. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-lg);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+p,
+ul,
+ol {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding: 0;
+  list-style: none;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+img,
+svg {
+  display: block;
+}
+
+button {
+  font-family: inherit;
+}
+
+::selection {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+/* The product mark (apps/ui/src/shell/mark.ts + shell.css .sh-mark-*). */
+.sh-mark {
+  flex: none;
+}
+
+.sh-mark-body,
+.sh-mark-tuft {
+  fill: #ffdb3f;
+}
+
+.sh-mark-eye {
+  fill: #0e2a68;
+}
+
+.sh-mark-beak {
+  fill: #f7a823;
+}
+
+.sh-mark-smile {
+  fill: none;
+  stroke: #b65e00;
+  stroke-width: 0.5;
+  stroke-linecap: round;
+}
+
+/* Monospace spans inside copy (model names, numbers). */
+.sd-mono {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  letter-spacing: -0.01em;
+}
+
+/* Reveal on scroll: the opacity fades here; the rise is a real spring, driven in js/main.js. */
+[data-reveal] {
+  opacity: 0;
+}
+
+.sd-revealed {
+  opacity: 1;
+  transition: opacity var(--duration-slow) var(--ease-standard);
+}
+
+/* Reduced motion: everything fades or jumps, nothing springs (plan §6 rule 6). */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  [data-reveal] {
+    opacity: 1;
+    transform: none !important;
+    transition: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

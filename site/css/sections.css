@@ -1,0 +1,987 @@
+/* Sections: nav, hero, problem, control plane, features, beliefs, CTA, footer.
+   Every offset sits on the 8pt grid (spacing tokens are multiples of 8). */
+
+.sd-container {
+  max-width: var(--sd-max);
+  margin: 0 auto;
+  padding: 0 var(--space-3);
+}
+
+/* ---- nav -------------------------------------------------------------------------------------- */
+
+.sd-nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  background: rgba(10, 11, 14, 0.85);
+  backdrop-filter: blur(24px) saturate(190%);
+  -webkit-backdrop-filter: blur(24px) saturate(190%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.sd-nav-inner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: var(--sd-max);
+  height: var(--header-height);
+  margin: 0 auto;
+  padding: 0 var(--space-3);
+}
+
+.sd-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-title-sm);
+  font-weight: var(--weight-bold);
+  letter-spacing: -0.01em;
+}
+
+.sd-nav-links {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  /* Left cluster beside the brand: the middle of the bar belongs to the island. */
+}
+
+.sd-nav-inner > .btn {
+  /* The CTA always closes the bar, with or without the links. */
+  margin-left: auto;
+}
+
+.sd-nav-links a {
+  color: var(--dim);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  transition: color var(--duration-fast) var(--ease-standard);
+}
+
+.sd-nav-links a:hover {
+  color: var(--ink);
+}
+
+/* ---- hero -------------------------------------------------------------------------------------- */
+
+.sd-hero {
+  position: relative;
+  padding: var(--space-22) 0 var(--space-12);
+  background: var(--bg-canvas);
+  overflow: clip;
+}
+
+.sd-grid {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.sd-hero-inner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.sd-kicker {
+  margin-bottom: var(--space-2);
+  color: var(--dim);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+}
+
+.sd-h1 {
+  max-width: 900px;
+  font-size: var(--text-h1);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--track-tight);
+  line-height: 1.04;
+  text-wrap: balance;
+}
+
+.sd-h1-dim {
+  display: block;
+  color: var(--dim);
+}
+
+.sd-lede {
+  max-width: 640px;
+  margin-top: var(--space-3);
+  color: var(--dim-2);
+  font-size: var(--text-lede);
+}
+
+.sd-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-1);
+  margin-top: var(--space-5);
+}
+
+.sd-hosts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  margin-top: var(--space-10);
+}
+
+.sd-hosts-label {
+  margin-right: var(--space-1);
+  color: var(--dim-3);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+}
+
+/* ---- sections ---------------------------------------------------------------------------------- */
+
+.sd-section {
+  padding: var(--space-16) 0;
+}
+
+.sd-section--flat {
+  background: var(--bg-obsidian);
+}
+
+.sd-h2 {
+  max-width: 800px;
+  font-size: var(--text-h2);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--track-tighter);
+  line-height: 1.08;
+  text-wrap: balance;
+}
+
+.sd-h3 {
+  font-size: var(--text-h3);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-tighter);
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.sd-section-lede {
+  max-width: 640px;
+  margin-top: var(--space-2);
+  margin-bottom: var(--space-8);
+  color: var(--dim-2);
+  font-size: var(--text-lede);
+}
+
+/* ---- problem cards ------------------------------------------------------------------------------ */
+
+.sd-cards-4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-2);
+}
+
+.sd-problem-card {
+  padding: var(--space-3);
+}
+
+.sd-problem-card h3 {
+  margin-top: var(--space-2);
+  font-size: var(--text-title-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-tighter);
+}
+
+.sd-problem-card p {
+  margin-top: var(--space-1);
+  color: var(--dim-2);
+  font-size: var(--text-sm);
+}
+
+/* ---- the silo diagram --------------------------------------------------------------------------- */
+
+.sd-diagram {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-8);
+  padding: var(--space-4);
+}
+
+.sd-diagram-title {
+  margin-bottom: var(--space-2);
+  color: var(--dim-3);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+}
+
+.sd-silo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--card-flat);
+}
+
+.sd-silo + .sd-silo {
+  margin-top: var(--space-1);
+}
+
+.sd-silo-lock {
+  display: inline-flex;
+  color: var(--sys-red);
+  opacity: 0.8;
+}
+
+.sd-diagram-note {
+  margin-top: var(--space-2);
+  color: var(--dim-3);
+  font-size: var(--text-caption);
+}
+
+.sd-diagram-arrow {
+  color: var(--dim-3);
+}
+
+.sd-project-node .sd-diagram-title {
+  text-align: right;
+}
+
+.sd-project-card {
+  border: 1px solid rgba(255, 219, 63, 0.3);
+  border-radius: var(--radius-md);
+  background: rgba(255, 219, 63, 0.05);
+  overflow: hidden;
+}
+
+.sd-project-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid rgba(255, 219, 63, 0.16);
+  font-size: var(--text-title-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.sd-project-head .nt-tag {
+  margin-left: auto;
+}
+
+.sd-project-list li {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--dim-2);
+  font-size: var(--text-sm);
+}
+
+.sd-project-list li:last-child {
+  border-bottom: 0;
+}
+
+/* ---- the control-plane flow ---------------------------------------------------------------------- */
+
+.sd-flow {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: var(--space-3);
+}
+
+.sd-flow-node {
+  position: relative;
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--card-flat);
+}
+
+.sd-flow-node:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -14px;
+  width: 8px;
+  height: 8px;
+  border-top: 1px solid var(--dim-5);
+  border-right: 1px solid var(--dim-5);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.sd-flow-num {
+  display: block;
+  color: var(--dim-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+}
+
+.sd-flow-node--green .sd-flow-num {
+  color: var(--color-emerald);
+}
+
+.sd-flow-name {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--text-title-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-tighter);
+}
+
+.sd-flow-cap {
+  display: block;
+  margin-top: 2px;
+  color: var(--dim-3);
+  font-size: var(--text-caption);
+}
+
+.sd-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-8);
+}
+
+/* ---- feature showcases --------------------------------------------------------------------------- */
+
+.sd-feature {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  gap: var(--space-10);
+  padding: var(--space-10) 0;
+}
+
+.sd-feature--flip .sd-feature-text {
+  order: 2;
+}
+
+.sd-feature-text p {
+  margin-top: var(--space-2);
+  color: var(--dim-2);
+  font-size: var(--text-body-lg);
+}
+
+.sd-visual {
+  position: relative;
+  min-height: 400px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--bg-canvas);
+  overflow: clip;
+}
+
+.sd-grid--dim {
+  opacity: 0.7;
+}
+
+/* the notch showcase: the island hangs from the panel's top edge over quiet editor lines */
+.sd-visual--notch .nt-island-static {
+  z-index: 2;
+}
+
+.sd-editor-lines {
+  position: absolute;
+  top: 120px;
+  left: var(--space-4);
+  right: var(--space-4);
+  display: grid;
+  gap: 16px;
+}
+
+.sd-editor-lines span {
+  height: 8px;
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sd-editor-lines span:nth-child(2) {
+  width: 72%;
+}
+
+.sd-editor-lines span:nth-child(3) {
+  width: 88%;
+}
+
+.sd-editor-lines span:nth-child(4) {
+  width: 56%;
+}
+
+/* the studio showcase: nodes placed on the 24px dot grid */
+.sd-node {
+  position: absolute;
+  left: var(--x);
+  top: var(--y);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  box-shadow: var(--shadow-sm);
+}
+
+.sd-node--goal {
+  left: var(--space-3);
+  top: var(--space-3);
+  border-color: rgba(255, 219, 63, 0.3);
+  background: rgba(255, 219, 63, 0.05);
+}
+
+.sd-node-kicker {
+  color: var(--dim-3);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+}
+
+.sd-node-title {
+  font-size: var(--text-title-sm);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-tighter);
+}
+
+.sd-node--agent {
+  align-items: center;
+}
+
+.sd-node-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.sd-node-cap {
+  color: var(--dim-3);
+  font-size: var(--text-micro);
+}
+
+/* checklist / routing panels */
+.sd-check-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--dim-2);
+  font-size: var(--text-sm);
+}
+
+.sd-check-row:last-of-type {
+  border-bottom: 0;
+}
+
+.sd-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: var(--radius-pill);
+}
+
+.sd-check--ok {
+  background: rgba(48, 209, 88, 0.14);
+  color: var(--color-emerald);
+}
+
+.sd-check--wait {
+  background: rgba(255, 159, 10, 0.14);
+  color: var(--color-amber);
+}
+
+.sd-check-hairline {
+  height: 3px;
+  margin-top: var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--border-medium);
+  overflow: hidden;
+}
+
+.sd-check-hairline span {
+  display: block;
+  height: 100%;
+  width: var(--p, 50%);
+  border-radius: inherit;
+  background: var(--color-emerald);
+}
+
+.sd-route-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--dim-2);
+  font-size: var(--text-sm);
+}
+
+.sd-budget {
+  padding-top: var(--space-1);
+}
+
+.sd-budget-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1);
+  color: var(--dim-2);
+  font-size: var(--text-sm);
+}
+
+/* ---- beliefs -------------------------------------------------------------------------------------- */
+
+.sd-belief {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: var(--space-3);
+  padding: var(--space-6) 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sd-belief:last-of-type {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sd-belief-num {
+  color: var(--dim-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-title-sm);
+  padding-top: 6px;
+}
+
+.sd-belief p {
+  max-width: 640px;
+  margin-top: var(--space-1);
+  color: var(--dim-2);
+}
+
+/* ---- final CTA + footer --------------------------------------------------------------------------- */
+
+.sd-cta {
+  padding: var(--space-16) 0;
+  background: var(--bg-obsidian);
+  text-align: center;
+}
+
+.sd-cta .nt-mascot {
+  margin: 0 auto var(--space-3);
+}
+
+.sd-cta .sd-section-lede {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.sd-cta-note {
+  margin-top: var(--space-3);
+  color: var(--dim-3);
+  font-size: var(--text-caption);
+}
+
+.sd-footer {
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-obsidian);
+  padding: var(--space-6) 0 var(--space-4);
+}
+
+.sd-footer-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.sd-footer-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--dim);
+  font-size: var(--text-sm);
+}
+
+.sd-footer-links {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.sd-footer-links a {
+  color: var(--dim);
+  font-size: var(--text-sm);
+  transition: color var(--duration-fast) var(--ease-standard);
+}
+
+.sd-footer-links a:hover {
+  color: var(--ink);
+}
+
+.sd-footer-note {
+  margin-top: var(--space-4);
+}
+
+.sd-footer-note p {
+  color: var(--dim-4);
+  font-size: var(--text-caption);
+}
+
+/* ---- pillar visuals: content panels ------------------------------------------------------------- */
+
+.sd-visual:has(> .sd-panel) {
+  min-height: 0;
+  padding: var(--space-3);
+}
+
+.sd-panel {
+  width: 100%;
+  padding: var(--space-2);
+}
+
+.sd-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.sd-panel-note {
+  margin: var(--space-2) var(--space-1) 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--dim-3);
+  font-size: var(--text-caption);
+}
+
+/* pillar 01 · the append-only ledger */
+.sd-ledger-row {
+  display: grid;
+  grid-template-columns: 52px 84px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 9px var(--space-1);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+}
+
+.sd-ledger-row:last-of-type {
+  border-bottom: 0;
+}
+
+.sd-ledger-row .sd-mono {
+  color: var(--dim-3);
+  font-size: 11px;
+}
+
+.sd-ledger-kind {
+  color: var(--ink-2);
+  font-weight: var(--weight-semibold);
+}
+
+.sd-ledger-what {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dim-2);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* pillar 02 · the token comparison */
+.sd-ast-row {
+  display: grid;
+  grid-template-columns: 96px 1fr 84px;
+  gap: 12px;
+  align-items: center;
+  padding: 9px var(--space-1);
+  font-size: var(--text-sm);
+}
+
+.sd-ast-label {
+  color: var(--dim-2);
+}
+
+.sd-bar {
+  display: block;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--border-medium);
+  overflow: hidden;
+}
+
+.sd-bar span {
+  display: block;
+  height: 100%;
+  width: var(--w);
+  border-radius: inherit;
+  background: var(--color-emerald);
+}
+
+.sd-bar--red span {
+  background: rgba(255, 69, 58, 0.55);
+}
+
+.sd-ast-row .sd-mono {
+  color: var(--dim-2);
+  font-size: 11px;
+  text-align: right;
+}
+
+.sd-ast-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px var(--space-1) 4px;
+}
+
+/* pillar 03 · the deterministic DAG */
+.sd-dag-goal {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 219, 63, 0.3);
+  border-radius: var(--radius-md);
+  background: rgba(255, 219, 63, 0.05);
+}
+
+.sd-dag-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 16px var(--space-1);
+}
+
+.sd-dag-task {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--card-flat);
+  color: var(--color-slate-200);
+  font-size: var(--text-sm);
+}
+
+.sd-dag-chev {
+  display: inline-flex;
+  color: var(--dim-4);
+}
+
+.sd-dag-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px var(--space-1);
+}
+
+.sd-dag-note {
+  color: var(--dim-3);
+  font-size: var(--text-caption);
+}
+
+/* ---- also on board: the bento grid ---------------------------------------------------------------- */
+
+.sd-bento {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+  margin-top: var(--space-8);
+}
+
+.sd-bento-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: var(--space-3);
+}
+
+.sd-bento-card h3 {
+  font-size: var(--text-title-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--track-tighter);
+}
+
+.sd-bento-card p {
+  color: var(--dim-2);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.sd-bento-card .sd-icon {
+  margin-bottom: 4px;
+}
+
+.sd-bento-card--wide {
+  grid-column: span 2;
+}
+
+.sd-bento-text {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-1) var(--space-1) var(--space-2);
+}
+
+/* the studio mock, small enough for its bento card */
+.sd-visual--mini {
+  min-height: 240px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.sd-visual--mini .sd-node--goal {
+  left: 24px;
+  top: 16px;
+}
+
+.sd-visual--mini .sd-node:nth-of-type(2) {
+  left: 24px;
+  top: 108px;
+}
+
+.sd-visual--mini .sd-node:nth-of-type(3) {
+  left: 168px;
+  top: 108px;
+}
+
+.sd-visual--mini .sd-node:nth-of-type(4) {
+  left: 312px;
+  top: 108px;
+}
+
+.sd-visual--mini .sd-node:nth-of-type(5) {
+  left: 168px;
+  top: 24px;
+}
+
+/* ---- breakpoints (LESSON UI-47: check 1440x900 and 1100x720; below 900 the density drops) ---------- */
+
+@media (max-width: 1100px) {
+  .sd-cards-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .sd-flow {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .sd-flow-node:nth-child(3)::after {
+    display: none;
+  }
+
+  .sd-feature {
+    grid-template-columns: 1fr;
+    gap: var(--space-4);
+  }
+
+  .sd-feature--flip .sd-feature-text {
+    order: 0;
+  }
+
+  .sd-diagram {
+    grid-template-columns: 1fr;
+  }
+
+  .sd-diagram-arrow {
+    transform: rotate(90deg);
+    justify-self: center;
+  }
+
+  .sd-project-node .sd-diagram-title {
+    text-align: left;
+  }
+
+  .sd-bento {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 1180px) {
+  /* The centered island needs the middle of the bar clear at every width. */
+  .sd-nav-links {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  /* The mark alone: the word would run under the island on a phone, and the bar is too narrow
+     for the button to clear the pill — the hero CTA sits right below anyway. */
+  .sd-brand span {
+    display: none;
+  }
+
+  .sd-nav-inner > .btn {
+    display: none;
+  }
+
+  .sd-cards-4 {
+    grid-template-columns: 1fr;
+  }
+
+  .sd-flow {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .sd-flow-node:nth-child(odd)::after {
+    display: none;
+  }
+
+  .sd-hero {
+    padding-top: var(--space-16);
+  }
+
+  .sd-belief {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
+
+  .sd-visual--notch {
+    min-height: 320px;
+  }
+
+  .sd-bento {
+    grid-template-columns: 1fr;
+  }
+
+  /* The studio mock re-flows onto a narrow card. */
+  .sd-visual--mini {
+    min-height: 300px;
+  }
+
+  .sd-visual--mini .sd-node:nth-of-type(3) {
+    left: 150px;
+    top: 168px;
+  }
+
+  .sd-visual--mini .sd-node:nth-of-type(4) {
+    left: 24px;
+    top: 228px;
+  }
+
+  .sd-visual--mini .sd-node:nth-of-type(5) {
+    left: 150px;
+    top: 24px;
+  }
+}

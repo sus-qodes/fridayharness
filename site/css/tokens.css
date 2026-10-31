@@ -1,0 +1,130 @@
+/* Design tokens: Friday's Apple-grade dark design system, carried over from apps/ui/src/styles/tokens.css.
+   The marketing scale at the bottom is the only addition; every component value below it is the app's. */
+:root {
+  color-scheme: dark;
+
+  /* Apple-style palette */
+  --ink: #f5f6f8; /* primary text */
+  --ink-2: #f1f2f4;
+  --dim: #9398a1;
+  --dim-2: #8e939c;
+  --dim-3: #6b7079;
+  --dim-4: #5f646d;
+  --dim-5: #4b5563;
+  --card: #141518; /* Apple squircle card body */
+  --card-flat: #0e0f11; /* Pure flat background */
+  --tab-on: #1d1f23; /* Active tab pill */
+  --hairline: rgba(255, 255, 255, 0.035);
+
+  /* Surfaces and backgrounds */
+  --bg-obsidian: #000000;
+  --bg-canvas: #0c0d10;
+  --bg-surface: #141518;
+  --bg-surface-elevated: #1a1c22;
+  --bg-surface-active: #22252d;
+  --bg-surface-glass: rgba(20, 21, 24, 0.82);
+
+  /* Hairline borders and dividers */
+  --border-subtle: rgba(255, 255, 255, 0.035);
+  --border-medium: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --glass-inner-bevel: rgba(255, 255, 255, 0.08);
+
+  /* The four Apple semantic status tints (docs/ui-redesign-changelog.md, Phase 5) */
+  --sys-blue: #0a84ff;
+  --sys-green: #30d158;
+  --sys-amber: #ff9f0a;
+  --sys-red: #ff453a;
+
+  /* Semantic aliases the components reference */
+  --color-slate-200: #f1f2f4;
+  --color-slate-300: #cbd5e1;
+  --color-slate-400: #9398a1;
+  --color-slate-500: #5f646d;
+  --color-emerald: var(--sys-green);
+  --color-amber: var(--sys-amber);
+  --color-crimson: var(--sys-red);
+  --color-grid-dot: rgba(255, 255, 255, 0.06);
+  --status-running: #38bdf8;
+
+  /* The duck's own yellow: the one brand colour, used only where Friday itself is meant. */
+  --duck: #ffdb3f;
+  --duck-deep: #f2b91a;
+
+  /* Typography: Apple SF Pro System Stack */
+  --font-sans:
+    system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI Variable Text", "Segoe UI",
+    sans-serif;
+  --font-mono: "SF Mono", "Cascadia Mono", "Consolas", ui-monospace, monospace;
+  --font: var(--font-sans);
+
+  --text-micro: 10px;
+  --text-caption: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-title-sm: 14px;
+  --text-title-md: 16px;
+  --text-title-lg: 20px;
+  --text-display: 28px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* Radii and elevations */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-card: 20px;
+  --radius-island: 14px;
+  --radius-pill: 999px;
+
+  /* Apple shadows */
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.85);
+  --shadow-glow-cyan: 0 0 24px rgba(34, 211, 238, 0.2);
+  --shadow-glow-amber: 0 0 24px rgba(245, 165, 36, 0.25);
+
+  /* Spring and timing curves */
+  --ease-snappy: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-elastic: cubic-bezier(0.3, 1.2, 0.4, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-close: cubic-bezier(0.45, 0, 0.2, 1);
+  --duration-fast: 100ms;
+  --duration-base: 200ms;
+  --duration-slow: 340ms;
+  --spring-duration: var(--duration-slow);
+  --spring-bounce: var(--ease-elastic);
+  --spring-snappy: cubic-bezier(0.18, 0.9, 0.28, 1);
+  --spring-smooth: cubic-bezier(0.25, 1, 0.35, 1);
+  --spring-bouncy: cubic-bezier(0.34, 1.4, 0.64, 1);
+
+  /* Layout */
+  --header-height: 44px;
+  --focus-ring: 0 0 0 2px var(--bg-canvas), 0 0 0 4px rgba(34, 211, 238, 0.6);
+
+  /* ---- Marketing extension: type, rhythm, container (8pt grid throughout) ---- */
+  --sd-max: 1120px;
+  --text-h1: clamp(44px, 7vw, 76px);
+  --text-h2: clamp(32px, 4.5vw, 48px);
+  --text-h3: clamp(24px, 3vw, 32px);
+  --text-lede: 19px;
+  --text-body-lg: 15px;
+  --track-tight: -0.03em;
+  --track-tighter: -0.02em;
+  --track-wide: 0.08em;
+  --space-1: 8px;
+  --space-2: 16px;
+  --space-3: 24px;
+  --space-4: 32px;
+  --space-5: 40px;
+  --space-6: 48px;
+  --space-8: 64px;
+  --space-10: 80px;
+  --space-12: 96px;
+  --space-16: 128px;
+  --space-22: 176px;
+}

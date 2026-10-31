@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Friday — The local control plane for AI coding agents</title>
+    <meta
+      name="description"
+      content="Friday connects Claude Code, Codex, Cursor and friends into one local brain: shared memory, AST-sliced context, deterministic plans, verified merges and one-click approvals — strictly on loopback."
+    />
+    <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
+    <link rel="stylesheet" href="./css/tokens.css" />
+    <link rel="stylesheet" href="./css/base.css" />
+    <link rel="stylesheet" href="./css/components.css" />
+    <link rel="stylesheet" href="./css/sections.css" />
+    <noscript>
+      <style>
+        [data-reveal] {
+          opacity: 1;
+        }
+      </style>
+    </noscript>
+  </head>
+  <body>
+    <!--
+      The Notch: the site's own island, hanging from the top edge exactly as it hangs from the top
+      of the screen in the desktop app. Springs drive its width, height and radius (js/island.js).
+      TODO: point the CTAs at the real installer release and GitHub repository.
+    -->
+    <div class="nt-island nt-island-site" id="island" data-state="hidden">
+      <div class="nt-view nt-view-hidden" data-view="hidden">
+        <button class="nt-strip" type="button" aria-label="Open Friday"></button>
+      </div>
+
+      <div class="nt-view nt-greeting" data-view="greeting" hidden>
+        <span class="nt-mascot nt-mascot-56" data-mascot data-size="56"></span>
+        <span class="nt-greet-text">
+          <p class="nt-greet-title">Hello, I am Friday</p>
+          <p class="nt-greet-sub">Hover the island — this is where approvals land.</p>
+        </span>
+      </div>
+
+      <div class="nt-view nt-compact" data-view="compact" hidden>
+        <button class="nt-compact-open" type="button" aria-label="Open Friday">
+          <span class="nt-mascot nt-mascot-24" data-mascot data-size="24"></span>
+          <span class="nt-tag" data-status="RUNNING" data-tag>2 RUNNING</span>
+          <span class="nt-chip" data-wait-chip hidden>1 waiting</span>
+          <span class="nt-chev" aria-hidden="true">
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 2.75 4 5.25l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          </span>
+        </button>
+      </div>
+
+      <div class="nt-view nt-expanded" data-view="expanded" hidden>
+        <div class="nt-head">
+          <span class="nt-mascot nt-mascot-36" data-mascot data-size="36"></span>
+          <span class="nt-head-text">
+            <span class="nt-project">friday · main</span>
+            <span class="nt-conn-row"><span class="nt-dot" data-tone="good"></span>3 agents connected</span>
+          </span>
+        </div>
+        <div class="nt-body">
+          <div class="nt-banner" data-banner data-tone="wait">
+            <div class="nt-banner-top">
+              <span class="nt-banner-dot"></span>
+              <span class="nt-banner-status" data-banner-status>WAITING FOR YOU</span>
+              <span class="nt-banner-tag">task #12</span>
+            </div>
+            <span class="nt-banner-summary" data-banner-summary>Agent wants to run: cargo test --workspace</span>
+            <div class="nt-banner-meta" data-banner-meta>
+              <span>kind command</span>
+              <span>risk medium</span>
+              <span>verify after</span>
+            </div>
+          </div>
+        </div>
+        <div class="nt-foot">
+          <button class="btn btn-sm btn-primary" type="button" data-allow>Allow once</button>
+          <button class="btn btn-sm" type="button" data-allow-run>Allow run</button>
+          <button class="nt-foot-btn" type="button" data-later>Later</button>
+        </div>
+      </div>
+    </div>
+
+    <header class="sd-nav">
+      <div class="sd-nav-inner">
+        <a class="sd-brand" href="#top" aria-label="Friday home">
+          <svg class="sh-mark" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+            <g transform="rotate(14 12 13)">
+              <ellipse class="sh-mark-tuft" cx="10.8" cy="6.4" rx="2.1" ry="2.5" />
+              <ellipse class="sh-mark-tuft" cx="14.2" cy="7.2" rx="1.7" ry="1.6" />
+              <ellipse class="sh-mark-body" cx="12" cy="13.6" rx="8.4" ry="7.4" />
+              <ellipse class="sh-mark-eye" cx="8.8" cy="12.6" rx="1.15" ry="1.6" />
+              <ellipse class="sh-mark-eye" cx="15.2" cy="12.6" rx="1.15" ry="1.6" />
+              <ellipse class="sh-mark-beak" cx="12" cy="16.1" rx="3.1" ry="2" />
+              <path class="sh-mark-smile" d="M10.9 16.3 Q12 17.2 13.1 16.3" />
+            </g>
+          </svg>
+          <span>Friday</span>
+        </a>
+        <nav class="sd-nav-links" aria-label="Sections">
+          <a href="#how">How it works</a>
+          <a href="#pillars">Pillars</a>
+          <a href="#notch">Governance</a>
+          <a href="#beliefs">Beliefs</a>
+        </nav>
+        <a class="btn btn-lg btn-primary" href="#" data-cta="download">Download</a>
+      </div>
+    </header>
+
+    <main id="top">
+      <!-- ================================================================ hero -->
+      <section class="sd-hero">
+        <svg class="sd-grid" aria-hidden="true">
+          <defs>
+            <pattern id="sd-dots" width="24" height="24" patternUnits="userSpaceOnUse">
+              <circle cx="1.5" cy="1.5" r="1" fill="rgba(255, 255, 255, 0.06)" />
+            </pattern>
+          </defs>
+          <rect width="100%" height="100%" fill="url(#sd-dots)" />
+        </svg>
+        <div class="sd-container sd-hero-inner">
+          <p class="sd-kicker" data-reveal>The local control plane for AI coding agents</p>
+          <h1 class="sd-h1" data-reveal>
+            Your context belongs to your project.
+            <span class="sd-h1-dim">Not to any harness.</span>
+          </h1>
+          <p class="sd-lede" data-reveal>
+            Friday gives every agent you run one local brain — shared project memory, token-efficient context,
+            deterministic plans and verified merges — while Claude Code, Codex and Cursor do the work on your machine.
+          </p>
+          <div class="sd-cta-row" data-reveal>
+            <a class="btn btn-lg btn-primary" href="#" data-cta="download">Download Friday Desktop</a>
+            <a class="btn btn-lg" href="#how">See how it works</a>
+          </div>
+          <div class="sd-hosts" data-reveal>
+            <span class="sd-hosts-label">Runs above</span>
+            <span class="chip">Claude Code</span>
+            <span class="chip">Codex</span>
+            <span class="chip">Cursor</span>
+            <span class="chip">Gemini CLI</span>
+            <span class="chip">Antigravity</span>
+            <span class="chip">OpenCode</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ problem -->
+      <section class="sd-section" id="problem">
+        <div class="sd-container">
+          <p class="sd-kicker" data-reveal>The problem</p>
+          <h2 class="sd-h2" data-reveal>Every harness keeps your context hostage.</h2>
+          <p class="sd-section-lede" data-reveal>
+            Today each agent runs in its own terminal tab: a separate bubble that forgets yesterday, re-reads
+            everything, and writes without asking. You cannot scale what you cannot trust.
+          </p>
+
+          <div class="sd-cards-4">
+            <div class="card sd-problem-card" data-reveal>
+              <span class="sd-icon sd-icon--red" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 2h12M6 22h12M7 2c0 6 10 6 10 10s-10 4-10 10M17 2c0 6-10 6-10 10s10 4 10 10" /></svg>
+              </span>
+              <h3>Memory dies at the tool boundary</h3>
+              <p>Sessions, indexes and notes live inside each tool. Switch hosts and the knowledge does not follow.</p>
+            </div>
+            <div class="card sd-problem-card" data-reveal>
+              <span class="sd-icon sd-icon--red" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" /></svg>
+              </span>
+              <h3>New host, blank slate</h3>
+              <p>A fresh agent re-learns your architecture, conventions and history — at your expense.</p>
+            </div>
+            <div class="card sd-problem-card" data-reveal>
+              <span class="sd-icon sd-icon--amber" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 12s4-7 10-7s10 7 10 7s-4 7-10 7S2 12 2 12M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6" /></svg>
+              </span>
+              <h3>Agents act while you look away</h3>
+              <p>Files get overwritten and work duplicated while loops run unattended — nobody checks until it is merged.</p>
+            </div>
+            <div class="card sd-problem-card" data-reveal>
+              <span class="sd-icon sd-icon--red" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h13l-4-4M17 17H4l4 4" /></svg>
+              </span>
+              <h3>Your code travels wholesale</h3>
+              <p>Whole files ride along with every prompt to somewhere remote, whether they are needed or not.</p>
+            </div>
+          </div>
+
+          <div class="card sd-diagram" data-reveal>
+            <div class="sd-diagram-side">
+              <p class="sd-diagram-title">Without Friday</p>
+              <div class="sd-silo">
+                <span class="chip">Claude Code</span>
+                <span class="sd-silo-lock" aria-hidden="true">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+                </span>
+              </div>
+              <div class="sd-silo">
+                <span class="chip">Codex</span>
+                <span class="sd-silo-lock" aria-hidden="true">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+                </span>
+              </div>
+              <div class="sd-silo">
+                <span class="chip">Cursor</span>
+                <span class="sd-silo-lock" aria-hidden="true">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+                </span>
+              </div>
+              <div class="sd-silo">
+                <span class="chip">Gemini CLI</span>
+                <span class="sd-silo-lock" aria-hidden="true">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+                </span>
+              </div>
+              <p class="sd-diagram-note">Four tools, four private memories, zero shared truth.</p>
+            </div>
+            <div class="sd-diagram-arrow" aria-hidden="true">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16M14 6l6 6-6 6" /></svg>
+            </div>
+            <div class="sd-diagram-side sd-project-node">
+              <p class="sd-diagram-title">With Friday</p>
+              <div class="sd-project-card">
+                <div class="sd-project-head">
+                  <svg class="sh-mark" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                    <g transform="rotate(14 12 13)">
+                      <ellipse class="sh-mark-tuft" cx="10.8" cy="6.4" rx="2.1" ry="2.5" />
+                      <ellipse class="sh-mark-tuft" cx="14.2" cy="7.2" rx="1.7" ry="1.6" />
+                      <ellipse class="sh-mark-body" cx="12" cy="13.6" rx="8.4" ry="7.4" />
+                      <ellipse class="sh-mark-eye" cx="8.8" cy="12.6" rx="1.15" ry="1.6" />
+                      <ellipse class="sh-mark-eye" cx="15.2" cy="12.6" rx="1.15" ry="1.6" />
+                      <ellipse class="sh-mark-beak" cx="12" cy="16.1" rx="3.1" ry="2" />
+                      <path class="sh-mark-smile" d="M10.9 16.3 Q12 17.2 13.1 16.3" />
+                    </g>
+                  </svg>
+                  <span>your project</span>
+                  <span class="nt-tag" data-status="RUNNING">LOCAL</span>
+                </div>
+                <ul class="sd-project-list">
+                  <li>Goals and plans</li>
+                  <li>Task history</li>
+                  <li>Memory and graph facts</li>
+                  <li>Policy and decisions</li>
+                  <li>Verification records</li>
+                </ul>
+              </div>
+              <p class="sd-diagram-note">One memory beside your code. Every host reads from it; none owns it.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ the local brain -->
+      <section class="sd-section sd-section--flat" id="how">
+        <div class="sd-container">
+          <p class="sd-kicker" data-reveal>Meet Friday</p>
+          <h2 class="sd-h2" data-reveal>One local brain. Every agent.</h2>
+          <p class="sd-section-lede" data-reveal>
+            Friday is not another wrapper. It is real infrastructure, running strictly on loopback, that connects your
+            agents into a single collaborative engineering team — with your codebase's memory anchored in an
+            append-only local ledger.
+          </p>
+
+          <ol class="sd-flow" data-reveal>
+            <li class="sd-flow-node">
+              <span class="sd-flow-num">01</span>
+              <span class="sd-flow-name">Goal</span>
+              <span class="sd-flow-cap">what you want</span>
+            </li>
+            <li class="sd-flow-node">
+              <span class="sd-flow-num">02</span>
+              <span class="sd-flow-name">Plan</span>
+              <span class="sd-flow-cap">how to get there</span>
+            </li>
+            <li class="sd-flow-node">
+              <span class="sd-flow-num">03</span>
+              <span class="sd-flow-name">Tasks</span>
+              <span class="sd-flow-cap">the unit of work</span>
+            </li>
+            <li class="sd-flow-node">
+              <span class="sd-flow-num">04</span>
+              <span class="sd-flow-name">Agents</span>
+              <span class="sd-flow-cap">any host runs it</span>
+            </li>
+            <li class="sd-flow-node sd-flow-node--green">
+              <span class="sd-flow-num">05</span>
+              <span class="sd-flow-name">Verify</span>
+              <span class="sd-flow-cap">nothing ships unchecked</span>
+            </li>
+            <li class="sd-flow-node">
+              <span class="sd-flow-num">06</span>
+              <span class="sd-flow-name">Git</span>
+              <span class="sd-flow-cap">the code authority</span>
+            </li>
+          </ol>
+
+          <div class="sd-facts" data-reveal>
+            <span class="chip"><span class="sd-dot" data-tone="good"></span>Daemon on 127.0.0.1</span>
+            <span class="chip">Append-only event ledger</span>
+            <span class="chip">Git is the authority</span>
+            <span class="chip">Bounded, redacted context</span>
+            <span class="chip">No credentials in the webview</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ pillars -->
+      <section class="sd-section" id="pillars">
+        <div class="sd-container">
+          <p class="sd-kicker" data-reveal>The pillars</p>
+          <h2 class="sd-h2" data-reveal>What no harness gives you.</h2>
+          <p class="sd-section-lede" data-reveal>
+            Four things Friday does around your agents — memory, tokens, intent and verification — and the governance
+            that wraps them.
+          </p>
+        </div>
+
+        <!-- pillar 01 · memory -->
+        <div class="sd-container sd-feature" id="memory">
+          <div class="sd-feature-text" data-reveal>
+            <p class="sd-kicker">Pillar 01 · Memory</p>
+            <h3 class="sd-h3">Every agent shares one memory.</h3>
+            <p>
+              Yesterday's decisions, today's failures, the graph of your code: Friday anchors it all beside your repo
+              in an append-only local ledger. Every agent reads from it; none owns it. Events are appended, never
+              rewritten — replay reconstructs the whole state of the project.
+            </p>
+          </div>
+          <div class="sd-visual" data-reveal>
+            <div class="card sd-panel">
+              <div class="sd-panel-head">
+                <span>event ledger · friday/shop</span>
+                <span class="nt-tag" data-status="RUNNING">APPEND-ONLY</span>
+              </div>
+              <div class="sd-ledger-row"><span class="sd-mono">#0431</span><span class="sd-ledger-kind">claimed</span><span class="sd-ledger-what">task-07 · wt-07</span><span class="sd-dot" data-tone="run"></span></div>
+              <div class="sd-ledger-row"><span class="sd-mono">#0432</span><span class="sd-ledger-kind">served</span><span class="sd-ledger-what">ast slice · routes/api.ts</span><span class="sd-dot" data-tone="run"></span></div>
+              <div class="sd-ledger-row"><span class="sd-mono">#0433</span><span class="sd-ledger-kind">reserved</span><span class="sd-ledger-what">routes/** · task-07</span><span class="sd-dot" data-tone="warn"></span></div>
+              <div class="sd-ledger-row"><span class="sd-mono">#0434</span><span class="sd-ledger-kind">verified</span><span class="sd-ledger-what">128 tests passed</span><span class="sd-dot" data-tone="good"></span></div>
+              <div class="sd-ledger-row"><span class="sd-mono">#0435</span><span class="sd-ledger-kind">merged</span><span class="sd-ledger-what">task-07 → main</span><span class="sd-dot" data-tone="good"></span></div>
+              <p class="sd-panel-note">Replay from #0001 rebuilds goals, plans, decisions and verification — without any tool's session history.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- pillar 02 · tokens -->
+        <div class="sd-container sd-feature sd-feature--flip" id="tokens">
+          <div class="sd-feature-text" data-reveal>
+            <p class="sd-kicker">Pillar 02 · Tokens</p>
+            <h3 class="sd-h3">Stop feeding the whole codebase into every prompt.</h3>
+            <p>
+              Traditional agent loops re-read entire files — thousands of tokens — on every turn. Friday's
+              token-saving engine serves pre-computed AST slices instead: just the symbols a task needs, assembled
+              locally from the code graph. Answers stay precise; bills stay small.
+            </p>
+          </div>
+          <div class="sd-visual" data-reveal>
+            <div class="card sd-panel">
+              <div class="sd-panel-head">
+                <span>context for task-07 · routes/api.ts</span>
+                <span class="nt-tag" data-status="RUNNING">LOCAL</span>
+              </div>
+              <div class="sd-ast-row">
+                <span class="sd-ast-label">the old loop</span>
+                <span class="sd-bar sd-bar--red"><span style="--w: 100%"></span></span>
+                <span class="sd-mono">12,400 tok</span>
+              </div>
+              <div class="sd-ast-row">
+                <span class="sd-ast-label">Friday slice</span>
+                <span class="sd-bar"><span style="--w: 9%"></span></span>
+                <span class="sd-mono">890 tok</span>
+              </div>
+              <div class="sd-ast-chips">
+                <span class="chip sd-mono">registerRoutes()</span>
+                <span class="chip sd-mono">struct Plan</span>
+                <span class="chip sd-mono">3 call sites</span>
+                <span class="chip sd-mono">test helpers</span>
+              </div>
+              <p class="sd-panel-note">Assembled from the pre-computed code graph — a stat per file, nothing re-read, nothing sent wholesale.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- pillar 03 · intent -->
+        <div class="sd-container sd-feature" id="intent">
+          <div class="sd-feature-text" data-reveal>
+            <p class="sd-kicker">Pillar 03 · Intent</p>
+            <h3 class="sd-h3">Your intent survives every retry.</h3>
+            <p>
+              A deterministic DAG breaks each goal into dependency-aware tasks, each editing its own isolated Git
+              worktree. When a model fails or a syntax retry loops, your boundaries hold: file reservations and task
+              edges are preserved mathematically, not by convention.
+            </p>
+          </div>
+          <div class="sd-visual" data-reveal>
+            <div class="card sd-panel">
+              <div class="sd-dag-goal">
+                <span class="sd-node-kicker">Goal</span>
+                <span class="sd-node-title">Ship the events API</span>
+              </div>
+              <div class="sd-dag-tasks">
+                <span class="sd-dag-task"><span class="sd-dot" data-tone="good"></span>schema · done</span>
+                <span class="sd-dag-chev" aria-hidden="true"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 1.5 6 5l-3.5 3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" /></svg></span>
+                <span class="sd-dag-task"><span class="sd-dot sd-dot--pulse" data-tone="run"></span>handlers · running</span>
+                <span class="sd-dag-chev" aria-hidden="true"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 1.5 6 5l-3.5 3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" /></svg></span>
+                <span class="sd-dag-task"><span class="sd-dot" data-tone="warn"></span>docs · waiting</span>
+              </div>
+              <div class="sd-dag-row">
+                <span class="chip sd-mono">wt-07 · task-07</span>
+                <span class="chip sd-mono">wt-08 · task-08</span>
+                <span class="sd-dag-note">isolated worktrees — main untouched</span>
+              </div>
+              <div class="sd-dag-row">
+                <span class="sd-silo-lock" aria-hidden="true">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+                </span>
+                <span class="sd-dag-note"><span class="sd-mono">pnpm-lock.yaml</span> reserved by task-07 · <span class="sd-mono">migrations/**</span> by task-08</span>
+              </div>
+              <p class="sd-panel-note">Retries re-run the attempt — boundaries and reservations hold until the task ends.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- pillar 04 · verification -->
+        <div class="sd-container sd-feature sd-feature--flip" id="verify">
+          <div class="sd-feature-text" data-reveal>
+            <p class="sd-kicker">Pillar 04 · Verification</p>
+            <h3 class="sd-h3">AI can never lie to you.</h3>
+            <p>
+              Every finished task is treated as an unverified claim until automated linters, typechecks and test
+              suites deterministically prove it passes. Only verified code merges into main — the model's word is
+              never the gate.
+            </p>
+          </div>
+          <div class="sd-visual" data-reveal>
+            <div class="card sd-panel">
+              <div class="sd-panel-head">
+                <span>task #07 — handlers</span>
+                <span class="nt-tag" data-status="VERIFYING">VERIFYING</span>
+              </div>
+              <div class="sd-check-row"><span class="sd-check sd-check--ok" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7" /></svg></span>lint clean</div>
+              <div class="sd-check-row"><span class="sd-check sd-check--ok" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7" /></svg></span>typecheck passed</div>
+              <div class="sd-check-row"><span class="sd-check sd-check--ok" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7" /></svg></span>tests <span class="sd-mono">128 passed</span></div>
+              <div class="sd-check-row"><span class="sd-check sd-check--wait" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7" /></svg></span>diff review</div>
+              <div class="sd-check-hairline" aria-hidden="true"><span style="--p: 75%"></span></div>
+              <p class="sd-panel-note">A task completes when the checks pass — not when the model feels finished.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ governance -->
+      <section class="sd-section sd-section--flat" id="notch">
+        <div class="sd-container sd-feature">
+          <div class="sd-feature-text" data-reveal>
+            <p class="sd-kicker">Governance</p>
+            <h2 class="sd-h3">One click, without stealing your focus.</h2>
+            <p>
+              When an agent wants to write a file or run a command, the ambient Notch drops down from the top of your
+              screen: allow once, for this run, or for the whole task. While something waits, the island never hides —
+              and nothing proceeds without you.
+            </p>
+          </div>
+          <div class="sd-visual sd-visual--notch" data-reveal>
+            <svg class="sd-grid sd-grid--dim" aria-hidden="true">
+              <defs>
+                <pattern id="sd-dots-3" width="24" height="24" patternUnits="userSpaceOnUse">
+                  <circle cx="1.5" cy="1.5" r="1" fill="rgba(255, 255, 255, 0.05)" />
+                </pattern>
+              </defs>
+              <rect width="100%" height="100%" fill="url(#sd-dots-3)" />
+            </svg>
+            <div class="sd-editor-lines" aria-hidden="true">
+              <span></span><span></span><span></span><span></span>
+            </div>
+            <div class="nt-island nt-island-static" id="island-demo" data-state="compact">
+              <div class="nt-view nt-compact" data-view="compact" hidden>
+                <button class="nt-compact-open" type="button" aria-label="Open the approval">
+                  <span class="nt-mascot nt-mascot-24" data-mascot data-size="24"></span>
+                  <span class="nt-tag" data-status="WAITING" data-tag>1 WAITING</span>
+                  <span class="nt-chev" aria-hidden="true">
+                    <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 2.75 4 5.25l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                  </span>
+                </button>
+              </div>
+              <div class="nt-view nt-expanded" data-view="expanded" hidden>
+                <div class="nt-head">
+                  <span class="nt-mascot nt-mascot-36" data-mascot data-size="36"></span>
+                  <span class="nt-head-text">
+                    <span class="nt-project">friday · main</span>
+                    <span class="nt-conn-row"><span class="nt-dot" data-tone="warn"></span>1 agent waiting</span>
+                  </span>
+                </div>
+                <div class="nt-body">
+                  <div class="nt-banner" data-banner data-tone="wait">
+                    <div class="nt-banner-top">
+                      <span class="nt-banner-dot"></span>
+                      <span class="nt-banner-status" data-banner-status>WAITING FOR YOU</span>
+                      <span class="nt-banner-tag">task #07</span>
+                    </div>
+                    <span class="nt-banner-summary" data-banner-summary>Agent wants to write: src/routes/api.ts</span>
+                    <div class="nt-banner-meta" data-banner-meta>
+                      <span>kind write</span>
+                      <span>risk low</span>
+                      <span>verify after</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="nt-foot">
+                  <button class="btn btn-sm btn-primary" type="button" data-allow>Allow once</button>
+                  <button class="btn btn-sm" type="button" data-allow-run>Allow run</button>
+                  <button class="nt-foot-btn" type="button" data-later>Later</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ also on board -->
+      <section class="sd-section" id="more">
+        <div class="sd-container">
+          <p class="sd-kicker" data-reveal>Also on board</p>
+          <h2 class="sd-h2" data-reveal>Everything else Friday runs for you.</h2>
+
+          <div class="sd-bento">
+            <div class="card sd-bento-card sd-bento-card--wide" data-reveal>
+              <div class="sd-bento-text">
+                <h3>The Studio</h3>
+                <p>A spatial canvas of goals, tasks and agents — drawers to inspect anything, diffs before they land, and the duck keeping watch over every state change.</p>
+              </div>
+              <div class="sd-visual sd-visual--mini">
+                <svg class="sd-grid sd-grid--dim" aria-hidden="true">
+                  <defs>
+                    <pattern id="sd-dots-2" width="24" height="24" patternUnits="userSpaceOnUse">
+                      <circle cx="1.5" cy="1.5" r="1" fill="rgba(255, 255, 255, 0.05)" />
+                    </pattern>
+                  </defs>
+                  <rect width="100%" height="100%" fill="url(#sd-dots-2)" />
+                </svg>
+                <div class="sd-node sd-node--goal">
+                  <span class="sd-node-kicker">Goal</span>
+                  <span class="sd-node-title">Ship the events API</span>
+                </div>
+                <div class="sd-node sd-node--task">
+                  <span class="sd-node-row"><span class="sd-dot" data-tone="good"></span>Schema</span>
+                  <span class="sd-node-cap">completed</span>
+                </div>
+                <div class="sd-node sd-node--task">
+                  <span class="sd-node-row"><span class="sd-dot sd-dot--pulse" data-tone="run"></span>Handlers</span>
+                  <span class="sd-node-cap">running</span>
+                </div>
+                <div class="sd-node sd-node--task">
+                  <span class="sd-node-row"><span class="sd-dot" data-tone="warn"></span>Docs</span>
+                  <span class="sd-node-cap">waiting</span>
+                </div>
+                <div class="sd-node sd-node--agent">
+                  <span class="nt-mascot nt-mascot-24" data-mascot data-size="24"></span>
+                  <span class="sd-node-cap">agent · codex</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="card sd-bento-card" data-reveal>
+              <h3>Routing and budget</h3>
+              <p>The right model for every task, and it asks before anyone spends.</p>
+              <div class="sd-route-row"><span>plan the goal</span><span class="chip sd-mono">frontier</span></div>
+              <div class="sd-route-row"><span>edit handlers</span><span class="chip sd-mono">fast</span></div>
+              <div class="sd-budget-row"><span>approved</span><span class="sd-mono">$4.20 of $10.00</span></div>
+              <div class="sd-check-hairline" aria-hidden="true"><span style="--p: 42%"></span></div>
+            </div>
+
+            <div class="card sd-bento-card" data-reveal>
+              <span class="sd-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" /></svg>
+              </span>
+              <h3>Recovery fencing</h3>
+              <p>A wandering attempt is fenced back to its own worktree. A crashed run resumes — it never starts over.</p>
+            </div>
+
+            <div class="card sd-bento-card" data-reveal>
+              <span class="sd-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4.5" /><circle cx="12" cy="12" r="0.5" /></svg>
+              </span>
+              <h3>Guided onboarding</h3>
+              <p>Friday the duck walks you through the whole loop — four stops, two minutes, and you know everything.</p>
+            </div>
+
+            <div class="card sd-bento-card" data-reveal>
+              <span class="sd-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8l9-12h-7z" /></svg>
+              </span>
+              <h3>Tray and shortcuts</h3>
+              <p>Status, pause, halt and restart live in the tray; a global shortcut opens the Studio from anywhere.</p>
+            </div>
+
+            <div class="card sd-bento-card" data-reveal>
+              <span class="sd-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 3v6c0 5-3.5 9.5-8 11c-4.5-1.5-8-6-8-11V5z" /></svg>
+              </span>
+              <h3>One daemon per clone</h3>
+              <p>Every project keeps its own private state on loopback — no cross-project bleed, no shared credentials.</p>
+            </div>
+
+            <div class="card sd-bento-card" data-reveal>
+              <span class="sd-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 12s4-7 10-7s10 7 10 7s-4 7-10 7S2 12 2 12M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6" /></svg>
+              </span>
+              <h3>The browser, too</h3>
+              <p>The daemon serves the same Studio on loopback — open Friday's interface in any browser on your machine.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ beliefs -->
+      <section class="sd-section sd-section--flat" id="beliefs">
+        <div class="sd-container">
+          <p class="sd-kicker" data-reveal>What we believe</p>
+          <div class="sd-belief" data-reveal>
+            <span class="sd-belief-num">01</span>
+            <div>
+              <h2 class="sd-h3">Your context belongs to your project.</h2>
+              <p>Not to a tool, not to a vendor. Friday's memory, events and graph facts live beside your code, in files and SQLite you can open and read.</p>
+            </div>
+          </div>
+          <div class="sd-belief" data-reveal>
+            <span class="sd-belief-num">02</span>
+            <div>
+              <h2 class="sd-h3">You are always the decider.</h2>
+              <p>Every write, every command and every dollar passes a human gate. Agents wait; you allow.</p>
+            </div>
+          </div>
+          <div class="sd-belief" data-reveal>
+            <span class="sd-belief-num">03</span>
+            <div>
+              <h2 class="sd-h3">Done means verified.</h2>
+              <p>Verification is not a suggestion. A task completes when the checks pass, not when the model feels finished.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ final CTA -->
+      <section class="sd-cta">
+        <div class="sd-container">
+          <span class="nt-mascot nt-mascot-80" data-mascot data-size="80" data-reveal></span>
+          <h2 class="sd-h2" data-reveal>Run your AI agents with Friday.</h2>
+          <p class="sd-section-lede" data-reveal>Stop babysitting terminal tabs. One installer, your machine, your repository.</p>
+          <div class="sd-cta-row" data-reveal>
+            <a class="btn btn-lg btn-primary" href="#" data-cta="download">Download Friday Desktop</a>
+            <a class="btn btn-lg" href="#" data-cta="github">Star on GitHub</a>
+          </div>
+          <p class="sd-cta-note" data-reveal>Free while in development. Windows today.</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="sd-footer">
+      <div class="sd-container sd-footer-inner">
+        <div class="sd-footer-brand">
+          <svg class="sh-mark" width="28" height="28" viewBox="0 0 24 24" aria-hidden="true">
+            <g transform="rotate(14 12 13)">
+              <ellipse class="sh-mark-tuft" cx="10.8" cy="6.4" rx="2.1" ry="2.5" />
+              <ellipse class="sh-mark-tuft" cx="14.2" cy="7.2" rx="1.7" ry="1.6" />
+              <ellipse class="sh-mark-body" cx="12" cy="13.6" rx="8.4" ry="7.4" />
+              <ellipse class="sh-mark-eye" cx="8.8" cy="12.6" rx="1.15" ry="1.6" />
+              <ellipse class="sh-mark-eye" cx="15.2" cy="12.6" rx="1.15" ry="1.6" />
+              <ellipse class="sh-mark-beak" cx="12" cy="16.1" rx="3.1" ry="2" />
+              <path class="sh-mark-smile" d="M10.9 16.3 Q12 17.2 13.1 16.3" />
+            </g>
+          </svg>
+          <p>Friday — a local control plane above AI coding hosts.</p>
+        </div>
+        <nav class="sd-footer-links" aria-label="Footer">
+          <a href="#how">How it works</a>
+          <a href="#" data-cta="github">GitHub</a>
+          <a href="#" data-cta="download">Download</a>
+        </nav>
+      </div>
+      <div class="sd-container sd-footer-note">
+        <p>
+          This page is a design exercise: it is built from the same tokens, springs and components as the Studio —
+          see <span class="sd-mono">site/README.md</span>. No cookies, no tracking.
+        </p>
+      </div>
+    </footer>
+
+    <script src="./js/spring.js"></script>
+    <script src="./js/mascot.js"></script>
+    <script src="./js/island.js"></script>
+    <script src="./js/main.js"></script>
+  </body>
+</html>

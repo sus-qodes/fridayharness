@@ -1,0 +1,609 @@
+/* Components ported value-for-value from the app:
+   - the island: apps/ui/src/styles/notch.css (geometry is driven by springs in js/island.js)
+   - buttons/cards/chips/tags: apps/ui/src/styles/base.css + notch.css
+   - mascot holders: apps/ui/src/styles/notch.css + mascot.css */
+
+/* ---- The island ------------------------------------------------------------------------------
+   Width, height and radius come from the springs (--nt-w/--nt-h/--nt-r). Views inside keep a fixed
+   width so their text never reflows while the island grows or shrinks. The island hangs from the
+   top edge: only its bottom corners are rounded. */
+
+.nt-island {
+  --nt-w: 200px;
+  --nt-h: 32px;
+  --nt-r: 16px;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: var(--nt-w);
+  height: var(--nt-h);
+  transform: translateX(-50%);
+  overflow: hidden;
+  border-radius: 0 0 var(--nt-r) var(--nt-r);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: none;
+  background: #000000;
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.88),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.4;
+  contain: layout paint;
+}
+
+.nt-island[data-state="hidden"] {
+  border-color: rgba(255, 255, 255, 0.02);
+  box-shadow: none;
+}
+
+.nt-island.nt-pinned {
+  border-color: var(--sys-amber);
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.88),
+    var(--shadow-glow-amber);
+}
+
+.nt-island.nt-pinned.nt-folded {
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.88);
+}
+
+.nt-island.nt-celebrate {
+  border-color: var(--color-emerald);
+  animation: nt-celebrate-glow calc(var(--duration-slow) * 3) var(--ease-standard) 2;
+}
+
+@keyframes nt-celebrate-glow {
+  0%,
+  100% {
+    box-shadow: var(--shadow-lg);
+  }
+  50% {
+    box-shadow:
+      var(--shadow-lg),
+      0 0 24px rgba(16, 185, 129, 0.45);
+  }
+}
+
+/* The site's own island floats over the page; the showcase one hangs inside its panel. */
+.nt-island-site {
+  position: fixed;
+  z-index: 90;
+}
+
+.nt-island-static {
+  position: absolute;
+}
+
+.nt-island [hidden] {
+  display: none;
+}
+
+.nt-island :focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px #38e1fc;
+}
+
+/* ---- views ---------------------------------------------------------------------------------- */
+
+.nt-view {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  animation: nt-fade-in var(--duration-base) var(--ease-standard);
+}
+
+@keyframes nt-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* hidden: the 4 px strip that wakes on hover */
+.nt-view-hidden {
+  width: 120px;
+  height: 4px;
+}
+
+.nt-strip {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: var(--border-medium);
+  cursor: pointer;
+}
+
+/* compact: the pill */
+.nt-compact {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 200px;
+  height: 32px;
+  padding: 0 10px 0 4px;
+}
+
+.nt-compact-open {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 4px 0 2px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.nt-compact-open:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.nt-tag {
+  --nt-tag-color: var(--color-slate-400);
+  min-width: 0;
+  overflow: hidden;
+  padding: 1px 8px;
+  border: 1px solid var(--nt-tag-color);
+  border-radius: var(--radius-pill);
+  color: var(--nt-tag-color);
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  line-height: 16px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  letter-spacing: 0.02em;
+}
+
+.nt-tag[data-status="RUNNING"] {
+  background: rgba(48, 209, 88, 0.12);
+  color: #30d158;
+  border-color: rgba(48, 209, 88, 0.3);
+}
+
+.nt-tag[data-status="WAITING"] {
+  background: rgba(255, 159, 10, 0.14);
+  color: #ff9f0a;
+  border-color: rgba(255, 159, 10, 0.4);
+}
+
+.nt-tag[data-status="VERIFYING"] {
+  background: rgba(10, 132, 255, 0.14);
+  color: #0a84ff;
+  border-color: rgba(10, 132, 255, 0.35);
+}
+
+.nt-chev {
+  display: inline-flex;
+  flex: none;
+  margin-left: auto;
+  color: var(--color-slate-400);
+}
+
+/* The amber waiting chip (notch.css .nt-chip). */
+.nt-chip {
+  flex: none;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: rgba(245, 165, 36, 0.18);
+  color: var(--color-amber);
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  line-height: 16px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    transform 0.08s ease;
+}
+
+.nt-chip:hover {
+  background: rgba(245, 165, 36, 0.28);
+}
+
+.nt-chip:active {
+  transform: scale(0.94);
+}
+
+/* expanded: the card */
+.nt-expanded {
+  display: flex;
+  flex-direction: column;
+  width: 400px;
+}
+
+.nt-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.nt-head-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.nt-project {
+  overflow: hidden;
+  font-size: var(--text-title-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.nt-conn-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-slate-400);
+  font-size: var(--text-caption);
+}
+
+.nt-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--color-slate-500);
+}
+
+.nt-dot[data-tone="good"] {
+  background: var(--color-emerald);
+  box-shadow: 0 0 6px var(--color-emerald);
+}
+
+.nt-dot[data-tone="warn"] {
+  background: var(--color-amber);
+}
+
+.nt-dot[data-tone="danger"] {
+  background: var(--color-crimson);
+}
+
+.nt-dot[data-tone="run"] {
+  background: var(--status-running);
+  box-shadow: 0 0 6px var(--status-running);
+}
+
+.nt-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 8px 10px;
+}
+
+.nt-banner {
+  --nt-status-color: var(--status-running);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--nt-status-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+}
+
+.nt-banner[data-tone="wait"] {
+  --nt-status-color: var(--sys-amber);
+}
+
+.nt-banner[data-tone="ok"] {
+  --nt-status-color: var(--sys-green);
+}
+
+.nt-banner-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.nt-banner-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--nt-status-color);
+}
+
+.nt-banner-status {
+  flex: none;
+  color: var(--nt-status-color);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.nt-banner-tag {
+  flex: none;
+  max-width: 96px;
+  overflow: hidden;
+  color: var(--color-slate-400);
+  font-size: var(--text-caption);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.nt-banner-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 2px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-slate-200);
+  font-size: var(--text-sm);
+  font-family: inherit;
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.nt-banner-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  color: var(--color-slate-400);
+  font-size: var(--text-caption);
+}
+
+.nt-foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.nt-foot-btn {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-slate-400);
+  font-size: var(--text-caption);
+  cursor: pointer;
+  transition: color 0.12s ease, transform 0.08s ease;
+}
+
+.nt-foot-btn:hover {
+  color: var(--color-slate-200);
+}
+
+.nt-foot-btn:active {
+  transform: scale(0.94);
+}
+
+/* greeting */
+.nt-greeting {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 320px;
+  height: 96px;
+  padding: 0 16px;
+}
+
+.nt-greet-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.nt-greet-title {
+  margin: 0;
+  font-size: var(--text-title-md);
+  font-weight: var(--weight-semibold);
+}
+
+.nt-greet-sub {
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-slate-400);
+  font-size: var(--text-sm);
+}
+
+/* ---- mascot holders -------------------------------------------------------------------------- */
+
+.nt-mascot {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
+.nt-mascot-24 {
+  width: 24px;
+  height: 24px;
+}
+
+.nt-mascot-36 {
+  width: 36px;
+  height: 36px;
+}
+
+.nt-mascot-56 {
+  width: 56px;
+  height: 56px;
+}
+
+.nt-mascot-80 {
+  width: 80px;
+  height: 80px;
+}
+
+.nt-mascot .friday-mascot {
+  overflow: visible;
+  cursor: pointer;
+}
+
+/* ---- buttons (base.css .btn, scaled for the page) -------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink-2);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: var(--weight-medium);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    transform 0.08s ease-out,
+    background 0.12s ease-out,
+    color 0.12s ease-out;
+}
+
+.btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--ink);
+}
+
+.btn:active {
+  transform: scale(0.94);
+}
+
+.btn-primary {
+  background: var(--ink);
+  color: #0b0c0e;
+  font-weight: var(--weight-semibold);
+}
+
+.btn-primary:hover {
+  background: #ffffff;
+  color: #0b0c0e;
+}
+
+.btn-lg {
+  min-height: 44px;
+  padding: 10px 22px;
+  font-size: 15px;
+}
+
+.btn-sm {
+  min-height: 26px;
+  padding: 3px 10px;
+  font-size: var(--text-sm);
+}
+
+/* ---- cards, chips, icons ---------------------------------------------------------------------- */
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  box-shadow:
+    var(--shadow-md),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-card);
+  overflow: clip;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-slate-300);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.sd-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--color-slate-500);
+}
+
+.sd-dot[data-tone="good"] {
+  background: var(--color-emerald);
+  box-shadow: 0 0 6px var(--color-emerald);
+}
+
+.sd-dot[data-tone="run"] {
+  background: var(--status-running);
+  box-shadow: 0 0 6px var(--status-running);
+}
+
+.sd-dot[data-tone="warn"] {
+  background: var(--color-amber);
+}
+
+.sd-dot--pulse {
+  animation: sd-pulse 1.6s var(--ease-standard) infinite;
+}
+
+@keyframes sd-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.sd-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-slate-300);
+}
+
+.sd-icon--red {
+  color: var(--sys-red);
+  background: rgba(255, 69, 58, 0.1);
+  border-color: rgba(255, 69, 58, 0.25);
+}
+
+.sd-icon--amber {
+  color: var(--sys-amber);
+  background: rgba(255, 159, 10, 0.1);
+  border-color: rgba(255, 159, 10, 0.25);
+}
