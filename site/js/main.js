@@ -116,7 +116,7 @@
     });
   }
 
-  /* ---- CTAs: placeholders until the real release and repository URLs land (see site/README.md) ---- */
+  /* ---- CTAs: download opens the latest GitHub release, GitHub the repository; a CTA left at "#" makes the ducks hop ---- */
 
   document.querySelectorAll('[data-cta]').forEach(function (link) {
     link.addEventListener('click', function (e) {

@@ -85,7 +85,7 @@ bars, routing rows) demonstrate UI, not measured results.
 
 ## Before this goes anywhere real
 
-- Point the CTAs at the actual installer release and GitHub repository: every `[data-cta]` link in
-  `index.html` currently points at `#` (clicking it just makes the ducks hop).
+- The download CTAs open `https://github.com/sus-qodes/fridayharness/releases/latest`, the release page with
+  the desktop installer, the `friday` package and the install steps; the GitHub CTAs open the repository.
 - The Studio mock, checklist and routing panels are illustrative mocks, not screenshots — swap in
   real captures when the UI settles.
