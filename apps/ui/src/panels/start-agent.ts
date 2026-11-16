@@ -35,6 +35,10 @@ export const HOSTS: readonly { host: HostName; label: string; prefix: string }[]
   { host: 'gemini', label: 'Gemini CLI (experimental)', prefix: 'gemini' },
 ];
 
+/** The Host list's line for Antigravity: shown and never selectable, since Friday does not start it. */
+export const ANTIGRAVITY_OPTION = 'antigravity';
+export const ANTIGRAVITY_OPTION_LABEL = 'Antigravity: you open it yourself (Agents → Antigravity → Connect)';
+
 export const AGENT_KEY_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const ROLE_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 export const BUDGET = { min: 0.01, max: 100, default: 1 } as const;
@@ -176,8 +180,13 @@ export function startAgentModal(
   let autoKey = form.agent_key;
   let busy = false;
 
-  const hostSelect = select(
-    HOSTS.map((x) => ({ value: x.host, label: x.label })),
+  const hostSelect = select<HostName>(
+    [
+      ...HOSTS.map((x) => ({ value: x.host, label: x.label })),
+      // Antigravity is not started by Friday (its terms keep a personal account to the session its
+      // person runs): it is listed, not offered, so nobody looks for it in vain.
+      { value: ANTIGRAVITY_OPTION as HostName, label: ANTIGRAVITY_OPTION_LABEL, disabled: true },
+    ],
     form.host,
     (v) => {
       form.host = v;
@@ -192,7 +201,19 @@ export function startAgentModal(
     title: 'Look for the installed hosts again',
   });
   const hostField = field('Host', hostSelect);
-  hostField.el.append(h('div', { class: 'row pn-host-check' }, hostNote, h('span', { class: 'spacer' }), checkHosts));
+  hostField.el.append(
+    h('div', { class: 'row pn-host-check' }, hostNote, h('span', { class: 'spacer' }), checkHosts),
+    h(
+      'div',
+      { class: 'field-hint pn-antigravity-hint' },
+      'Antigravity is not started here: you open it yourself. ',
+      // A drawer under a dialog takes no input: the dialog closes first (plan §7.4).
+      linkButton('Connect Antigravity', () => {
+        closeModal(ctx);
+        openDrawer(ctx, { kind: 'agents', tab: 'antigravity' });
+      }),
+    ),
+  );
 
   const key = input({ class: 'input mono', value: form.agent_key, maxLength: 64 });
   const keyField = field('Agent key', key, { hint: 'how Friday names this agent; a new key for each agent' });
@@ -421,6 +442,7 @@ export function startAgentModal(
       if (td.done) return;
       hosts = Array.isArray(r?.hosts) ? r.hosts : [];
       for (const opt of Array.from(hostSelect.options)) {
+        if (opt.value === ANTIGRAVITY_OPTION) continue;
         const info = hosts.find((x) => x.host === opt.value);
         opt.disabled = !!info && !info.found;
         opt.textContent = `${HOSTS.find((x) => x.host === opt.value)?.label ?? opt.value}${info && !info.found ? ' (not found)' : ''}`;

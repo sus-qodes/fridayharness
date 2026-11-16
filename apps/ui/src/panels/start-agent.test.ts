@@ -3,7 +3,15 @@ import { describe, expect, it } from 'vitest';
 import { ApiError } from '../platform/transport.js';
 import { makeContext } from '../test/context.js';
 import { makeAgent, makeSnapshot } from '../test/fixtures.js';
-import { defaultForm, formErrors, launchBody, nextAgentKey, startAgentModal, takenKeys } from './start-agent.js';
+import {
+  ANTIGRAVITY_OPTION_LABEL,
+  defaultForm,
+  formErrors,
+  launchBody,
+  nextAgentKey,
+  startAgentModal,
+  takenKeys,
+} from './start-agent.js';
 import { buttonBy, choose, controlBy, flush, HOSTILE, type } from './test-support.js';
 
 const profiles = (keys: string[]): AgentProcessesView => ({
@@ -184,6 +192,23 @@ describe('start agent modal', () => {
     expect(m.el.querySelector('.pn-server-error')?.textContent).toBe(message);
     expect(ctx.toasts.at(-1)?.kind).toBe('error');
     expect(closed).toBe(false);
+    m.destroy();
+  });
+
+  it('lists Antigravity as a host it does not start, and links to connecting it', async () => {
+    const ctx = makeContext({ answers: { 'GET /agent-hosts': HOSTS, 'GET /agent-processes': profiles([]) } });
+    const m = startAgentModal(ctx, { kind: 'start-agent' }, () => undefined);
+    await flush();
+    const host = controlBy<HTMLSelectElement>(m.el, 'Host');
+    const ag = host.querySelector('option[value="antigravity"]') as HTMLOptionElement;
+    // Listed after the hosts Friday starts, never selectable, and its words survive the host check.
+    expect(ag.disabled).toBe(true);
+    expect(ag.textContent).toBe(ANTIGRAVITY_OPTION_LABEL);
+    expect(host.value).toBe('claude-code');
+    expect(m.el.textContent).toContain('Antigravity is not started here: you open it yourself.');
+    buttonBy(m.el, 'Connect Antigravity').click();
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents', tab: 'antigravity' });
+    expect(ctx.store.select('ui').modal).toBeNull();
     m.destroy();
   });
 
