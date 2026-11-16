@@ -1,6 +1,7 @@
 /**
  * Integration of verified task branches into goal branches (plan M5c, ADR-0025).
  */
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { closeDatabase, openDatabase } from '@friday/db';
@@ -802,5 +803,106 @@ describe('landing a completed goal', () => {
       td.operator.projectPath('/ui/snapshot'),
     );
     expect(snapshot.goal_landing?.[goalId]).toMatchObject({ work: 'folder', landed: null });
+  });
+});
+
+describe('checks on a merged revision', () => {
+  const pnpm = spawnSync('pnpm', ['--version'], { shell: true, encoding: 'utf8' });
+  /** The project's test needs an installed package, as most projects' tests do. */
+  const NEEDS_TINY = [
+    "import assert from 'node:assert';",
+    "import { createRequire } from 'node:module';",
+    "import { test } from 'node:test';",
+    "import { a } from '../src/a.mjs';",
+    "import { b } from '../src/b.mjs';",
+    "const tiny = createRequire(import.meta.url)('tiny');",
+    "test('a + b stays small', () => assert.ok(a + b <= 3 + tiny));",
+    '',
+  ].join('\n');
+
+  it.skipIf(pnpm.status !== 0)(
+    'run with the dependencies installed, as in a task worktree, so two parallel tasks of a goal integrate',
+    async () => {
+      const td = await project(CHECKS, {
+        'package.json': '{"name":"shop","private":true,"dependencies":{"tiny":"file:vendor/tiny"}}\n',
+        'vendor/tiny/package.json': '{"name":"tiny","version":"1.0.0"}\n',
+        'vendor/tiny/index.js': 'module.exports = 0;\n',
+        'test/sum.test.mjs': NEEDS_TINY,
+        '.gitignore': 'node_modules/\n',
+      });
+      const dir = ws().projectDir;
+      const lock = spawnSync('pnpm', ['install', '--lockfile-only', '--ignore-scripts', '--ignore-pnpmfile'], {
+        cwd: dir,
+        shell: true,
+        encoding: 'utf8',
+      });
+      expect(lock.status, lock.stderr).toBe(0);
+      await deterministicGit(dir, { startEpoch: 1_767_225_800 }).commitAll('lockfile');
+      const { goalId, ids } = await goalWith(td, [
+        { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+        { key: 'add-c', summary: 'Add c', write: ['src/c.mjs'] },
+      ]);
+      // Both start from the same commit, in parallel: the second to finish needs a real merge.
+      const ra = await begin(td, 'be-1', ids['raise-a'] as string);
+      const rc = await begin(td, 'be-2', ids['add-c'] as string);
+      await finish(td, ra, { 'src/a.mjs': 'export const a = 2;\n' });
+      expect((await integrationOf(td, ids['raise-a'] as string)).status).toBe('integrated');
+      await finish(td, rc, { 'src/c.mjs': 'export const c = 1;\n' });
+      // The merged revision is checked in Friday's own checkout, which now has the package too:
+      // without it this check failed there ("Cannot find module 'tiny'"), again on every retry.
+      const two = await integrationOf(td, ids['add-c'] as string);
+      expect(two.checks.map((c) => [c.name, c.status])).toEqual([['tests', 'PASSED']]);
+      expect(two.status, two.summary ?? '').toBe('integrated');
+      await runOnce(td);
+      expect((await td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`))).goal.status).toBe(
+        'COMPLETED',
+      );
+      // Nothing of the install is in the revision, and the main checkout was not touched.
+      expect(await git(['status', '--porcelain'])).toBe('');
+    },
+    240_000,
+  );
+});
+
+describe('turning automatic verification on', () => {
+  it('checks the work that already waits, without a restart', async () => {
+    const td = await project();
+    const { ids } = await goalWith(td, [{ key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] }]);
+    const id = ids['raise-a'] as string;
+    // An agent finishes while automatic verification is off: its claim waits for a person.
+    const w = await begin(td, 'be-1', id);
+    writeFileSync(path.join(w.start.working_directory, 'src', 'a.mjs'), 'export const a = 2;\n');
+    await w.fake.client.reportResult({
+      task_id: id,
+      run_id: w.start.run_id,
+      status: 'completed_claim',
+      summary: 'a is 2',
+      changed_paths: ['src/a.mjs'],
+      checks: [],
+    });
+    await w.fake.close();
+    await eventually(
+      () => taskOf(td, id),
+      (t) => t.status === 'READY_FOR_VERIFICATION',
+      'the claim',
+    );
+    // The person turns it on in Settings, and trusts it: a setting, then this clone's trust.
+    await td.operator.post(td.operator.projectPath('/config/settings'), {
+      set: { 'verification.auto_on_completion': true },
+    });
+    expect((await taskOf(td, id)).status).toBe('READY_FOR_VERIFICATION');
+    const view = await td.operator.get<{ policy: { loosening_hash: string } }>(td.operator.projectPath('/policy'));
+    await td.operator.post(td.operator.projectPath('/policy/trust'), { loosening_hash: view.policy.loosening_hash });
+    // The board is read again, as the page does after the switch; the waiting claim is verified.
+    const done = await eventually(
+      async () => {
+        await td.operator.get(td.operator.projectPath('/ui/snapshot'));
+        return taskOf(td, id);
+      },
+      (t) => t.status === 'COMPLETED',
+      'the automatic verification of the waiting claim',
+      60_000,
+    );
+    expect(done.status).toBe('COMPLETED');
   });
 });

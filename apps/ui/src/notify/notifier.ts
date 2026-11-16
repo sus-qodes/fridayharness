@@ -7,8 +7,8 @@
  *   `Friday — <project>` when nothing waits; `opts.title` replaces the base.
  * - **Notifications:** only when the Settings toggle is on (`prefs.notifications`, asked from a
  *   user gesture there), the browser granted permission, and the tab is hidden. Triggers: a new
- *   approval, question, proposed plan, blocked agent, message awaiting the human's reply, failure,
- *   and Friday stopping. One per item, at most `MAX_PER_UPDATE` per board (the rest summed up in
+ *   approval, question, proposed plan, blocked agent, work to verify, goal ready to land, message
+ *   awaiting the human's reply, failure, and Friday stopping. One per item, at most `MAX_PER_UPDATE` per board (the rest summed up in
  *   one); items present when the notifier starts are not announced. Clicking one focuses the window
  *   and selects the item's task; a message's click also opens the Messages drawer at the delivery.
  *   A notification whose approval, question or message leaves the list closes by itself.
@@ -152,6 +152,19 @@ export function diffNotices(memory: NoticeMemory, board: UiSnapshot, now: number
         body: short(item.escalation.question),
         taskId: item.taskId,
       });
+    } else if (item.kind === 'verify') {
+      if (memory.seen.has(item.key)) continue;
+      memory.seen.add(item.key);
+      notices.push({
+        key: item.key,
+        title: 'Work is ready for you to verify',
+        body: `${item.task.agent_key ? `${short(item.task.agent_key, 40)}: ` : ''}${short(item.task.summary)}`,
+        taskId: item.taskId,
+      });
+    } else if (item.kind === 'land') {
+      if (memory.seen.has(item.key)) continue;
+      memory.seen.add(item.key);
+      notices.push({ key: item.key, title: 'A goal is ready to land', body: short(item.request), taskId: null });
     }
   }
   for (const p of planKeys(board)) {

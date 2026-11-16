@@ -296,9 +296,14 @@ describe('execution gateway', () => {
     expect(curl?.status).toBe('FAILED');
     expect(curl?.summary).toContain("not on the execution profile's binary list");
 
-    // The claim made before the trust waits for a human, who verifies it as before.
-    expect(await status(first)).toBe('READY_FOR_VERIFICATION');
-    expect((await cli(['--project', dir, 'verify', first])).code).toBe(0);
-    expect(await status(first)).toBe('COMPLETED');
+    // The claim made before the trust is verified too, once the trust is in force (2026-11-17): it
+    // used to wait until a restart or a person's own verify, though nothing told them it did.
+    expect(
+      await eventually(
+        () => status(first),
+        (x) => x === 'COMPLETED' || x === 'FAILED',
+        'the automatic verification of the claim that waited',
+      ),
+    ).toBe('COMPLETED');
   }, 120_000);
 });

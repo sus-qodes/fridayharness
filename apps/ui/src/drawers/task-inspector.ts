@@ -292,6 +292,9 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
     if (!ver) return empty('Not verified yet.');
     const run = ver.checks.filter((c) => !NOT_RUN.has(c.status));
     const passed = run.filter((c) => c.status === 'PASSED').length;
+    // Friday's own checks alone (scope, credentials, evidence): none of the project's ran, because
+    // none is set. "Passed" then says less than it reads, so it is said (2026-11-17).
+    const fridayOnly = run.length > 0 && run.every((c) => c.origin === 'friday');
     return [
       h(
         'div',
@@ -300,6 +303,13 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
         h('span', null, `${passed} passed of ${run.length} run`),
         ver.ended_at ? h('span', { class: 'muted', title: ver.ended_at }, timeAgo(ver.ended_at, ctx.now())) : null,
       ),
+      fridayOnly
+        ? h(
+            'p',
+            { class: 'dr-text muted', dataset: { role: 'friday-only' } },
+            'Checked by Friday only: this project has no checks of its own set (tests, lint, build). Friday checked that the changes stay in scope, hold no credentials and were run, not that the project’s tests pass.',
+          )
+        : null,
       ver.summary ? h('p', { class: 'dr-text' }, truncate(cleanText(ver.summary), 600)) : null,
       ver.checks.length
         ? h(

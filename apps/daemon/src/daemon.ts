@@ -318,11 +318,14 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
 
   // Read again whenever the policy files change, so what they tighten applies at once (LESSONS D-43).
   let policyReason: string | null = null;
+  // Set once automatic verification is wired (below): runs when a reload turns it on.
+  let autoVerificationTurnedOn: (() => void) | null = null;
   const policies = reloadingPolicy({
     projectRoot: project.root,
     initial: policy,
     load: () => loadEffectivePolicy(project, privateDir),
     onLoad: (p, why) => {
+      const turnedOn = !policy.auto_verification && p.auto_verification;
       policy = p;
       (state.config as { enforcementRequired: StateConfig['enforcementRequired'] }).enforcementRequired =
         p.enforcement_required;
@@ -332,6 +335,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
         trusted: p.trusted,
         errors: p.errors.length,
       });
+      if (turnedOn) autoVerificationTurnedOn?.();
     },
   });
 
@@ -450,7 +454,16 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     cache: dependencyCache,
   });
   // A completed goal task's verified work goes to its goal branch before its worktree is released (ADR-0025).
-  const integration = new IntegrationManager({ state, project, logger, workspaces, profile, groups });
+  const integration = new IntegrationManager({
+    state,
+    project,
+    logger,
+    workspaces,
+    profile,
+    groups,
+    // The merged revision's checkout gets its dependencies as a task worktree does, cache included.
+    setup: (w, ids) => (worktreeSetup ? worktreeSetup.run(w, ids) : Promise.resolve(null)),
+  });
   const stopWorkspaces = state.transport.subscribe(
     { project_id: project.project_id, types: ['run.created', 'task.cancelled', 'task.completed'] },
     (e) => {
@@ -585,14 +598,27 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       );
     },
   );
+  /** Verifies every claim that waits: after a start, and when automatic verification is turned on. */
+  const verifyWaitingClaims = async () => {
+    for (const t of state.q.tasks(project.project_id, { statuses: ['READY_FOR_VERIFICATION'] })) {
+      await autoVerify(t.task_id);
+    }
+  };
   if (autoVerifies() && !paused()) {
     // Claims made while the daemon was down, or whose verification it interrupted.
-    void (async () => {
-      for (const t of state.q.tasks(project.project_id, { statuses: ['READY_FOR_VERIFICATION'] })) {
-        await autoVerify(t.task_id);
-      }
-    })();
+    void verifyWaitingClaims();
   }
+  // A person turned automatic verification on (and trusted it) while work already waited: it is
+  // checked now, not at the next restart or resume (2026-11-17). Off the reload's own call stack.
+  autoVerificationTurnedOn = () => {
+    setImmediate(() => {
+      if (autoVerifies() && !paused()) {
+        void verifyWaitingClaims().catch((err) =>
+          logger.warn('verifying what waited failed', { message: (err as Error).message }),
+        );
+      }
+    });
+  };
 
   const brain =
     opts.brain === false

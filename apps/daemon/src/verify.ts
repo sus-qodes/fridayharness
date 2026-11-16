@@ -587,8 +587,10 @@ const EXECUTING_CLASSES = new Set(['test.local', 'build.local', 'lint.local']);
 
 /**
  * Evidence that the work was run: a test, build or lint command the hooks saw, or a check the claim
- * names with an outcome. A claimed check whose command matches no command seen is a warning, not a
- * failure: the claim is the agent's word, bounded by what the hooks recorded.
+ * names as passed. A claimed check whose command matches no command seen is a warning, not a
+ * failure: the claim is the agent's word, bounded by what the hooks recorded. A check the claim
+ * itself reports as failed is no evidence that the work is done (2026-11-17: it used to count as
+ * one, so a claim saying "tests: failed" passed for the want of anything else).
  */
 export function evidenceOfRunning(input: { claimed: readonly ClaimedCheck[]; executed: readonly ExecutedCommand[] }): {
   ok: boolean;
@@ -596,11 +598,21 @@ export function evidenceOfRunning(input: { claimed: readonly ClaimedCheck[]; exe
   findings: Finding[];
 } {
   const ran = input.executed.filter((c) => c.command_class !== null && EXECUTING_CLASSES.has(c.command_class));
-  const claimed = input.claimed.filter((c) => c.outcome !== 'skipped');
+  const named = input.claimed.filter((c) => c.outcome !== 'skipped');
+  const claimed = named.filter((c) => c.outcome !== 'failed');
+  const failedByClaim = named.filter((c) => c.outcome === 'failed');
   const findings: Finding[] = [];
+  for (const c of failedByClaim) {
+    findings.push({
+      rule: 'evidence.claimed_failed',
+      severity: 'warn',
+      message: `the claim itself reports its check "${c.name}" as failed`,
+      paths: [],
+    });
+  }
   const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
   const seen = input.executed.map((c) => norm(c.text));
-  const unconfirmed = claimed.filter((c) => {
+  const unconfirmed = named.filter((c) => {
     if (!c.command) return false;
     const cmd = norm(c.command);
     return !seen.some((t) => t.includes(cmd) || cmd.includes(t));
@@ -617,17 +629,22 @@ export function evidenceOfRunning(input: { claimed: readonly ClaimedCheck[]; exe
     findings.push({
       rule: 'evidence.none',
       severity: 'fail',
-      message:
-        'no evidence the work was run: the claim lists no check, and no test, build or lint command ran in this attempt. Run the code or its tests, then claim again, listing what you ran under checks',
+      message: failedByClaim.length
+        ? `no evidence the work is done: the only check(s) the claim lists failed by its own word (${failedByClaim.map((c) => c.name).join(', ')}), and no test, build or lint command ran in this attempt. Make them pass, then claim again`
+        : 'no evidence the work was run: the claim lists no check, and no test, build or lint command ran in this attempt. Run the code or its tests, then claim again, listing what you ran under checks',
       paths: [],
     });
-    return { ok: false, summary: 'nothing shows the work was run', findings };
+    return {
+      ok: false,
+      summary: failedByClaim.length ? "the claim's own checks failed" : 'nothing shows the work was run',
+      findings,
+    };
   }
   const parts = [
     ...(ran.length ? [`${ran.length} test, build or lint command(s) ran`] : []),
-    ...(claimed.length
+    ...(named.length
       ? [
-          `the claim names ${claimed.length} check(s)${unconfirmed.length ? `, ${unconfirmed.length} not seen run` : ''}`,
+          `the claim names ${named.length} check(s)${failedByClaim.length ? `, ${failedByClaim.length} failed by its own word` : ''}${unconfirmed.length ? `, ${unconfirmed.length} not seen run` : ''}`,
         ]
       : []),
   ];

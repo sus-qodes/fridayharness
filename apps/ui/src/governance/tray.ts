@@ -62,13 +62,15 @@ const ICONS: Record<TrayItem['kind'], IconName> = {
   question: 'question',
   waiting: 'hourglass',
   plan: 'goal',
+  verify: 'check',
+  land: 'branch',
   message: 'message',
   memory: 'memory',
   policy: 'shield',
 };
 
 /** Rows that open another place instead of a card under themselves. */
-const OPENS_PLACE = new Set<TrayItem['kind']>(['plan', 'message', 'memory', 'policy']);
+const OPENS_PLACE = new Set<TrayItem['kind']>(['plan', 'verify', 'land', 'message', 'memory', 'policy']);
 
 function senderOf(m: SnapshotInboxItem): string {
   if (m.from.kind === 'agent') return m.from.agent_key ?? m.from.id;
@@ -139,6 +141,13 @@ export function mountDecisionsTray(
         };
       case 'plan':
         return { label: `Proposed plan v${item.version}`, sub: truncate(cleanText(item.request), 110) };
+      case 'verify':
+        return {
+          label: 'Work to verify',
+          sub: `${visible(item.task.agent_key ?? 'An agent')} says it is done · ${truncate(cleanText(item.task.summary), 90)}`,
+        };
+      case 'land':
+        return { label: 'Goal ready to land', sub: truncate(cleanText(item.request), 110) };
       case 'message': {
         const m = item.message;
         return {
@@ -188,6 +197,8 @@ export function mountDecisionsTray(
   /** Where a row without a card is decided. */
   const openPlace = (item: TrayItem): void => {
     if (item.kind === 'plan') openModal(ctx, { kind: 'plan-review', id: item.goalId });
+    else if (item.kind === 'verify') openModal(ctx, { kind: 'verify', id: item.taskId });
+    else if (item.kind === 'land') openModal(ctx, { kind: 'land', id: item.goalId });
     else if (item.kind === 'message') openDrawer(ctx, { kind: 'inbox', id: item.message.delivery_id });
     else if (item.kind === 'memory') openDrawer(ctx, { kind: 'memory', tab: 'review' });
     else if (item.kind === 'policy') openDrawer(ctx, { kind: 'settings', tab: 'policy' });

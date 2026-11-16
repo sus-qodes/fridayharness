@@ -219,6 +219,14 @@ function noticeItem(item: WaitingItem, handlers: ViewHandlers): HTMLElement | nu
     title = `Proposed plan v${item.version}`;
     line = truncate(cleanText(item.request), 120);
     door = 'Open the plan review';
+  } else if (item.kind === 'verify') {
+    title = 'Work is ready for you to verify';
+    line = `${visible(item.task.agent_key ?? 'An agent')} · ${truncate(cleanText(item.task.summary), 120)}`;
+    door = 'Open the verification';
+  } else if (item.kind === 'land') {
+    title = 'A goal is ready to land';
+    line = truncate(cleanText(item.request), 120);
+    door = 'Open the landing';
   } else if (item.kind === 'message') {
     const m = item.message;
     const from = m.from.kind === 'agent' ? (m.from.agent_key ?? m.from.id) : m.from.kind;

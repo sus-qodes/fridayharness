@@ -39,6 +39,14 @@ export type WaitingItem =
       version: number;
       request: string;
     }
+  /**
+   * Work an agent claimed that waits for a person to verify it: automatic checks are off, or they
+   * are on and the task has sat there all the same (`VERIFY_STUCK_MS`). Without this row the default
+   * setup stalled with "0 waiting for you" (2026-11-17).
+   */
+  | { kind: 'verify'; key: string; id: string; taskId: string; task: SnapshotTask }
+  /** A completed goal whose branch a person has not landed yet; `id` is the goal's. */
+  | { kind: 'land'; key: string; id: string; taskId: null; goalId: string; request: string }
   /** An agent's message the human has not replied to (a request, or one the sender blocks on). */
   | { kind: 'message'; key: string; id: string; taskId: string | null; message: SnapshotInboxItem }
   /** One row for every memory that needs review. */
@@ -47,6 +55,9 @@ export type WaitingItem =
   | { kind: 'policy'; key: string; id: string; taskId: null };
 
 export type WaitingKind = WaitingItem['kind'];
+
+/** With automatic checks on, a task still waiting to be verified after this long is the person's to look at. */
+export const VERIFY_STUCK_MS = 60_000;
 
 export const MEMORY_REVIEW_KEY = 'memory:review';
 export const POLICY_UNTRUSTED_KEY = 'policy:untrusted';
@@ -90,8 +101,42 @@ function proposedPlans(board: UiSnapshot): WaitingItem[] {
   return out;
 }
 
+/** Claimed work a person verifies, oldest first (see the `verify` kind). */
+function toVerify(board: UiSnapshot, now: number): WaitingItem[] {
+  const auto = board.verification?.auto_on_completion === true;
+  return board.tasks
+    .filter((t) => t.status === 'READY_FOR_VERIFICATION')
+    .filter((t) => !auto || now - time(t.updated_at) >= VERIFY_STUCK_MS)
+    .sort((a, b) => time(a.updated_at) - time(b.updated_at))
+    .map(
+      (t): WaitingItem => ({ kind: 'verify', key: `verify:${t.task_id}`, id: t.task_id, taskId: t.task_id, task: t }),
+    );
+}
+
+/**
+ * Completed goals whose branch waits to be landed, in the goals' order. Work made in the project
+ * folder itself is not listed: it is already there, and nothing tells Friday when it was committed.
+ */
+function toLand(board: UiSnapshot): WaitingItem[] {
+  const out: WaitingItem[] = [];
+  for (const g of board.goals) {
+    const landing = board.goal_landing?.[g.goal_id];
+    if (g.status !== 'COMPLETED' || !landing || landing.landed || landing.work === 'folder') continue;
+    out.push({
+      kind: 'land',
+      key: `land:${g.goal_id}`,
+      id: g.goal_id,
+      taskId: null,
+      goalId: g.goal_id,
+      request: g.objective ?? g.request,
+    });
+  }
+  return out;
+}
+
 /**
  * Approvals, then questions, then waiting agents, each oldest first; then the proposed plans, the
+ * work to verify and the goals to land, the
  * messages that wait for a reply, the memories to review and the untrusted policy. A waiting task
  * whose own approval or question is already listed is not listed again (a spawned agent blocks
  * while its approval waits; that is one decision, not two).
@@ -135,6 +180,8 @@ export function waitingItems(board: UiSnapshot | null, now: number): WaitingItem
       (t): WaitingItem => ({ kind: 'waiting', key: `waiting:${t.task_id}`, id: t.task_id, taskId: t.task_id, task: t }),
     ),
     ...proposedPlans(board),
+    ...toVerify(board, now),
+    ...toLand(board),
     ...messages.map(
       (m): WaitingItem => ({
         kind: 'message',
@@ -169,6 +216,8 @@ const WAITING_WORDS: Record<WaitingKind, [one: string, many: string]> = {
   question: ['question', 'questions'],
   waiting: ['blocked agent', 'blocked agents'],
   plan: ['proposed plan', 'proposed plans'],
+  verify: ['task to verify', 'tasks to verify'],
+  land: ['goal to land', 'goals to land'],
   message: ['message to reply to', 'messages to reply to'],
   memory: ['memory to review', 'memories to review'],
   policy: ['policy change to trust', 'policy changes to trust'],
@@ -179,6 +228,8 @@ const WAITING_ORDER: readonly WaitingKind[] = [
   'question',
   'waiting',
   'plan',
+  'verify',
+  'land',
   'message',
   'memory',
   'policy',
@@ -209,7 +260,8 @@ export function statusSentence(board: UiSnapshot | null, now: number): string {
   });
   if (why.length) parts.push(why.join(', '));
   const ready = count('READY');
-  const toVerify = count('READY_FOR_VERIFICATION') + count('VERIFYING');
+  // Those listed above as waiting for the person are not counted a second time here.
+  const toVerify = Math.max(0, count('READY_FOR_VERIFICATION') - (byKind.get('verify') ?? 0)) + count('VERIFYING');
   const failed = count('FAILED') + count('HARNESS_LOST');
   if (ready) parts.push(`${ready} ready`);
   if (toVerify) parts.push(`${toVerify} to verify`);
@@ -254,6 +306,10 @@ export function itemSignature(item: WaitingItem): string {
     }
     case 'plan':
       return [item.key, item.planId, String(item.version)].join('\u0000');
+    case 'verify':
+      return [item.key, item.task.status, item.task.current_run_id].join('\u0000');
+    case 'land':
+      return item.key;
     case 'message': {
       const m = item.message;
       return [item.key, m.subject, m.preview, m.from.agent_key, m.priority, String(m.blocking)].join('\u0000');
@@ -276,7 +332,7 @@ export interface StudioTarget {
    * A drawer (Settings, the agents drawer at `tab`, the diff of `task_id` at `path`, Messages at
    * `id`, Project memory) or the plan review dialog of the goal `id`.
    */
-  panel?: 'settings' | 'agents' | 'diff' | 'inbox' | 'memory' | 'plan-review';
+  panel?: 'settings' | 'agents' | 'diff' | 'inbox' | 'memory' | 'plan-review' | 'verify' | 'land';
   /** What the panel opens on: a delivery for Messages, a goal for the plan review. */
   id?: string;
   tab?: string;
@@ -289,6 +345,9 @@ export function studioTarget(item: WaitingItem | null, activeTaskId: string | nu
     return item.taskId ? { task_id: item.taskId, approval_id: item.id } : { approval_id: item.id };
   }
   if (item?.kind === 'plan') return { panel: 'plan-review', id: item.goalId };
+  // The dialogs where each is done: the task's verification, the goal's landing.
+  if (item?.kind === 'verify') return { task_id: item.taskId, panel: 'verify', id: item.taskId };
+  if (item?.kind === 'land') return { panel: 'land', id: item.goalId };
   // The delivery too: with two open messages the drawer opens on this one, as the rail's row does.
   if (item?.kind === 'message') return { panel: 'inbox', id: item.id };
   if (item?.kind === 'memory') return { panel: 'memory', tab: 'review' };

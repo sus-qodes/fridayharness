@@ -167,6 +167,23 @@ describe('the task inspector: Overview', () => {
     drawer.destroy();
   });
 
+  it('says when only Friday’s own checks ran, because the project has none set', () => {
+    // The board of the other tests has a configured check: nothing is added there.
+    const withProject = createTaskInspector(makeContext({ snapshot: boardWith('COMPLETED') }), {
+      kind: 'inspector',
+      id: TID,
+    });
+    expect(withProject.el.querySelector('[data-role="friday-only"]')).toBeNull();
+    withProject.destroy();
+    const board = boardWith('COMPLETED');
+    board.verifications = { [TID]: makeVerification({ task_id: TID }) };
+    const drawer = createTaskInspector(makeContext({ snapshot: board }), { kind: 'inspector', id: TID });
+    const note = drawer.el.querySelector('[data-role="friday-only"]');
+    expect(note?.textContent).toContain('Checked by Friday only');
+    expect(note?.textContent).toContain('not that the project’s tests pass');
+    drawer.destroy();
+  });
+
   it('jumps to dependencies and dependents', () => {
     const ctx = makeContext({ snapshot: boardWith('READY') });
     const drawer = createTaskInspector(ctx, { kind: 'inspector', id: TID });

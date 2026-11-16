@@ -45,4 +45,32 @@ describe('evidence that the work was run', () => {
     const r = evidenceOfRunning({ claimed: [{ name: 'tests', outcome: 'skipped' }], executed: [] });
     expect(r.ok).toBe(false);
   });
+
+  it('does not take a check the claim itself reports as failed for evidence', () => {
+    // Nothing else to go by: the claim's own word is that it is not done.
+    const alone = evidenceOfRunning({ claimed: [{ name: 'tests', outcome: 'failed' }], executed: [] });
+    expect(alone.ok).toBe(false);
+    expect(alone.summary).toBe("the claim's own checks failed");
+    expect(alone.findings.map((f) => [f.rule, f.severity])).toEqual([
+      ['evidence.claimed_failed', 'warn'],
+      ['evidence.none', 'fail'],
+    ]);
+    expect(alone.findings[1]?.message).toContain('failed by its own word (tests)');
+    // With a check that passed, or a test command Friday saw, the work was run: the failed one is said.
+    const mixed = evidenceOfRunning({
+      claimed: [
+        { name: 'tests', outcome: 'passed' },
+        { name: 'lint', outcome: 'failed' },
+      ],
+      executed: [],
+    });
+    expect(mixed.ok).toBe(true);
+    expect(mixed.summary).toBe('the claim names 2 check(s), 1 failed by its own word');
+    expect(mixed.findings.map((f) => f.rule)).toEqual(['evidence.claimed_failed']);
+    const seen = evidenceOfRunning({
+      claimed: [{ name: 'tests', outcome: 'failed' }],
+      executed: [{ text: 'npm test', command_class: 'test.local' }],
+    });
+    expect(seen.ok).toBe(true);
+  });
 });

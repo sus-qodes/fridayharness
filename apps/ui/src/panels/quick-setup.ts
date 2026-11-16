@@ -210,9 +210,17 @@ export function autoVerifySwitch(ctx: AppContext, td: Teardown): HTMLElement {
   }
 
   function render() {
-    const state = autoVerification(ctx.store.select('board'));
+    const board = ctx.store.select('board');
+    const state = autoVerification(board);
+    // Without checks of the project's own, checking is Friday's part alone: said, so "checked" is not over-read.
+    const noChecks = board ? board.verification.checks.length === 0 : false;
     replace(
       body,
+      noChecks
+        ? note(
+            'This project has no checks of its own set yet (tests, lint, build), so Friday checks only that the changes stay in scope, hold no credentials and were run.',
+          )
+        : null,
       state === 'on'
         ? h(
             'div',

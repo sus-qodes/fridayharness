@@ -2,6 +2,16 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — stability pass, part 3: checks that mean what they say, and work that is not left waiting unseen
+
+Findings of the 2026-11-16 review of verification and of what waits for a person.
+
+- **A merged revision is checked with the project's dependencies installed.** When two tasks of a goal ran in parallel, the second needed a real merge, and Friday checked the merged revision in its own checkout, which had no `node_modules`: the project's tests failed there ("Cannot find module…"), again on every retry and on "Integrate my repair", and the goal never completed. That checkout now gets its dependencies as a task worktree does (the same setup and dependency cache), kept while the manifest and lockfile are the same and cleared when they change. When they could not be installed, a failing check says so instead of blaming the merged work alone. `tests/integration/goal-integration.test.ts` has the case; it fails without the fix.
+- **A check the claim itself reports as failed is not evidence.** A claim listing `tests: failed` and nothing else passed Friday's evidence check, since any named check counted. It is now refused ("the only check(s) the claim lists failed by its own word"), and a failed one beside real evidence is noted (`evidence.claimed_failed`).
+- **"Passed" says when only Friday's own checks ran.** With no project checks set, a verification is Friday's part alone (scope, credentials, evidence): the task inspector says "Checked by Friday only…", and the "Check the work automatically" switch says so too.
+- **Work that waits for you is counted.** With automatic checks off (the default), a finished task waited at "Ready for verification" while the header said "0 waiting for you", and a completed goal raised nothing. "Waiting for you" (the header, the rail, the pill, the tray, the title) now lists **Work to verify** and **Goal ready to land**, each opening its dialog, and each is announced once. With automatic checks on, a task still waiting after a minute is listed too. Work made in the project folder itself is not listed as "to land".
+- **Turning automatic checks on checks what already waits.** Claims that waited when the switch was turned on (and trusted) were checked only after a restart or a resume; they are verified at once.
+
 ## Unreleased — stability pass, part 2: landing never touches what is yours, and says what is in the way
 
 Findings of the 2026-11-16 review of "Land into my branch" (each reproduced against a real repository in `tests/integration/goal-integration.test.ts`).

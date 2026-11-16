@@ -160,9 +160,11 @@ export function mountNotchWith(
       opts.onOpenStudio(target);
       return;
     }
-    if (target.panel === 'plan-review') {
-      // The plan review is a dialog, not a drawer; it opens on the goal.
-      openModal(ctx, { kind: 'plan-review', ...(target.id ? { id: target.id } : {}) });
+    if (target.panel === 'plan-review' || target.panel === 'verify' || target.panel === 'land') {
+      // These are dialogs, not drawers: the plan review and the landing open on the goal, the
+      // verification on the task.
+      if (target.task_id) store.patch('ui', { selectedTaskId: target.task_id });
+      openModal(ctx, { kind: target.panel, ...(target.id ? { id: target.id } : {}) });
       return;
     }
     if (target.panel) {

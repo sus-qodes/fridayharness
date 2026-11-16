@@ -230,6 +230,85 @@ describe('waiting items: a proposed plan (the one list the header, the rail, the
   });
 });
 
+describe('waiting items: work to verify and goals to land (review of 2026-11-16)', () => {
+  const claimed = (over = {}) =>
+    makeTask({
+      task_id: 't1',
+      status: 'READY_FOR_VERIFICATION',
+      agent_key: 'claude-1',
+      summary: 'Add the API',
+      updated_at: new Date(NOW - 5_000).toISOString(),
+      ...over,
+    });
+
+  it('lists claimed work a person verifies: always with automatic checks off, only when stuck with them on', () => {
+    const manual = makeSnapshot({ tasks: [claimed()] });
+    const items = waitingItems(manual, NOW);
+    expect(items.map((i) => i.kind)).toEqual(['verify']);
+    expect(items[0]).toMatchObject({ key: 'verify:t1', id: 't1', taskId: 't1' });
+    expect(waitingCount(manual, NOW)).toBe(1);
+    // Its door is the task's verification dialog.
+    expect(studioTarget(items[0] ?? null, null)).toEqual({ task_id: 't1', panel: 'verify', id: 't1' });
+    // Being verified, or verified: nothing waits for the person.
+    expect(waitingItems(makeSnapshot({ tasks: [claimed({ status: 'VERIFYING' })] }), NOW)).toEqual([]);
+    // Automatic checks on: Friday is about to check it itself...
+    const auto = { checks: [], auto_on_completion: true };
+    expect(waitingItems(makeSnapshot({ verification: auto, tasks: [claimed()] }), NOW)).toEqual([]);
+    // ...unless it has sat there for over a minute (a check that was interrupted): then it is the person's.
+    const stuck = claimed({ updated_at: new Date(NOW - 61_000).toISOString() });
+    expect(waitingItems(makeSnapshot({ verification: auto, tasks: [stuck] }), NOW).map((i) => i.kind)).toEqual([
+      'verify',
+    ]);
+  });
+
+  it('lists a completed goal until a person landed it, and never work that is already in the folder', () => {
+    const done = makeGoal({ goal_id: 'goal_done', status: 'COMPLETED', request: 'Add discount codes' });
+    const land = (landing: unknown) =>
+      waitingItems(
+        makeSnapshot({ goals: [done], ...(landing ? { goal_landing: { goal_done: landing as never } } : {}) }),
+        NOW,
+      );
+    expect(land({ work: 'branch', landed: null })).toEqual([
+      {
+        kind: 'land',
+        key: 'land:goal_done',
+        id: 'goal_done',
+        taskId: null,
+        goalId: 'goal_done',
+        request: 'Add discount codes',
+      },
+    ]);
+    expect(land({ work: 'mixed', landed: null }).map((i) => i.kind)).toEqual(['land']);
+    expect(land({ work: 'folder', landed: null })).toEqual([]);
+    expect(land({ work: 'branch', landed: { into: 'main', at: '2026-10-17T09:00:00.000Z' } })).toEqual([]);
+    // A daemon that does not say (older): nothing is guessed.
+    expect(land(null)).toEqual([]);
+    const [item] = land({ work: 'branch', landed: null });
+    expect(studioTarget(item ?? null, 'task_x')).toEqual({ panel: 'land', id: 'goal_done' });
+    // An active goal with the same record is not listed.
+    expect(
+      waitingItems(
+        makeSnapshot({
+          goals: [makeGoal({ goal_id: 'g2', status: 'ACTIVE' })],
+          goal_landing: { g2: { work: 'branch', landed: null } },
+        }),
+        NOW,
+      ),
+    ).toEqual([]);
+  });
+
+  it('says them in the status sentence, each task counted once', () => {
+    const board = makeSnapshot({
+      tasks: [claimed(), claimed({ task_id: 't2', status: 'VERIFYING' })],
+      counts: { READY_FOR_VERIFICATION: 1, VERIFYING: 1 },
+      goals: [makeGoal({ goal_id: 'goal_done', status: 'COMPLETED' })],
+      goal_landing: { goal_done: { work: 'branch', landed: null } },
+    });
+    const sentence = statusSentence(board, NOW);
+    expect(sentence).toContain('2 waiting for you: 1 task to verify, 1 goal to land; 1 to verify');
+  });
+});
+
 describe('the status sentence (the Running count’s tooltip and the tray’s line)', () => {
   it('counts what runs and what waits for you, then what is ready and who is connected', () => {
     expect(statusSentence(makeScenario(), NOW)).toBe(

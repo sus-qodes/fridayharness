@@ -260,6 +260,30 @@ describe('notifications (plan FD-25)', () => {
     expect(f.shown[2]?.options?.body).toBe('codex-1: Which names?');
   });
 
+  it('announces work to verify and a goal ready to land, once each', () => {
+    const memory = remember(makeSnapshot(), NOW);
+    const board = makeSnapshot({
+      tasks: [
+        makeTask({
+          task_id: 't1',
+          status: 'READY_FOR_VERIFICATION',
+          agent_key: 'claude-1',
+          summary: `Add the API ${HOSTILE}`,
+        }),
+      ],
+      goals: [makeGoal({ goal_id: 'goal_done', status: 'COMPLETED', request: 'Add discount codes' })],
+      goal_landing: { goal_done: { work: 'branch', landed: null } },
+    });
+    const notices = diffNotices(memory, board, NOW);
+    expect(notices.map((n) => [n.title, n.body, n.taskId])).toEqual([
+      ['Work is ready for you to verify', `claude-1: Add the API ${HOSTILE}`, 't1'],
+      ['A goal is ready to land', 'Add discount codes', null],
+    ]);
+    expect(diffNotices(memory, board, NOW)).toEqual([]);
+    // Work that waited when the page opened is not announced.
+    expect(diffNotices(remember(board, NOW), board, NOW)).toEqual([]);
+  });
+
   it('announces a task each time it fails again, and an agent blocking again', () => {
     const memory = remember(makeSnapshot(), NOW);
     const failed = makeSnapshot({ tasks: [makeTask({ task_id: 't', status: 'FAILED' })] });

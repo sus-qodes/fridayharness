@@ -106,6 +106,35 @@ describe('the "Waiting for you" tray', () => {
     expect(host.children).toHaveLength(0);
   });
 
+  it('lists work to verify and a goal to land, each opening its dialog', () => {
+    ctx = makeContext({
+      snapshot: makeSnapshot({
+        tasks: [
+          makeTask({
+            task_id: 't1',
+            status: 'READY_FOR_VERIFICATION',
+            agent_key: 'claude-1',
+            summary: `Add ${HOSTILE}`,
+          }),
+        ],
+        goals: [makeGoal({ goal_id: 'goal_done', status: 'COMPLETED', request: 'Add discount codes' })],
+        goal_landing: { goal_done: { work: 'branch', landed: null } },
+      }),
+    });
+    const tray = mountDecisionsTray(ctx, host);
+    const text = host.textContent ?? '';
+    expect(text).toContain('Work to verify');
+    expect(text).toContain(`claude-1 says it is done · Add ${HOSTILE}`);
+    expect(text).toContain('Goal ready to land');
+    expect(host.querySelector('img')).toBeNull();
+    const rows = [...host.querySelectorAll<HTMLButtonElement>('.gv-tray-list button')];
+    rows.find((b) => b.textContent?.includes('Work to verify'))?.click();
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'verify', id: 't1' });
+    rows.find((b) => b.textContent?.includes('Goal ready to land'))?.click();
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'land', id: 'goal_done' });
+    tray.destroy();
+  });
+
   it('renders rows with hostile text as text and opens each card in place', () => {
     const board = makeScenario();
     board.approvals = [makeApproval({ task_id: board.tasks[0]?.task_id ?? null, target: `${HOSTILE}‮` })];
