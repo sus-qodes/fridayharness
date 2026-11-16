@@ -552,6 +552,12 @@ describe('Master Brain trigger table', () => {
       [{ kind: 'after_rejection', goal_id: 'goal_1', plan_id: 'plan_1', version: 2, note: 'too broad' }],
     ],
     ['a reservation ends', ev('task.reservation_released', { task_id: 'task_g1' }), facts(), [{ kind: 'delegate' }]],
+    [
+      'what kept a host out is lifted (a person said they signed in again)',
+      ev('readiness.invalidated', { evidence_ids: ['rdy_1'], host: 'claude-code', model: null }),
+      facts(),
+      [{ kind: 'delegate' }],
+    ],
     ['human answers an agent', ev('escalation.answered', { escalation_id: 'esc_agent' }), facts(), []],
     [
       'Friday closes a question its task made moot',

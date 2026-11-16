@@ -150,12 +150,31 @@ describe('runtime readiness', () => {
     const blocked = await td.operator.get<{ dry_run: DryRun }>(P(`/routing/explain/${task.task_id}`));
     expect(blocked.dry_run).toMatchObject({ blocked: true, model: null });
     expect(blocked.dry_run.reason).toContain('codex/openai/gpt-6.1-sol is not signed in: run "codex login"');
+    // The board says which host is kept out and why, so the interface can offer the way back.
+    type Blocks = { host_blocks?: { host: string; model: string | null; kind: string; detail: string | null }[] };
+    const board = () => td.operator.get<Blocks>(P('/ui/snapshot'));
+    expect((await board()).host_blocks).toEqual([
+      // A check a person recorded counts for a day; a host's own refusal has no end (`until: null`).
+      expect.objectContaining({ host: 'codex', model: null, kind: 'sign_in', detail: 'run "codex login"' }),
+    ]);
 
     const cleared = await cli(['--project', dir, 'readiness', 'clear', 'codex']);
     expect(cleared.code, cleared.stderr).toBe(0);
     expect(cleared.stdout).toContain('Cleared 1 record(s) for codex');
     const after = await td.operator.get<{ dry_run: DryRun }>(P(`/routing/explain/${task.task_id}`));
     expect(after.dry_run).toMatchObject({ blocked: false, model: 'openai/gpt-6.1-sol' });
+    expect((await board()).host_blocks).toEqual([]);
+
+    // The interface's button is the same clearing, without a terminal ("I signed in: try again").
+    await td.operator.post(P('/readiness/evidence'), {
+      host: 'codex',
+      source: 'test',
+      stages: [{ stage: 'authenticated', status: 'failed', detail: 'run "codex login"' }],
+    });
+    expect((await board()).host_blocks).toHaveLength(1);
+    const lifted = await td.operator.post<{ ended: unknown[] }>(P('/readiness/clear'), { host: 'codex', model: null });
+    expect(lifted.ended).toHaveLength(1);
+    expect((await board()).host_blocks).toEqual([]);
   }, 60_000);
 
   it('fails over to the next host in the ranking after a host failure, and says so (ADR-0035 §3–§4)', async () => {

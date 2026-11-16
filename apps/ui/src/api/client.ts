@@ -443,6 +443,14 @@ export class FridayApi {
     return this.post('/config/settings', { set });
   }
 
+  /**
+   * Lifts what keeps a host (or one of its models) out of work: a failed sign-in, a bench. The next
+   * task tries it again; a host still signed out is kept out again.
+   */
+  clearReadiness(host: string, model: string | null = null): Promise<{ ended: unknown[] }> {
+    return this.post('/readiness/clear', { host, model });
+  }
+
   /** Merges a completed goal's branch into the branch the project folder has checked out. */
   landGoal(goalId: string): Promise<LandResult> {
     // Longer than the daemon gives the merge itself (120 s), so its own answer is what arrives.

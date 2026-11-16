@@ -170,6 +170,8 @@ pub static ROUTES: &[Route] = &[
     // The few config.yaml settings the interface changes: none applies on its own say (trust,
     // this machine's approval or a restart still decides), so no dialog of the shell's.
     post("config/settings"),
+    // Lifts what keeps a host out of work (a failed sign-in, a bench): "I signed in: try again".
+    post("readiness/clear"),
     post("control/pause"),
     post("control/resume"),
     confirm("control/halt", Confirm::Halt),

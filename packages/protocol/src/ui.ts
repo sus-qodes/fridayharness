@@ -226,6 +226,22 @@ export interface GoalLandingView {
   landed: { into: string; at: string } | null;
 }
 
+/**
+ * What keeps a host, or one of its models, from being given work now (2026-11-17), from the
+ * readiness evidence: `sign_in`, the host said it is not signed in, which stays until a person says
+ * it is (or starts its agent again); `benched`, it failed in a way that passes (a rate or usage
+ * limit, a crash), and is tried again after `until`.
+ */
+export interface HostBlockView {
+  host: string;
+  model: string | null;
+  kind: 'sign_in' | 'benched';
+  /** What the host said, shortened, without credentials. */
+  detail: string | null;
+  since: string;
+  until: string | null;
+}
+
 /** `GET …/goals/:gid/land`: what Land would do now; it changes nothing. */
 export interface LandPlanView {
   goal_id: string;
@@ -300,6 +316,8 @@ export interface UiSnapshot {
    * more than a day ago, or past the list's cap).
    */
   goal_progress: Record<string, GoalProgressView>;
+  /** What keeps hosts out of work now (a failed sign-in, a bench). Absent from an older daemon. */
+  host_blocks?: HostBlockView[];
   /** Per completed goal: where its work is, and whether a person landed it. Absent from an older daemon. */
   goal_landing?: Record<string, GoalLandingView>;
   plans: Record<string, { active: LivePlanVersion | null; proposed: LivePlanVersion | null }>;

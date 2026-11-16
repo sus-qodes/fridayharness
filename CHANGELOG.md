@@ -2,6 +2,17 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — stability pass, part 5: an agent that is signed out or at its limit says so, with the way back
+
+Findings of the 2026-11-16 review of connecting and running agents.
+
+- **A failed sign-in no longer locks a host out behind a terminal command.** A host that once said "not signed in" was refused every later task: the record has no expiry, only a completed attempt shows a sign-in (and routing gave the host none), and only `friday readiness clear` ended it, so signing in again changed nothing. The board now says what keeps each host out (`host_blocks` in the snapshot: a failed sign-in, or a bench with its end), and the routing question's card and the Agents drawer show it in plain words with one button: **I signed in: try again**, or **Try again now** for a bench. The desktop forwards `readiness/clear`. A host still signed out fails its next attempt and is kept out again.
+- **Lifting a block offers the waiting tasks again at once** (`readiness.invalidated` starts delegation), not at the next unrelated event.
+- **A subscription's usage limit is a limit, not the work's failure.** "Claude AI usage limit reached|<time>", "5-hour limit reached ∙ resets 3pm" and "You've hit your limit · resets 5pm" were read as the task failing, so it was retried at once on the same host and handed to a person as failed. They are now a rate limit that benches the host until the time it names (the moment after the bar, or the time of day on this machine's clock; a day at most), and the board says until when.
+- **A subscription's expired sign-in is a sign-in problem** ("OAuth token has expired", "Please run /login"). What a task's own tests print ("session expired", "token expired", "recursion limit reached") is not taken for either.
+
+Not done as first listed: an agent that starts again does not lift its host's failed sign-in by itself. The reviewed rule is that it stays until the host is seen signed in or a person clears it (two tests hold it), and any second agent of the host starting would have lifted it; the button is that clearing, one click.
+
 ## Unreleased — stability pass, part 4: goals that can end, questions that go away, drafts that stay
 
 Findings of the 2026-11-16 review of goals and planning.

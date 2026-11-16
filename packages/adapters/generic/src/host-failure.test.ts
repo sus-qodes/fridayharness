@@ -23,6 +23,50 @@ describe('classifyHostFailure (ADR-0035 §3)', () => {
     expect(retryAfterSeconds('nothing said')).toBeUndefined();
   });
 
+  it("sees a subscription's usage limit as a limit that passes, with the wait until it lifts (2026-11-17)", () => {
+    // Local time: "resets 3pm" is read as this machine's clock shows it.
+    const now = new Date(2026, 10, 17, 10, 0, 0);
+    const epoch = Math.floor(now.getTime() / 1000) + 5400;
+    expect(
+      classifyHostFailure(`the Claude Code turn ended: success: Claude AI usage limit reached|${epoch}`, 'turn', now),
+    ).toEqual({ kind: 'rate_limit', retry_after_s: 5400 });
+    expect(classifyHostFailure('5-hour limit reached ∙ resets 3pm', 'turn', now)).toEqual({
+      kind: 'rate_limit',
+      retry_after_s: 5 * 3600,
+    });
+    expect(classifyHostFailure("You've hit your limit · resets at 10:30", 'turn', now)).toEqual({
+      kind: 'rate_limit',
+      retry_after_s: 1800,
+    });
+    // A time of day that has passed is tomorrow's.
+    expect(classifyHostFailure('weekly limit reached, resets 9am', 'exit', now)).toEqual({
+      kind: 'rate_limit',
+      retry_after_s: 23 * 3600,
+    });
+    expect(retryAfterSeconds('resets 12am', now)).toBe(14 * 3600);
+    // A moment already past, or no time at all: a limit, with the default wait.
+    expect(classifyHostFailure('Claude AI usage limit reached|1000000000', 'turn', now)).toEqual({
+      kind: 'rate_limit',
+    });
+    expect(classifyHostFailure('You have hit your usage limit.', 'turn', now)).toEqual({ kind: 'rate_limit' });
+    expect(retryAfterSeconds('resets 25:00', now)).toBeUndefined();
+  });
+
+  it("sees a subscription's expired sign-in, and not what a task's own tests print", () => {
+    expect(classifyHostFailure('OAuth token has expired. Please run /login', 'turn')).toEqual({ kind: 'auth' });
+    expect(classifyHostFailure('API Error: OAuth access token expired', 'exit')).toEqual({ kind: 'auth' });
+    // A turn that ended in an error of the work's own is nobody's sign-in and nobody's limit.
+    for (const text of [
+      'tests failed: expected "session expired" to equal "ok"',
+      'AssertionError: token expired should redirect to the sign-in page',
+      'RangeError: recursion limit reached in parse()',
+      'the context limit reached; the conversation was compacted',
+      'the Claude Code turn ended: error_max_turns',
+    ]) {
+      expect(classifyHostFailure(text, 'turn'), text).toBeNull();
+    }
+  });
+
   it('is a runtime failure when the host cannot serve the model it was given (the live check of 2026-10-22)', () => {
     expect(
       classifyHostFailure(

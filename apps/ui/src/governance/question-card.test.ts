@@ -255,6 +255,49 @@ describe('question cards by kind (plan FD-21)', () => {
       card.destroy();
     });
 
+    it('says which host is kept out and why, and tries it again when the person signed in', async () => {
+      const card = mount(makeEscalation({ kind: 'routing_blocked' }), {}, { 'POST /readiness/clear': { ended: [] } });
+      // Nothing is kept out: the card is as before.
+      expect(card.el.querySelector('.gv-host-block')).toBeNull();
+      card.destroy();
+      const blocked = mount(
+        makeEscalation({ kind: 'routing_blocked' }),
+        {},
+        { 'POST /readiness/clear': { ended: [] } },
+      );
+      blocked.destroy();
+      ctx = makeContext({
+        snapshot: makeSnapshot({
+          agents: [makeAgent()],
+          tasks: [makeTask({ goal_id: GOAL })],
+          escalations: [makeEscalation({ kind: 'routing_blocked' })],
+          host_blocks: [
+            {
+              host: 'claude-code',
+              model: null,
+              kind: 'sign_in',
+              detail: 'auth: Not logged in',
+              since: '2026-11-17T09:00:00.000Z',
+              until: null,
+            },
+          ],
+        }),
+        answers: { 'POST /readiness/clear': { ended: [{ evidence_id: 'rdy_1' }] } },
+      });
+      const withBlock = questionCard(ctx, makeEscalation({ kind: 'routing_blocked' }));
+      document.body.append(withBlock.el);
+      const row = withBlock.el.querySelector('.gv-host-block') as HTMLElement;
+      expect(row.textContent).toContain('Claude Code is not signed in, so Friday gives it no work');
+      buttonNamed(withBlock.el, 'I signed in: try again').click();
+      await flush();
+      expect(ctx.transport.to('POST', '/readiness/clear').map((c) => c.body)).toEqual([
+        { host: 'claude-code', model: null },
+      ]);
+      expect(ctx.refreshes).toBe(1);
+      expect(withBlock.el.textContent).toContain('Friday offers the task again now');
+      withBlock.destroy();
+    });
+
     it('Pin a model for this task lists the models and pins one to the task', async () => {
       const card = mount(
         makeEscalation({ kind: 'routing_violated' }),

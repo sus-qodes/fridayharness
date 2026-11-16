@@ -207,6 +207,24 @@ export function buildUiSnapshot(deps: {
   );
   const goalProgress: UiSnapshot['goal_progress'] = {};
   for (const g of goals) goalProgress[g.goal_id] = counted[g.goal_id] ?? { total: 0, completed: 0 };
+  // What keeps a host out of work now: a failed sign-in (until cleared), a bench (until it expires).
+  const hostBlocks: NonNullable<UiSnapshot['host_blocks']> = [];
+  for (const e of state.q.readinessEvidence(pid, { limit: 200 })) {
+    if (e.status !== 'failed') continue;
+    const kind = e.stage === 'authenticated' ? 'sign_in' : e.stage === 'benched' ? 'benched' : null;
+    if (!kind) continue;
+    if (e.expires_at && Date.parse(e.expires_at) <= deps.nowMs) continue;
+    // The newest record of a host, model and kind is the one that counts (they come newest first).
+    if (hostBlocks.some((b) => b.host === e.host && b.model === e.model && b.kind === kind)) continue;
+    hostBlocks.push({
+      host: e.host,
+      model: e.model,
+      kind,
+      detail: e.detail,
+      since: e.checked_at,
+      until: e.expires_at,
+    });
+  }
   // A completed goal's card says "Landed into main", or that its work is already in the folder.
   const landed = landedGoals(state, pid);
   const goalLanding: NonNullable<UiSnapshot['goal_landing']> = {};
@@ -295,6 +313,7 @@ export function buildUiSnapshot(deps: {
     goals,
     goal_progress: goalProgress,
     goal_landing: goalLanding,
+    host_blocks: hostBlocks,
     plans,
     tasks,
     runs,

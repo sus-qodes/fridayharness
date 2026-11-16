@@ -125,6 +125,9 @@ export function triggersFor(e: TriggerEvent, f: TriggerFacts): BrainAction[] {
     case 'task.released':
     case 'task.reservation_released':
     case 'harness.registered':
+    // What kept a host out was lifted (a person cleared it, or its agent started again): the tasks
+    // that waited for it are offered again now, not at the next unrelated event.
+    case 'readiness.invalidated':
     // A human resumed Friday: delegation, and the planning lane, start again (plan M9 §5.5).
     case 'control.resumed':
       return [{ kind: 'delegate' }];

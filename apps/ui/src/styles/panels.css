@@ -611,6 +611,25 @@
   margin-bottom: 12px;
 }
 
+/* What keeps a host out of work (not signed in, a limit), with its button. */
+.pn-host-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.pn-host-block {
+  padding: 8px 10px;
+  border: 1px solid var(--color-amber);
+  border-radius: 8px;
+}
+
+.pn-host-block-detail {
+  font-size: var(--text-caption);
+  overflow-wrap: anywhere;
+}
+
 /* The plan editor's note that a kept draft is back, with Start over. */
 .pn-draft-restored {
   display: flex;

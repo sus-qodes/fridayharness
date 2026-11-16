@@ -8,6 +8,7 @@
  * Start dialog's Host field shows them otherwise). The routing pins live in Settings → Routing: a
  * request for them opens Settings there.
  */
+
 import type {
   AgentHost,
   AgentProcess,
@@ -24,6 +25,7 @@ import { humanize, timeAgo } from '../ui/format.js';
 import { icon } from '../ui/svg.js';
 import { ANTIGRAVITY_ATTACH_NOTE } from './antigravity-setup.js';
 import { actWithError, badge, errorOf, note, panel, pathText, plain, Teardown } from './common.js';
+import { hostBlocksNotice } from './host-blocks.js';
 
 export const PROCESS_POLL_MS = 3000;
 
@@ -544,6 +546,8 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
         class: 'btn btn-primary',
       }),
     ),
+    // What keeps a host out of work now (not signed in, a limit), with the way back.
+    hostBlocksNotice(ctx, td),
     hostsSection,
     h('section', { class: 'pn-section' }, h('h3', { class: 'section-title' }, 'Agents'), listState, list),
     claudeSection,

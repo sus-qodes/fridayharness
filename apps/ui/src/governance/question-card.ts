@@ -11,6 +11,7 @@
 
 import type { EscalationView } from '@friday/protocol';
 import { classifyEscalation, composeAnswer, LET_AGENT_DECIDE, type QuestionSpec } from '../model/escalations.js';
+import { blockSentence, hostBlocks, hostName, liftLabel } from '../model/host-blocks.js';
 import { hasHidden, visible } from '../model/text.js';
 import { cancelTask } from '../shell/cancel-task.js';
 import { type AppContext, type Component, openDrawer, openModal } from '../shell/context.js';
@@ -464,9 +465,38 @@ function routingBody(kit: Kit): Built {
     { class: 'btn' },
   );
   const cancel = cancelTaskButton(kit);
+  // A host that is kept out (not signed in, a limit) is often why no agent may run the task: said
+  // here in plain words, with the button that tries it again (2026-11-17). Before, the only way
+  // back from a failed sign-in was a terminal command, whatever the person did in the host.
+  const blocks = hostBlocks(ctx.store.select('board'));
+  const blockRows = blocks.map((b) => {
+    const lift = button(
+      liftLabel(b),
+      async () => {
+        lift.disabled = true;
+        const done = await ctx.act(
+          b.kind === 'sign_in' ? 'Try the sign-in again' : 'Try the host again',
+          () => ctx.api.clearReadiness(b.host, b.model),
+          `${hostName(b.host)} is tried again with the next task`,
+        );
+        if (done) {
+          ctx.refresh();
+          kit.status.textContent = 'Friday offers the task again now; this question closes when it starts.';
+        } else lift.disabled = false;
+      },
+      { class: b.kind === 'sign_in' ? 'btn btn-primary' : 'btn' },
+    );
+    return h(
+      'div',
+      { class: 'gv-host-block', dataset: { host: b.host, kind: b.kind } },
+      h('p', null, blockSentence(b)),
+      h('div', { class: 'gv-actions' }, lift),
+    );
+  });
   return {
     body: present([
       ...context(spec),
+      ...blockRows,
       taskId ? h('div', { class: 'gv-actions' }, why, pinOpen, cancel) : null,
       whyBox,
       pinBox,
