@@ -361,19 +361,28 @@ pub fn prepare(
             let detail = get(&format!("{base}goals/{gid}"))?;
             let goal = detail.get("goal").cloned().unwrap_or(Value::Null);
             let text = field(&goal, "objective").or_else(|| field(&goal, "request"));
-            // What would be merged, read now: the branch and how many commits it brings.
+            // What landing would do, read now (`GET goals/{gid}/land`): the branch it lands into by
+            // name, or that nothing would merge. Only a merge is asked about: a goal already on that
+            // branch, or one the daemon refuses with its reason (changes in the way, a merge of the
+            // person's in progress, work that is already in the folder), is sent without a dialog,
+            // since it changes nothing in the folder.
+            let plan = get(&format!("{base}goals/{gid}/land"))?;
+            if field(&plan, "state") != Some("ready") {
+                return Ok(Prepared { body: json!({}), dialog: None });
+            }
+            let into = field(&plan, "into").unwrap_or("your branch").to_string();
             let diff = get(&format!("{base}goals/{gid}/diff?stat=1"))?;
             let branch = field(&diff, "branch").map(str::to_string).unwrap_or_else(|| format!("friday/goal-{gid}"));
             let commits = diff.get("commits_ahead").and_then(Value::as_array).map_or(0, Vec::len);
             let files = diff.get("files").and_then(Value::as_array).map_or(0, Vec::len);
-            too_long(&[text.unwrap_or(""), &branch])?;
+            too_long(&[text.unwrap_or(""), &branch, &into])?;
             Ok(Prepared {
                 // The land route takes nothing: what it merges is the goal's own branch.
                 body: json!({}),
                 dialog: Some(Dialog {
                     title: "Friday: land this goal?".into(),
                     text: format!(
-                        "Goal {}: {}\n\nThis merges {} ({} {}, {} {}) into the branch your project folder has checked out, as \"git merge\" there would. If git cannot merge cleanly, nothing is changed.\n\nLand the goal?",
+                        "Goal {}: {}\n\nThis merges {} ({} {}, {} {}) into {}, the branch your project folder has checked out, as \"git merge\" there would. If git cannot merge cleanly, nothing is changed.\n\nLand the goal?",
                         visible(&gid),
                         shown(text),
                         visible(&branch),
@@ -381,6 +390,7 @@ pub fn prepare(
                         if commits == 1 { "commit" } else { "commits" },
                         files,
                         if files == 1 { "file" } else { "files" },
+                        visible(&into),
                     ),
                     confirm: "Land the goal".into(),
                     danger: false,
@@ -597,29 +607,41 @@ mod tests {
     }
 
     #[test]
-    fn landing_a_goal_always_asks_and_says_what_it_merges() {
-        let get = |path: &str| -> Result<Value, CmdError> {
-            if path.ends_with("/goals/g1") {
-                Ok(json!({"goal": {"objective": "Discount\u{202E} codes"}}))
-            } else if path.ends_with("/goals/g1/diff?stat=1") {
-                Ok(json!({"branch": "friday/goal-g1", "commits_ahead": [{"sha": "a"}, {"sha": "b"}],
-                    "files": [{"path": "README.md"}]}))
-            } else {
-                panic!("unexpected read {path}")
+    fn landing_a_goal_asks_before_a_merge_and_says_what_it_merges_into() {
+        let reads = |state: &'static str| {
+            move |path: &str| -> Result<Value, CmdError> {
+                if path.ends_with("/goals/g1") {
+                    Ok(json!({"goal": {"objective": "Discount\u{202E} codes"}}))
+                } else if path.ends_with("/goals/g1/land") {
+                    Ok(json!({"state": state, "into": "ma\u{202E}in", "commits": 2}))
+                } else if path.ends_with("/goals/g1/diff?stat=1") {
+                    Ok(json!({"branch": "friday/goal-g1", "commits_ahead": [{"sha": "a"}, {"sha": "b"}],
+                        "files": [{"path": "README.md"}]}))
+                } else {
+                    panic!("unexpected read {path}")
+                }
             }
         };
         let body = json!({"force": true});
         let (c, what) = checked("goals/g1/land", Some(&body));
         assert_eq!(what, Some(Confirm::LandGoal));
-        let p = prepare(what, &c, PID, Some(&body), &get).unwrap();
+        let p = prepare(what, &c, PID, Some(&body), &reads("ready")).unwrap();
         // Nothing of the page's body is sent: the route merges the goal's own branch.
         assert_eq!(p.body, json!({}));
         let d = p.dialog.expect("a dialog");
         assert!(d.text.contains("Discount⟨U+202E⟩ codes"));
-        assert!(d.text.contains("friday/goal-g1 (2 commits, 1 file)"));
+        assert!(d.text.contains("friday/goal-g1 (2 commits, 1 file) into ma⟨U+202E⟩in,"), "{}", d.text);
         assert_eq!(d.confirm, "Land the goal");
-        // Only confirm_and_send sends it.
+        // Nothing would merge (already there, or the daemon refuses with its reason): no question
+        // is asked about a merge that will not happen, and the daemon's answer is what the person reads.
+        for state in ["landed", "blocked", "in_folder", "not_completed"] {
+            let p = prepare(what, &c, PID, Some(&body), &reads(state)).unwrap();
+            assert!(p.dialog.is_none(), "{state}");
+            assert_eq!(p.body, json!({}), "{state}");
+        }
+        // Only confirm_and_send sends the merge; the plan is an ordinary read.
         assert!(crate::routes::for_request("POST", &format!("{PREFIX}{PID}/goals/g1/land"), None, PID, 4310).is_err());
+        assert!(crate::routes::for_request("GET", &format!("{PREFIX}{PID}/goals/g1/land"), None, PID, 4310).is_ok());
     }
 
     #[test]

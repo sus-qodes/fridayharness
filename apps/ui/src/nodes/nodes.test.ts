@@ -420,6 +420,33 @@ describe('goal card', () => {
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'land', id: g.goal.goal_id });
   });
 
+  it('says where a completed goal landed, or that its work is already in the folder', () => {
+    const done = makeGoal({ status: 'COMPLETED' });
+    const label = (landing: NonNullable<UiSnapshot['goal_landing']>[string] | undefined) => {
+      const ctx = makeContext({
+        snapshot: makeSnapshot({ goals: [done], ...(landing ? { goal_landing: { [done.goal_id]: landing } } : {}) }),
+      });
+      const node = createGoalNode(ctx, { group: group({ goal: done }) });
+      const b = node.el.querySelector('[data-action="land"]') as HTMLButtonElement;
+      click(b);
+      // Each opens the same dialog, which says what there is to do.
+      expect(ctx.store.select('ui').modal).toEqual({ kind: 'land', id: done.goal_id });
+      return b.textContent;
+    };
+    // An older daemon, or a goal not landed yet.
+    expect(label(undefined)).toBe('Ready to land');
+    expect(label({ work: 'branch', landed: null })).toBe('Ready to land');
+    expect(label({ work: 'mixed', landed: null })).toBe('Ready to land');
+    expect(label({ work: 'folder', landed: null })).toBe('Review and commit');
+    expect(label({ work: 'branch', landed: { into: 'main', at: '2026-11-17T10:00:00.000Z' } })).toBe(
+      'Landed into main',
+    );
+    // A hostile branch name is text, cut short.
+    const hostile = label({ work: 'branch', landed: { into: `x${BIDI}${LONG}`, at: '2026-11-17T10:00:00.000Z' } });
+    expect(hostile).not.toContain(BIDI);
+    expect((hostile ?? '').length).toBeLessThan(60);
+  });
+
   describe('what Friday did (plan M12.7)', () => {
     const GID = 'goal_0000000000000000000000gg01';
     /** A goal with tasks and nothing else on record; each test changes what it needs. */

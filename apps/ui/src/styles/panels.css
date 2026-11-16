@@ -603,6 +603,20 @@
   color: var(--color-cyan-glow);
 }
 
+/* What landing waits for (changes in the way, a merge of the person's own), and its files. */
+.pn-land-now {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.pn-land-blocked {
+  font-size: var(--text-caption);
+  color: var(--color-amber);
+  overflow-wrap: anywhere;
+}
+
 /* Agents drawer */
 .pn-host-name {
   font-weight: var(--weight-semibold);

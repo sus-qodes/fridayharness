@@ -196,6 +196,9 @@ async fn confirm_and_send(app: AppHandle, method: String, path: String, body: Op
             Some(routes::Confirm::Halt) | Some(routes::Confirm::LaunchAgent) | Some(routes::Confirm::StartAgent) => {
                 Duration::from_secs(120)
             }
+            // Longer than the daemon gives the merge itself (land.ts, 120 s), so a slow hook or a
+            // large checkout never reads here as an error while the merge still finishes.
+            Some(routes::Confirm::LandGoal) => Duration::from_secs(180),
             _ => Duration::from_secs(30),
         };
         proxy::send(&project, Gate::Confirmed, &request(&method, &path, Some(&prepared.body), timeout))

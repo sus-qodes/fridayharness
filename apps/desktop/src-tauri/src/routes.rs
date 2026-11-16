@@ -127,6 +127,8 @@ pub static ROUTES: &[Route] = &[
     get("goals", &[]),
     get("goals/{gid}", &[]),
     get("goals/{gid}/diff", &["stat"]),
+    // What landing would do, read before the dialog (the POST of the same path is confirmed below).
+    get("goals/{gid}/land", &[]),
     post("goals"),
     confirm("goals/{gid}/cancel", Confirm::CancelGoal),
     confirm("goals/{gid}/land", Confirm::LandGoal),

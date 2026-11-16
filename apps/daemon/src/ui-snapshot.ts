@@ -20,6 +20,7 @@ import type { ProjectRef } from '@friday/sdk';
 import type { FridayState, MemoryActor } from '@friday/state';
 import type { BrainHandle } from './brain.js';
 import { escalationView, liveVersion } from './brain-routes.js';
+import { goalWork, landedGoals } from './land.js';
 
 /** The interface API version this daemon speaks; a page built for another asks to be reloaded (plan §5.3). */
 export const UI_API_VERSION = 1;
@@ -206,6 +207,14 @@ export function buildUiSnapshot(deps: {
   );
   const goalProgress: UiSnapshot['goal_progress'] = {};
   for (const g of goals) goalProgress[g.goal_id] = counted[g.goal_id] ?? { total: 0, completed: 0 };
+  // A completed goal's card says "Landed into main", or that its work is already in the folder.
+  const landed = landedGoals(state, pid);
+  const goalLanding: NonNullable<UiSnapshot['goal_landing']> = {};
+  for (const g of goals) {
+    if (g.status !== 'COMPLETED') continue;
+    const l = landed.get(g.goal_id);
+    goalLanding[g.goal_id] = { work: goalWork(state, pid, g.goal_id), landed: l ? { into: l.into, at: l.at } : null };
+  }
   const plans: UiSnapshot['plans'] = {};
   for (const g of goals) {
     if (!g.plan_id) continue;
@@ -285,6 +294,7 @@ export function buildUiSnapshot(deps: {
     counts: state.q.statusCounts(pid),
     goals,
     goal_progress: goalProgress,
+    goal_landing: goalLanding,
     plans,
     tasks,
     runs,

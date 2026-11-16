@@ -1,12 +1,17 @@
 /**
  * Landing a goal (plan §7.7, FD-27): what Friday did for the goal, one row per fact from its
  * records (plan M12.7); what is ready on `friday/goal-<id>` (its commits ahead of the main
- * checkout's HEAD and its files with `+N −M`), a way to the full goal diff, a "Land into my branch"
+ * checkout's HEAD and its files with `+N −M`), a way to the full goal diff, a "Land into <branch>"
  * button (2026-11-16: a person's click, confirmed, merges it as `git merge` would, all or nothing),
  * and the steps to merge it in VS Code or git, each with a copy button. Friday never merges into a
  * human's branch on its own.
+ *
+ * What the button would do is read first (`GET goals/:gid/land`, 2026-11-17): the branch it lands
+ * into by name; what is in the way, with the files, when something is; that the goal is on that
+ * branch already; or that its work was made in the project folder itself (sessions attached from
+ * an editor), where there is nothing to land and the person reviews and commits it.
  */
-import type { GoalDiff, GoalSummary } from '@friday/protocol';
+import type { GoalDiff, GoalSummary, LandPlanView } from '@friday/protocol';
 import { hasHidden, visible } from '../model/text.js';
 import { goalSummaryRows } from '../nodes/goal-node.js';
 import { type AppContext, type Component, type ModalRequest, openDrawer } from '../shell/context.js';
@@ -32,6 +37,9 @@ export function goalBranch(goalId: string): string {
   return `friday/goal-${goalId}`;
 }
 
+/** How many of a plan's files the dialog lists before "and N more". */
+const FILES_SHOWN = 12;
+
 export function landModal(
   ctx: AppContext,
   request: ModalRequest,
@@ -41,6 +49,9 @@ export function landModal(
   const goalId = request.id ?? '';
   const goal = ctx.store.select('board')?.goals.find((g) => g.goal_id === goalId) ?? null;
   let branch = goalBranch(goalId);
+  /** What Land would do, once read; null while reading, or when the daemon did not say. */
+  let plan: LandPlanView | null = null;
+  let planError: string | null = null;
 
   const branchLine = h('div', { class: 'pn-land-branch' });
   const didBox = h('div', { class: 'pn-did' }, h('div', { class: 'muted' }, 'Reading what Friday did…'));
@@ -63,10 +74,17 @@ export function landModal(
   const filesBox = h('div', { class: 'pn-diffstat' });
   const stepsBox = h('div', { class: 'pn-steps-box' });
 
+  /** The work was made in the project folder itself: there is no branch to show or to merge. */
+  const inFolder = () => plan?.state === 'in_folder';
+
   function renderBranch() {
+    if (inFolder()) {
+      replace(branchLine, h('span', { class: 'pn-land-title' }, 'Already in your project folder'));
+      return;
+    }
     replace(
       branchLine,
-      h('span', { class: 'pn-land-title' }, 'Ready to land: '),
+      h('span', { class: 'pn-land-title' }, plan?.state === 'landed' ? 'Landed: ' : 'Ready to land: '),
       pathText(branch, 'pn-branch'),
       button(copyIcon(), () => void copy(branch, 'branch name'), {
         class: 'btn btn-icon',
@@ -86,18 +104,34 @@ export function landModal(
     );
   }
 
+  /** The files of a plan (in the way, or to commit), as a short list. */
+  function fileList(files: string[]): HTMLElement | null {
+    if (!files.length) return null;
+    return h(
+      'ul',
+      { class: 'pn-list', dataset: { role: 'land-files' } },
+      files.slice(0, FILES_SHOWN).map((f) => h('li', { class: 'pn-item' }, pathText(f, 'pn-grow'))),
+      files.length > FILES_SHOWN ? h('li', { class: 'pn-item muted' }, `and ${files.length - FILES_SHOWN} more`) : null,
+    );
+  }
+
   const landBox = h('div', { class: 'pn-land-now' });
   const landError = h('div', { class: 'field-error', hidden: true, role: 'alert' });
   let landing = false;
+  /** The branch Land merges into, as the plan read it. */
+  const into = () => (plan?.into ? visible(plan.into) : 'my branch');
+
   /** Lands the goal into the branch the project folder has checked out, after a confirmation. */
   async function landNow() {
     if (landing) return;
+    // Nothing is asked when nothing would merge (the goal is on that branch already).
+    const merges = plan?.state !== 'landed';
     // The desktop shows its own dialog for this route (`confirm_and_send`); a browser asks here.
-    if (!ctx.platform.desktop) {
+    if (merges && !ctx.platform.desktop) {
       const ok = await ctx.confirm({
         title: 'Land this goal?',
         body: [
-          `This merges ${visible(branch)} into the branch your project folder has checked out, as "git merge" there would.`,
+          `This merges ${visible(branch)} into ${into()}, the branch your project folder has checked out, as "git merge" there would.`,
           'If git cannot merge cleanly, nothing is changed and Friday says why.',
         ],
         confirmLabel: 'Land the goal',
@@ -122,42 +156,110 @@ export function landModal(
     );
     landing = false;
     if (td.done) return;
-    if (r) {
-      landed = r.into;
-      ctx.refresh();
-    }
-    renderLand();
+    if (r) ctx.refresh();
+    // What Land would do now: landed, or what the refusal named.
+    await readPlan();
   }
-  let landed: string | null = null;
+
   function renderLand() {
-    // The daemon refuses a goal that is not completed; a goal the board does not hold is asked anyway.
-    const ready = !goal || goal.status === 'COMPLETED';
+    const known = goal ? goal.status === 'COMPLETED' : true;
+    const recorded = Boolean(ctx.store.select('board')?.goal_landing?.[goalId]?.landed);
+    const again = linkButton('Check again', () => void readPlan());
+    let body: (HTMLElement | null)[];
+    if (!plan) {
+      // The plan is not read (an older daemon, or the read failed): the daemon still judges a click.
+      body = [
+        h(
+          'div',
+          { class: 'pn-actions pn-actions-start' },
+          button('Land into my branch', () => void landNow(), {
+            class: 'btn btn-primary',
+            disabled: landing || !known,
+            title: known
+              ? 'Merge the goal branch into the branch your project folder has checked out'
+              : 'Only a completed goal lands',
+          }),
+        ),
+        planError ? note(`Friday could not say what landing would do: ${planError}`) : null,
+      ];
+    } else if (plan.state === 'landed') {
+      body = [
+        h('div', { class: 'row' }, badge('landed', 'good'), h('span', null, `The goal's work is on ${into()}.`)),
+        // Merged by hand: the board learns it when the person says so.
+        recorded
+          ? null
+          : h(
+              'div',
+              { class: 'pn-actions pn-actions-start' },
+              button('Mark as landed', () => void landNow(), { class: 'btn', disabled: landing }),
+            ),
+      ];
+    } else if (plan.state === 'in_folder') {
+      const root = ctx.store.select('board')?.project.root ?? '';
+      body = [
+        note(
+          'This goal’s work was made in your project folder itself (by an agent you run in your editor), so it is already there. There is no branch to land: review the changes and commit them.',
+        ),
+        plan.files.length ? h('div', { class: 'field-label' }, 'Not committed yet in your project folder') : null,
+        fileList(plan.files),
+        h(
+          'div',
+          { class: 'pn-actions pn-actions-start' },
+          root
+            ? button('Open the folder in VS Code', () => ctx.platform.openInEditor(root), { class: 'btn btn-primary' })
+            : null,
+          again,
+        ),
+      ];
+    } else if (plan.state === 'blocked' || plan.state === 'not_completed') {
+      body = [
+        h(
+          'div',
+          { class: 'pn-actions pn-actions-start' },
+          button(`Land into ${into()}`, () => undefined, { class: 'btn btn-primary', disabled: true }),
+          again,
+        ),
+        h(
+          'div',
+          { class: 'pn-land-blocked', role: 'status' },
+          plain(`Not yet: ${plan.reason ?? 'something is in the way'}.`, 600),
+        ),
+        fileList(plan.files),
+      ];
+    } else {
+      body = [
+        h(
+          'div',
+          { class: 'pn-actions pn-actions-start' },
+          button(`Land into ${into()}`, () => void landNow(), {
+            class: 'btn btn-primary',
+            disabled: landing || plan.commits === 0,
+            title:
+              plan.commits === 0
+                ? 'The goal branch has no commits to bring'
+                : `Merge the goal branch into ${into()}, the branch your project folder has checked out`,
+          }),
+        ),
+      ];
+    }
     replace(
       landBox,
-      landed
-        ? h(
-            'div',
-            { class: 'row' },
-            badge('landed', 'good'),
-            h('span', null, `The goal's work is on ${visible(landed)}.`),
+      ...body,
+      plan?.work === 'mixed'
+        ? note(
+            'Some of this goal’s tasks worked in your project folder itself (an agent you run in your editor): that part is already in the folder and is not on this branch. Review and commit it too.',
           )
-        : h(
-            'div',
-            { class: 'pn-actions pn-actions-start' },
-            button('Land into my branch', () => void landNow(), {
-              class: 'btn btn-primary',
-              disabled: landing || !ready,
-              title: ready
-                ? 'Merge the goal branch into the branch your project folder has checked out'
-                : 'Only a completed goal lands',
-            }),
-          ),
+        : null,
       landError,
     );
   }
-  renderLand();
 
   function renderSteps() {
+    renderLand();
+    if (inFolder()) {
+      replace(stepsBox, landBox);
+      return;
+    }
     replace(
       stepsBox,
       landBox,
@@ -175,11 +277,30 @@ export function landModal(
     );
   }
 
+  /** Reads what Land would do; the dialog works without it (an older daemon judges the click). */
+  async function readPlan() {
+    try {
+      const read = await ctx.api.landPlan(goalId);
+      planError = null;
+      // A daemon without the route answers something else: only a plan is taken as one.
+      plan =
+        read && typeof read.state === 'string' ? { ...read, files: Array.isArray(read.files) ? read.files : [] } : null;
+    } catch (e) {
+      plan = null;
+      planError = plain(errorOf(e).message, 300);
+    }
+    if (td.done) return;
+    if (plan?.branch) branch = plan.branch;
+    renderBranch();
+    renderSteps();
+  }
+
   function render(diff: GoalDiff) {
     if (typeof diff.branch === 'string' && diff.branch) branch = diff.branch;
     renderBranch();
     renderSteps();
     const commits = Array.isArray(diff.commits_ahead) ? diff.commits_ahead : [];
+    const notes = (Array.isArray(diff.notes) ? diff.notes : []).filter((n) => typeof n === 'string');
     replace(
       commitsBox,
       h(
@@ -201,7 +322,9 @@ export function landModal(
               ),
             ),
           )
-        : h('div', { class: 'muted' }, 'Nothing to land yet: the goal branch has no commits ahead.'),
+        : h('div', { class: 'muted' }, 'Nothing to land: the goal branch has no commits ahead.'),
+      // What the daemon noted about the branch (it does not exist yet, it shares no history).
+      ...notes.map((n) => note(plain(n, 300))),
     );
     const files = Array.isArray(diff.files) ? diff.files : [];
     const added = files.reduce((n, f) => n + (f.added ?? 0), 0);
@@ -286,6 +409,8 @@ export function landModal(
         ),
       );
     }
+    // After the diff, which the dialog is for: what the button would do.
+    if (!td.done) await readPlan();
   })();
 
   // The goal detail carries the summary (plan M12.7); read after the diff, which the dialog is for.
@@ -307,6 +432,9 @@ export function landModal(
       );
     }
   })();
+
+  // A landing made meanwhile (another window) shows without reopening the dialog.
+  td.add(ctx.store.subscribe('board', () => renderLand()));
 
   return {
     title: 'Ready to land',

@@ -2,6 +2,17 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — stability pass, part 2: landing never touches what is yours, and says what is in the way
+
+Findings of the 2026-11-16 review of "Land into my branch" (each reproduced against a real repository in `tests/integration/goal-integration.test.ts`).
+
+- **A merge, rebase or cherry-pick of your own is never touched.** Landing while you were halfway through your own merge ran `git merge --abort` on it and then said "nothing was changed": your resolution was gone. Land now refuses before git runs when the folder is in the middle of one, and only ever takes back a merge it started itself.
+- **Changes in the way are named before anyone clicks.** `GET goals/:gid/land` says what Land would do: the branch it lands into by name, or what is in the way with the files (uncommitted changes to files the goal changes, an uncommitted file where the goal adds one, staged changes, a detached HEAD). The dialog shows it, with **Check again**; the button reads "Land into main".
+- **Every way git can refuse ends the same way: nothing changed, and a plain reason.** Git's exit code 2 (local changes, a locked file) fell through as a generic error and could leave stray files. A conflict, a commit hook that refuses the merge commit, a missing git name and email, a fast-forward-only repository, a locked file and the time limit are each said in a sentence, git's own words after it; whatever the attempt left among the files it was writing is put back, and what could not be is named.
+- **Work made in the project folder itself is not "ready to land".** A goal worked by a session attached from an editor (Antigravity, Claude Code in VS Code), or with worktrees off, has no goal branch: its work is already in the folder. The card now reads **Review and commit**, and the dialog says so and lists what is not committed yet, instead of "0 commits" and a failing Land. A goal that mixes both says which part is where.
+- **The board knows a goal was landed.** The card reads "Landed into main" (`goal_landing` in the snapshot) instead of "Ready to land" for ever; a merge made by hand can be marked as landed from the dialog.
+- Smaller: `fast_forward` was always false; one landing runs at a time per project; the desktop waits 180 s and the browser 180 s for a merge the daemon gives 120 s, so its own answer is what arrives; the desktop's dialog names the branch and is not shown when nothing would merge; Land is disabled when the goal branch brings no commits; the dialog shows the daemon's notes about the branch.
+
 ## Unreleased — stability pass, part 1: the desktop app opens, says why it cannot, and starts again
 
 Findings of the 2026-11-16 review of what a person meets first (five read-only reviews; each finding re-read in the code before it was fixed).

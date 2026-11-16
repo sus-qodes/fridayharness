@@ -48,11 +48,11 @@ const REPAIRING_CHECK = [
 ].join('\n');
 const REPAIRING_CHECKS = '  checks:\n    - name: repairing\n      command: node\n      args: ["scripts/check.cjs"]\n';
 
-async function project(checks = CHECKS, extra: Record<string, string> = {}): Promise<TestDaemon> {
+async function project(checks = CHECKS, extra: Record<string, string> = {}, tail = ''): Promise<TestDaemon> {
   const td = await startTestDaemon(ws(), {
     git: true,
     brain: { autoStart: false },
-    editConfig: (y) => y.replace('  checks: []\n', checks),
+    editConfig: (y) => `${y.replace('  checks: []\n', checks)}${tail}`,
   });
   const dir = ws().projectDir;
   const git = deterministicGit(dir, { startEpoch: 1_767_225_700 });
@@ -577,20 +577,230 @@ describe('landing a completed goal', () => {
     expect(await land(td, goalId)).toMatchObject({ status: 'already', head: landed.head });
   });
 
-  it('changes nothing when local changes are in the way, or the goal is not completed', async () => {
+  /** What Land would do, read before anyone clicks. */
+  const plan = (td: TestDaemon, goalId: string) =>
+    td.operator.get<{
+      state: string;
+      into: string | null;
+      reason: string | null;
+      files: string[];
+      commits: number;
+      work: string;
+    }>(td.operator.projectPath(`/goals/${goalId}/land`));
+  const file = (rel: string) => path.join(ws().projectDir, rel);
+  const text = (rel: string) => readFileSync(file(rel), 'utf8').replace(/\r\n/g, '\n');
+  const head = async () => (await git(['rev-parse', 'HEAD'])).trim();
+  /** A commit of the person's own on the checked-out branch: a landing after it is a real merge. */
+  async function ownCommit(rel: string, content: string, message: string) {
+    writeFileSync(file(rel), content);
+    await deterministicGit(ws().projectDir, { startEpoch: 1_767_300_000 }).commitAll(message);
+  }
+
+  // A merge commit is made in the person's name: the daemon's git reads it from the environment here.
+  const IDENTITY = {
+    GIT_AUTHOR_NAME: 'Dev',
+    GIT_AUTHOR_EMAIL: 'dev@example.invalid',
+    GIT_COMMITTER_NAME: 'Dev',
+    GIT_COMMITTER_EMAIL: 'dev@example.invalid',
+  };
+  let identityBefore: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    identityBefore = Object.fromEntries(Object.keys(IDENTITY).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, IDENTITY);
+  });
+  afterEach(() => {
+    for (const [k, v] of Object.entries(identityBefore)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it('says beforehand what Land would do, and the board shows the landing', async () => {
     const td = await project();
+    const branch = (await git(['symbolic-ref', '--short', 'HEAD'])).trim();
     const goalId = await completedGoal(td);
-    const before = (await git(['rev-parse', 'HEAD'])).trim();
-    // The person is editing the same file in their checkout: git refuses, and Friday says why.
-    writeFileSync(path.join(ws().projectDir, 'src', 'a.mjs'), 'export const a = 3; // mine\n');
-    await expect(land(td, goalId)).rejects.toThrow(/nothing was changed/);
-    expect((await git(['rev-parse', 'HEAD'])).trim()).toBe(before);
-    expect(readFileSync(path.join(ws().projectDir, 'src', 'a.mjs'), 'utf8')).toBe('export const a = 3; // mine\n');
+    expect(await plan(td, goalId)).toMatchObject({
+      state: 'ready',
+      into: branch,
+      commits: 1,
+      work: 'branch',
+      files: [],
+    });
+    const snapshot = () =>
+      td.operator.get<{ goal_landing?: Record<string, { work: string; landed: { into: string } | null }> }>(
+        td.operator.projectPath('/ui/snapshot'),
+      );
+    expect((await snapshot()).goal_landing?.[goalId]).toEqual({ work: 'branch', landed: null });
+    // A fast-forward: the branch the folder is on had not moved since the goal started.
+    expect(await land(td, goalId)).toMatchObject({ status: 'landed', fast_forward: true });
+    expect(await plan(td, goalId)).toMatchObject({ state: 'landed', into: branch });
+    expect((await snapshot()).goal_landing?.[goalId]).toMatchObject({ work: 'branch', landed: { into: branch } });
     // An open goal is not ready to land.
     const open = await td.operator.post<{ goal_id: string }>(td.operator.projectPath('/goals'), {
       request: 'not started',
       plan: false,
     });
+    expect(await plan(td, open.goal_id)).toMatchObject({ state: 'not_completed' });
     await expect(land(td, open.goal_id)).rejects.toThrow(/only a completed goal lands/);
+  });
+
+  it('makes a merge commit when the person committed meanwhile, and learns a merge made by hand', async () => {
+    const td = await project();
+    const goalId = await completedGoal(td);
+    await ownCommit('src/b.mjs', 'export const b = 0;\n', 'my own change');
+    const mine = await head();
+    const landed = await land(td, goalId);
+    expect(landed).toMatchObject({ status: 'landed', fast_forward: false });
+    expect(landed.head).not.toBe(mine);
+    // Both sides are there, in one commit with two parents.
+    expect(text('src/a.mjs')).toBe('export const a = 2;\n');
+    expect(text('src/b.mjs')).toBe('export const b = 0;\n');
+    expect((await git(['rev-list', '--parents', '-n', '1', 'HEAD'])).trim().split(' ')).toHaveLength(3);
+    expect((await git(['log', '-1', '--format=%s'])).trim()).toContain(`Land goal ${goalId}`);
+
+    // A second goal, merged by the person in their own terminal: Friday records it when asked, once.
+    const { goalId: second, ids } = await goalWith(td, [{ key: 'raise-b', summary: 'Raise b', write: ['src/b.mjs'] }]);
+    const id = ids['raise-b'] as string;
+    await work(td, 'be-2', id, { 'src/b.mjs': 'export const b = 1;\n' });
+    await integrationOf(td, id);
+    await runOnce(td);
+    await runGit(ws().projectDir, ['merge', '--no-edit', `friday/goal-${second}`]);
+    expect(await plan(td, second)).toMatchObject({ state: 'landed' });
+    const landings = () =>
+      td.daemon.state.store
+        .readSince(td.project.project_id, 0, { types: ['goal.landed'], limit: 10 })
+        .filter((e) => (e.payload as { goal_id?: string }).goal_id === second);
+    expect(landings()).toHaveLength(0);
+    expect(await land(td, second)).toMatchObject({ status: 'already' });
+    expect(await land(td, second)).toMatchObject({ status: 'already' });
+    expect(landings()).toHaveLength(1);
+  });
+
+  it('refuses before git runs when the folder has changes in the way, and names the files', async () => {
+    const td = await project();
+    const goalId = await completedGoal(td);
+    await ownCommit('src/b.mjs', 'export const b = 0;\n', 'my own change');
+    const before = await head();
+
+    // The person is editing the file the goal changes.
+    writeFileSync(file('src/a.mjs'), 'export const a = 3; // mine\n');
+    expect(await plan(td, goalId)).toMatchObject({ state: 'blocked', files: ['src/a.mjs'] });
+    await expect(land(td, goalId)).rejects.toThrow(/not committed, and the goal changes them too.*src\/a\.mjs/);
+    expect(await head()).toBe(before);
+    expect(readFileSync(file('src/a.mjs'), 'utf8')).toBe('export const a = 3; // mine\n');
+    await git(['checkout', '--', 'src/a.mjs']);
+
+    // An edit elsewhere is not in the way... unless it is staged: a merge commit must not take a
+    // staged change of the person's with it.
+    writeFileSync(file('src/b.mjs'), 'export const b = 0; // still mine\n');
+    expect(await plan(td, goalId)).toMatchObject({ state: 'ready' });
+    await git(['add', 'src/b.mjs']);
+    const staged = await plan(td, goalId);
+    expect(staged).toMatchObject({ state: 'blocked', files: ['src/b.mjs'] });
+    expect(staged.reason).toContain('staged changes');
+    await expect(land(td, goalId)).rejects.toThrow(/staged changes/);
+    expect(await head()).toBe(before);
+    expect((await git(['diff', '--cached', '--name-only'])).trim()).toBe('src/b.mjs');
+    await git(['reset', '-q', 'HEAD', '--', 'src/b.mjs']);
+
+    // With the unstaged edit elsewhere left as it is, the goal lands around it.
+    const landed = await land(td, goalId);
+    expect(landed.status).toBe('landed');
+    expect(readFileSync(file('src/b.mjs'), 'utf8')).toBe('export const b = 0; // still mine\n');
+    expect(text('src/a.mjs')).toBe('export const a = 2;\n');
+  });
+
+  it('refuses when a file nobody committed stands where the goal adds one', async () => {
+    const td = await project();
+    const { goalId, ids } = await goalWith(td, [{ key: 'add-c', summary: 'Add c', write: ['src/c.mjs'] }]);
+    const id = ids['add-c'] as string;
+    await work(td, 'be-1', id, { 'src/c.mjs': 'export const c = 1;\n' });
+    await integrationOf(td, id);
+    await runOnce(td);
+    writeFileSync(file('src/c.mjs'), '// my scratch file\n');
+    const before = await head();
+    expect(await plan(td, goalId)).toMatchObject({ state: 'blocked', files: ['src/c.mjs'] });
+    await expect(land(td, goalId)).rejects.toThrow(/src\/c\.mjs/);
+    expect(await head()).toBe(before);
+    expect(readFileSync(file('src/c.mjs'), 'utf8')).toBe('// my scratch file\n');
+  });
+
+  it('never touches a merge of the person in progress', async () => {
+    const td = await project();
+    const goalId = await completedGoal(td);
+    // Two branches of the person conflict on b, and they are halfway through resolving it.
+    await git(['branch', 'theirs']);
+    await ownCommit('src/b.mjs', 'export const b = 5;\n', 'b is 5');
+    await git(['checkout', '-q', 'theirs']);
+    await ownCommit('src/b.mjs', 'export const b = 7;\n', 'b is 7');
+    await git(['checkout', '-q', '-']);
+    const conflicted = await runGit(ws().projectDir, ['merge', '--no-edit', 'theirs'], { okCodes: [1] });
+    expect(conflicted.code).toBe(1);
+    writeFileSync(file('src/b.mjs'), 'export const b = 6; // resolved by hand\n');
+    await git(['add', 'src/b.mjs']);
+    const mergeHead = (await git(['rev-parse', 'MERGE_HEAD'])).trim();
+
+    const blocked = await plan(td, goalId);
+    expect(blocked.state).toBe('blocked');
+    expect(blocked.reason).toContain('in the middle of a merge');
+    await expect(land(td, goalId)).rejects.toThrow(/in the middle of a merge/);
+    // Their merge is exactly where they left it.
+    expect((await git(['rev-parse', 'MERGE_HEAD'])).trim()).toBe(mergeHead);
+    expect(readFileSync(file('src/b.mjs'), 'utf8')).toBe('export const b = 6; // resolved by hand\n');
+    expect((await git(['diff', '--cached', '--name-only'])).trim()).toBe('src/b.mjs');
+  });
+
+  it('takes back a merge that conflicts, or that a commit hook refuses, and says which it was', async () => {
+    const td = await project();
+    const goalId = await completedGoal(td);
+    // The person committed another value of the same line: a real conflict.
+    await ownCommit('src/a.mjs', 'export const a = 0;\n', 'a is 0');
+    const before = await head();
+    await expect(land(td, goalId)).rejects.toThrow(/change the same lines.*Nothing was changed/s);
+    expect(await head()).toBe(before);
+    expect((await runGit(ws().projectDir, ['status', '--porcelain'])).stdout).toBe('');
+    const merging = () => runGit(ws().projectDir, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'], { okCodes: [1] });
+    expect((await merging()).code).toBe(1);
+
+    // A second goal that merges cleanly, in a repository whose hook refuses every commit message.
+    const { goalId: other, ids } = await goalWith(td, [{ key: 'raise-b', summary: 'Raise b', write: ['src/b.mjs'] }]);
+    const id = ids['raise-b'] as string;
+    await work(td, 'be-2', id, { 'src/b.mjs': 'export const b = 2;\n' });
+    await integrationOf(td, id);
+    await runOnce(td);
+    // The person committed since, so landing needs a merge commit, which the hook then judges.
+    await ownCommit('notes.txt', 'a note of mine\n', 'a note');
+    const mine = await head();
+    const hooks = path.join(ws().projectDir, '.git', 'hooks');
+    mkdirSync(hooks, { recursive: true });
+    writeFileSync(path.join(hooks, 'commit-msg'), '#!/bin/sh\necho "subject must start with a ticket" >&2\nexit 1\n', {
+      mode: 0o755,
+    });
+    await expect(land(td, other)).rejects.toThrow(/commit hook of this repository refused.*Nothing was changed/s);
+    expect(await head()).toBe(mine);
+    expect((await runGit(ws().projectDir, ['status', '--porcelain'])).stdout).toBe('');
+    expect((await merging()).code).toBe(1);
+    expect(text('src/b.mjs')).toBe('export const b = 1;\n');
+  });
+
+  it('has nothing to land for work made in the project folder itself, and says to commit it', async () => {
+    // Worktrees off: every run works in the main checkout, as a session attached from an editor does.
+    const td = await project(CHECKS, {}, '\nworktrees:\n  mode: off\n');
+    const { goalId, ids } = await goalWith(td, [{ key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] }]);
+    await work(td, 'be-1', ids['raise-a'] as string, { 'src/a.mjs': 'export const a = 2;\n' });
+    await runOnce(td);
+    expect((await td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`))).goal.status).toBe(
+      'COMPLETED',
+    );
+    const p = await plan(td, goalId);
+    expect(p).toMatchObject({ state: 'in_folder', work: 'folder' });
+    expect(p.reason).toContain('already there');
+    // What there is to review and commit.
+    expect(p.files).toContain('src/a.mjs');
+    await expect(land(td, goalId)).rejects.toThrow(/there is no branch to land/);
+    const snapshot = await td.operator.get<{ goal_landing?: Record<string, { work: string }> }>(
+      td.operator.projectPath('/ui/snapshot'),
+    );
+    expect(snapshot.goal_landing?.[goalId]).toMatchObject({ work: 'folder', landed: null });
   });
 });

@@ -43,7 +43,7 @@ import type { ControlManager } from './control.js';
 import { countMatches, listFiles } from './files.js';
 import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
 import type { IntegrationManager } from './integration.js';
-import { landGoal } from './land.js';
+import { landGoal, landPlan } from './land.js';
 import type { Logger } from './log.js';
 import type { OperationManager } from './operations.js';
 import type { EffectivePolicy } from './policy.js';
@@ -394,6 +394,10 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   // (`confirm_and_send`); landing is git's merge, all or nothing.
   app.post(`${P}/goals/:gid/land`, allow(...OPERATOR), async (c) =>
     c.json(await landGoal(state, project, c.req.param('gid'), humanOf(c))),
+  );
+  // What that would do, read before anyone clicks: the branch it lands into, or what is in the way.
+  app.get(`${P}/goals/:gid/land`, allow(...OPERATOR), async (c) =>
+    c.json(await landPlan(state, project, c.req.param('gid'))),
   );
   // The few settings of config.yaml a person changes from the interface (`EDITABLE_SETTINGS`).
   // None applies on its own say: automatic verification waits for this clone's trust, remote

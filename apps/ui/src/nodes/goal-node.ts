@@ -191,6 +191,33 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
     })();
   }
   const land = () => openModal(ctx, { kind: 'land', id: model.group.goal.goal_id });
+  /**
+   * A completed goal's last step, from the board's `goal_landing`: landed already (it says into
+   * which branch), work that was made in the project folder itself (nothing to land: review and
+   * commit), or ready to land. Each opens the same dialog, which says what there is to do.
+   */
+  function landButton(goalId: string): HTMLElement {
+    const landing = ctx.store.select('board')?.goal_landing?.[goalId];
+    if (landing?.landed) {
+      return button([nodeIcon('check', 13), `Landed into ${truncate(cleanText(landing.landed.into), 40)}`], land, {
+        class: 'btn nd-land nd-landed',
+        title: 'This goal was landed; open it to see what it brought',
+        dataset: { action: 'land', landing: 'landed' },
+      });
+    }
+    if (landing?.work === 'folder') {
+      return button([nodeIcon('check', 13), 'Review and commit'], land, {
+        class: 'btn btn-primary nd-land',
+        title: 'This goal’s work is already in your project folder: review the changes and commit them',
+        dataset: { action: 'land', landing: 'folder' },
+      });
+    }
+    return button([nodeIcon('check', 13), 'Ready to land'], land, {
+      class: 'btn btn-primary nd-land',
+      title: `Land friday/goal-${goalId}`,
+      dataset: { action: 'land' },
+    });
+  }
   const writePlan = () => openModal(ctx, { kind: 'plan-editor', id: model.group.goal.goal_id, mode: 'first' });
   const brainPlan = async () => {
     const goalId = model.group.goal.goal_id;
@@ -350,13 +377,7 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
             title: 'Ask the Master Brain for a plan; you review it before anything starts',
           })
         : null,
-      goal.status === 'COMPLETED'
-        ? button([nodeIcon('check', 13), 'Ready to land'], land, {
-            class: 'btn btn-primary nd-land',
-            title: `Land friday/goal-${goal.goal_id}`,
-            dataset: { action: 'land' },
-          })
-        : null,
+      goal.status === 'COMPLETED' ? landButton(goal.goal_id) : null,
     );
     el.dataset.status = goal.status;
     el.setAttribute('aria-label', `Goal ${goal.status.toLowerCase()}: ${truncate(cleanText(text), 120)}`);

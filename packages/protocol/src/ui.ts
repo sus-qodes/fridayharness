@@ -215,6 +215,32 @@ export interface GoalProgressView {
   completed: number;
 }
 
+/**
+ * A completed goal's way into the person's branch (2026-11-17). `work`: where its tasks worked:
+ * `branch` (on `friday/goal-<id>`, which Land merges), `folder` (in the project folder itself:
+ * sessions attached from an editor, or worktrees off; nothing to land, the person commits), or
+ * `mixed`. `landed`: the landing a person made from the interface, else null.
+ */
+export interface GoalLandingView {
+  work: 'branch' | 'folder' | 'mixed';
+  landed: { into: string; at: string } | null;
+}
+
+/** `GET …/goals/:gid/land`: what Land would do now; it changes nothing. */
+export interface LandPlanView {
+  goal_id: string;
+  branch: string;
+  /** The branch the project folder has checked out; null on a detached HEAD. */
+  into: string | null;
+  state: 'ready' | 'landed' | 'in_folder' | 'blocked' | 'not_completed';
+  /** Why not `ready`, in words a person can act on. */
+  reason: string | null;
+  /** The files in the way (`blocked`), or the folder's uncommitted files (`in_folder`); 50 at most. */
+  files: string[];
+  commits: number;
+  work: 'branch' | 'folder' | 'mixed';
+}
+
 /** An inbox item without its body (loaded when opened), with a short preview. */
 export type SnapshotInboxItem = Omit<InboxItem, 'body'> & { preview: string };
 
@@ -274,6 +300,8 @@ export interface UiSnapshot {
    * more than a day ago, or past the list's cap).
    */
   goal_progress: Record<string, GoalProgressView>;
+  /** Per completed goal: where its work is, and whether a person landed it. Absent from an older daemon. */
+  goal_landing?: Record<string, GoalLandingView>;
   plans: Record<string, { active: LivePlanVersion | null; proposed: LivePlanVersion | null }>;
   tasks: SnapshotTask[];
   runs: Record<string, RunView>;

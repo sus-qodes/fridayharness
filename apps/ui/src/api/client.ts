@@ -26,6 +26,7 @@ import type {
   HarnessEntry,
   InboxItem,
   IntegrationView,
+  LandPlanView,
   LivePlanVersion,
   MessageView,
   ModelEvidenceView,
@@ -432,7 +433,13 @@ export class FridayApi {
 
   /** Merges a completed goal's branch into the branch the project folder has checked out. */
   landGoal(goalId: string): Promise<LandResult> {
-    return this.post(`/goals/${encodeURIComponent(goalId)}/land`, {}, { timeoutMs: TIMEOUTS.diff });
+    // Longer than the daemon gives the merge itself (120 s), so its own answer is what arrives.
+    return this.post(`/goals/${encodeURIComponent(goalId)}/land`, {}, { timeoutMs: 180_000 });
+  }
+
+  /** What landing would do now: the branch it lands into, or what is in the way. Changes nothing. */
+  landPlan(goalId: string): Promise<LandPlanView> {
+    return this.get(`/goals/${encodeURIComponent(goalId)}/land`, { timeoutMs: TIMEOUTS.diff });
   }
 
   // ---- control
