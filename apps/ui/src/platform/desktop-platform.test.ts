@@ -50,6 +50,26 @@ describe('desktopPlatform', () => {
     ]);
   });
 
+  it('reports a file the editor could not open, instead of doing nothing', async () => {
+    const failures: unknown[] = [];
+    const core: Pick<TauriCore, 'invoke'> = {
+      invoke: (async (cmd: string) => {
+        if (cmd === 'open_in_editor') throw refusal(500, 'DESKTOP-2004', 'Windows has no handler for vscode:// links');
+        return null;
+      }) as TauriCore['invoke'],
+    };
+    const platform = desktopPlatform(core, { writeText: async () => undefined }, (e) => failures.push(e));
+    platform.openInEditor('C:/demo/shop/.friday/config.yaml');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toBeInstanceOf(ApiError);
+    expect((failures[0] as ApiError).code).toBe('DESKTOP-2004');
+    // Without a listener it stays quiet, as before.
+    desktopPlatform(core).openInEditor('x');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(failures).toHaveLength(1);
+  });
+
   it('answers false when the human cancels the native dialog, and passes other refusals on as errors', async () => {
     const cancelled = refusal(400, DIALOG_CANCELLED, 'you cancelled it in the confirmation dialog');
     const { desktop } = shell({

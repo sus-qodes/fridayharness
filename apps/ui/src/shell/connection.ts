@@ -88,6 +88,11 @@ export interface StripOptions {
    * reachable, and reads the board again while connected after a read failed.
    */
   onRetry?: () => void;
+  /**
+   * Where the app can start Friday itself (the desktop): what the strip says once Friday stopped,
+   * and what its button reads, in place of "open it again from its shortcut" and "Try again".
+   */
+  stopped?: { message: string; action: string };
 }
 
 /** The connection strip: hidden while live and well. */
@@ -105,9 +110,11 @@ export function mountConnectionStrip(store: FridayStore, opts: StripOptions = {}
 
   function render(system: SystemState): void {
     const v = connectionView(system);
+    const here = v.state === 'stopped' ? opts.stopped : undefined;
     el.hidden = !v.message;
     el.dataset.state = v.state;
-    setText(text, v.message ?? '');
+    setText(text, here ? here.message : (v.message ?? ''));
+    setText(retry, here ? here.action : 'Try again');
     setText(detail, v.detail ?? '');
     detail.hidden = !v.detail;
     retry.hidden = !(v.retry && opts.onRetry);

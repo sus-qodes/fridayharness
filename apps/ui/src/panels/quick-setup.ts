@@ -9,7 +9,7 @@ import type { UiSnapshot } from '@friday/protocol';
 import type { AppContext } from '../shell/context.js';
 import { button, h, replace } from '../ui/dom.js';
 import { icon } from '../ui/svg.js';
-import { badge, copyLine, input, note, plain, type Teardown } from './common.js';
+import { badge, copyLine, input, note, plain, restartBlocked, type Teardown } from './common.js';
 import { readLoosening } from './settings.js';
 
 /** The daily budget offered for planning through Claude Code, in dollars. */
@@ -75,7 +75,14 @@ export function plannerQuickSetup(ctx: AppContext, td: Teardown): HTMLElement {
     // 2. This machine allows it to spend (the shell's own dialog), then 3. Friday restarts.
     if (set && native) {
       const allowed = await ctx.act('Allow planning to spend', () => native.allowSpending(amount, 'claude-code'));
-      if (allowed) await ctx.act('Restart Friday', () => native.restart(), 'Friday restarts with the new planner');
+      if (allowed && !restartBlocked(ctx)) {
+        // A cancelled restart answers false: only a restart that happened says so.
+        await ctx.act(
+          'Restart Friday',
+          () => native.restart(),
+          (done) => (done ? 'Friday restarts with the new planner' : ''),
+        );
+      }
     }
     busy = false;
     if (!td.done) {
@@ -98,9 +105,13 @@ export function plannerQuickSetup(ctx: AppContext, td: Teardown): HTMLElement {
       disabled: busy,
     });
     const restart = native
-      ? button([icon('rework', 14), 'Restart Friday'], () => void ctx.act('Restart Friday', () => native.restart()), {
-          class: 'btn btn-primary',
-        })
+      ? button(
+          [icon('rework', 14), 'Restart Friday'],
+          () => {
+            if (!restartBlocked(ctx)) void ctx.act('Restart Friday', () => native.restart());
+          },
+          { class: 'btn btn-primary' },
+        )
       : null;
     const terminal = (cmd: string) => h('li', null, 'In a terminal in the project folder:', copyLine(ctx, cmd));
     replace(

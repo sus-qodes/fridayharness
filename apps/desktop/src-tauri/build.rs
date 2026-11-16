@@ -9,6 +9,8 @@ const COMMANDS: &[&str] = &[
     "daemon_status",
     "stop_daemon",
     "restart_daemon",
+    "choose_project_folder",
+    "open_project_file",
     "notch_rect",
     "notch_keyboard",
     "show_studio",

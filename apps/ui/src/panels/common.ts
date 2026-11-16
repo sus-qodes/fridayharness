@@ -7,6 +7,7 @@
 import type { BrainStatusView } from '@friday/protocol';
 import { hasHidden, visible } from '../model/text.js';
 import { ApiError } from '../platform/transport.js';
+import { isCancelled } from '../shell/act.js';
 import type { AppContext } from '../shell/context.js';
 import { button, type Child, h, type Props } from '../ui/dom.js';
 import { cleanText, truncate } from '../ui/format.js';
@@ -294,12 +295,29 @@ export async function actWithError<T>(
       try {
         return await call();
       } catch (e) {
-        onError(errorOf(e));
+        // A cancelled native confirmation is not a failure: nothing to show beside the form.
+        if (!isCancelled(e)) onError(errorOf(e));
         throw e;
       }
     },
     success,
   );
+}
+
+/**
+ * True, with a toast that says why, when a restart would not come back: config.yaml as it stands
+ * cannot be read (`config.changes.error`), so the Friday that runs keeps its settings, and one
+ * started again would stop at once. Every "Restart Friday" asks this first.
+ */
+export function restartBlocked(ctx: Pick<AppContext, 'store' | 'toast'>): boolean {
+  const error = ctx.store.select('board')?.config.changes?.error ?? null;
+  if (!error) return false;
+  ctx.toast({
+    kind: 'warn',
+    text: 'Friday was not restarted: config.yaml has an error, and Friday would not start again',
+    detail: truncate(cleanText(error), 300),
+  });
+  return true;
 }
 
 /** The project's root joined with a relative path, with forward slashes. */

@@ -33,6 +33,7 @@ import {
   plain,
   plannerState,
   projectPath,
+  restartBlocked,
   segmented,
   select,
   Teardown,
@@ -841,7 +842,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
       ? button([icon('rework', 14), 'Restart Friday'], () => void restart(), { class: 'hub-btn' })
       : null;
     async function restart() {
-      if (!desktop || !restartBtn) return;
+      if (!desktop || !restartBtn || restartBlocked(ctx)) return;
       restartBtn.disabled = true;
       const done = await ctx.act('Restart Friday', () => desktop.restart());
       if (done) ctx.toast({ kind: 'success', text: 'Friday is restarting' });

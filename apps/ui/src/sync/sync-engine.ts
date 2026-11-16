@@ -171,6 +171,15 @@ export class SyncEngine {
     return this.start();
   }
 
+  /**
+   * The app that runs Friday says it has stopped (the desktop shell's watchdog, or its own stop):
+   * the strip says so now, without waiting for the reconnect attempts to run out. `retry` starts
+   * again, as after any stop.
+   */
+  daemonGone(): void {
+    if (this.#running) this.#end(UNREACHABLE_MESSAGE);
+  }
+
   stop(): void {
     this.#running = false;
     this.#streaming = false;

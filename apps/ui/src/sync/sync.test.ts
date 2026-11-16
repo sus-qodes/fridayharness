@@ -681,6 +681,27 @@ function boardStore(extra: Partial<UiSnapshot> = {}): FridayStore {
   return store;
 }
 
+describe('SyncEngine, told that Friday stopped', () => {
+  it('says stopped at once, and starts again on retry', async () => {
+    const t = new FakeTransport();
+    t.snapshots = [snapshot(10)];
+    t.fallback = silent;
+    const { store, engine } = setup(t);
+    await engine.start();
+    await tick(10);
+    expect(store.select('system').connection).toBe('live');
+    engine.daemonGone();
+    expect(store.select('system').connection).toBe('stopped');
+    expect(store.select('system').lastError).toBe(UNREACHABLE_MESSAGE);
+    // Told twice, or while already stopped: nothing more happens.
+    engine.daemonGone();
+    await engine.retry();
+    await tick(10);
+    expect(store.select('system').connection).toBe('live');
+    engine.stop();
+  });
+});
+
 describe('Dispatcher (plan §7.2)', () => {
   it('says which events change domain state', () => {
     for (const type of ['task.ready', 'approval.decided', 'brain.call_started', 'goal.created', 'control.paused'])

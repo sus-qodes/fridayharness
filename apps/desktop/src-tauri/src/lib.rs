@@ -69,6 +69,8 @@ pub struct AppState {
     muted: AtomicBool,
     /// A stop this app asked for (the watchdog then does not report a crash).
     stopping: AtomicBool,
+    /// A project is being chosen (the folder picker and its dialogs): one at a time.
+    choosing: AtomicBool,
 }
 
 fn state(app: &AppHandle) -> tauri::State<'_, AppState> {
@@ -257,6 +259,42 @@ async fn restart_daemon(app: AppHandle) -> Result<(), CmdError> {
     .await
 }
 
+/// The folder picker again, from the Studio's "No project is open" screen (the first one was
+/// cancelled). Refused while a project is open: changing projects is not this command.
+#[tauri::command]
+fn choose_project_folder(app: AppHandle) -> Result<(), CmdError> {
+    if state(&app).project.read().unwrap().is_some() {
+        return Err(CmdError::bad_request("a project is already open"));
+    }
+    std::thread::spawn(move || boot(app, None, true, false));
+    Ok(())
+}
+
+/// Opens the project's config.yaml or the daemon's console log, for the screen shown when Friday
+/// did not start: in VS Code, or without it in Notepad, which every Windows has.
+#[tauri::command]
+async fn open_project_file(app: AppHandle, kind: String) -> Result<(), CmdError> {
+    let project = current_project(&app)?;
+    let file = match kind.as_str() {
+        "config" => project.root.join(".friday").join("config.yaml"),
+        "log" => daemon::console_log(&project),
+        _ => return Err(CmdError::bad_request("the file is config or log")),
+    };
+    blocking(move || {
+        if !file.is_file() {
+            return Err(CmdError::bad_request("that file does not exist yet"));
+        }
+        if platform_windows::shell_open(&paths::vscode_uri(&file, None)) {
+            return Ok(());
+        }
+        match std::process::Command::new("notepad.exe").arg(&file).spawn() {
+            Ok(_) => Ok(()),
+            Err(e) => Err(CmdError::shell(500, "DESKTOP-2004", "no_editor", format!("the file could not be opened ({e})"))),
+        }
+    })
+    .await
+}
+
 // ---- commands: windows ---------------------------------------------------------------------------
 
 /// The island's rectangle in the Notch window's CSS pixels (click-through, island.rs).
@@ -345,7 +383,7 @@ fn second_launch(app: &AppHandle, argv: Vec<String>) {
         let app2 = app.clone();
         match open {
             None => {
-                std::thread::spawn(move || boot(app2, Some(dir)));
+                std::thread::spawn(move || boot(app2, Some(dir), true, true));
             }
             Some(p) => {
                 let wanted = std::fs::canonicalize(&dir).unwrap_or(dir);
@@ -675,8 +713,9 @@ fn pick_folder(app: &AppHandle, title: &str) -> Option<PathBuf> {
 
 /// The project: `--project`, the last one opened, or a folder picker; a folder without Friday
 /// offers "Set up Friday here".
-fn choose_project(app: &AppHandle, initial: Option<PathBuf>) -> Option<daemon::Project> {
-    let mut next = initial.or_else(|| state(app).settings.lock().unwrap().last_project.clone()).filter(|d| d.is_dir());
+fn choose_project(app: &AppHandle, initial: Option<PathBuf>, use_last: bool) -> Option<daemon::Project> {
+    let last = if use_last { state(app).settings.lock().unwrap().last_project.clone() } else { None };
+    let mut next = initial.or(last).filter(|d| d.is_dir());
     loop {
         let dir = match next.take() {
             Some(d) => d,
@@ -793,7 +832,7 @@ fn ensure_daemon(app: &AppHandle) {
                 return;
             }
             Err(f) => {
-                set_status(app, "failed", Some(f.message.clone()));
+                set_status(app, "failed", Some(failure_line(&f)));
                 let tail: Vec<String> = f.log_tail.iter().rev().take(15).rev().map(|l| visible(l)).collect();
                 let text = format!(
                     "{}\n\nThe last lines of {}:\n{}\n\nRun Friday's checks, or start it again?",
@@ -809,6 +848,15 @@ fn ensure_daemon(app: &AppHandle) {
                 return;
             }
         }
+    }
+}
+
+/// What the Studio shows when Friday did not start: the shell's own words and the last thing the
+/// daemon wrote (its error), so "exit code 1" is not all a person gets.
+fn failure_line(f: &daemon::StartFailure) -> String {
+    match f.log_tail.iter().rev().map(|l| l.trim()).find(|l| !l.is_empty()) {
+        Some(last) => format!("{}: {}", f.message, visible(&last.chars().take(300).collect::<String>())),
+        None => f.message.clone(),
     }
 }
 
@@ -899,12 +947,28 @@ fn spawn_watchdog(app: AppHandle) {
     });
 }
 
-fn boot(app: AppHandle, initial: Option<PathBuf>) {
-    let Some(project) = choose_project(&app, initial) else {
-        set_status(&app, "no_project", Some("No project is open. Restart the app to choose one.".into()));
+/// Opens a project and starts its Friday. `show` opens the Studio (a launch by hand; a start at
+/// sign-in passes `--background` and stays in the tray), so the person sees Friday starting, or the
+/// screen that says no project is open, instead of a tray icon alone. `use_last` reopens the last
+/// project without asking; the Studio's "Choose a project folder" asks with the picker.
+fn boot(app: AppHandle, initial: Option<PathBuf>, show: bool, use_last: bool) {
+    if state(&app).choosing.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let chosen = choose_project(&app, initial, use_last);
+    state(&app).choosing.store(false, Ordering::SeqCst);
+    let Some(project) = chosen else {
+        set_status(&app, "no_project", None);
+        if show {
+            show_studio_window(&app, None);
+        }
         return;
     };
     *state(&app).project.write().unwrap() = Some(project);
+    set_status(&app, "starting", None);
+    if show {
+        show_studio_window(&app, None);
+    }
     ensure_daemon(&app);
 }
 
@@ -1083,6 +1147,8 @@ fn project_arg(args: &[String]) -> Option<PathBuf> {
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
     let initial = project_arg(&args);
+    // Windows' start at sign-in stays in the tray; a person's own launch opens the Studio.
+    let show = !args.iter().any(|a| a == autostart::BACKGROUND);
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| second_launch(app, argv)))
         .plugin(tauri_plugin_dialog::init())
@@ -1109,6 +1175,8 @@ pub fn run() {
             daemon_status,
             stop_daemon,
             restart_daemon,
+            choose_project_folder,
+            open_project_file,
             notch_rect,
             notch_keyboard,
             show_studio,
@@ -1148,6 +1216,7 @@ pub fn run() {
                 paused: AtomicBool::new(false),
                 muted: AtomicBool::new(false),
                 stopping: AtomicBool::new(false),
+                choosing: AtomicBool::new(false),
             });
             create_windows(app)?;
             let handle = app.handle().clone();
@@ -1168,7 +1237,7 @@ pub fn run() {
             {
                 let h = handle.clone();
                 let initial = initial.clone();
-                std::thread::spawn(move || boot(h, initial));
+                std::thread::spawn(move || boot(h, initial, show, true));
             }
             spawn_watchdog(handle.clone());
             #[cfg(feature = "probe")]
@@ -1290,5 +1359,25 @@ mod tests {
         let args: Vec<String> = ["friday-desktop", "--project", r"C:\work\shop"].iter().map(|s| s.to_string()).collect();
         assert_eq!(project_arg(&args), Some(PathBuf::from(r"C:\work\shop")));
         assert_eq!(project_arg(&args[..1]), None);
+    }
+
+    #[test]
+    fn a_failed_start_says_what_the_daemon_wrote_last() {
+        let f = |message: &str, tail: &[&str]| daemon::StartFailure {
+            message: message.into(),
+            log_tail: tail.iter().map(|l| l.to_string()).collect(),
+        };
+        // The last line that says something: the daemon's own error.
+        assert_eq!(
+            failure_line(&f("Friday stopped while starting (exit code 1)", &["starting", "config.yaml: bad key  ", "", "  "])),
+            "Friday stopped while starting (exit code 1): config.yaml: bad key"
+        );
+        // An empty log leaves the shell's words alone.
+        assert_eq!(failure_line(&f("could not run node: not found", &[])), "could not run node: not found");
+        // A long line is cut, and a control character in it is never sent to the page raw.
+        let noisy = format!("{}\u{1b}[2J", "e".repeat(400));
+        let long = failure_line(&f("x", &[noisy.as_str()]));
+        assert!(long.chars().count() <= 3 + 300 + 16, "{}", long.chars().count());
+        assert!(!long.contains('\u{1b}'));
     }
 }

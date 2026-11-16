@@ -3,6 +3,7 @@
  * failure always shows what was attempted plus Friday's error code and message, and a success
  * shows a short confirmation when the caller gives one. It never throws.
  */
+import { DIALOG_CANCELLED } from '../platform/desktop-platform.js';
 import { ApiError, OfflineError } from '../platform/transport.js';
 import { cleanText, truncate } from '../ui/format.js';
 import type { AppContext, Toast } from './context.js';
@@ -11,6 +12,14 @@ import type { AppContext, Toast } from './context.js';
 export const OFFLINE_DETAIL = 'Friday is not reachable';
 
 const DETAIL_MAX = 400;
+
+/**
+ * The person closed the desktop shell's own confirmation with Cancel (`confirm_and_send`, and the
+ * shell's dialogs): nothing was done and nothing went wrong, so no toast says "error".
+ */
+export function isCancelled(e: unknown): boolean {
+  return e instanceof ApiError && e.code === DIALOG_CANCELLED;
+}
 
 /** The second line of an error toast: `<code>: <message>` for Friday's errors. */
 export function errorDetail(e: unknown): string {
@@ -30,7 +39,7 @@ export function makeAct(toast: (t: Toast) => void): AppContext['act'] {
     try {
       result = await call();
     } catch (e) {
-      toast({ kind: 'error', text: label, detail: errorDetail(e) });
+      if (!isCancelled(e)) toast({ kind: 'error', text: label, detail: errorDetail(e) });
       return undefined;
     }
     if (success !== undefined) {

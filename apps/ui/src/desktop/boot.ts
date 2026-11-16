@@ -21,6 +21,7 @@ import type { NotchStudioTarget } from '../notch/island-host.js';
 import { type NotificationCtor, type NotificationLike, startNotifierWith } from '../notify/notifier.js';
 import { desktopPlatform } from '../platform/desktop-platform.js';
 import { type TauriCore, TauriTransport } from '../platform/tauri-transport.js';
+import { errorDetail } from '../shell/act.js';
 import { createAppContext, createShellServices, mountShell } from '../shell/app.js';
 import { type AppContext, type DrawerKind, type ModalKind, openDrawer, openModal } from '../shell/context.js';
 import { productMark } from '../shell/mark.js';
@@ -137,17 +138,41 @@ const STATE_TEXT: Record<DaemonState, { title: string; message: string }> = {
   ready: { title: 'Friday is ready', message: '' },
   stopping: { title: 'Friday is stopping', message: 'Work in worktrees is kept.' },
   stopped: { title: 'Friday is not running', message: 'Start it for this project; work in worktrees is kept.' },
-  failed: { title: 'Friday could not start', message: 'What the shell saw is below.' },
+  failed: { title: 'Friday could not start', message: 'What stopped it is below.' },
   no_project: {
     title: 'No project is open',
-    message: 'Start the desktop app from a project’s shortcut, or with --project and the project’s folder.',
+    message: 'Choose the folder of the project Friday should work on.',
   },
 };
 
+/** What the status screen offers besides Start: choosing a project, and the files that say why a start failed. */
+export interface StatusActions {
+  /** The folder picker (`choose_project_folder`), while no project is open. */
+  onChoose?: () => void;
+  /** The project's config.yaml or the daemon's log (`open_project_file`), after a failed start. */
+  onOpen?: (kind: 'config' | 'log') => void;
+}
+
 /** The screen shown while there is no board: the daemon's state, and a way on when there is one. */
-export function statusScreen(status: DaemonStatus, onStart: (() => void) | null): HTMLElement {
+export function statusScreen(
+  status: DaemonStatus,
+  onStart: (() => void) | null,
+  actions: StatusActions = {},
+): HTMLElement {
   const text = STATE_TEXT[status.state] ?? STATE_TEXT.failed;
   const canStart = onStart !== null && (status.state === 'stopped' || status.state === 'failed');
+  const { onChoose, onOpen } = actions;
+  const more = [
+    status.state === 'no_project' && onChoose
+      ? button('Choose a project folder…', () => onChoose(), { class: 'btn btn-primary sh-login-action' })
+      : null,
+    status.state === 'failed' && onOpen
+      ? button('Open config.yaml', () => onOpen('config'), { class: 'btn sh-login-action' })
+      : null,
+    status.state === 'failed' && onOpen
+      ? button('Open the log', () => onOpen('log'), { class: 'btn sh-login-action' })
+      : null,
+  ];
   return h(
     'main',
     { class: 'sh-login' },
@@ -164,6 +189,7 @@ export function statusScreen(status: DaemonStatus, onStart: (() => void) | null)
       text.message ? h('p', { class: 'sh-login-message' }, text.message) : null,
       status.message ? h('p', { class: 'sh-login-detail mono' }, status.message.slice(0, 400)) : null,
       canStart ? button('Start Friday', () => onStart?.(), { class: 'btn btn-primary sh-login-action' }) : null,
+      ...more,
     ),
   );
 }
@@ -194,9 +220,20 @@ export async function untilReady(env: DesktopEnv, root: HTMLElement | null): Pro
       shown = key;
       replace(
         root,
-        statusScreen(status, () => {
-          void env.core.invoke('restart_daemon').catch(() => undefined);
-        }),
+        statusScreen(
+          status,
+          () => {
+            void env.core.invoke('restart_daemon').catch(() => undefined);
+          },
+          {
+            onChoose: () => {
+              void env.core.invoke('choose_project_folder').catch(() => undefined);
+            },
+            onOpen: (kind) => {
+              void env.core.invoke('open_project_file', { kind }).catch(() => undefined);
+            },
+          },
+        ),
       );
     }
     await new Promise((r) => setTimeout(r, pollMs));
@@ -231,7 +268,10 @@ function makeContext(env: DesktopEnv, info: ProjectInfo, root: HTMLElement): Run
     store,
     api,
     keys,
-    platform: desktopPlatform(env.core),
+    // A file that cannot be opened (no VS Code) says so, instead of a button that does nothing.
+    platform: desktopPlatform(env.core, undefined, (e) =>
+      services.toasts.show({ kind: 'error', text: 'Open in VS Code', detail: errorDetail(e) }),
+    ),
     toast: (t) => services.toasts.show(t),
     confirm: (o) => services.confirms.confirm(o),
     react: (kind, label) => dispatcher.react(kind, Date.now(), label),
@@ -266,10 +306,18 @@ function safeStorage(): Storage | null {
   }
 }
 
-/** Follows the shell's word about the daemon: a restart on another port is read again at once. */
+/** What the strip says in the desktop app once Friday stopped: the app itself starts it again. */
+export const STOPPED_HERE = 'Friday has stopped for this project. Work in worktrees is kept; start it again here.';
+
+/**
+ * Follows the shell's word about the daemon: a restart on another port is read again at once, and
+ * a Friday that stopped or crashed shows on the strip now (with Start Friday), not after the
+ * stream gave up reconnecting.
+ */
 async function followDaemon(env: DesktopEnv, run: Running): Promise<() => void> {
   return env.listen<DaemonStatus>('daemon-status', (s) => {
     if (s.state === 'ready') void run.engine.retry();
+    else if (s.state === 'stopped' || s.state === 'failed') run.engine.daemonGone();
   });
 }
 
@@ -311,9 +359,19 @@ export async function bootDesktopStudio(root: HTMLElement, injected?: DesktopEnv
   const info = await untilReady(env, root);
   const run = makeContext(env, info, root);
   mountShell(run.ctx, run.services, root, studioAreas({ notch: false, sounds: false }), {
+    // "Start Friday" on the strip: a Friday that stopped is started by the shell (its `ready` then
+    // reads the board again, `followDaemon`); one that runs is only read again.
     onRetry: () => {
-      void run.engine.retry();
+      void (async () => {
+        const status = await env.core.invoke<DaemonStatus>('daemon_status').catch(() => null);
+        const shell = run.ctx.platform.desktop;
+        if (shell && status && (status.state === 'stopped' || status.state === 'failed')) {
+          await run.ctx.act('Start Friday', () => shell.restart());
+        }
+        void run.engine.retry();
+      })();
     },
+    stopped: { message: STOPPED_HERE, action: 'Start Friday' },
     reload: () => location.reload(),
   });
   await followDaemon(env, run);

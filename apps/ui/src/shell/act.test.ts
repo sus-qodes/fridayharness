@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, AuthError, OfflineError } from '../platform/transport.js';
-import { errorDetail, makeAct, OFFLINE_DETAIL } from './act.js';
+import { errorDetail, isCancelled, makeAct, OFFLINE_DETAIL } from './act.js';
 import type { Toast } from './context.js';
 
 function setup() {
@@ -66,6 +66,23 @@ describe('makeAct (plan §6 rule 6)', () => {
       },
     );
     expect(r).toBe(1);
+    expect(toasts).toEqual([]);
+  });
+
+  it('says nothing when the person cancelled the desktop confirmation: nothing went wrong', async () => {
+    const { toasts, act } = setup();
+    const cancelled = new ApiError(400, 'DESKTOP-1003', 'cancelled', 'you cancelled it in the confirmation dialog');
+    expect(isCancelled(cancelled)).toBe(true);
+    expect(isCancelled(new ApiError(409, 'COS-2002', 'invalid_state_transition', 'no'))).toBe(false);
+    expect(isCancelled(new Error('DESKTOP-1003'))).toBe(false);
+    const r = await act(
+      'Land the goal',
+      async () => {
+        throw cancelled;
+      },
+      'Landed',
+    );
+    expect(r).toBeUndefined();
     expect(toasts).toEqual([]);
   });
 

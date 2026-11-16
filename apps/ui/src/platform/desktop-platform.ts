@@ -15,7 +15,12 @@ export const DIALOG_CANCELLED = 'DESKTOP-1003';
 export const TEST_TITLE = 'Friday: a test notification';
 export const TEST_BODY = 'This is how Friday tells you that an approval, a question or a failure waits for you.';
 
-export function desktopPlatform(core: Pick<TauriCore, 'invoke'>, clipboard?: Pick<Clipboard, 'writeText'>): Platform {
+export function desktopPlatform(
+  core: Pick<TauriCore, 'invoke'>,
+  clipboard?: Pick<Clipboard, 'writeText'>,
+  /** Told when a file did not open in the editor (no handler for `vscode://`, a path refused). */
+  openFailed?: (e: unknown) => void,
+): Platform {
   const board = clipboard ?? (typeof navigator !== 'undefined' ? navigator.clipboard : undefined);
   /** A shell command; its refusal (`{status, body}`) becomes the error a toast can read. */
   async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -38,7 +43,7 @@ export function desktopPlatform(core: Pick<TauriCore, 'invoke'>, clipboard?: Pic
   return {
     kind: 'tauri',
     openInEditor(path, line) {
-      void core.invoke('open_in_editor', { path, ...(line ? { line } : {}) }).catch(() => undefined);
+      void core.invoke('open_in_editor', { path, ...(line ? { line } : {}) }).catch((e) => openFailed?.(errorOf(e)));
     },
     async copy(text) {
       if (!board) return false;

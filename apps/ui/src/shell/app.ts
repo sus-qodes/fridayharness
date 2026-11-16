@@ -160,6 +160,8 @@ export type ShellRegion =
 export interface ShellOptions {
   /** The connection strip's "Try again" (the sync engine's `retry`). */
   onRetry?: () => void;
+  /** The strip's words and button once Friday stopped, where the app starts it itself (`StripOptions.stopped`). */
+  stopped?: { message: string; action: string };
   /** Reloads the page (the stale-page banner). */
   reload?: () => void;
   /** Draws the in-page Notch when `areas.notch` is given (default true). */
@@ -274,7 +276,9 @@ export function mountShell(
 
   mount('The header', top, () => mountHeader(ctx, { onShowWaiting: hooks.onShowWaiting }));
   mount('The banners', top, () => mountBanners(ctx, { reload: opts.reload }));
-  mount('The connection strip', top, () => mountConnectionStrip(ctx.store, { onRetry: opts.onRetry }));
+  mount('The connection strip', top, () =>
+    mountConnectionStrip(ctx.store, { onRetry: opts.onRetry, ...(opts.stopped ? { stopped: opts.stopped } : {}) }),
+  );
   mount('The Studio', studio, () => areas.studio(ctx, studio));
   mount('The Settings Hub', settingsHub, () => mountSettingsHub(ctx));
   mount('The decisions', rail, () => areas.tray(ctx, rail, { onCollapse: () => setRailCollapsed(true) }));

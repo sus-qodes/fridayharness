@@ -10,6 +10,7 @@ import {
   bootDesktopStudio,
   type DaemonStatus,
   type DesktopEnv,
+  STOPPED_HERE,
   type StudioTarget,
   sendableLink,
   statusScreen,
@@ -98,6 +99,40 @@ describe('waiting for Friday in the desktop app', () => {
     expect(failed.querySelector('b')).toBeNull();
     expect(statusScreen({ state: 'starting' }, start).querySelector('button')).toBeNull();
   });
+
+  it('offers the folder picker while no project is open, and the files that say why a start failed', () => {
+    const choose = vi.fn();
+    const open = vi.fn();
+    const none = statusScreen({ state: 'no_project' }, null, { onChoose: choose, onOpen: open });
+    expect(none.textContent).toContain('Choose the folder of the project');
+    expect(none.textContent).not.toContain('--project');
+    const buttons = (el: HTMLElement) => [...el.querySelectorAll('button')].map((b) => b.textContent);
+    expect(buttons(none)).toEqual(['Choose a project folder…']);
+    none.querySelector('button')?.click();
+    expect(choose).toHaveBeenCalledOnce();
+    const failed = statusScreen({ state: 'failed', message: 'exit code 1: config.yaml: bad' }, () => undefined, {
+      onChoose: choose,
+      onOpen: open,
+    });
+    expect(buttons(failed)).toEqual(['Start Friday', 'Open config.yaml', 'Open the log']);
+    for (const b of [...failed.querySelectorAll('button')].slice(1)) b.click();
+    expect(open.mock.calls).toEqual([['config'], ['log']]);
+    // Without the shell's commands (a test, an older shell) the screen is as before.
+    expect(buttons(statusScreen({ state: 'no_project' }, null))).toEqual([]);
+  });
+
+  it('asks the shell for the folder picker from the screen it shows while no project is open', async () => {
+    const waiting: DaemonStatus[] = Array.from({ length: 200 }, () => ({ state: 'no_project' as const }));
+    const shell = fakeShell([...waiting, { state: 'ready' }]);
+    const root = document.createElement('div');
+    const done = untilReady(shell.env, root);
+    await settle();
+    const choose = [...root.querySelectorAll('button')].find((b) => b.textContent === 'Choose a project folder…');
+    expect(choose).toBeTruthy();
+    choose?.click();
+    expect(shell.calls.some((c) => c.cmd === 'choose_project_folder')).toBe(true);
+    await done;
+  });
 });
 
 describe('the desktop Studio', () => {
@@ -138,6 +173,29 @@ describe('the desktop Studio', () => {
     expect(takeRequestedReach('apr_1')).toBe('task');
     applyDeepLink(ctx, { panel: 'recover', id: 'task_7' });
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'recover', id: 'task_7' });
+  });
+});
+
+describe('a Friday that stopped while the Studio is open', () => {
+  it('says so at once on the strip, and Start Friday starts it through the shell', async () => {
+    const shell = fakeShell([{ state: 'ready' }, { state: 'stopped' }, { state: 'ready' }]);
+    const root = document.createElement('div');
+    document.body.append(root);
+    await bootDesktopStudio(root, shell.env);
+    await settle();
+    const strip = root.querySelector('.sh-strip') as HTMLElement;
+    expect(strip.hidden).toBe(true);
+    // The shell's watchdog saw the daemon go.
+    shell.emit('daemon-status', { state: 'stopped', message: 'Friday stopped.' });
+    await settle();
+    expect(strip.hidden).toBe(false);
+    expect(strip.textContent).toContain(STOPPED_HERE);
+    expect(strip.textContent).not.toContain('shortcut');
+    const start = strip.querySelector('button') as HTMLButtonElement;
+    expect(start.textContent).toBe('Start Friday');
+    start.click();
+    await settle();
+    expect(shell.calls.some((c) => c.cmd === 'restart_daemon')).toBe(true);
   });
 });
 

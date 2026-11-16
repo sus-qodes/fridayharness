@@ -2,6 +2,19 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — stability pass, part 1: the desktop app opens, says why it cannot, and starts again
+
+Findings of the 2026-11-16 review of what a person meets first (five read-only reviews; each finding re-read in the code before it was fixed).
+
+- **A launch by hand opens the Studio.** The window was created hidden and only the tray, the Notch or a second launch showed it, so a first start ended with a tray icon and a pill. `boot` now shows it once the project is chosen, or with "No project is open". The sign-in entry passes `--background` and stays in the tray; an entry written before still counts as on.
+- **A cancelled folder picker is not a dead end.** The "No project is open" screen has **Choose a project folder…** (`choose_project_folder`), and no longer speaks of shortcuts and `--project`.
+- **A Friday that stopped is started from the Studio.** The strip said "open it again from its shortcut or the desktop app" inside the desktop app, and Try again only reconnected to the dead daemon. The shell's `stopped` or `failed` now shows on the strip at once ("Friday has stopped for this project…") with **Start Friday**, which restarts it through the shell.
+- **A failed start says why.** The Studio showed "Friday stopped while starting (exit code 1)" alone; it now adds the last line the daemon wrote (shown with hidden characters visible, 300 characters at most) and offers **Open config.yaml** and **Open the log** (`open_project_file`: VS Code, or Notepad without it).
+- **Cancel is not an error.** Cancelling one of the shell's own confirmations (land, trust, stop, approve…) raised a red toast "DESKTOP-1003: you cancelled it in the confirmation dialog", and the same text beside the form. `act` and `actWithError` now treat it as nothing done.
+- **No restart into a broken config.** Settings' and the planner switch's **Restart Friday** refuse, with the reason, while `config.yaml` as it stands cannot be read: the running Friday keeps its settings, and one started again would stop at once.
+- **A file that does not open says so.** "Open in VS Code" and "Open config.yaml" did nothing without VS Code; the shell's refusal is now a toast.
+- The planner switch no longer says "Friday restarts with the new planner" when the restart was cancelled.
+
 ## Unreleased — fewer terminal steps: plan with Claude Code, check work automatically, land a goal
 
 - **"Plan with your Claude Code sign-in" in Settings → Planner:** while the planner is not ready, one button sets `master_brain.provider: claude-code`, `providers.claude-code.allow_remote: true` and a daily limit in `config.yaml` (default $2), then the desktop asks, in its own dialog, to allow this machine to spend that much through Claude Code and restarts Friday. No API key is involved: planning uses the installed Claude Code as it is signed in. In a browser the page sets `config.yaml` and shows the one terminal step left for this machine (`friday brain allow-remote --provider claude-code --budget N`). Plans still wait for a person's approval. The desktop's `allow_spending` takes the provider (`anthropic` or `claude-code`).
