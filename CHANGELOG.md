@@ -2,6 +2,16 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — stability pass, part 4: goals that can end, questions that go away, drafts that stay
+
+Findings of the 2026-11-16 review of goals and planning.
+
+- **A planner that cannot be called is no planner.** The Master Brain took a configured model for a planner that plans. In the default setup (provider `anthropic`, no key, no consent) every failed check was answered with a planning call that was refused and a "Friday cannot plan" question, where a setup with no planner at all sends the task back to its agent. What Friday does now follows what the status says (`plannerReady`: no consent, no key, a local model not named): a failed task is reworked with verification's note, a human's task cancel starts no revision, and a goal that asks for a plan is told why there is none without a model call. The status' `auto_approve` is what is in force (set and trusted), not the raw setting.
+- **Questions about planning go away when they are answered by what happened.** "Friday cannot plan this goal", "the plan cannot be read", "today's budget is spent" and "a planning action failed" stayed in "Waiting for you" after a person wrote or approved the plan, and answering a stale one later started a revision nobody asked for. They are answered as moot when a person proposes the plan or a plan is approved, and every question of a goal when it is cancelled or completed.
+- **"Cancel goal…" on the goal card**, for a goal that is open or running. Only an integration conflict's card offered it, so a goal nobody wanted stayed on the board for good. Its unfinished tasks are cancelled and its agents stopped; the goal branch and its commits are kept.
+- **Cancelling a task other tasks wait for asks what becomes of them.** A task that depends on a cancelled one never starts, so its goal never finished and nothing said why. The card, the inspector and the question card now name the waiting tasks and ask: **cancel them too** (through every level) or **keep them**, in which case they no longer wait for it and start once their other prerequisites are done (`dependents: cancel | release` on `tasks/:tid/cancel`; the desktop's dialog says the choice). Backing out at the confirmation changes nothing.
+- **The plan editor keeps what you typed.** Esc, the close button or another dialog opening over it lost the whole draft. A dialog's content may now say whether it may close (`beforeClose`): the editor asks "Close the plan editor?" once something was typed, and a draft that is closed anyway is kept for its goal and brought back when the editor opens again, with **Start over**. Proposing the plan drops it.
+
 ## Unreleased — stability pass, part 3: checks that mean what they say, and work that is not left waiting unseen
 
 Findings of the 2026-11-16 review of verification and of what waits for a person.

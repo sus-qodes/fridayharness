@@ -49,6 +49,7 @@ import {
   fold,
   group,
   input,
+  linkButton,
   note,
   panel,
   plain,
@@ -322,16 +323,43 @@ export function editorDataFromBoard(ctx: AppContext, goalId: string): PlanEditor
   return { goal, active: plans?.active ?? null, proposed: plans?.proposed ?? null };
 }
 
+/**
+ * Drafts not proposed yet, by goal and kind of plan, as the editor's own JSON (2026-11-17): a dialog
+ * closed by Esc, its close button or another dialog opening over it used to lose everything typed.
+ * Kept for as long as the page lives; proposing the plan, or "Start over", drops it.
+ */
+const DRAFTS = new Map<string, string>();
+
+/** The editor of one plan: what the dialog needs to keep its draft. */
+interface DraftEditor {
+  destroy(): void;
+  /** The draft as it stands, as the editor exports it. */
+  json(): string;
+  /** Replaces the draft with an exported one. */
+  load(text: string): void;
+}
+
 export function planEditorModal(
   ctx: AppContext,
   request: ModalRequest,
   close: () => void,
-): Component & { title: string; size: 'lg' } {
+): Component & { title: string; size: 'lg'; beforeClose: () => Promise<boolean> } {
   const td = new Teardown();
   const goalId = request.id ?? '';
   const body = h('div', { class: 'pn-editor-body' });
   const el = panel('pn-plan-editor', body);
-  let editor: { destroy(): void } | null = null;
+  let editor: DraftEditor | null = null;
+  /** The draft the editor opened with (nothing typed), and where this goal's draft is kept. */
+  let pristine: string | null = null;
+  let key: string | null = null;
+  let proposed = false;
+  const dirty = () => editor !== null && pristine !== null && !proposed && editor.json() !== pristine;
+  /** After the plan was proposed: nothing is left to keep or to ask about. */
+  const done = () => {
+    proposed = true;
+    if (key) DRAFTS.delete(key);
+    close();
+  };
 
   function start(data: PlanEditorData) {
     editor?.destroy();
@@ -346,7 +374,28 @@ export function planEditorModal(
       notes.push(
         `Version ${data.proposed.version} is proposed and waits for a decision; approve or reject it on the board.`,
       );
-    editor = revision ? revisionEditor(ctx, data, body, notes, close) : firstPlanEditor(ctx, data, body, notes, close);
+    editor = revision
+      ? revisionEditor(ctx, data, body, notes, close, done)
+      : firstPlanEditor(ctx, data, body, notes, close, done);
+    pristine = editor.json();
+    key = `${goalId}:${revision ? `revision:${data.active?.version ?? 0}` : 'first'}`;
+    const kept = DRAFTS.get(key);
+    if (kept && kept !== pristine) {
+      const current = editor;
+      const empty = pristine;
+      current.load(kept);
+      const restored = h(
+        'div',
+        { class: 'pn-draft-restored', role: 'status' },
+        note('Your draft for this goal was kept: it is back as you left it.'),
+        linkButton('Start over', () => {
+          current.load(empty);
+          if (key) DRAFTS.delete(key);
+          restored.remove();
+        }),
+      );
+      body.prepend(restored);
+    }
   }
 
   async function load() {
@@ -385,12 +434,35 @@ export function planEditorModal(
     title: fromBoard?.active?.status === 'ACTIVE' ? 'Revise the plan' : 'Write the plan',
     size: 'lg',
     el,
+    /** Asked for Esc, the close button and Cancel: a draft is not closed by a slip of the hand. */
+    async beforeClose() {
+      if (!dirty()) return true;
+      return ctx.confirm({
+        title: 'Close the plan editor?',
+        body: [
+          'The plan is not proposed yet.',
+          'Your draft is kept for this goal: opening the editor again brings it back (until Friday is closed or reloaded).',
+        ],
+        confirmLabel: 'Close',
+        cancelLabel: 'Keep writing',
+      });
+    },
     destroy() {
+      // Closed with a draft, whichever way (another dialog opening over it too): it is kept.
+      if (key) {
+        if (dirty() && editor) DRAFTS.set(key, editor.json());
+        else if (!dirty()) DRAFTS.delete(key);
+      }
       td.run();
       editor?.destroy();
       el.remove();
     },
   };
+}
+
+/** Forgets every kept draft (tests). */
+export function forgetPlanDrafts(): void {
+  DRAFTS.clear();
 }
 
 // ---- the shared frame of both modes ------------------------------------------------------------
@@ -546,7 +618,8 @@ function firstPlanEditor(
   host: HTMLElement,
   notes: string[],
   close: () => void,
-): { destroy(): void } {
+  done: () => void,
+): DraftEditor {
   const draft: FirstPlanDraft = {
     objective: truncate(data.goal.objective ?? data.goal.request, 500),
     summary: '',
@@ -666,28 +739,27 @@ function firstPlanEditor(
     submitBtn.disabled = false;
     if (!r) return;
     ctx.refresh();
-    close();
+    done();
   }
 
-  const tools = jsonTools(
-    ctx,
-    () => exportJson(normalizeFirstPlan(draft)),
-    (text) => {
-      const r = importFirstPlan(text);
-      if (!r.ok) return { error: r.error };
-      draft.objective = r.draft.objective ?? draft.objective;
-      draft.summary = r.draft.summary;
-      draft.tasks = r.draft.tasks.slice(0, PLAN_LIMITS.maxTasks);
-      objective.value = draft.objective ?? '';
-      summary.value = draft.summary;
-      rebuild();
-      changed();
-      const warnings = [...r.warnings];
-      if (r.draft.tasks.length > PLAN_LIMITS.maxTasks)
-        warnings.push(`only the first ${PLAN_LIMITS.maxTasks} tasks were loaded`);
-      return { warnings };
-    },
-  );
+  const json = () => exportJson(normalizeFirstPlan(draft));
+  /** Loads an exported draft: the JSON tools' import, and a kept draft coming back. */
+  const load = (text: string): { error: string } | { warnings: string[] } => {
+    const r = importFirstPlan(text);
+    if (!r.ok) return { error: r.error };
+    draft.objective = r.draft.objective ?? draft.objective;
+    draft.summary = r.draft.summary;
+    draft.tasks = r.draft.tasks.slice(0, PLAN_LIMITS.maxTasks);
+    objective.value = draft.objective ?? '';
+    summary.value = draft.summary;
+    rebuild();
+    changed();
+    const warnings = [...r.warnings];
+    if (r.draft.tasks.length > PLAN_LIMITS.maxTasks)
+      warnings.push(`only the first ${PLAN_LIMITS.maxTasks} tasks were loaded`);
+    return { warnings };
+  };
+  const tools = jsonTools(ctx, json, load);
 
   append(
     main,
@@ -713,6 +785,8 @@ function firstPlanEditor(
   rebuild();
 
   return {
+    json,
+    load: (text) => void load(text),
     destroy() {
       for (const e of editors) e.destroy();
       editors = [];
@@ -728,7 +802,8 @@ function revisionEditor(
   host: HTMLElement,
   notes: string[],
   close: () => void,
-): { destroy(): void } {
+  done: () => void,
+): DraftEditor {
   const active = data.active as LivePlanVersion;
   const existing: ExistingTask[] = existingFromPlan(active, ctx.store.select('board')?.tasks ?? []);
   const draft: RevisionDraft = { summary: '', rework: [], drop: [], new_tasks: [] };
@@ -965,30 +1040,29 @@ function revisionEditor(
     submitBtn.disabled = false;
     if (!r) return;
     ctx.refresh();
-    close();
+    done();
   }
 
-  const tools = jsonTools(
-    ctx,
-    () => exportJson(normalizeRevision(draft)),
-    (text) => {
-      const r = importRevision(text);
-      if (!r.ok) return { error: r.error };
-      draft.summary = r.draft.summary;
-      draft.rework = r.draft.rework;
-      draft.drop = r.draft.drop;
-      draft.new_tasks = r.draft.new_tasks.slice(0, PLAN_LIMITS.maxTasks);
-      summary.value = draft.summary;
-      renderExisting();
-      rebuild();
-      changed();
-      const known = new Set(existing.map((t) => t.task_id));
-      const warnings = [...r.warnings];
-      for (const id of [...draft.rework.map((x) => x.task_id), ...draft.drop.map((x) => x.task_id)])
-        if (!known.has(id)) warnings.push(`${id} is not a task of the active plan`);
-      return { warnings };
-    },
-  );
+  const json = () => exportJson(normalizeRevision(draft));
+  /** Loads an exported revision: the JSON tools' import, and a kept draft coming back. */
+  const load = (text: string): { error: string } | { warnings: string[] } => {
+    const r = importRevision(text);
+    if (!r.ok) return { error: r.error };
+    draft.summary = r.draft.summary;
+    draft.rework = r.draft.rework;
+    draft.drop = r.draft.drop;
+    draft.new_tasks = r.draft.new_tasks.slice(0, PLAN_LIMITS.maxTasks);
+    summary.value = draft.summary;
+    renderExisting();
+    rebuild();
+    changed();
+    const known = new Set(existing.map((t) => t.task_id));
+    const warnings = [...r.warnings];
+    for (const id of [...draft.rework.map((x) => x.task_id), ...draft.drop.map((x) => x.task_id)])
+      if (!known.has(id)) warnings.push(`${id} is not a task of the active plan`);
+    return { warnings };
+  };
+  const tools = jsonTools(ctx, json, load);
 
   renderExisting();
   append(
@@ -1026,6 +1100,8 @@ function revisionEditor(
   renderChanges();
 
   return {
+    json,
+    load: (text) => void load(text),
     destroy() {
       for (const e of editors) e.destroy();
       editors = [];

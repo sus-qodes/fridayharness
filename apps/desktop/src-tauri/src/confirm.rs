@@ -322,12 +322,27 @@ pub fn prepare(
             let detail = get(&format!("{base}tasks/{tid}"))?;
             let summary = detail.pointer("/task/summary").and_then(Value::as_str);
             too_long(&[summary.unwrap_or("")])?;
+            // What becomes of the tasks that depend on it, as the person chose in the page: one of
+            // two words, sent on as it is and said here; anything else is left out.
+            let dependents = body
+                .and_then(|b| b.get("dependents"))
+                .and_then(Value::as_str)
+                .filter(|d| matches!(*d, "cancel" | "release"));
+            let mut sent = reason_body(body)?;
+            if let (Some(d), Some(m)) = (dependents, sent.as_object_mut()) {
+                m.insert("dependents".into(), Value::String(d.to_string()));
+            }
+            let also = match dependents {
+                Some("cancel") => "\n\nThe unfinished tasks that depend on it are cancelled too.",
+                Some("release") => "\n\nThe tasks that depend on it are kept, and no longer wait for it.",
+                _ => "",
+            };
             Ok(Prepared {
-                body: reason_body(body)?,
+                body: sent,
                 dialog: Some(Dialog {
                     title: "Friday: cancel this task?".into(),
                     text: format!(
-                        "Task {}: {}\n\nA cancelled task does not run again. Its worktree is kept until you prune it.\n\nCancel the task?",
+                        "Task {}: {}\n\nA cancelled task does not run again. Its worktree is kept until you prune it.{also}\n\nCancel the task?",
                         visible(&tid),
                         shown(summary)
                     ),
@@ -669,6 +684,28 @@ mod tests {
             }
             if rest.ends_with("/start") {
                 assert!(d.text.contains("WARNING: danger-full-access"));
+            }
+        }
+        // What becomes of the tasks that depend on a cancelled one is the person's choice: one of two
+        // words goes on to the daemon and is said in the dialog; anything else is dropped.
+        for (word, said) in [
+            ("cancel", Some("are cancelled too")),
+            ("release", Some("no longer wait for it")),
+            ("everything", None),
+        ] {
+            let body = json!({"reason": "because", "dependents": word});
+            let (c, what) = checked("tasks/t1/cancel", Some(&body));
+            let p = prepare(what, &c, PID, Some(&body), &get).unwrap();
+            let d = p.dialog.expect("a dialog");
+            match said {
+                Some(text) => {
+                    assert_eq!(p.body, json!({"reason": "because", "dependents": word}));
+                    assert!(d.text.contains(text), "{word}: {}", d.text);
+                }
+                None => {
+                    assert_eq!(p.body, json!({"reason": "because"}));
+                    assert!(!d.text.contains("depend on it"), "{}", d.text);
+                }
             }
         }
         let launch = json!({"host": "codex", "agent_key": "codex-2", "role": "implementer",

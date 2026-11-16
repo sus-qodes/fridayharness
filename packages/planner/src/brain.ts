@@ -74,6 +74,15 @@ export interface BrainDeps {
   /** The planning model; null when none is configured (`plannerUnavailable` says why). */
   model: PlannerModel | null;
   plannerUnavailable?: string;
+  /**
+   * Why the model cannot be called now though one is configured (the project does not allow remote
+   * calls, this machine has not approved them, no key is stored), or null when it can. Read at each
+   * decision. Without it a configured model counted as a planner that plans, so a setup that never
+   * could (the default: provider anthropic, no key) answered every failed check with a planning
+   * call that was refused and a "Friday cannot plan" question, where a setup with no planner at
+   * all sends the task back to its agent (2026-11-17).
+   */
+  plannerReady?: () => string | null;
   settings: BrainSettings;
   /** Read before every model call; defaults to `settings`. */
   remotePolicy?: () => RemotePolicy;
@@ -633,9 +642,12 @@ export class MasterBrain {
         const pending = v?.status === 'PROPOSED';
         return { goal_id: String(row.goal_id), replan: pending, force: pending };
       },
-      planner: this.#deps.model
-        ? { available: true, reason: '' }
-        : { available: false, reason: this.#deps.plannerUnavailable ?? 'no planner is configured' },
+      planner: (() => {
+        const why = this.#deps.model
+          ? (this.#deps.plannerReady?.() ?? null)
+          : (this.#deps.plannerUnavailable ?? 'no planner is configured');
+        return why === null ? { available: true, reason: '' } : { available: false, reason: why };
+      })(),
       limits: {
         escalateAfterFailures: settings.escalateAfterFailures,
         maxReplans: settings.maxReplans,

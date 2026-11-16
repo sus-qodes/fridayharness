@@ -218,6 +218,33 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
       dataset: { action: 'land' },
     });
   }
+  /**
+   * Cancels a goal that is open or running (2026-11-17): before, only an integration conflict's
+   * card offered it, so a goal nobody wanted any more stayed on the board for good. The desktop
+   * asks in its own dialog (`confirm_and_send`); a browser asks here.
+   */
+  const cancelGoal = async () => {
+    const goalId = model.group.goal.goal_id;
+    if (!ctx.platform.desktop) {
+      const ok = await ctx.confirm({
+        title: 'Cancel this goal?',
+        body: [
+          'Every task of the goal that is not finished is cancelled, and agents working on them are stopped.',
+          'The work already done is kept: the goal branch and its commits stay, and nothing is merged into your branches.',
+        ],
+        confirmLabel: 'Cancel goal',
+        cancelLabel: 'Keep it',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    const r = await ctx.act(
+      'Cancel the goal',
+      () => ctx.api.cancelGoal(goalId, 'cancelled from the board'),
+      'Goal cancelled',
+    );
+    if (r) ctx.refresh();
+  };
   const writePlan = () => openModal(ctx, { kind: 'plan-editor', id: model.group.goal.goal_id, mode: 'first' });
   const brainPlan = async () => {
     const goalId = model.group.goal.goal_id;
@@ -363,6 +390,13 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
           )
         : null,
       h('span', { class: 'spacer' }),
+      goal.status === 'OPEN' || goal.status === 'ACTIVE'
+        ? button('Cancel goal…', () => void cancelGoal(), {
+            class: 'btn btn-ghost nd-cancel-goal',
+            title: 'Stop this goal: its unfinished tasks are cancelled, the work already done is kept',
+            dataset: { action: 'cancel-goal' },
+          })
+        : null,
       need
         ? actionButton('Write the plan', 'goal', writePlan, {
             cls: 'nd-act-primary',

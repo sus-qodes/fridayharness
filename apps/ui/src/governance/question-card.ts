@@ -8,9 +8,11 @@
  * Friday's own kinds are CLI instructions: never choices, at most small print. Every box a person
  * types an answer into is labelled "Reply to <agent>": one wording for one act.
  */
+
 import type { EscalationView } from '@friday/protocol';
 import { classifyEscalation, composeAnswer, LET_AGENT_DECIDE, type QuestionSpec } from '../model/escalations.js';
 import { hasHidden, visible } from '../model/text.js';
+import { cancelTask } from '../shell/cancel-task.js';
 import { type AppContext, type Component, openDrawer, openModal } from '../shell/context.js';
 import { append, button, h, replace, setText } from '../ui/dom.js';
 import { cleanText, stripEscapes, timeAgo, truncate } from '../ui/format.js';
@@ -514,18 +516,15 @@ function cancelTaskButton(kit: Kit): HTMLButtonElement {
     async (b) => {
       if (!spec.taskId) return;
       const taskId = spec.taskId;
-      const ok = await ctx.confirm({
-        title: 'Cancel this task?',
-        body: [taskLine(ctx.store.select('board'), taskId), 'A cancelled task does not run again.'],
-        confirmLabel: 'Cancel task',
-        cancelLabel: 'Keep it',
-        danger: true,
-      });
-      if (!ok) return;
       b.disabled = true;
-      const r = await ctx.act('Cancel the task', () => ctx.api.taskAction(taskId, 'cancel'), 'Task cancelled');
+      const summary = ctx.store.select('board')?.tasks.find((t) => t.task_id === taskId)?.summary ?? null;
+      const done = await cancelTask(
+        ctx,
+        { task_id: taskId, summary },
+        { line: taskLine(ctx.store.select('board'), taskId) },
+      );
       b.disabled = false;
-      if (r) kit.done('Task cancelled');
+      if (done) kit.done('Task cancelled');
     },
     'btn btn-danger',
   );

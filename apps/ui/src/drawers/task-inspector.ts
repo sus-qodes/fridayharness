@@ -5,6 +5,7 @@
  * was given (the packet the agent received and why: it explains Friday, not the task). It reads the
  * board snapshot and follows it; the three tabs after Overview load when first shown.
  */
+
 import type {
   ContextExplanation,
   ContextPacket,
@@ -18,6 +19,7 @@ import type {
 } from '@friday/protocol';
 import { notStartedText, PRIORITY, RISK, TASK_KIND, WAITING_REASON } from '../model/status.js';
 import { visible } from '../model/text.js';
+import { cancelTask } from '../shell/cancel-task.js';
 import { type AppContext, type Component, type DrawerRequest, openDrawer, openModal } from '../shell/context.js';
 import { append, button, type Child, h, replace } from '../ui/dom.js';
 import { cleanText, duration, humanize, plural, shortId, timeAgo, truncate } from '../ui/format.js';
@@ -253,23 +255,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
   }
 
   async function cancel(v: View): Promise<void> {
-    const ok = await ctx.confirm({
-      title: 'Cancel this task?',
-      body: [
-        `“${truncate(cleanText(v.task.summary), 160)}” stops for good: it will not run again.`,
-        'Its worktree and its preserved work are kept.',
-      ],
-      confirmLabel: 'Cancel task',
-      cancelLabel: 'Keep it',
-      danger: true,
-    });
-    if (!ok) return;
-    await ctx.act(
-      'Cancel the task',
-      () => ctx.api.taskAction(id, 'cancel', 'cancelled in the inspector'),
-      'Task cancelled',
-    );
-    ctx.refresh();
+    await cancelTask(ctx, v.task, { reason: 'cancelled in the inspector' });
   }
 
   function taskLink(taskId: string): HTMLElement {

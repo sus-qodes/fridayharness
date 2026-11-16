@@ -721,6 +721,12 @@ const RECOVERY_QUESTIONS = new Set(['recovery_needed']);
 const ROUTING_QUESTIONS = new Set(['routing_blocked', 'routing_violated']);
 const INTEGRATION_QUESTIONS = new Set(['integration_conflict', 'integration_failed']);
 const SYSTEM_QUESTIONS = new Set([...RECOVERY_QUESTIONS, ...ROUTING_QUESTIONS, ...INTEGRATION_QUESTIONS]);
+/**
+ * The Master Brain's questions about a goal's planning itself: it cannot plan, the plan it got
+ * cannot be read, today's budget is spent, a planning action failed. A plan a person wrote or
+ * approved answers them.
+ */
+const PLANNING_QUESTIONS = new Set(['planner_unavailable', 'invalid_plan', 'budget_exceeded', 'action_failed']);
 const FAILURE_QUESTIONS = new Set([
   'planner_unavailable',
   'budget_exceeded',
@@ -962,6 +968,26 @@ export class FridayState {
         type: 'escalation.answered',
         actor: SYSTEM,
         payload: { escalation_id: e.escalation_id, answer: `no longer needed: the task ${why}`, moot: true },
+        refs: [{ kind: 'escalation', id: String(e.escalation_id) }],
+      });
+    }
+  }
+
+  /**
+   * A goal's own pending questions (no task) from the Master Brain, answered as moot in the caller's
+   * transaction: those about planning once a person wrote or approved a plan (`kinds`), every one
+   * once the goal ended (`kinds` null). They used to stay in "Waiting for you" for ever, and
+   * answering a stale one later started a revision nobody asked for (2026-11-17). An answer marked
+   * moot starts none.
+   */
+  private settleGoalQuestions(ctx: CommandContext, goalId: string, kinds: Set<string> | null, why: string): void {
+    for (const e of this.q.escalations(ctx.project_id, 'pending', { goal_id: goalId })) {
+      if (e.task_id || e.requested_by_kind !== 'master_brain') continue;
+      if (kinds && !kinds.has(String(e.kind))) continue;
+      ctx.emit({
+        type: 'escalation.answered',
+        actor: SYSTEM,
+        payload: { escalation_id: e.escalation_id, answer: `no longer needed: ${why}`, moot: true },
         refs: [{ kind: 'escalation', id: String(e.escalation_id) }],
       });
     }
@@ -3028,6 +3054,63 @@ export class FridayState {
     );
   }
 
+  /**
+   * Cancels a task a person no longer wants and settles what waited for it (2026-11-17). A task that
+   * depends on a cancelled one never starts (a cancelled prerequisite is not a completed one), so
+   * its goal never finished and nothing said why. `cancel` cancels every unfinished task that
+   * depends on it, directly or through another; `release` takes it out of what its direct
+   * dependents wait for, and those whose other prerequisites are done become ready.
+   */
+  cancelTaskAndDependents(
+    projectId: string,
+    actor: Actor,
+    taskId: string,
+    reason: string,
+    dependents: 'cancel' | 'release',
+  ): { task: TaskView; cancelled: string[]; released: string[] } {
+    return this.exec(
+      { name: 'task.cancel', project_id: projectId, actor, params: { taskId, reason, dependents } },
+      (ctx) => {
+        const task = this.cancelWithin(ctx, projectId, taskId, reason);
+        const cancelled: string[] = [];
+        const released: string[] = [];
+        const open = (id: string) => {
+          const t = this.q.findTask(projectId, id);
+          return t && !TERMINAL_TASK.has(t.status) ? t : null;
+        };
+        if (dependents === 'cancel') {
+          const seen = new Set<string>([taskId]);
+          const queue = [...this.q.dependents(taskId)];
+          while (queue.length) {
+            const id = queue.shift() as string;
+            if (seen.has(id)) continue;
+            seen.add(id);
+            if (!open(id)) continue;
+            this.cancelWithin(ctx, projectId, id, `it depended on ${taskId}, which was cancelled: ${reason}`);
+            cancelled.push(id);
+            queue.push(...this.q.dependents(id));
+          }
+        } else {
+          for (const id of this.q.dependents(taskId)) {
+            if (!open(id)) continue;
+            ctx.emit({
+              type: 'task.dependencies_changed',
+              payload: {
+                task_id: id,
+                dependencies: this.q.dependencies(id).filter((d) => d !== taskId),
+                reason: `${taskId} was cancelled; a person kept this task without it`,
+              },
+              refs: [{ kind: 'task', id }],
+            });
+            released.push(id);
+          }
+          if (task.goal_id && released.length) this.readyWithin(ctx, projectId, task.goal_id);
+        }
+        return { task, cancelled, released };
+      },
+    );
+  }
+
   private cancelWithin(ctx: CommandContext, projectId: string, taskId: string, reason: string): TaskView {
     {
       let task = this.q.task(projectId, taskId);
@@ -3239,6 +3322,7 @@ export class FridayState {
       for (const v of goal.plan_id ? this.q.planVersions(goal.plan_id) : []) {
         if (v.status === 'PROPOSED') this.movePlan(ctx, v, 'REJECTED', 'goal cancelled');
       }
+      this.settleGoalQuestions(ctx, goalId, null, 'the goal was cancelled');
       return this.q.goal(projectId, goalId);
     });
   }
@@ -3388,6 +3472,10 @@ export class FridayState {
         for (const v of versions.filter((x) => x.status === 'PROPOSED')) {
           this.movePlan(ctx, v, 'SUPERSEDED', `replaced by version ${version}`);
         }
+        // A person wrote the plan the Master Brain could not: its questions about that are answered.
+        if (actor.kind === 'human') {
+          this.settleGoalQuestions(ctx, goalId, PLANNING_QUESTIONS, 'a person wrote the plan');
+        }
         ctx.emit({
           type: 'plan.proposed',
           payload: {
@@ -3466,6 +3554,7 @@ export class FridayState {
       }
       const active = this.q.latestPlanVersion(planId, ['ACTIVE']);
       this.assertPlanFresh(projectId, v, active?.version ?? null);
+      this.settleGoalQuestions(ctx, goal.goal_id, PLANNING_QUESTIONS, 'a plan was approved');
       // The ceiling again (plan M12.2): the policy may have tightened since the version was proposed,
       // and a task is materialized with the scope it may hold now, or the approval is refused.
       const bounded = new Map<string, BoundedPlanTask>();
@@ -3689,6 +3778,7 @@ export class FridayState {
     if (!active || !done) return null;
     return this.exec({ name: 'goal.complete', project_id: projectId, actor, params: { goalId } }, (ctx) => {
       this.movePlan(ctx, active, 'COMPLETED', 'all tasks completed');
+      this.settleGoalQuestions(ctx, goalId, null, 'the goal was completed');
       ctx.emit({
         type: 'goal.status_changed',
         payload: {

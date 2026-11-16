@@ -611,6 +611,15 @@
   margin-bottom: 12px;
 }
 
+/* The plan editor's note that a kept draft is back, with Start over. */
+.pn-draft-restored {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 .pn-land-blocked {
   font-size: var(--text-caption);
   color: var(--color-amber);

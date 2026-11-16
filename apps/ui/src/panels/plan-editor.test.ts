@@ -1,11 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../platform/transport.js';
 import { makeContext } from '../test/context.js';
 import { makeAgent, makeGoal, makeHarness, makePlan, makePlanTask, makeSnapshot, makeTask } from '../test/fixtures.js';
-import { planEditorModal } from './plan-editor.js';
+import { forgetPlanDrafts, planEditorModal } from './plan-editor.js';
 import { buttonBy, check, choose, controlBy, flush, HOSTILE, type, ZW } from './test-support.js';
 
 const GID = 'goal_0000000000000000000000gg01';
+
+// A draft is kept per goal for as long as the page lives: each test starts without one.
+afterEach(() => forgetPlanDrafts());
 const PLANS = `/goals/${GID}/plans`;
 
 function tasksOf(el: HTMLElement): HTMLElement[] {
@@ -388,5 +391,92 @@ describe('plan editor, revision', () => {
     expect(item.textContent).toContain('the note needs at least 3 characters');
     expect(ctx.transport.to('POST', PLANS)).toHaveLength(0);
     m.destroy();
+  });
+});
+
+describe('a draft that is not proposed yet (review of 2026-11-16)', () => {
+  /** Mounts the dialog as the modal host does, with its close guarded by `beforeClose`. */
+  function open(ctx: ReturnType<typeof firstPlanContext>) {
+    let closed = 0;
+    const m = planEditorModal(ctx, { kind: 'plan-editor', id: GID, mode: 'first' }, () => {
+      closed += 1;
+    });
+    return { m, closed: () => closed };
+  }
+
+  it('closes without a question while nothing was typed, and asks once something was', async () => {
+    const ctx = firstPlanContext();
+    const { m } = open(ctx);
+    expect(await m.beforeClose()).toBe(true);
+    expect(ctx.confirms).toHaveLength(0);
+    const [t1] = tasksOf(m.el);
+    fillTask(t1 as HTMLElement, { summary: 'Build the API', criteria: 'tests pass', write: 'backend/**' });
+    ctx.confirmAnswer = false;
+    expect(await m.beforeClose()).toBe(false);
+    expect(ctx.confirms[0]).toMatchObject({
+      title: 'Close the plan editor?',
+      confirmLabel: 'Close',
+      cancelLabel: 'Keep writing',
+    });
+    expect([ctx.confirms[0]?.body].flat().join(' ')).toContain('Your draft is kept for this goal');
+    ctx.confirmAnswer = true;
+    expect(await m.beforeClose()).toBe(true);
+    m.destroy();
+  });
+
+  it('keeps the draft when the dialog goes away, brings it back, and can start over', () => {
+    const ctx = firstPlanContext();
+    const first = open(ctx).m;
+    fillTask(tasksOf(first.el)[0] as HTMLElement, {
+      summary: `Build the API ${HOSTILE}`,
+      criteria: 'tests pass',
+      write: 'backend/**',
+    });
+    // Another dialog opened over it, Esc, the close button: whichever way, it is destroyed.
+    first.destroy();
+
+    const again = open(ctx).m;
+    expect(again.el.textContent).toContain('Your draft for this goal was kept');
+    const summary = controlBy(tasksOf(again.el)[0] as HTMLElement, 'Summary') as HTMLInputElement;
+    expect(summary.value).toBe(`Build the API ${HOSTILE}`);
+    expect(again.el.querySelector('img')).toBeNull();
+    // Another goal's editor does not get it.
+    const other = planEditorModal(
+      makeContext({ snapshot: makeSnapshot({ goals: [makeGoal({ goal_id: 'goal_other' })] }) }),
+      { kind: 'plan-editor', id: 'goal_other', mode: 'first' },
+      () => undefined,
+    );
+    expect(other.el.textContent).not.toContain('Your draft for this goal was kept');
+    other.destroy();
+
+    buttonBy(again.el, 'Start over').click();
+    expect((controlBy(tasksOf(again.el)[0] as HTMLElement, 'Summary') as HTMLInputElement).value).toBe('');
+    expect(again.el.textContent).not.toContain('Your draft for this goal was kept');
+    again.destroy();
+    // Started over and closed: nothing is kept.
+    const third = open(ctx).m;
+    expect(third.el.textContent).not.toContain('Your draft for this goal was kept');
+    third.destroy();
+  });
+
+  it('keeps nothing once the plan was proposed, and closes without asking', async () => {
+    const ctx = firstPlanContext({ [`POST /goals/${GID}/plans`]: { plan_id: 'plan_1', version: 1 } });
+    const { m, closed } = open(ctx);
+    type(controlBy(m.el, 'Summary') as HTMLTextAreaElement, 'One task for the API');
+    fillTask(tasksOf(m.el)[0] as HTMLElement, {
+      summary: 'Build the API',
+      criteria: 'tests pass',
+      write: 'backend/**',
+    });
+    buttonBy(m.el, 'Propose the plan').click();
+    await flush();
+    expect(ctx.transport.to('POST', `/goals/${GID}/plans`)).toHaveLength(1);
+    expect(closed()).toBe(1);
+    expect(await m.beforeClose()).toBe(true);
+    expect(ctx.confirms).toHaveLength(0);
+    m.destroy();
+    const again = open(ctx).m;
+    expect(again.el.textContent).not.toContain('Your draft for this goal was kept');
+    again.destroy();
   });
 });

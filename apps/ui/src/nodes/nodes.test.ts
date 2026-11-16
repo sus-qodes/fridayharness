@@ -420,6 +420,44 @@ describe('goal card', () => {
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'land', id: g.goal.goal_id });
   });
 
+  it('cancels an open or running goal from the card, after asking; a finished one has nothing to cancel', async () => {
+    const active = makeGoal({ status: 'ACTIVE' });
+    const ctx = makeContext({ answers: { [`POST /goals/${active.goal_id}/cancel`]: { goal: active } } });
+    const node = createGoalNode(ctx, { group: group({ goal: active }) });
+    const cancel = node.el.querySelector('[data-action="cancel-goal"]') as HTMLButtonElement;
+    expect(cancel.textContent).toBe('Cancel goal…');
+    // Saying "Keep it" changes nothing.
+    ctx.confirmAnswer = false;
+    click(cancel);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ctx.confirms[0]?.title).toBe('Cancel this goal?');
+    expect([ctx.confirms[0]?.body].flat().join(' ')).toContain('The work already done is kept');
+    expect(ctx.transport.to('POST', `/goals/${active.goal_id}/cancel`)).toHaveLength(0);
+    ctx.confirmAnswer = true;
+    click(cancel);
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    expect(ctx.transport.to('POST', `/goals/${active.goal_id}/cancel`)[0]?.body).toEqual({
+      reason: 'cancelled from the board',
+    });
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Goal cancelled' });
+    expect(ctx.refreshes).toBe(1);
+
+    // The desktop asks in its own dialog: the page does not ask a second time.
+    const desktop = makeContext();
+    (desktop as { platform: unknown }).platform = { ...desktop.platform, kind: 'tauri', desktop: {} };
+    const onDesktop = createGoalNode(desktop, { group: group({ goal: makeGoal({ status: 'OPEN' }) }) });
+    click(onDesktop.el.querySelector('[data-action="cancel-goal"]'));
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    expect(desktop.confirms).toHaveLength(0);
+    expect(desktop.transport.calls.filter((c) => c.method === 'POST')).toHaveLength(1);
+
+    for (const status of ['COMPLETED', 'CANCELLED'] as const) {
+      const done = createGoalNode(makeContext(), { group: group({ goal: makeGoal({ status }) }) });
+      expect(done.el.querySelector('[data-action="cancel-goal"]')).toBeNull();
+    }
+  });
+
   it('says where a completed goal landed, or that its work is already in the folder', () => {
     const done = makeGoal({ status: 'COMPLETED' });
     const label = (landing: NonNullable<UiSnapshot['goal_landing']>[string] | undefined) => {

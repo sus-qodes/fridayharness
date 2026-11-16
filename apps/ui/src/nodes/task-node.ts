@@ -6,6 +6,7 @@
  * coloured by status with the waiting reason, and the agent's note while it is blocked. Hover (or
  * focus) reveals the actions that apply to the task's state, *Changes* among them.
  */
+
 import type {
   FileReservationView,
   HarnessEntry,
@@ -17,6 +18,7 @@ import type {
 import { assignableAgents, CRITERIA_SHOWN, checksSummary, conflictOf, TERMINAL_STATUSES } from '../model/board.js';
 import { notStartedText, PRIORITY, RISK, statusLook, TASK_KIND, WAITING_REASON } from '../model/status.js';
 import { visible } from '../model/text.js';
+import { cancelTask } from '../shell/cancel-task.js';
 import { type AppContext, openDrawer, openModal } from '../shell/context.js';
 import { button, h, replace, setVar, toggleClass } from '../ui/dom.js';
 import { cleanText, duration, plural, shortId, truncate } from '../ui/format.js';
@@ -386,19 +388,7 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
               'Cancel',
               'cross',
               async () => {
-                const ok = await ctx.confirm({
-                  title: 'Cancel this task?',
-                  body: [
-                    truncate(cleanText(t.summary), 200),
-                    'The task stops for good; its worktree and branch are kept.',
-                  ],
-                  confirmLabel: 'Cancel the task',
-                  cancelLabel: 'Keep it',
-                  danger: true,
-                });
-                if (!ok) return;
-                await ctx.act('Cancel the task', () => ctx.api.taskAction(t.task_id, 'cancel'), 'Task cancelled');
-                ctx.refresh();
+                await cancelTask(ctx, t);
               },
               { action: a, cls: 'nd-act-danger', busyLabel: 'Cancelling…' },
             ),

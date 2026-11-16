@@ -528,6 +528,47 @@ describe('without a planner (no model key)', () => {
     expect(pending()).toMatchObject([{ kind: 'repeated_verification_failures', task_id: reworked.task_id }]);
   });
 
+  it('does the same when a model is configured but cannot be called (no key, no consent): it is no planner', async () => {
+    const dev = register('dev-1', 'developer');
+    const goal = state.createGoal(PROJECT, human, { request: 'Add a VAT note to prices', plan: false });
+    const draft = parsePlanDraft({
+      objective: 'Show a VAT note',
+      summary: 'One step',
+      tasks: [
+        { key: 'note', summary: 'Add the note', acceptance_criteria: ['shown'], scope: { write: ['frontend/src/**'] } },
+      ],
+    });
+    if (!draft.ok) throw new Error(draft.errors.join('; '));
+    const v = state.proposePlan(PROJECT, human, goal.goal_id, proposalFromDraft(draft.value, { trigger: 'human' }));
+    state.approvePlan(PROJECT, human, v.plan_id, v.version);
+    // The default setup: the Anthropic provider is configured, and nothing lets it be called.
+    const model = new FakePlannerModel([]);
+    let ready: string | null = 'remote calls to anthropic are off for this project';
+    const b = brain(model, { plannerReady: () => ready });
+    await b.runOnce();
+    accept(dev);
+    finish(dev, byKey(goal.goal_id).note as TaskView, false);
+    const first = await b.runOnce();
+    // Reworked at once: no planning call that would be refused, and no "Friday cannot plan" question.
+    expect(first.steps.map((s) => s.action)).toContain('rework');
+    expect(first.steps.map((s) => s.action)).not.toContain('replan');
+    expect(model.requests).toHaveLength(0);
+    expect(pending()).toEqual([]);
+    expect(state.store.readSince(PROJECT, 0, { types: ['task.rework'] }).at(-1)?.payload).toMatchObject({
+      transition: { reason: expect.stringContaining('remote calls to anthropic are off') },
+    });
+    // A goal that asks for a plan is told why there is none, once, without a model call.
+    state.createGoal(PROJECT, human, { request: 'Plan this one for me' });
+    await b.runOnce();
+    expect(pending()).toMatchObject([{ kind: 'planner_unavailable' }]);
+    expect(model.requests).toHaveLength(0);
+    // Read at each decision: once it can be called, the next goal's plan is asked of the model.
+    ready = null;
+    state.createGoal(PROJECT, human, { request: 'And this one' });
+    await b.runOnce();
+    expect(model.requests.length).toBeGreaterThan(0);
+  });
+
   it('delegates a writing task while a read-only review task runs', async () => {
     const dev = register('dev-1', 'developer');
     const reviewer = register('rev-1', 'reviewer');

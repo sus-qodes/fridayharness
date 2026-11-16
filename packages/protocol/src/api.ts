@@ -663,6 +663,12 @@ export type VerifyRequest = z.input<typeof VerifyRequest>;
 export const TaskActionRequest = z.object({
   reason: z.string().max(2000).optional(),
   agent_key: z.string().max(64).optional(),
+  /**
+   * `cancel` only: what becomes of the unfinished tasks that depend on the cancelled one. `cancel`:
+   * they are cancelled too, through every level; `release`: they no longer wait for it and start
+   * once their other prerequisites are done. Left out, they keep waiting (as before 2026-11-17).
+   */
+  dependents: z.enum(['cancel', 'release']).optional(),
 });
 export type TaskActionRequest = z.input<typeof TaskActionRequest>;
 

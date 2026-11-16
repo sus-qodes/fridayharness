@@ -277,11 +277,44 @@ export function createMasterBrain(input: {
     dailyBudgetUsd: provider.daily_budget_usd,
     ...(provider.prices ? { prices: provider.prices } : {}),
   };
+  // Through Claude Code the login is Claude Code's own (a key or a subscription): no key of Friday's.
+  const viaClaudeCode = started.provider === 'claude-code';
+  /** The key a remote planner of Friday's own needs, and where it is. */
+  const keyState = (): BrainStatus['key'] => {
+    const remote = model?.remote ?? false;
+    return !remote || viaClaudeCode
+      ? 'not needed'
+      : hasSecret('anthropic', env)
+        ? 'stored'
+        : env.ANTHROPIC_API_KEY?.trim()
+          ? 'environment'
+          : 'missing';
+  };
+  /**
+   * Why the planner cannot plan now, or null: no model, no consent for remote calls, no key, a
+   * local model not named. One answer for the status the interface shows and for the Master
+   * Brain's own decisions, so "not ready" on the screen is "no planner" in what Friday does.
+   */
+  const whyUnavailable = (): string | null => {
+    const remote = model?.remote ?? false;
+    const consent = remotePolicy();
+    return (
+      reason ??
+      (remote && !consent.allowRemote
+        ? (consent.refusal ?? 'remote calls are off')
+        : keyState() === 'missing'
+          ? 'no Anthropic API key: run "friday secrets set anthropic"'
+          : local && model && current().model === 'auto'
+            ? LOCAL_MODEL_UNSET
+            : null)
+    );
+  };
   const brain = new MasterBrain({
     state,
     projectId: project.project_id,
     model,
     ...(reason ? { plannerUnavailable: reason } : {}),
+    plannerReady: whyUnavailable,
     settings,
     remotePolicy,
     projectContext: () =>
@@ -306,28 +339,10 @@ export function createMasterBrain(input: {
     status: () => {
       const pid = project.project_id;
       const remote = model?.remote ?? false;
-      // Through Claude Code the login is Claude Code's own (a key or a subscription): no key of Friday's.
-      const viaClaudeCode = started.provider === 'claude-code';
-      const stored = hasSecret('anthropic', env);
-      const key: BrainStatus['key'] =
-        !remote || viaClaudeCode
-          ? 'not needed'
-          : stored
-            ? 'stored'
-            : env.ANTHROPIC_API_KEY?.trim()
-              ? 'environment'
-              : 'missing';
+      const key = keyState();
       const dayStart = `${state.clock.now().slice(0, 10)}T00:00:00.000Z`;
       const consent = remotePolicy();
-      const unavailable =
-        reason ??
-        (remote && !consent.allowRemote
-          ? (consent.refusal ?? 'remote calls are off')
-          : key === 'missing'
-            ? 'no Anthropic API key: run "friday secrets set anthropic"'
-            : local && model && current().model === 'auto'
-              ? LOCAL_MODEL_UNSET
-              : null);
+      const unavailable = whyUnavailable();
       return {
         provider: model?.provider ?? started.provider,
         model: modelId(),
@@ -340,7 +355,8 @@ export function createMasterBrain(input: {
         key,
         planner_available: !unavailable,
         reason: unavailable,
-        auto_approve: current().auto_approve,
+        // What is in force: the setting, once this clone trusts it (it is a loosening).
+        auto_approve: settings.autoApprove,
         escalate_after_failures: current().escalate_after_failures,
         max_replans: current().max_replans,
         // No budget holds a model that costs nothing: only remote calls have one (ADR-0015 §4).

@@ -700,7 +700,12 @@ export function buildApp(deps: AppDeps): Hono<Env> {
         case 'release':
           return c.json({ task: state.releaseTask(pid, HUMAN, tid, reason) });
         case 'cancel':
-          return c.json({ task: state.cancelTask(pid, HUMAN, tid, reason) });
+          // What waited for the task is settled with it when the person chose how (`dependents`).
+          return c.json(
+            body.dependents
+              ? state.cancelTaskAndDependents(pid, HUMAN, tid, reason, body.dependents)
+              : { task: state.cancelTask(pid, HUMAN, tid, reason) },
+          );
         case 'rework':
           return c.json({ task: state.reworkTask(pid, HUMAN, tid, reason) });
         case 'unreserve':

@@ -184,8 +184,20 @@ export class FridayApi {
     return this.post('/tasks', body, { idempotencyKey: newKey() });
   }
 
-  taskAction(taskId: string, action: TaskAction, reason?: string): Promise<{ task: TaskView }> {
-    return this.post(`/tasks/${encodeURIComponent(taskId)}/${action}`, reason ? { reason } : {});
+  /**
+   * `extra.dependents` (cancel only): what becomes of the unfinished tasks that depend on the task:
+   * `cancel` cancels them too, `release` lets them start without it.
+   */
+  taskAction(
+    taskId: string,
+    action: TaskAction,
+    reason?: string,
+    extra?: { dependents?: 'cancel' | 'release' },
+  ): Promise<{ task: TaskView; cancelled?: string[]; released?: string[] }> {
+    return this.post(`/tasks/${encodeURIComponent(taskId)}/${action}`, {
+      ...(reason ? { reason } : {}),
+      ...(extra?.dependents ? { dependents: extra.dependents } : {}),
+    });
   }
 
   assign(taskId: string, agentKey: string): Promise<{ mode: 'assigned' | 'reserved'; task: TaskView }> {

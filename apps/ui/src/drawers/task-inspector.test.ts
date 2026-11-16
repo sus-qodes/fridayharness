@@ -243,13 +243,16 @@ describe('the task inspector: Overview', () => {
     ctx.confirmAnswer = false;
     buttonNamed(drawer.el, 'Cancel task')?.click();
     await settle();
-    expect(ctx.confirms).toHaveLength(1);
-    expect(ctx.confirms[0]?.danger).toBe(true);
+    // A task waits for this one: what becomes of it is asked first, then the cancellation itself.
+    expect(ctx.confirms.map((c) => c.title)).toEqual(['1 other task waits for this one', 'Cancel this task?']);
+    expect(ctx.confirms.every((c) => c.danger === true)).toBe(true);
     expect(ctx.transport.to('POST', `/tasks/${TID}/cancel`)).toHaveLength(0);
     ctx.confirmAnswer = true;
     buttonNamed(drawer.el, 'Cancel task')?.click();
     await settle();
-    expect(ctx.transport.to('POST', `/tasks/${TID}/cancel`)).toHaveLength(1);
+    expect(ctx.transport.to('POST', `/tasks/${TID}/cancel`).map((c) => c.body)).toEqual([
+      { reason: 'cancelled in the inspector', dependents: 'cancel' },
+    ]);
     drawer.destroy();
   });
 
