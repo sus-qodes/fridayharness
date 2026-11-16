@@ -75,7 +75,8 @@ describe('the Settings Hub, Planner', () => {
     const hub = hubAt(ctx, 'planner');
     const el = hub.el;
     expect(el.textContent).toContain('You can always write plans yourself');
-    const budget = el.querySelector('input[type="number"]') as HTMLInputElement;
+    // The anthropic steps' budget, not the Claude Code switch's.
+    const budget = el.querySelector('input[type="number"]:not(.pn-qs-budget)') as HTMLInputElement;
     type(budget, '7');
     expect(el.textContent).toContain('friday brain allow-remote --budget 7');
     buttonBy(el, 'Store the key…').click();
@@ -94,7 +95,7 @@ describe('the Settings Hub, Planner', () => {
     const { ctx } = desktopContext({ provider: 'local', model: 'qwen2.5:7b', remote: false, key: 'not needed' });
     const hub = hubAt(ctx, 'planner');
     expect(() => buttonBy(hub.el, 'Store the key…')).toThrow();
-    expect(hub.el.querySelector('input[type="number"]')).toBeNull();
+    expect(hub.el.querySelector('input[type="number"]:not(.pn-qs-budget)')).toBeNull();
     expect(hub.el.textContent).toContain('friday doctor');
     expect(hub.el.textContent).not.toContain('Allow spending');
     hub.destroy();

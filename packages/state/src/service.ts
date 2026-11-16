@@ -704,6 +704,10 @@ const OBSERVATION_TYPES = new Set([
   'setup.progress',
   'setup.completed',
   'setup.failed',
+  // A person landed a completed goal's branch into their own branch, from the interface (2026-11-16).
+  'goal.landed',
+  // A person changed one of the settings the interface may change in config.yaml (2026-11-16).
+  'config.edited',
 ]);
 
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };

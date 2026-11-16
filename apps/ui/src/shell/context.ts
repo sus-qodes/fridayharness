@@ -79,7 +79,11 @@ export interface DesktopCommands {
    */
   storeKey(name: string): Promise<boolean>;
   /** Lets this clone spend at most `budget` dollars a day, after a native confirmation; false when cancelled. */
-  allowSpending(budget: number): Promise<boolean>;
+  /**
+   * Lets this clone spend on the Master Brain's plans, after the shell's own dialog: through a
+   * stored key (`anthropic`, the default) or the installed Claude Code's sign-in (`claude-code`).
+   */
+  allowSpending(budget: number, provider?: 'anthropic' | 'claude-code'): Promise<boolean>;
   /** Whether the desktop app starts when the user signs in to Windows (plan §8.3). */
   autostart(): Promise<boolean>;
   /** Turns starting at sign-in on or off; answers whether it is on now. */

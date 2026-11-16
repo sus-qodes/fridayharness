@@ -49,6 +49,8 @@ pub enum Confirm {
     /// `tasks/{tid}/recover` with `action: cancel`: the cancel dialog, the recovery body.
     RecoverCancel,
     CancelGoal,
+    /// `goals/{gid}/land`: merges the goal's branch into the person's own branch.
+    LandGoal,
     StopDaemon,
     LaunchAgent,
     StartAgent,
@@ -127,6 +129,7 @@ pub static ROUTES: &[Route] = &[
     get("goals/{gid}/diff", &["stat"]),
     post("goals"),
     confirm("goals/{gid}/cancel", Confirm::CancelGoal),
+    confirm("goals/{gid}/land", Confirm::LandGoal),
     post("goals/{gid}/replan"),
     post("goals/{gid}/plans"),
     post("plans/{plan}/versions/{v}/approve"),
@@ -162,6 +165,9 @@ pub static ROUTES: &[Route] = &[
     post("worktrees/prune"),
     get("policy", &[]),
     confirm("policy/trust", Confirm::Trust),
+    // The few config.yaml settings the interface changes: none applies on its own say (trust,
+    // this machine's approval or a restart still decides), so no dialog of the shell's.
+    post("config/settings"),
     post("control/pause"),
     post("control/resume"),
     confirm("control/halt", Confirm::Halt),
@@ -696,6 +702,7 @@ mod tests {
             p("control/halt"),
             p("tasks/task_1/cancel"),
             p("goals/goal_1/cancel"),
+            p("goals/goal_1/land"),
             p("daemon/stop"),
             p("agent-processes"),
             p("agent-processes/claude-1/start"),

@@ -533,3 +533,64 @@ describe('goal branches', () => {
     }
   });
 });
+
+describe('landing a completed goal', () => {
+  /** A one-task goal, worked, verified, integrated and completed: its branch is ready to land. */
+  async function completedGoal(td: TestDaemon) {
+    const { goalId, ids } = await goalWith(td, [{ key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] }]);
+    const id = ids['raise-a'] as string;
+    await work(td, 'be-1', id, { 'src/a.mjs': 'export const a = 2;\n' });
+    await integrationOf(td, id);
+    await runOnce(td);
+    expect((await td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`))).goal.status).toBe(
+      'COMPLETED',
+    );
+    return goalId;
+  }
+  const land = (td: TestDaemon, goalId: string) =>
+    td.operator.post<{ status: string; into: string; head: string; branch: string; fast_forward: boolean }>(
+      td.operator.projectPath(`/goals/${goalId}/land`),
+      {},
+    );
+
+  it('merges the goal branch into the checked-out branch once, and says so the second time', async () => {
+    const td = await project();
+    const before = (await git(['rev-parse', 'HEAD'])).trim();
+    const branch = (await git(['symbolic-ref', '--short', 'HEAD'])).trim();
+    const goalId = await completedGoal(td);
+    const landed = await land(td, goalId);
+    expect(landed).toMatchObject({ status: 'landed', into: branch, branch: `friday/goal-${goalId}` });
+    // The main checkout now has the goal's work, on the person's own branch.
+    expect(readFileSync(path.join(ws().projectDir, 'src', 'a.mjs'), 'utf8').replace(/\r\n/g, '\n')).toBe(
+      'export const a = 2;\n',
+    );
+    expect((await git(['rev-parse', 'HEAD'])).trim()).toBe(landed.head);
+    expect(landed.head).not.toBe(before);
+    expect((await git(['symbolic-ref', '--short', 'HEAD'])).trim()).toBe(branch);
+    // Clean as the person's own git sees it (with this machine's line-ending settings, which the
+    // test helper's git overrides).
+    expect((await runGit(ws().projectDir, ['status', '--porcelain'])).stdout).toBe('');
+    expect(
+      td.daemon.state.store.readSince(td.project.project_id, 0, { types: ['goal.landed'], limit: 10 }),
+    ).toHaveLength(1);
+    // Landing again brings nothing and changes nothing.
+    expect(await land(td, goalId)).toMatchObject({ status: 'already', head: landed.head });
+  });
+
+  it('changes nothing when local changes are in the way, or the goal is not completed', async () => {
+    const td = await project();
+    const goalId = await completedGoal(td);
+    const before = (await git(['rev-parse', 'HEAD'])).trim();
+    // The person is editing the same file in their checkout: git refuses, and Friday says why.
+    writeFileSync(path.join(ws().projectDir, 'src', 'a.mjs'), 'export const a = 3; // mine\n');
+    await expect(land(td, goalId)).rejects.toThrow(/nothing was changed/);
+    expect((await git(['rev-parse', 'HEAD'])).trim()).toBe(before);
+    expect(readFileSync(path.join(ws().projectDir, 'src', 'a.mjs'), 'utf8')).toBe('export const a = 3; // mine\n');
+    // An open goal is not ready to land.
+    const open = await td.operator.post<{ goal_id: string }>(td.operator.projectPath('/goals'), {
+      request: 'not started',
+      plan: false,
+    });
+    await expect(land(td, open.goal_id)).rejects.toThrow(/only a completed goal lands/);
+  });
+});

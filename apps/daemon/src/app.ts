@@ -1,3 +1,4 @@
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { blastRadius, lookupSymbol, skeletonOf } from '@friday/code-graph';
@@ -19,7 +20,7 @@ import {
   type TokenClass,
   VerifyRequest,
 } from '@friday/protocol';
-import { FRIDAY_DIR, FRIDAY_VERSION, type ProjectRef } from '@friday/sdk';
+import { CONFIG_FILE, editConfigText, FRIDAY_DIR, FRIDAY_VERSION, type ProjectRef } from '@friday/sdk';
 import {
   backupTo,
   createSnapshot,
@@ -42,6 +43,7 @@ import type { ControlManager } from './control.js';
 import { countMatches, listFiles } from './files.js';
 import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
 import type { IntegrationManager } from './integration.js';
+import { landGoal } from './land.js';
 import type { Logger } from './log.js';
 import type { OperationManager } from './operations.js';
 import type { EffectivePolicy } from './policy.js';
@@ -119,6 +121,11 @@ const OPERATOR: TokenClass[] = ['operator'];
 /** Routes a UI session may not call (plan M9 §5.2). */
 const UI_SESSION_REFUSED = /^\/admin\/|^\/protocol\/|\/harness-sessions\/bind$|\/ui\/login-codes$/;
 const HUMAN: Actor = { kind: 'human', id: 'local-operator' };
+/** The person behind a request: the credential they signed in with, else the local operator. */
+const humanOf = (c: Context): Actor => {
+  const auth = (c as unknown as { get(k: 'auth'): { credential_id?: string } | undefined }).get('auth');
+  return { kind: 'human', id: auth?.credential_id ?? HUMAN.id };
+};
 
 function errorResponse(c: Context, err: FridayError) {
   return c.json(err.toBody() as ErrorBody, err.http as 400);
@@ -383,6 +390,27 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.get(`${P}/goals/:gid/diff`, allow(...OPERATOR), async (c) =>
     c.json(await goalDiff(state, project, c.req.param('gid'), diffOpts(c))),
   );
+  // A person lands a completed goal into their own branch (2026-11-16): the desktop asks first
+  // (`confirm_and_send`); landing is git's merge, all or nothing.
+  app.post(`${P}/goals/:gid/land`, allow(...OPERATOR), async (c) =>
+    c.json(await landGoal(state, project, c.req.param('gid'), humanOf(c))),
+  );
+  // The few settings of config.yaml a person changes from the interface (`EDITABLE_SETTINGS`).
+  // None applies on its own say: automatic verification waits for this clone's trust, remote
+  // planning for this machine's approval, the planner's provider for a restart.
+  app.post(`${P}/config/settings`, allow(...OPERATOR), async (c) => {
+    const body = z.object({ set: z.record(z.string(), z.unknown()) }).parse(await json(c));
+    const file = path.join(project.root, FRIDAY_DIR, CONFIG_FILE);
+    const { text, changed } = editConfigText(readFileSync(file, 'utf8'), body.set, `${FRIDAY_DIR}/${CONFIG_FILE}`);
+    if (changed.length) {
+      // Written beside it, then renamed over it: the file is never seen half written.
+      const temp = `${file}.${process.pid}.tmp`;
+      writeFileSync(temp, text);
+      renameSync(temp, file);
+      state.recordObservation(pid, humanOf(c), 'config.edited', { changed }, []);
+    }
+    return c.json({ changed });
+  });
   // The scope picker's view of the repository (plan M9 §5.11): tracked files only, capped.
   app.get(`${P}/files`, allow(...OPERATOR), async (c) =>
     c.json(await listFiles(project.root, c.req.query('dir') ?? '')),

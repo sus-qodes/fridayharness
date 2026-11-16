@@ -57,7 +57,8 @@ export function desktopPlatform(core: Pick<TauriCore, 'invoke'>, clipboard?: Pic
       // The shell asks natively before it stops a running Friday; a cancel answers false.
       restart: () => dialog('restart_daemon'),
       storeKey: (name) => dialog('store_key', { name }),
-      allowSpending: (budget) => dialog('allow_spending', { budget }),
+      allowSpending: (budget, provider) =>
+        dialog('allow_spending', provider && provider !== 'anthropic' ? { budget, provider } : { budget }),
       autostart: async () => (await call<unknown>('get_autostart')) === true,
       setAutostart: async (enabled) => (await call<unknown>('set_autostart', { enabled })) === true,
       // `test`: from either window, now, whatever the Notch shows; the answer is whether the shell

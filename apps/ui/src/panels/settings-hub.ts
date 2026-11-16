@@ -37,6 +37,7 @@ import {
   select,
   Teardown,
 } from './common.js';
+import { autoVerifySwitch, plannerQuickSetup } from './quick-setup.js';
 import { routingPins } from './routing-pins.js';
 import {
   clampNumber,
@@ -680,8 +681,10 @@ export function mountSettingsHub(ctx: AppContext): Component {
     ];
     cardActions.append(...actionParts.filter((x): x is HTMLElement => x !== null));
 
+    // No API key needed: the installed Claude Code plans, signed in as it already is.
+    const cardQuick = h('div', { class: 'hub-card' }, plannerQuickSetup(ctx, td));
     // The steps are offered while the planner is not ready, as in the Settings drawer.
-    return st.ready ? [cardStatus] : [cardStatus, cardActions];
+    return st.ready ? [cardStatus] : [cardStatus, cardQuick, cardActions];
   }
 
   // ── 5. Routing & Pins Tab ─────────────────────────────────────────────────
@@ -793,7 +796,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
     void loadPolicy();
 
     card.append(h('div', { class: 'hub-card-title' }, 'Workspace Security Policy'), policyBox);
-    return [card];
+    return [h('div', { class: 'hub-card' }, autoVerifySwitch(ctx, td)), card];
   }
 
   // ── 7. Friday Engine Tab ──────────────────────────────────────────────────

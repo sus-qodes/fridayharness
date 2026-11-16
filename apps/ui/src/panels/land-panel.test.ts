@@ -211,4 +211,74 @@ describe('landing', () => {
     expect(m.el.textContent).toContain('Could not read the goal branch: no goal branch');
     m.destroy();
   });
+
+  it('lands a completed goal on a click, after the browser asks', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ goals: [makeGoal({ status: 'COMPLETED' })] }),
+      answers: {
+        [`GET /goals/${GID}/diff`]: diff(),
+        [`POST /goals/${GID}/land`]: {
+          goal_id: GID,
+          status: 'landed',
+          branch: goalBranch(GID),
+          into: 'main',
+          head: 'f'.repeat(40),
+          fast_forward: true,
+        },
+      },
+    });
+    const m = landModal(ctx, { kind: 'land', id: GID }, () => undefined);
+    await flush();
+    // Saying no changes nothing.
+    ctx.confirmAnswer = false;
+    buttonBy(m.el, 'Land into my branch').click();
+    await flush();
+    expect(ctx.confirms[0]?.title).toBe('Land this goal?');
+    expect(ctx.transport.to('POST', `/goals/${GID}/land`)).toHaveLength(0);
+    ctx.confirmAnswer = true;
+    buttonBy(m.el, 'Land into my branch').click();
+    await flush();
+    expect(ctx.transport.to('POST', `/goals/${GID}/land`)).toHaveLength(1);
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Landed into main (fast-forward)' });
+    expect(m.el.textContent).toContain("The goal's work is on main.");
+    expect(ctx.refreshes).toBe(1);
+    m.destroy();
+  });
+
+  it('on the desktop leaves the asking to the shell, and shows why git refused', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ goals: [makeGoal({ status: 'COMPLETED' })] }),
+      answers: {
+        [`GET /goals/${GID}/diff`]: diff(),
+        [`POST /goals/${GID}/land`]: () => {
+          throw new Error(`The goal branch would conflict with main; nothing was changed. ${HOSTILE}`);
+        },
+      },
+    });
+    (ctx as { platform: unknown }).platform = { ...ctx.platform, kind: 'tauri', desktop: {} };
+    const m = landModal(ctx, { kind: 'land', id: GID }, () => undefined);
+    await flush();
+    buttonBy(m.el, 'Land into my branch').click();
+    await flush();
+    expect(ctx.confirms).toHaveLength(0);
+    const err = m.el.querySelector('.pn-land-now [role="alert"]') as HTMLElement;
+    expect(err.hidden).toBe(false);
+    expect(err.textContent).toContain('would conflict with main; nothing was changed');
+    expect(m.el.querySelector('img')).toBeNull();
+    // Still offered: the person can fix the conflict and try again, or merge by hand.
+    expect(buttonBy(m.el, 'Land into my branch').disabled).toBe(false);
+    expect(m.el.textContent).toContain('Or in git');
+    m.destroy();
+  });
+
+  it('does not offer to land a goal that is not completed', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ goals: [makeGoal({ status: 'ACTIVE' })] }),
+      answers: { [`GET /goals/${GID}/diff`]: diff() },
+    });
+    const m = landModal(ctx, { kind: 'land', id: GID }, () => undefined);
+    await flush();
+    expect(buttonBy(m.el, 'Land into my branch').disabled).toBe(true);
+    m.destroy();
+  });
 });

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { FridayError, TaskKind, TaskScope } from '@friday/protocol';
-import { parse as parseYaml } from 'yaml';
+import { parseDocument, parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
 /**
@@ -624,6 +624,55 @@ export function parseConfig(text: string, source = 'config.yaml'): FridayConfig 
 export function loadConfig(path: string): FridayConfig {
   if (!existsSync(path)) throw new FridayError('project_not_found', `no Friday config at ${path}; run "friday init"`);
   return parseConfig(readFileSync(path, 'utf8'), path);
+}
+
+/**
+ * The settings a person may change from the interface (2026-11-16), each with the values it takes.
+ * Nothing here applies on its own say: automatic verification is a loosening this clone trusts
+ * before it applies (ADR-0029 §6), remote planning needs this machine's approval as well as the
+ * project's request, and the planner's provider is read when Friday starts.
+ */
+export const EDITABLE_SETTINGS = {
+  'verification.auto_on_completion': z.boolean(),
+  'master_brain.provider': z.enum(['anthropic', 'claude-code', 'none']),
+  'providers.claude-code.allow_remote': z.boolean(),
+  'providers.claude-code.daily_budget_usd': z.number().min(0).max(100_000),
+} as const;
+export type EditableSetting = keyof typeof EDITABLE_SETTINGS;
+
+/**
+ * `text` (a config.yaml) with these settings set, its comments, order and the rest of its values
+ * kept; refused when a setting is not editable, a value is not one it takes, or the result is not a
+ * valid configuration. Answers the new text and the settings that changed.
+ */
+export function editConfigText(
+  text: string,
+  sets: Readonly<Record<string, unknown>>,
+  source = 'config.yaml',
+): { text: string; changed: EditableSetting[] } {
+  const doc = parseDocument(text);
+  if (doc.errors.length) {
+    throw new FridayError('invalid_request', `${source} is not valid YAML: ${doc.errors[0]?.message ?? 'unreadable'}`);
+  }
+  const changed: EditableSetting[] = [];
+  for (const [key, value] of Object.entries(sets)) {
+    if (!Object.hasOwn(EDITABLE_SETTINGS, key)) {
+      throw new FridayError('invalid_request', `${key} is not a setting the interface changes`);
+    }
+    const setting = key as EditableSetting;
+    const checked = EDITABLE_SETTINGS[setting].safeParse(value);
+    if (!checked.success) {
+      throw new FridayError('invalid_request', `${key}: ${checked.error.issues[0]?.message ?? 'not a value it takes'}`);
+    }
+    const at = setting.split('.');
+    if (doc.getIn(at) === checked.data) continue;
+    doc.setIn(at, checked.data);
+    changed.push(setting);
+  }
+  const next = doc.toString();
+  // The result must still be a configuration Friday reads, or nothing is written.
+  parseConfig(next, source);
+  return { text: changed.length ? next : text, changed };
 }
 
 /** Initial config written by `friday init`. Block style so the hook launcher can find the id without a YAML parser. */

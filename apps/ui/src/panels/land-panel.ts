@@ -1,8 +1,10 @@
 /**
  * Landing a goal (plan §7.7, FD-27): what Friday did for the goal, one row per fact from its
  * records (plan M12.7); what is ready on `friday/goal-<id>` (its commits ahead of the main
- * checkout's HEAD and its files with `+N −M`), a way to the full goal diff, and the steps to merge
- * it in VS Code or git, each with a copy button. Friday never merges into a human's branch.
+ * checkout's HEAD and its files with `+N −M`), a way to the full goal diff, a "Land into my branch"
+ * button (2026-11-16: a person's click, confirmed, merges it as `git merge` would, all or nothing),
+ * and the steps to merge it in VS Code or git, each with a copy button. Friday never merges into a
+ * human's branch on its own.
  */
 import type { GoalDiff, GoalSummary } from '@friday/protocol';
 import { hasHidden, visible } from '../model/text.js';
@@ -10,7 +12,20 @@ import { goalSummaryRows } from '../nodes/goal-node.js';
 import { type AppContext, type Component, type ModalRequest, openDrawer } from '../shell/context.js';
 import { button, h, replace } from '../ui/dom.js';
 import { humanize, timeAgo } from '../ui/format.js';
-import { copyIcon, copyLine, errorOf, linkButton, note, panel, pathText, plain, section, Teardown } from './common.js';
+import {
+  actWithError,
+  badge,
+  copyIcon,
+  copyLine,
+  errorOf,
+  linkButton,
+  note,
+  panel,
+  pathText,
+  plain,
+  section,
+  Teardown,
+} from './common.js';
 
 /** The goal branch's name, as Friday names it. */
 export function goalBranch(goalId: string): string {
@@ -71,10 +86,82 @@ export function landModal(
     );
   }
 
+  const landBox = h('div', { class: 'pn-land-now' });
+  const landError = h('div', { class: 'field-error', hidden: true, role: 'alert' });
+  let landing = false;
+  /** Lands the goal into the branch the project folder has checked out, after a confirmation. */
+  async function landNow() {
+    if (landing) return;
+    // The desktop shows its own dialog for this route (`confirm_and_send`); a browser asks here.
+    if (!ctx.platform.desktop) {
+      const ok = await ctx.confirm({
+        title: 'Land this goal?',
+        body: [
+          `This merges ${visible(branch)} into the branch your project folder has checked out, as "git merge" there would.`,
+          'If git cannot merge cleanly, nothing is changed and Friday says why.',
+        ],
+        confirmLabel: 'Land the goal',
+      });
+      if (!ok) return;
+    }
+    landing = true;
+    landError.hidden = true;
+    renderLand();
+    const r = await actWithError(
+      ctx,
+      'Land the goal',
+      () => ctx.api.landGoal(goalId),
+      (e) => {
+        landError.hidden = false;
+        landError.textContent = plain(e.message, 1000);
+      },
+      (x) =>
+        x.status === 'already'
+          ? `Nothing to land: ${x.into} already has this goal's work`
+          : `Landed into ${x.into}${x.fast_forward ? ' (fast-forward)' : ''}`,
+    );
+    landing = false;
+    if (td.done) return;
+    if (r) {
+      landed = r.into;
+      ctx.refresh();
+    }
+    renderLand();
+  }
+  let landed: string | null = null;
+  function renderLand() {
+    // The daemon refuses a goal that is not completed; a goal the board does not hold is asked anyway.
+    const ready = !goal || goal.status === 'COMPLETED';
+    replace(
+      landBox,
+      landed
+        ? h(
+            'div',
+            { class: 'row' },
+            badge('landed', 'good'),
+            h('span', null, `The goal's work is on ${visible(landed)}.`),
+          )
+        : h(
+            'div',
+            { class: 'pn-actions pn-actions-start' },
+            button('Land into my branch', () => void landNow(), {
+              class: 'btn btn-primary',
+              disabled: landing || !ready,
+              title: ready
+                ? 'Merge the goal branch into the branch your project folder has checked out'
+                : 'Only a completed goal lands',
+            }),
+          ),
+      landError,
+    );
+  }
+  renderLand();
+
   function renderSteps() {
     replace(
       stepsBox,
-      h('div', { class: 'field-label' }, 'In VS Code'),
+      landBox,
+      h('div', { class: 'field-label' }, 'Or yourself, in VS Code'),
       h(
         'ol',
         { class: 'pn-steps' },
@@ -82,9 +169,9 @@ export function landModal(
         h('li', null, 'In its "…" menu choose Branch → Merge Branch…'),
         h('li', null, 'Pick ', pathText(branch), '.'),
       ),
-      h('div', { class: 'field-label' }, 'In git (in the project folder, on your branch)'),
+      h('div', { class: 'field-label' }, 'Or in git (in the project folder, on your branch)'),
       copyLine(ctx, `git merge ${branch}`, 'merge command'),
-      note('Friday never merges into your branch: landing the goal is your step. Review the diff first.'),
+      note('Friday never merges into your branch on its own: landing the goal is your step. Review the diff first.'),
     );
   }
 

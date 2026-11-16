@@ -50,6 +50,17 @@ export type TaskAction = 'ready' | 'release' | 'cancel' | 'rework' | 'unreserve'
 export type Reach = 'once' | 'run' | 'task';
 export type RecoveryActionName = 'reassign' | 'restart' | 'rebind' | 'needs_human' | 'cancel';
 
+/** What landing a goal did (`POST goals/:gid/land`). */
+export interface LandResult {
+  goal_id: string;
+  /** `landed`: merged now; `already`: the branch had nothing more to bring. */
+  status: 'landed' | 'already';
+  branch: string;
+  into: string;
+  head: string;
+  fast_forward: boolean;
+}
+
 export interface TaskDetail {
   task: TaskView;
   runs: RunView[];
@@ -412,6 +423,16 @@ export class FridayApi {
 
   trustPolicy(looseningHash: string): Promise<PolicyView> {
     return this.post('/policy/trust', { loosening_hash: looseningHash });
+  }
+
+  /** Sets a few config.yaml settings (the daemon's `EDITABLE_SETTINGS`); answers those that changed. */
+  editSettings(set: Record<string, unknown>): Promise<{ changed: string[] }> {
+    return this.post('/config/settings', { set });
+  }
+
+  /** Merges a completed goal's branch into the branch the project folder has checked out. */
+  landGoal(goalId: string): Promise<LandResult> {
+    return this.post(`/goals/${encodeURIComponent(goalId)}/land`, {}, { timeoutMs: TIMEOUTS.diff });
   }
 
   // ---- control

@@ -43,6 +43,7 @@ import {
   select,
   Teardown,
 } from './common.js';
+import { autoVerifySwitch, plannerQuickSetup } from './quick-setup.js';
 import { routingPins } from './routing-pins.js';
 
 /** Page actions a test replaces (a reload would end the test page). */
@@ -496,7 +497,7 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
     'div',
     { class: 'pn-planner-fix' },
     note(
-      'You can always write plans yourself. To let the Master Brain plan, run these in a terminal in the project folder:',
+      'Or with an Anthropic API key. You can always write plans yourself. To let the Master Brain plan with a key, run these in a terminal in the project folder:',
     ),
     field('Daily budget (USD) for the command below', budgetInput).el,
     nativeBox,
@@ -555,6 +556,8 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
     { class: 'pn-section', id: 'pn-settings-planner' },
     h('h3', { class: 'section-title' }, 'Planner'),
     plannerHead,
+    // No API key needed: the installed Claude Code plans, signed in as it already is.
+    plannerQuickSetup(ctx, td),
     fixBox,
   );
 
@@ -659,6 +662,7 @@ export function settingsDrawer(ctx: AppContext, request: DrawerRequest): Compone
     'section',
     { class: 'pn-section', id: 'pn-settings-policy' },
     h('h3', { class: 'section-title' }, 'Policy'),
+    autoVerifySwitch(ctx, td),
     policyBox,
   );
 

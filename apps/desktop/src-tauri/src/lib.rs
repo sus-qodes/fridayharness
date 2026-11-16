@@ -581,20 +581,32 @@ async fn store_key(app: AppHandle, name: String) -> Result<Value, CmdError> {
 
 /// Lets this clone use the provider key, after a native confirmation:
 /// `friday brain allow-remote --budget <n> --json` (FD-26).
+/// `provider` is the planner the approval is for: `anthropic` (the default, a stored key) or
+/// `claude-code` (the installed Claude Code, signed in as on this machine).
 #[tauri::command]
-async fn allow_spending(app: AppHandle, budget: f64) -> Result<Value, CmdError> {
+async fn allow_spending(app: AppHandle, budget: f64, provider: Option<String>) -> Result<Value, CmdError> {
     if !budget.is_finite() || !(0.0..=100_000.0).contains(&budget) {
         return Err(CmdError::bad_request("the budget is a number of dollars from 0 to 100000"));
+    }
+    let provider = provider.unwrap_or_else(|| "anthropic".into());
+    if provider != "anthropic" && provider != "claude-code" {
+        return Err(CmdError::bad_request("the provider is anthropic or claude-code"));
     }
     let install = current_install(&app)?;
     let project = current_project(&app)?;
     blocking(move || {
         let amount = format!("{}", (budget * 100.0).round() / 100.0);
+        let whose = if provider == "claude-code" {
+            "your Claude Code sign-in (your subscription or key, as Claude Code uses it)"
+        } else {
+            "your provider key"
+        };
         let d = Dialog {
             title: "Friday: allow this clone to spend?".into(),
             text: format!(
-                "Let this clone of {} use your provider key for the Master Brain, at most ${} a day?\n\nThe project's own budget still applies; the lower of the two wins.",
+                "Let this clone of {} use {} for the Master Brain's plans, at most ${} a day?\n\nThe project's own budget still applies; the lower of the two wins.",
                 visible(&project.name),
+                whose,
                 amount
             ),
             confirm: "Allow".into(),
@@ -606,7 +618,7 @@ async fn allow_spending(app: AppHandle, budget: f64) -> Result<Value, CmdError> 
         let out = daemon::run_cli(
             &install,
             Some(&project.root),
-            &["brain", "allow-remote", "--budget", &amount, "--json"],
+            &["brain", "allow-remote", "--provider", &provider, "--budget", &amount, "--json"],
             None,
             Duration::from_secs(60),
         )
