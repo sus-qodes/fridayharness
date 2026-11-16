@@ -7,6 +7,7 @@
  * daemon's `details.errors` are the final word and are shown beside the form.
  */
 import type { GoalView, LivePlanVersion } from '@friday/protocol';
+import { agentChoices } from '../model/board.js';
 import {
   canDrop,
   canRework,
@@ -36,7 +37,7 @@ import {
 import { PRIORITY, RISK, statusLook } from '../model/status.js';
 import { visible } from '../model/text.js';
 import type { AppContext, Component, ModalRequest } from '../shell/context.js';
-import { append, button, h, replace } from '../ui/dom.js';
+import { append, button, h, replace, setText } from '../ui/dom.js';
 import { humanize, truncate } from '../ui/format.js';
 import { icon } from '../ui/svg.js';
 import {
@@ -127,6 +128,29 @@ function taskEditor(ctx: AppContext, o: TaskEditorOptions): TaskEditor {
     t.role = role.value;
     o.onInput();
   });
+
+  // Who takes it: Friday by role, or one agent by name (reserved for it when the plan is approved).
+  const choices = agentChoices(ctx.store.select('board'));
+  const chosen = (t.assign_to ?? '').trim();
+  const assignOptions = [
+    { value: '', label: 'Friday decides (an agent of its role)' },
+    ...choices.map((c) => ({ value: c.agent_key, label: visible(c.label) })),
+    ...(chosen && !choices.some((c) => c.agent_key === chosen)
+      ? [{ value: chosen, label: `${visible(chosen)} · not seen by Friday yet` }]
+      : []),
+  ];
+  const assignHint = (key: string) => {
+    if (!key) return 'Friday gives it to a free agent when the plan is approved.';
+    const c = choices.find((x) => x.agent_key === key);
+    return `Kept for ${visible(key)} when the plan is approved: ${c ? c.note : 'it waits until this agent connects'}.`;
+  };
+  const assign = select(assignOptions, chosen, (v) => {
+    t.assign_to = v || undefined;
+    setText(assignNote, assignHint(v));
+    o.onInput();
+  });
+  const assignField = field('Assign to', assign);
+  const assignNote = h('div', { class: 'field-hint' }, assignHint(chosen));
 
   const priority = select(
     PRIORITIES.map((v) => ({ value: v, label: PRIORITY[v]?.label ?? v })),
@@ -242,6 +266,7 @@ function taskEditor(ctx: AppContext, o: TaskEditorOptions): TaskEditor {
   reg('role', roleField, role);
   reg('priority', priorityField, priority);
   reg('risk_level', riskField, risk);
+  reg('assign_to', assignField, assign);
   reg('description', descriptionField, description);
   reg('acceptance_criteria', criteriaField, criteria);
   o.register(`${p}.depends_on`, {
@@ -260,6 +285,7 @@ function taskEditor(ctx: AppContext, o: TaskEditorOptions): TaskEditor {
     h('div', { class: 'pn-task-head' }, title, h('span', { class: 'spacer' }), up, down, remove),
     h('div', { class: 'pn-grid2' }, keyField.el, summaryField.el),
     h('div', { class: 'pn-grid4' }, kindField.el, roleField.el, priorityField.el, riskField.el),
+    h('div', { class: 'pn-assign' }, assignField.el, assignNote),
     descriptionField.el,
     criteriaField.el,
     deps,

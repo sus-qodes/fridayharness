@@ -25,6 +25,8 @@ const TERMINAL = new Set(['COMPLETED', 'CANCELLED', 'ABANDONED']);
 
 const KEY_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
 const ROLE_RE = /^[a-z][a-z0-9-]{0,31}$/;
+/** An agent key, as the server's `AgentKeyRef` takes it. */
+const AGENT_KEY_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 /** Import refuses larger files (a plan is a few kilobytes). */
 export const MAX_IMPORT_BYTES = 1_000_000;
 
@@ -40,6 +42,11 @@ export interface DraftTask {
   scope: { write: string[]; read: string[] };
   priority: DraftPriority;
   risk_level: DraftRisk;
+  /**
+   * The agent this task is for (`dev-1`): reserved for it when the plan is approved, so no other
+   * agent takes it first. Absent or empty: Friday gives it to an agent by role.
+   */
+  assign_to?: string;
 }
 
 /** A first plan for a goal (`PlanDraft`). */
@@ -83,7 +90,7 @@ export interface DraftIssue {
   /**
    * Where it is: `objective`, `summary`, `plan`, `tasks`, `tasks.<i>.<field>` (`key`, `summary`,
    * `kind`, `role`, `description`, `acceptance_criteria`, `depends_on`, `scope.write`,
-   * `scope.read`, `priority`, `risk_level`), `rework.<task_id>`, `drop.<task_id>`; a revision's
+   * `scope.read`, `priority`, `risk_level`, `assign_to`), `rework.<task_id>`, `drop.<task_id>`; a revision's
    * new tasks use `new_tasks.<i>.<field>`.
    */
   path: string;
@@ -157,6 +164,7 @@ function cleanList(list: readonly string[]): string[] {
 /** A task as it is sent: trimmed text, empty lines and globs removed, an empty description left out. */
 export function normalizeTask(t: DraftTask): DraftTask {
   const description = (t.description ?? '').trim();
+  const assignTo = (t.assign_to ?? '').trim();
   return {
     key: t.key.trim(),
     summary: t.summary.trim(),
@@ -168,6 +176,7 @@ export function normalizeTask(t: DraftTask): DraftTask {
     scope: { write: cleanList(t.scope.write), read: cleanList(t.scope.read) },
     priority: t.priority,
     risk_level: t.risk_level,
+    ...(assignTo ? { assign_to: assignTo } : {}),
   };
 }
 
@@ -336,6 +345,8 @@ function taskIssues(t: DraftTask, prefix: string, label: string): DraftIssue[] {
   }
   if (!(PRIORITIES as readonly string[]).includes(t.priority)) add('priority', `"${t.priority}" is not a priority`);
   if (!(RISKS as readonly string[]).includes(t.risk_level)) add('risk_level', `"${t.risk_level}" is not a risk level`);
+  if (t.assign_to && !AGENT_KEY_RE.test(t.assign_to))
+    add('assign_to', 'an agent key is lowercase letters, digits and dashes, such as "dev-1"');
   return issues;
 }
 
@@ -586,6 +597,7 @@ function taskFrom(v: unknown, i: number, warnings: string[]): DraftTask {
     scope: { write: strList(scope.write), read: strList(scope.read) },
     priority: pick(o.priority, PRIORITIES, 'normal', `task "${key}": priority`, warnings),
     risk_level: pick(o.risk_level, RISKS, 'low', `task "${key}": risk_level`, warnings),
+    ...(str(o.assign_to) ? { assign_to: str(o.assign_to) } : {}),
   };
 }
 

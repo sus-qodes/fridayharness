@@ -919,6 +919,11 @@ export const PlanTaskView = z.object({
   priority: Priority,
   risk_level: RiskLevel,
   note: z.string().nullable(),
+  /**
+   * The agent this task is for, by key: reserved for it when the plan is approved, so no other
+   * agent takes it first. Null: Friday delegates it by role. Absent from views written before it.
+   */
+  assign_to: z.string().nullable().optional(),
 });
 export type PlanTaskView = z.infer<typeof PlanTaskView>;
 

@@ -114,6 +114,8 @@ export function consolidatePlan(draft: PlanDraft, opts: { teamRoles?: ReadonlySe
       RISK,
       order.map((t) => t.risk_level),
     ),
+    // Consolidation runs on a model's draft, which names no agent.
+    assign_to: null,
   };
   const note = `Friday kept this as one task: its ${keys.length} parts (${keys.join(', ')}) would run one after another, and one agent session does them for the fixed context of one.`;
   const rationale = [draft.rationale, note].filter(Boolean).join(' ');

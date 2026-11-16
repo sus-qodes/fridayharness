@@ -509,6 +509,8 @@ export interface PlanTaskRow {
   priority: string;
   risk_level: string;
   note: string | null;
+  /** Since migration 28; absent on a row read from an older database's copy. */
+  assign_to?: string | null;
 }
 
 export function toPlanTaskView(row: PlanTaskRow): PlanTaskView {
@@ -527,6 +529,7 @@ export function toPlanTaskView(row: PlanTaskRow): PlanTaskView {
     priority: row.priority as PlanTaskView['priority'],
     risk_level: row.risk_level as PlanTaskView['risk_level'],
     note: row.note,
+    assign_to: row.assign_to ?? null,
   };
 }
 

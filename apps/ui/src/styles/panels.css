@@ -357,6 +357,10 @@
   transform: rotate(180deg);
 }
 
+.pn-assign {
+  max-width: 420px;
+}
+
 .pn-deps {
   display: flex;
   flex-wrap: wrap;

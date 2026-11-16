@@ -483,7 +483,10 @@ describe('Tier 2: Boundary & Corner Cases', () => {
       // so the rule lives in styles/mascot.css and must not come back inline.
       const markup = renderFridaySvgString();
       expect(markup).not.toContain('<style');
-      const css = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'styles', 'mascot.css'), 'utf8');
+      const css = readFileSync(
+        path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'styles', 'mascot.css'),
+        'utf8',
+      );
       expect(css).toContain('@media (prefers-reduced-motion: reduce)');
       expect(css).toContain('animation: none !important');
     });

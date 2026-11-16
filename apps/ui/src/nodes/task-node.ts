@@ -192,17 +192,31 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
     const agents = assignableAgents(ctx.store.select('board'), t);
     const items: HTMLElement[] = agents.map((a) =>
       button(
-        [h('span', { class: 'mono' }, visible(a.agent_key)), h('span', { class: 'muted' }, ` ${visible(a.role)}`)],
+        [
+          h('span', { class: 'mono' }, visible(a.agent_key)),
+          h('span', { class: 'muted' }, ` ${visible(a.role)}`),
+          a.host === 'antigravity' ? h('span', { class: 'muted' }, ' · Antigravity') : null,
+          a.connected ? null : h('span', { class: 'muted' }, ' · waits'),
+        ],
         () => {
           closeMenu();
           void ctx
-            .act('Assign the task', () => ctx.api.assign(t.task_id, a.agent_key), `Given to ${a.agent_key}`)
+            .act(
+              'Assign the task',
+              () => ctx.api.assign(t.task_id, a.agent_key),
+              (r) => (r.mode === 'reserved' ? `Reserved for ${a.agent_key}: ${a.note}` : `Given to ${a.agent_key}`),
+            )
             .then(() => ctx.refresh());
         },
-        { class: 'nd-menu-item', role: 'menuitem', dataset: { agent: a.agent_key } },
+        {
+          class: 'nd-menu-item',
+          role: 'menuitem',
+          dataset: { agent: a.agent_key },
+          title: `${visible(a.label)}: ${a.note}`,
+        },
       ),
     );
-    if (!agents.length) items.push(h('div', { class: 'nd-menu-empty' }, 'No other agent is connected'));
+    if (!agents.length) items.push(h('div', { class: 'nd-menu-empty' }, 'Friday knows no other agent yet'));
     if (t.status === 'ASSIGNED') {
       items.push(
         button(
@@ -331,9 +345,11 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
           );
           break;
         case 'reassign': {
-          const b = actionButton('Reassign', 'swap', () => openMenu(b), {
+          // A task no agent holds yet is assigned; one an agent holds or waits for is reassigned.
+          const held = Boolean(t.agent_key || t.reserved_for_agent_key);
+          const b = actionButton(held ? 'Reassign' : 'Assign', 'swap', () => openMenu(b), {
             action: a,
-            title: 'Give the task to another agent',
+            title: held ? 'Give the task to another agent' : 'Give the task to an agent',
           });
           b.setAttribute('aria-haspopup', 'menu');
           buttons.push(b);

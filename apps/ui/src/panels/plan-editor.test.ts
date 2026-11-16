@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../platform/transport.js';
 import { makeContext } from '../test/context.js';
-import { makeGoal, makePlan, makePlanTask, makeSnapshot, makeTask } from '../test/fixtures.js';
+import { makeAgent, makeGoal, makeHarness, makePlan, makePlanTask, makeSnapshot, makeTask } from '../test/fixtures.js';
 import { planEditorModal } from './plan-editor.js';
-import { buttonBy, check, controlBy, flush, HOSTILE, type, ZW } from './test-support.js';
+import { buttonBy, check, choose, controlBy, flush, HOSTILE, type, ZW } from './test-support.js';
 
 const GID = 'goal_0000000000000000000000gg01';
 const PLANS = `/goals/${GID}/plans`;
@@ -93,6 +93,62 @@ describe('plan editor, first plan', () => {
     });
     expect(closed).toBe(1);
     expect(ctx.refreshes).toBe(1);
+    m.destroy();
+  });
+
+  it('gives a task to one agent, Antigravity among them, and sends no agent for the others', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({
+        goals: [makeGoal({ status: 'OPEN', plan_id: null })],
+        agents: [
+          makeAgent({ agent_key: 'claude-1', role: 'backend' }),
+          makeAgent({
+            agent_id: 'agent_000000000000000000000ag03',
+            agent_key: 'dev-1',
+            status: 'DISCONNECTED',
+            harness_id: 'harness_00000000000000000000ag01',
+          }),
+        ],
+        harnesses: [
+          makeHarness(),
+          makeHarness({ harness_id: 'harness_00000000000000000000ag01', vendor: 'antigravity', attach_mode: 'attach' }),
+        ],
+      }),
+      answers: {
+        'POST /files/match': { counts: {}, total: 0, truncated: false },
+        [`POST ${PLANS}`]: makePlan({ status: 'PROPOSED' }),
+      },
+    });
+    const m = planEditorModal(ctx, { kind: 'plan-editor', id: GID, mode: 'first' }, () => undefined);
+    type(controlBy<HTMLTextAreaElement>(m.el, 'Summary'), 'The API, and its docs');
+    fillTask(tasksOf(m.el)[0] as HTMLElement, {
+      key: 'api',
+      summary: 'Add the API',
+      criteria: 'ok',
+      write: 'backend/**',
+    });
+    buttonBy(m.el, 'Add a task').click();
+    const second = tasksOf(m.el)[1] as HTMLElement;
+    fillTask(second, { key: 'docs', summary: 'Write the docs', criteria: 'ok', write: 'docs/**' });
+    const assign = controlBy<HTMLSelectElement>(second, 'Assign to');
+    // Friday decides by default; every agent it knows is offered, connected or not.
+    expect(assign.value).toBe('');
+    expect(Array.from(assign.options).map((o) => o.textContent)).toEqual([
+      'Friday decides (an agent of its role)',
+      'claude-1 · Claude Code',
+      'dev-1 · Antigravity · not open now',
+    ]);
+    choose(assign, 'dev-1');
+    expect(second.textContent).toContain('waits until you type /friday in Antigravity');
+    buttonBy(m.el, 'Propose the plan').click();
+    await flush();
+    const call = ctx.transport.to('POST', PLANS)[0];
+    expect(call).toBeDefined();
+    const sent = (call?.body as { draft: { tasks: Record<string, unknown>[] } } | undefined)?.draft;
+    expect(sent?.tasks.map((t) => [t.key, t.assign_to])).toEqual([
+      ['api', undefined],
+      ['docs', 'dev-1'],
+    ]);
     m.destroy();
   });
 

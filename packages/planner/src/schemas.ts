@@ -32,6 +32,11 @@ export const AgentRole = z
   .string()
   .regex(/^[a-z][a-z0-9-]{0,31}$/, 'roles are lowercase words such as "backend", "frontend", "qa" or "developer"');
 
+/** An agent's key, as `friday task assign --agent` takes it: `dev-1`, `claude-2`. */
+export const AgentKeyRef = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9-]{0,63}$/, 'an agent key is lowercase letters, digits and dashes, such as "dev-1"');
+
 export const PlanTaskDraft = z.object({
   key: PlanKey,
   kind: TaskKind.default('implementation'),
@@ -44,6 +49,13 @@ export const PlanTaskDraft = z.object({
   role: AgentRole.default('developer'),
   priority: Priority.default('normal'),
   risk_level: RiskLevel.default('low'),
+  /**
+   * The agent this task is for: reserved for it when the plan is approved, so no other agent takes
+   * it first (an agent its person drives, such as Antigravity, waits for them to type /friday).
+   * A person's choice only: it is left out of the schema a planner model sees (`draftJsonSchema`)
+   * and cleared from what a model writes (`withoutAssignments`). Null: Friday delegates by role.
+   */
+  assign_to: AgentKeyRef.nullable().default(null),
 });
 export type PlanTaskDraft = z.output<typeof PlanTaskDraft>;
 
@@ -95,12 +107,46 @@ export const ReplanDraft = z.object({
 export type ReplanDraft = z.output<typeof ReplanDraft>;
 export type ReplanDraftInput = z.input<typeof ReplanDraft>;
 
-/** JSON Schema for a draft, as sent to a model provider (inputs: defaults are optional). */
+/** A person's field a planner model is not offered: the agent a task is for. */
+const PERSON_ONLY = 'assign_to';
+
+/** `schema` without a person-only property, wherever an object schema lists it. */
+function withoutPersonOnly(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(withoutPersonOnly);
+  if (!schema || typeof schema !== 'object') return schema;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
+    if (k === 'properties' && v && typeof v === 'object') {
+      const { [PERSON_ONLY]: _left, ...rest } = v as Record<string, unknown>;
+      out[k] = withoutPersonOnly(rest);
+    } else if (k === 'required' && Array.isArray(v)) {
+      out[k] = v.filter((x) => x !== PERSON_ONLY);
+    } else {
+      out[k] = withoutPersonOnly(v);
+    }
+  }
+  return out;
+}
+
+/**
+ * JSON Schema for a draft, as sent to a model provider (inputs: defaults are optional). The agent
+ * a task is for is a person's choice, so the model is not offered it.
+ */
 export function draftJsonSchema(kind: 'plan' | 'replan'): Record<string, unknown> {
   const schema = z.toJSONSchema(kind === 'plan' ? PlanDraft : ReplanDraft, {
     io: 'input',
     unrepresentable: 'any',
   }) as Record<string, unknown>;
   delete schema.$schema;
-  return schema;
+  return withoutPersonOnly(schema) as Record<string, unknown>;
+}
+
+/** A model's draft with no task naming an agent: a planner model never reserves work for one. */
+export function withoutAssignments<T extends { tasks?: PlanTaskDraft[]; new_tasks?: PlanTaskDraft[] }>(draft: T): T {
+  const clear = (ts: PlanTaskDraft[] | undefined) => ts?.map((t) => ({ ...t, assign_to: null }));
+  return {
+    ...draft,
+    ...(draft.tasks ? { tasks: clear(draft.tasks) } : {}),
+    ...(draft.new_tasks ? { new_tasks: clear(draft.new_tasks) } : {}),
+  };
 }

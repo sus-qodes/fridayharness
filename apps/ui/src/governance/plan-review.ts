@@ -80,6 +80,16 @@ function taskRow(t: LivePlanTask): HTMLElement {
       `${t.kind} · ${t.role} · ${t.priority} priority · ${t.risk_level} risk`,
       t.depends_on.length ? ` · after ${t.depends_on.map((d) => visible(d)).join(', ')}` : '',
     ),
+    // Who takes it once approved: one agent by name, else whoever Friday gives it to by role.
+    t.assign_to
+      ? h(
+          'div',
+          { class: 'gv-plan-task-assign' },
+          'For ',
+          h('span', { class: 'mono' }, visible(t.assign_to)),
+          ': kept for this agent when you approve',
+        )
+      : null,
     // What the agent will be told: the description becomes its instruction, in full.
     t.description
       ? h('div', { class: 'gv-plan-desc' }, h('span', { class: 'gv-k' }, 'Instructions: '), decisionText(t.description))

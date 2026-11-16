@@ -2,6 +2,13 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — a plan names the agent a task is for
+
+- **"Assign to" in the plan editor:** each task can name one agent (Friday decides by role when it names none). The choice is kept with the plan version (`assign_to` on its tasks; migration 28 adds the column) and shown in the plan review, and when the plan is approved the task is created reserved for that agent, a human's reservation that does not expire. Before, delegation gave each task to any free agent, so a task meant for Antigravity, which waits for its person to type `/friday`, went to whichever agent Friday runs was free first.
+- **A person's choice only:** the schema a planner model is given leaves `assign_to` out, and what a model writes has it cleared, in a first plan and in a revision's new tasks.
+- **The task card offers every agent Friday knows:** its Assign (Reassign once held) menu lists agents that are not connected too, marked so, Antigravity's saying it waits for `/friday`; giving a task to one reserves it.
+- `tests/scenarios/antigravity-attach.test.ts` has a plan with one task for Antigravity beside a free agent Friday runs: the free agent takes only the other task, and Antigravity claims its own with `/friday`. Without `assign_to` the same scenario hands the Antigravity task to the free agent.
+
 ## Unreleased — Antigravity connects from the Agents drawer
 
 - **A "Connect" button for Antigravity:** the Agents drawer has an Antigravity card beside "Claude Code in VS Code". Connect previews every file `friday harness config antigravity` would write, applies them on confirm, shows the doctor's answer and then the steps in Antigravity (open the folder yourself, trust it, allow the friday tools, tell the agent to take its task). A connected session shows in the list as "attached in Antigravity". The daemon serves it at `agent-setup/antigravity` (GET previews, POST applies), and the desktop shell forwards those two routes.

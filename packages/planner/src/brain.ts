@@ -40,7 +40,7 @@ import {
 import { existingTasks, proposalFromDraft, proposalFromReplan } from './proposals.js';
 import type { ModelRequest, PlannerModel } from './providers/types.js';
 import { classifyTaskRoles, ROLE_CLASSIFIER_PROMPT_VERSION, type RoleClassifierSettings } from './role-classifier.js';
-import { draftJsonSchema, type NeedsHuman } from './schemas.js';
+import { draftJsonSchema, type NeedsHuman, withoutAssignments } from './schemas.js';
 import { type BrainAction, failureAction, type TriggerFacts, triggersFor } from './triggers.js';
 import { type ExistingTask, type PlanTaskBounder, validateReplanDraft } from './validate.js';
 
@@ -1109,9 +1109,11 @@ export class MasterBrain {
     // A plan asked for with a human's feedback is proposed as the model wrote it: the feedback may
     // be how the human wants the work split.
     const teams = state.planBounds?.().teams ?? {};
+    // A model never reserves work for an agent: the agent a task is for is a person's choice.
+    const drafted = withoutAssignments(outcome.draft);
     const d = feedback
-      ? outcome.draft
-      : consolidatePlan(outcome.draft, {
+      ? drafted
+      : consolidatePlan(drafted, {
           teamRoles: new Set(Object.keys(teams).filter((r) => (teams[r]?.length ?? 0) > 0)),
         }).draft;
     const v = state.proposePlan(
@@ -1197,7 +1199,8 @@ export class MasterBrain {
     const callId = this.#recordCalls(outcome.calls, goalId, goal.plan_id);
     if (this.#closed && !outcome.ok && outcome.reason === 'provider') return this.#interruptedByShutdown(job);
     if (!outcome.ok) return { status: 'done', result: this.#plannerFailed(outcome, goalId, taskId) };
-    const d = outcome.draft;
+    // A model never reserves work for an agent: the agent a task is for is a person's choice.
+    const d = withoutAssignments(outcome.draft);
     // Freshness (review F06): the revision must still fit the plan and the tasks as they are now.
     const nowGoal = state.q.goal(projectId, goalId);
     const nowActive = nowGoal.plan_id ? state.q.latestPlanVersion(nowGoal.plan_id, ['ACTIVE']) : undefined;

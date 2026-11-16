@@ -101,6 +101,7 @@ export {
   type RoleClassifierSettings,
 } from './role-classifier.js';
 export {
+  AgentKeyRef,
   draftJsonSchema,
   NeedsHuman,
   PLAN_LIMITS,
@@ -111,6 +112,7 @@ export {
   ReplanDraft,
   type ReplanDraftInput,
   ScopeGlob,
+  withoutAssignments,
 } from './schemas.js';
 export { type BrainAction, failureAction, type TriggerEvent, type TriggerFacts, triggersFor } from './triggers.js';
 export {

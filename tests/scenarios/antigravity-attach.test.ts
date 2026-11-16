@@ -23,6 +23,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli, REPO_ROOT } from '../helpers/cli.js';
 import type { TestDaemon } from '../helpers/daemon.js';
+import { FakeHarness } from '../helpers/fake-harness.js';
 import { hostEnv } from '../helpers/hooks.js';
 
 const ws = useTestWorkspace();
@@ -156,10 +157,85 @@ async function antigravitySession(root: string) {
   return { hook, tool, friday };
 }
 
+describe('a plan with a task for Antigravity, beside an agent Friday runs', () => {
+  it('keeps that task for Antigravity while the free agent takes the other, and Antigravity claims it with /friday', async () => {
+    const { root } = materializeFixtureShop(path.join(ws().root, 'shop'));
+    const configured = await cli(['--project', root, 'harness', 'config', 'antigravity', '--agent', 'dev-1']);
+    expect(configured.code, configured.stderr).toBe(0);
+    await deterministicGit(root, { startEpoch: 1_767_300_000 }).commitAll('Friday for Antigravity');
+    const daemon = await createDaemon({
+      projectRoot: root,
+      stateDir: ws().stateDir,
+      tickMs: 0,
+      pollIntervalMs: 25,
+      logToFile: true,
+      extensions: [claudeCodeHooks()],
+      brain: { autoStart: false },
+    });
+    ws().track({ close: () => daemon.close('test cleanup') });
+    const td = wrap(daemon);
+    const op = td.operator;
+    const pid = td.project.project_id;
+
+    // An agent Friday runs, free and of a role that fits both tasks: before plans could name an
+    // agent, it was given whichever task came first, the one meant for Antigravity included.
+    const free = await FakeHarness.connect(td, { agentKey: 'cc-1', role: 'developer' });
+    free.client.startHeartbeat();
+    ws().track({ close: () => free.close() });
+
+    // The person's plan: the docs for Antigravity (first, so it would be first to go), the API for anyone.
+    const goal = await op.post<{ goal_id: string }>(op.projectPath('/goals'), {
+      request: 'Document how to run the tests, and tidy the checkout service',
+      plan: false,
+    });
+    const task = (key: string, write: string, assign_to?: string) => ({
+      key,
+      kind: 'implementation',
+      summary: `Do the ${key}`,
+      acceptance_criteria: [`the ${key} is done`],
+      scope: { write: [write] },
+      role: 'developer',
+      ...(assign_to ? { assign_to } : {}),
+    });
+    const proposed = await op.post<{ plan_id: string; version: number }>(
+      op.projectPath(`/goals/${goal.goal_id}/plans`),
+      {
+        draft: {
+          objective: 'Document how to run the tests, and tidy the checkout service',
+          summary: 'Two independent tasks',
+          tasks: [task('docs', 'README.md', 'dev-1'), task('service', 'backend/**')],
+        },
+      },
+    );
+    await op.post(op.projectPath(`/plans/${proposed.plan_id}/versions/${proposed.version}/approve`), {});
+    await op.post(op.projectPath('/brain/run-once'), {});
+    await op.post(op.projectPath('/brain/run-once'), {});
+
+    const byKey = () => new Map(daemon.state.q.goalTasks(pid, goal.goal_id).map((t) => [t.plan_key, t]));
+    // The free agent got the task anyone could take, and only that one.
+    const started = await free.waitFor('task.start', 30_000);
+    expect((started.params as { task_id: string }).task_id).toBe(byKey().get('service')?.task_id);
+    expect(byKey().get('docs')).toMatchObject({
+      status: 'READY',
+      reserved_for_agent_key: 'dev-1',
+      reserved_by: 'human',
+    });
+    expect(free.received.filter((m) => m.method === 'task.start')).toHaveLength(1);
+
+    // The person opens Antigravity and types /friday: it takes its task.
+    const ag = await antigravitySession(root);
+    await ag.hook('SessionStart');
+    const claim = await ag.friday('friday_task_claim', { next: true });
+    expect(claim.ok, claim.text).toBe(true);
+    expect((claim.structured.task as { task_id: string }).task_id).toBe(byKey().get('docs')?.task_id);
+    expect(byKey().get('docs')?.status).toBe('RUNNING');
+  }, 180_000);
+});
+
 describe('an Antigravity session, rehearsed', () => {
   it.each([
-    ['with Friday’s files committed, as the Connect dialog asks', true],
-    ['with Friday’s files not committed yet, as the Connect dialog leaves them', false],
+    ['with Fridayâ€™s files committed, as the Connect dialog asks', true],
+    ['with Fridayâ€™s files not committed yet, as the Connect dialog leaves them', false],
   ])(
     'connects, takes the task reserved for it, edits inside its scope without a prompt, claims it, and Friday verifies it: %s',
     async (_state, committed) => {
@@ -246,7 +322,7 @@ describe('an Antigravity session, rehearsed', () => {
       expect(progress.ok, progress.text).toBe(true);
       const tests = await ag.tool('run_command', { CommandLine: 'node --test "**/test/*.test.ts"', Cwd: where });
       // The project's own test command is one Friday's rules pass (test.local): no prompt.
-      expect(tests, 'the project’s own test command').toMatchObject({ decision: 'allow' });
+      expect(tests, 'the projectâ€™s own test command').toMatchObject({ decision: 'allow' });
       const done = await ag.friday('friday_claim_done', {
         summary: "Added a 'Running the tests' section to README.md",
         changed_paths: ['README.md'],

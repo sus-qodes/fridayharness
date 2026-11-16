@@ -1057,6 +1057,18 @@ ALTER TABLE learning_proposals ADD COLUMN origin_json TEXT;
   },
 ];
 
+export const PLAN_ASSIGNMENT_MIGRATIONS: Migration[] = [
+  {
+    // The agent a plan task is for (2026-11-16): reserved for it when the plan is approved, so an
+    // agent a person drives (Antigravity) gets it rather than whichever agent is free first.
+    version: 28,
+    name: 'plan_task_assign_to',
+    up: `
+ALTER TABLE plan_tasks ADD COLUMN assign_to TEXT;
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -1082,6 +1094,7 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...INTENT_MIGRATIONS,
   ...RUN_INTENT_MIGRATIONS,
   ...READINESS_MIGRATIONS,
+  ...PLAN_ASSIGNMENT_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */

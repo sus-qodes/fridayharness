@@ -3507,7 +3507,11 @@ export class FridayState {
               risk_level: t.risk_level,
               scope,
               dependencies,
-              reserved_for_agent_key: null,
+              // The agent the plan names for it (2026-11-16): reserved from the start, so no other
+              // free agent is given it first. Only a person's plan names one (the planner model's
+              // drafts never carry it), so the reservation is a human's and does not expire.
+              reserved_for_agent_key: t.assign_to ?? null,
+              ...(t.assign_to ? { reserved_by: 'human', reserved_until: null } : {}),
               created_by: ctx.actor,
             },
           },

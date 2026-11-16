@@ -1288,8 +1288,8 @@ export class StateProjector implements Projector {
       );
     const insert = this.db.prepare(
       `INSERT INTO plan_tasks (plan_id, version, key, project_id, position, change, task_id, kind, summary, description,
-         acceptance_criteria_json, depends_on_json, scope_json, role, priority, risk_level, note)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         acceptance_criteria_json, depends_on_json, scope_json, role, priority, risk_level, note, assign_to)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     ((plan.tasks as Payload[] | undefined) ?? []).forEach((t, i) => {
       insert.run(
@@ -1310,6 +1310,7 @@ export class StateProjector implements Projector {
         str(t.priority),
         str(t.risk_level),
         opt(t.note),
+        opt(t.assign_to),
       );
     });
   }
