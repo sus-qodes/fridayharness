@@ -1,9 +1,10 @@
 /**
  * `friday harness config antigravity` (plan M8b.3): plans every file change that attaches
  * Antigravity to a Friday project, and its exact undo with `--remove`. Friday owns its hook group
- * (`friday`) in `.agents/hooks.json`, its server (`friday`) in `.agents/mcp_config.json`, its marker
- * block in `AGENTS.md` and the folder `.friday/harness/antigravity/`; everything else in those
- * files is the user's and is kept as it is, in order.
+ * (`friday`) in `.agents/hooks.json`, its server (`friday`) in `.agents/mcp_config.json`, its skill
+ * (`.agents/skills/friday/`, the `/friday` command), its marker block in `AGENTS.md` and the folder
+ * `.friday/harness/antigravity/`; everything else in those files is the user's and is kept as it
+ * is, in order.
  */
 import { existsSync, readFileSync, rmdirSync } from 'node:fs';
 import path from 'node:path';
@@ -16,8 +17,13 @@ import {
   HARNESS_DIR,
   HARNESS_README,
   HOOK_GROUP,
+  HOOK_SHIM,
+  HOOK_SHIM_PATH,
   LAUNCH_MCP,
   MCP_ENTRY,
+  SKILL_MARKER,
+  SKILL_MD,
+  SKILL_PATH,
 } from './templates.js';
 
 export interface AntigravityConfigOptions {
@@ -140,6 +146,14 @@ export function planAntigravity(opts: AntigravityConfigOptions): FileChange[] {
     'hook launcher (policy checks)',
     true,
   );
+  // Antigravity starts hooks in `.agents/`, where the hook command's path lands on this file.
+  add(
+    path.join(root, ...HOOK_SHIM_PATH.split('/')),
+    install ? HOOK_SHIM : null,
+    true,
+    'runs the hook launcher from .agents (where Antigravity starts hooks)',
+    true,
+  );
   add(path.join(harnessDir, 'launch-mcp.mjs'), install ? LAUNCH_MCP : null, true, 'starts the friday MCP server', true);
   add(path.join(harnessDir, 'README.md'), install ? HARNESS_README : null, true, 'what these files are', true);
 
@@ -167,6 +181,13 @@ export function planAntigravity(opts: AntigravityConfigOptions): FileChange[] {
     'registers the friday MCP server',
   );
 
+  // The `/friday` command. A skill named friday that the user wrote is theirs: Friday writes and
+  // removes only the one carrying its marker.
+  const skillFile = path.join(root, ...SKILL_PATH.split('/'));
+  const skillBefore = read(skillFile);
+  if (skillBefore === null || skillBefore.includes(SKILL_MARKER))
+    add(skillFile, install ? SKILL_MD : null, true, 'the /friday command (a skill)', true);
+
   const agentsMd = path.join(root, 'AGENTS.md');
   const mdBefore = read(agentsMd);
   if (install || mdBefore?.includes('<!-- friday:begin -->'))
@@ -182,10 +203,16 @@ export function applyAntigravityPlan(changes: FileChange[]): void {
   applyPlan(changes);
   for (const c of changes) {
     if (c.after !== null || !c.display.startsWith('.agents/')) continue;
-    try {
-      rmdirSync(path.dirname(c.path));
-    } catch {
-      // not empty: the user's own files stay
+    // Every folder between the removed file and the project root, innermost first, `.agents` last.
+    let dir = path.dirname(c.path);
+    for (let depth = c.display.split('/').length - 1; depth > 0; depth -= 1) {
+      try {
+        rmdirSync(dir);
+      } catch {
+        // not empty: the user's own files stay
+        break;
+      }
+      dir = path.dirname(dir);
     }
   }
 }

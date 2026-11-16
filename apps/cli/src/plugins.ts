@@ -20,6 +20,7 @@ import { opencodeConfigCli, opencodeDoctorCli } from '@friday/adapter-opencode';
 import { newId } from '@friday/protocol';
 import { type Command, Option } from 'commander';
 import { createAgentLauncher } from './agent-launcher.js';
+import { antigravitySetupExtension } from './antigravity-setup-ext.js';
 import { claudeSetupExtension } from './claude-setup-ext.js';
 import { doctorCodex, registerSpawnRun } from './codex.js';
 import { type GlobalOptions, out, project, UsageError } from './context.js';
@@ -310,7 +311,12 @@ let registered = false;
 if (!registered) {
   registered = true;
   // The hooks route, and the interface's agent launcher and Claude Code setup (plan M9 §5.9, §5.10).
-  daemonPlugins.extensions.push(claudeCodeHooks(), createAgentLauncher(), claudeSetupExtension());
+  daemonPlugins.extensions.push(
+    claudeCodeHooks(),
+    createAgentLauncher(),
+    claudeSetupExtension(),
+    antigravitySetupExtension(),
+  );
   commandPlugins.push(registerHarness, registerFixture);
   extraDoctorChecks.push(async (ref) => {
     if (!ref || !existsSync(path.join(ref.root, '.friday', 'harness', 'claude-code'))) return [];

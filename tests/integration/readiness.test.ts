@@ -64,6 +64,8 @@ describe('runtime readiness', () => {
       ['cursor', 'claude-opus-5-5', false],
       ['codex', 'openai/gpt-6.1-sol', false],
       ['opencode', 'z-ai/glm-5.3', false],
+      // Last in the role since 2026-11-16, and no more ready than the rest on a machine that has seen none.
+      ['antigravity', 'gemini-3.8-flash', false],
     ]);
     let report = await td.operator.get<ReadinessReport>(P('/readiness'));
     const codex = report.hosts.find((h) => h.host === 'codex');

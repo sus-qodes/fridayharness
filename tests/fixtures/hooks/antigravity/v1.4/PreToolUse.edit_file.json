@@ -1,0 +1,26 @@
+{
+  "host": "antigravity",
+  "host_version": "1.5",
+  "written_at": "2026-11-16",
+  "event": "PreToolUse",
+  "note": "an edit by the tool name of CLI 1.5; its argument names are not documented, Path is assumed from read_file",
+  "input": {
+    "conversationId": "conv-fixture-1",
+    "workspacePaths": [
+      "${PROJECT_DIR}"
+    ],
+    "transcriptPath": "${HOME}/.gemini/antigravity-cli/brain/conv-fixture-1/.system_generated/logs/transcript.jsonl",
+    "artifactDirectoryPath": "${HOME}/.gemini/antigravity-cli/brain/conv-fixture-1",
+    "modelName": "fixture-model",
+    "lastUserInput": "/friday",
+    "hookEventName": "PreToolUse",
+    "cwd": "${PROJECT_DIR}",
+    "toolCall": {
+      "name": "edit_file",
+      "args": {
+        "Path": "${PROJECT_DIR}/src/a.ts"
+      }
+    },
+    "stepIdx": 2
+  }
+}

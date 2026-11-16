@@ -61,7 +61,7 @@ export function checklist(board: UiSnapshot | null, context: Partial<ChecklistCo
       done: connected > 0,
       title:
         connected > 0 ? `${connected === 1 ? 'An agent is' : `${connected} agents are`} connected` : 'Connect an agent',
-      detail: 'Start Claude Code or Codex from Friday, or set up Claude Code in VS Code.',
+      detail: 'Start Claude Code or Codex from Friday, or connect Claude Code in VS Code or Antigravity.',
       fix: { label: 'Open Agents', action: 'agents' },
     },
     {

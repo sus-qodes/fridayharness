@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-21.4",
+  "version": "2026-11-16.1",
   "aliases": {
     "classifier": "decision_router",
     "router": "decision_router",
@@ -189,6 +189,23 @@
             "observed_at": "2026-10-21"
           },
           "benchmark": null
+        },
+        {
+          "rank": 5,
+          "model": "gemini-3.8-flash",
+          "harness": "antigravity",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-11-16",
+          "cost": null,
+          "benchmark": null
         }
       ]
     },
@@ -295,6 +312,23 @@
             "observed_at": "2026-10-21"
           },
           "benchmark": null
+        },
+        {
+          "rank": 6,
+          "model": "gemini-3.8-flash",
+          "harness": "antigravity",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-11-16",
+          "cost": null,
+          "benchmark": null
         }
       ]
     },
@@ -380,6 +414,23 @@
             "source": "Friday registry cost table (2026-10-21)",
             "observed_at": "2026-10-21"
           },
+          "benchmark": null
+        },
+        {
+          "rank": 5,
+          "model": "gemini-3.8-flash",
+          "harness": "antigravity",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-11-16",
+          "cost": null,
           "benchmark": null
         }
       ]
@@ -467,6 +518,23 @@
             "observed_at": "2026-10-21"
           },
           "benchmark": null
+        },
+        {
+          "rank": 5,
+          "model": "gemini-3.8-flash",
+          "harness": "antigravity",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-11-16",
+          "cost": null,
+          "benchmark": null
         }
       ]
     },
@@ -553,6 +621,23 @@
             "observed_at": "2026-10-21"
           },
           "benchmark": null
+        },
+        {
+          "rank": 5,
+          "model": "gemini-3.8-flash",
+          "harness": "antigravity",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-11-16",
+          "cost": null,
+          "benchmark": null
         }
       ]
     },
@@ -638,6 +723,23 @@
             "source": "Friday registry cost table (2026-10-21)",
             "observed_at": "2026-10-21"
           },
+          "benchmark": null
+        },
+        {
+          "rank": 5,
+          "model": "gemini-3.8-flash",
+          "harness": "antigravity",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-11-16",
+          "cost": null,
           "benchmark": null
         }
       ]

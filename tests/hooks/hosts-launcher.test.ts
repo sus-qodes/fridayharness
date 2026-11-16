@@ -8,7 +8,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'nod
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { claudeCodeHooks, LAUNCHER_VERSION } from '@friday/adapter-claude';
+import { ANTIGRAVITY_NO_DECISION, claudeCodeHooks, LAUNCHER_VERSION } from '@friday/adapter-claude';
 import { GenericHarnessClient } from '@friday/adapter-generic';
 import type { TaskView, Vendor } from '@friday/protocol';
 import { loadProject, privateDirFor, writePrivateFile } from '@friday/sdk';
@@ -67,6 +67,9 @@ function decided(vendor: OtherVendor, r: HostRun): { decision: string | null; re
   if (vendor === 'cursor') {
     return { decision: (j.permission as string | undefined) ?? null, reason: String(j.agent_message ?? '') };
   }
+  // Antigravity has no reply without a decision (it reads one as a denial): a call Friday did not
+  // judge is `ask` there, the person and their own permissions deciding. It is no decision of Friday's.
+  if (vendor === 'antigravity' && r.stdout === ANTIGRAVITY_NO_DECISION) return { decision: null, reason: '' };
   const d = (j.decision as string | undefined) ?? null;
   return { decision: d === 'force_ask' ? 'ask' : d, reason: String(j.reason ?? '') };
 }
@@ -157,7 +160,7 @@ describe('every host, with no daemon', () => {
     expect((await run(w, 'cursor', 'preToolUse.read')).stdout).toBe('{}');
     await expectRun('antigravity', 'PreToolUse.write_to_file', 'deny', 'edits are paused');
     expect((await expectRun('antigravity', 'PreToolUse.run_command', 'ask')).json?.decision).toBe('force_ask');
-    expect((await run(w, 'antigravity', 'PreToolUse.invoke_subagent')).stdout).toBe('{}');
+    expect((await run(w, 'antigravity', 'PreToolUse.invoke_subagent')).stdout).toBe(ANTIGRAVITY_NO_DECISION);
     expect((await expectRun('gemini', 'BeforeTool.replace', 'deny', 'edits are paused')).code).toBe(2);
     await expectRun('gemini', 'BeforeTool.run_shell_command', 'ask', 'a human must confirm');
     await expectRun('gemini', 'BeforeTool.mcp', 'ask');
@@ -195,7 +198,7 @@ describe('every host, with no daemon', () => {
     mkdirSync(other, { recursive: true });
     for (const [vendor, name, empty] of [
       ['cursor', 'preToolUse.write', '{}'],
-      ['antigravity', 'PreToolUse.write_to_file', '{}'],
+      ['antigravity', 'PreToolUse.write_to_file', ANTIGRAVITY_NO_DECISION],
       ['gemini', 'BeforeTool.write_file', ''],
     ] as const) {
       const f = hostFixture(vendor, name, other);
@@ -474,7 +477,9 @@ describe('every host, with the daemon', () => {
       });
       if (vendor !== 'antigravity') expect(out.code, vendor).toBe(2);
       const ok = await inside[vendor]();
-      expect([ok.code, decided(vendor, ok).decision], vendor).toEqual([0, null]);
+      // No decision of Friday's, except in Antigravity, which takes no reply without one: there a
+      // write inside the task's scope is told to go ahead.
+      expect([ok.code, decided(vendor, ok).decision], vendor).toEqual([0, vendor === 'antigravity' ? 'allow' : null]);
     }
     // One rule decided all four, each recorded once with the session's agent as the actor.
     const evaluated = td.daemon.state.store

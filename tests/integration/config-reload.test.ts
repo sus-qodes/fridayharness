@@ -266,7 +266,7 @@ describe('config.yaml read again while Friday runs', () => {
       model: 'claude-sonnet-5-5',
       role: 'backend_engineer',
       role_source: 'kind_fallback',
-      registry_version: '2026-10-21.4',
+      registry_version: '2026-11-16.1',
       selected_rank: 1,
       selected_harness: 'claude-code',
     });
@@ -293,16 +293,16 @@ describe('config.yaml read again while Friday runs', () => {
       blocked: true,
       role: 'backend_engineer',
       role_source: 'kind_fallback',
-      registry_version: '2026-10-21.4',
-      // Appended after the owner's five backend ranks; it never reorders them.
-      selected_rank: 6,
+      registry_version: '2026-11-16.1',
+      // Appended after the owner's six backend ranks (Antigravity is the sixth); it never reorders them.
+      selected_rank: 7,
       selected_harness: 'generic',
     });
     expect(enabled.reason).toContain('must hold');
     expect(enabled.candidates).toContainEqual(
       expect.objectContaining({
         model: 'local-coder',
-        reasons: ['registry.rank(6)', 'registry.harness(generic)'],
+        reasons: ['registry.rank(7)', 'registry.harness(generic)'],
       }),
     );
   });

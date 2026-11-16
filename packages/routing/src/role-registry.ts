@@ -143,6 +143,16 @@ const DEEPSEEK: CandidateOptions = {
 };
 const ranked = (rank: number, model: string, harness: string, options: CandidateOptions = {}) =>
   candidate(rank, model, harness, { cost: HANDOFF_COST, ...options });
+/**
+ * Antigravity, last in each working role. It attaches only: its person starts it and picks its
+ * model, so the entry is what lets a task start in their session (without one, every claim there
+ * ended "no dispatchable candidate"), not a claim about which model runs it; the route is advisory,
+ * as for every host that chooses its own model. The owner added it on 2026-11-16, after the first
+ * live sessions. It reorders nothing, and no cost or benchmark is claimed for it.
+ */
+const ANTIGRAVITY_MODEL = 'gemini-3.8-flash';
+const antigravity = (rank: number) =>
+  candidate(rank, ANTIGRAVITY_MODEL, 'antigravity', { cost: null, last_checked: '2026-11-16' });
 
 /**
  * Typed canonical role registry: the owner's static ranking, in the
@@ -156,7 +166,7 @@ const ranked = (rank: number, model: string, harness: string, options: Candidate
  * no ranking exists that the owner did not write.
  */
 export const ROLE_REGISTRY_SOURCE: RoleRegistry = {
-  version: '2026-10-21.4',
+  version: '2026-11-16.1',
   aliases: {
     classifier: 'decision_router',
     router: 'decision_router',
@@ -214,6 +224,7 @@ export const ROLE_REGISTRY_SOURCE: RoleRegistry = {
         ranked(2, 'claude-fable-5-1', 'claude-code'),
         ranked(3, 'openai/gpt-6-astra', 'codex'),
         ranked(4, 'anthropic/claude-opus-5.5', 'opencode'),
+        antigravity(5),
       ],
     },
     backend_engineer: {
@@ -225,6 +236,7 @@ export const ROLE_REGISTRY_SOURCE: RoleRegistry = {
         ranked(3, 'deepseek-flash', 'deepseek', DEEPSEEK),
         ranked(4, 'openai/gpt-6.1-sol', 'codex'),
         ranked(5, 'z-ai/glm-5.3', 'opencode'),
+        antigravity(6),
       ],
     },
     frontend_engineer: {
@@ -235,6 +247,7 @@ export const ROLE_REGISTRY_SOURCE: RoleRegistry = {
         ranked(2, 'claude-sonnet-5-5', 'cursor'),
         ranked(3, 'gemini-4-argon', 'gemini'),
         ranked(4, 'claude-opus-5-5', 'claude-code'),
+        antigravity(5),
       ],
     },
     qa_and_debugging: {
@@ -245,6 +258,7 @@ export const ROLE_REGISTRY_SOURCE: RoleRegistry = {
         ranked(2, 'openai/gpt-6.1-sol', 'codex'),
         ranked(3, 'openai/gpt-6-astra', 'codex'),
         ranked(4, 'deepseek-flash', 'deepseek', DEEPSEEK),
+        antigravity(5),
       ],
     },
     devops_and_terminal: {
@@ -255,6 +269,7 @@ export const ROLE_REGISTRY_SOURCE: RoleRegistry = {
         ranked(2, 'openai/gpt-6.1-sol', 'codex'),
         ranked(3, 'claude-opus-5-5', 'claude-code'),
         ranked(4, 'deepseek/deepseek-v4.1-flash-1017', 'opencode'),
+        antigravity(5),
       ],
     },
     code_reviewer_and_security: {
@@ -265,6 +280,7 @@ export const ROLE_REGISTRY_SOURCE: RoleRegistry = {
         ranked(2, 'claude-sonnet-5-5', 'cursor'),
         ranked(3, 'gemini-4-argon', 'gemini'),
         ranked(4, 'z-ai/glm-5.3', 'opencode'),
+        antigravity(5),
       ],
     },
   },

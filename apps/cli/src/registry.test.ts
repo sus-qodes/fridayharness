@@ -12,7 +12,7 @@ const view = {
 describe('friday registry', () => {
   it('shows canonical roles, aliases and candidate requirements without claiming availability', () => {
     const text = formatRoleRegistry(ROLE_REGISTRY_SOURCE);
-    expect(text).toContain('Static role registry 2026-10-21.4');
+    expect(text).toContain('Static role registry 2026-11-16.1');
     expect(text).toContain('backend_engineer —');
     expect(text).toContain('aliases: backend, backend-engineer');
     expect(text).toContain('claude-sonnet-5-5 via claude-code [dispatchable]');
@@ -34,9 +34,10 @@ describe('friday registry', () => {
   it('validates the typed registry, its project extension and the generated artifact', () => {
     expect(validateRegistryView(view)).toEqual({
       ok: true,
-      version: '2026-10-21.4',
+      version: '2026-11-16.1',
       roles: 7,
-      candidates: 28,
+      // Twenty-eight of the handoff, and Antigravity last in each of the six working roles.
+      candidates: 34,
       project_candidates: 0,
       artifact: 'matches',
     });

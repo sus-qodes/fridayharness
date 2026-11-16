@@ -248,13 +248,19 @@ export interface NormalizedHook {
 
 /**
  * Friday's answer to one hook, before a host module turns it into the host's reply. Friday only
- * restricts (B9): there is no "allow" here, and a host module never answers allow or approve.
+ * restricts (B9): a host module never answers allow or approve, with one exception the owner
+ * decided on 2026-11-16. Antigravity takes no reply without a decision (it reads one as a denial),
+ * so "no objection" there can only be said as its `ask`, a prompt to the person at every step; the
+ * first live sessions needed thirty to forty of them. For Antigravity alone, a call that Friday's
+ * own rules pass is therefore answered `allow`. Every other host module reads `allow` as `none`.
  * Reasons carry no "Friday:" prefix; each host's reply adds it.
  */
 export type HookJudgment =
   | { decision: 'none' }
   | { decision: 'deny'; reason: string }
   | { decision: 'ask'; reason: string }
+  /** PreToolUse: Friday's own rules pass this call, or it is one of Friday's own tools (Antigravity only; `none` elsewhere). */
+  | { decision: 'allow'; reason: string }
   /** SessionStart: text for the session. `brief` marks a one-line note rather than the context packet. */
   | { decision: 'context'; text: string; brief?: boolean }
   /** Stop: keep the agent working once, with this message. */

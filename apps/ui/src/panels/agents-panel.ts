@@ -3,9 +3,10 @@
  * row saying whether Friday started it or it attached in VS Code, whether it is connected now, its
  * process state, enforcement and model, with Stop, Start again, Forget and Output as they apply
  * (processes and remembered profiles read again every 3 s while the drawer is open; the connected
- * sessions from the board); the "Claude Code in VS Code" card; and the installed hosts, shown only
- * while none is found (the Start dialog's Host field shows them otherwise). The routing pins live in
- * Settings → Routing: a request for them opens Settings there.
+ * sessions from the board); the "Claude Code in VS Code" card; the "Antigravity" card, which connects
+ * a host Friday may not start itself; and the installed hosts, shown only while none is found (the
+ * Start dialog's Host field shows them otherwise). The routing pins live in Settings → Routing: a
+ * request for them opens Settings there.
  */
 import type {
   AgentHost,
@@ -21,6 +22,7 @@ import { type AppContext, type Component, type DrawerRequest, openDrawer, openMo
 import { button, h, replace } from '../ui/dom.js';
 import { humanize, timeAgo } from '../ui/format.js';
 import { icon } from '../ui/svg.js';
+import { ANTIGRAVITY_ATTACH_NOTE } from './antigravity-setup.js';
 import { actWithError, badge, errorOf, note, panel, pathText, plain, Teardown } from './common.js';
 
 export const PROCESS_POLL_MS = 3000;
@@ -118,16 +120,22 @@ function optionsText(o: Record<string, unknown> | undefined): string {
   return parts.join(' · ');
 }
 
-const HOST_LABEL: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex' };
+const HOST_LABEL: Record<string, string> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  antigravity: 'Antigravity',
+};
 
-/** The "Claude Code in VS Code" status from the connected harnesses (plan §7.7). */
-export function claudeCodeStatus(harnesses: readonly HarnessEntry[]): {
+export interface AttachedStatus {
   connected: boolean;
   hooksSeen: boolean;
   harness: HarnessEntry | null;
-} {
+}
+
+/** The status of a host that joins by attaching (its MCP server and hooks), from the connected harnesses. */
+function attachedStatus(harnesses: readonly HarnessEntry[], vendor: string): AttachedStatus {
   const attached = harnesses.filter(
-    (x) => x.vendor === 'claude-code' && x.attach_mode === 'attach' && x.status !== 'TERMINATED',
+    (x) => x.vendor === vendor && x.attach_mode === 'attach' && x.status !== 'TERMINATED',
   );
   const harness = attached.find((x) => x.status !== 'DISCONNECTED') ?? attached[0] ?? null;
   const status = harness?.enforcement_status ?? null;
@@ -136,6 +144,21 @@ export function claudeCodeStatus(harnesses: readonly HarnessEntry[]): {
     hooksSeen: status === 'enforcing' || status === 'degraded' || status === 'unverified',
     harness,
   };
+}
+
+/** The "Claude Code in VS Code" status from the connected harnesses (plan §7.7). */
+export function claudeCodeStatus(harnesses: readonly HarnessEntry[]): AttachedStatus {
+  return attachedStatus(harnesses, 'claude-code');
+}
+
+/** The "Antigravity" status: a session the person opened on this project themselves. */
+export function antigravityStatus(harnesses: readonly HarnessEntry[]): AttachedStatus {
+  return attachedStatus(harnesses, 'antigravity');
+}
+
+/** Where a session the person started themselves runs, for the row's "attached in …". */
+export function attachedPlace(host: string): string {
+  return host === 'antigravity' ? 'Antigravity' : 'VS Code';
 }
 
 interface RowView {
@@ -322,7 +345,7 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
       const x = row.harness;
       const fridayRow = !!p || !!row.profile;
       keyEl.textContent = visible(row.agent_key || '—');
-      originEl.textContent = row.origin === 'attached' ? 'attached in VS Code' : 'started by Friday';
+      originEl.textContent = row.origin === 'attached' ? `attached in ${attachedPlace(row.host)}` : 'started by Friday';
       const connected = isConnected(x);
       connEl.className = `badge badge-${connected ? 'good' : 'muted'}`;
       connEl.textContent = connected ? 'connected' : 'not connected';
@@ -388,7 +411,7 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
       listState.hidden = rows.length > 0;
       listState.textContent = rows.length
         ? ''
-        : 'No agent yet. Start one above, or set up Claude Code in VS Code below.';
+        : 'No agent yet. Start one above, or connect Claude Code in VS Code or Antigravity below.';
     }
     const seen = new Set<string>();
     for (const row of rows) {
@@ -464,6 +487,38 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
     );
   }
 
+  // ---- Antigravity: it only attaches (its terms keep a personal account to the Antigravity the
+  // person runs themselves), so this card connects it and says why there is no Start button.
+  const antigravityBox = h('div', { class: 'pn-antigravity' });
+  function renderAntigravity() {
+    const st = antigravityStatus(ctx.store.select('board')?.harnesses ?? []);
+    const b = st.harness
+      ? enforcementWords(st.harness.enforcement_level, st.harness.enforcement_status, st.harness.enforcement_basis)
+      : null;
+    replace(
+      antigravityBox,
+      h(
+        'dl',
+        { class: 'pn-kv' },
+        h('dt', null, 'Configured'),
+        h('dd', null, st.harness ? 'yes: it connected' : 'not seen yet (Connect previews it)'),
+        h('dt', null, 'MCP connected'),
+        h('dd', null, st.connected ? 'yes' : 'no'),
+        h('dt', null, 'Hooks seen'),
+        h('dd', null, st.hooksSeen ? 'yes' : st.harness ? 'not yet: they show with its first tool call' : 'no'),
+        h('dt', null, 'Enforcement'),
+        h('dd', null, b ? badge(b.label, b.tone, b.title) : '—'),
+      ),
+      h(
+        'div',
+        { class: 'pn-actions pn-actions-start' },
+        button([icon('gear', 14), 'Connect'], () => openModal(ctx, { kind: 'antigravity-setup' }), {
+          class: 'btn btn-primary',
+        }),
+      ),
+    );
+  }
+
   // ---- the drawer
   const claudeSection = h(
     'section',
@@ -471,6 +526,13 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
     h('h3', { class: 'section-title' }, 'Claude Code in VS Code'),
     note('Claude Code running in your editor joins Friday through its MCP server and hooks.'),
     claudeBox,
+  );
+  const antigravitySection = h(
+    'section',
+    { class: 'pn-section pn-card' },
+    h('h3', { class: 'section-title' }, 'Antigravity'),
+    note(`Antigravity joins Friday through its MCP server and hooks (experimental). ${ANTIGRAVITY_ATTACH_NOTE}`),
+    antigravityBox,
   );
 
   const el = panel(
@@ -485,14 +547,17 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
     hostsSection,
     h('section', { class: 'pn-section' }, h('h3', { class: 'section-title' }, 'Agents'), listState, list),
     claudeSection,
+    antigravitySection,
   );
 
   renderRows();
   renderClaude();
+  renderAntigravity();
   td.add(
     ctx.store.subscribe('board', () => {
       renderRows();
       renderClaude();
+      renderAntigravity();
     }),
   );
   void loadHosts();
@@ -500,10 +565,10 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
   const timer = setInterval(() => void loadProcesses(), PROCESS_POLL_MS);
   td.add(() => clearInterval(timer));
 
-  if (request.tab === 'claude') {
+  const card = request.tab === 'claude' ? claudeSection : request.tab === 'antigravity' ? antigravitySection : null;
+  if (card) {
     queueMicrotask(() => {
-      if (!td.done && typeof claudeSection.scrollIntoView === 'function')
-        claudeSection.scrollIntoView({ block: 'start' });
+      if (!td.done && typeof card.scrollIntoView === 'function') card.scrollIntoView({ block: 'start' });
     });
   }
 

@@ -3,6 +3,7 @@
  * nothing, that the user's own hooks, servers and AGENTS.md text survive, and that `--remove`
  * gives the project back exactly as it was.
  */
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
@@ -21,10 +22,15 @@ import {
   fridayHookGroup,
   HARNESS_README,
   HOOK_EVENTS,
+  HOOK_SHIM,
+  HOOK_SHIM_PATH,
   HOOK_TIMEOUTS_S,
   hookCommand,
   LAUNCH_MCP,
   MCP_ENTRY,
+  SKILL_MARKER,
+  SKILL_MD,
+  SKILL_PATH,
   TOOL_MATCHER,
 } from './templates.js';
 
@@ -98,10 +104,33 @@ describe('Antigravity hook templates', () => {
       LAUNCH_MCP,
       HARNESS_README,
       AGENTS_MD_BLOCK,
+      SKILL_MD,
     ])
       expect(t).not.toMatch(/[A-Za-z]:[\\/]|\/home\/|\/Users\/|127\.0\.0\.1|Bearer /);
     expect(LAUNCH_MCP).toContain('install.json');
     expect(LAUNCH_MCP).toContain('restart Antigravity');
+  });
+
+  it('gives the person a /friday command that takes one task and leaves the next to them', () => {
+    expect(SKILL_PATH).toBe('.agents/skills/friday/SKILL.md');
+    // Antigravity names the slash command after the skill: the frontmatter comes first, with both keys.
+    expect(SKILL_MD.startsWith('---\nname: friday\ndescription: ')).toBe(true);
+    expect(SKILL_MD).toContain(SKILL_MARKER);
+    expect(SKILL_MD).toContain('friday_task_claim');
+    expect(SKILL_MD).toContain('friday_claim_done');
+    // How CLI 1.5 offers an MCP tool, and what a turn that began before the server connected should say.
+    expect(SKILL_MD).toContain('mcp_friday_friday_whoami');
+    expect(SKILL_MD).toContain('call_mcp_tool');
+    expect(SKILL_MD).toContain('type /friday again in a few seconds');
+    // A refused claim once sent a session through forty prompts of probing Friday's own code: it stops instead.
+    expect(SKILL_MD).toContain('tell the user exactly what Friday said and stop');
+    expect(SKILL_MD).toContain('Do not try to fix, inspect or work around Friday');
+    // A personal account's session is driven by its person: no loop over the queue, no waiting for work.
+    expect(SKILL_MD).toContain('Do this once, for one task');
+    expect(SKILL_MD).toContain('Do not start it yourself');
+    expect(SKILL_MD).not.toMatch(
+      /until (none|no tasks?) (is|are) left|keep (taking|working)|wait for (the next|more|new)/i,
+    );
   });
 
   it('keeps the AGENTS.md block short, host-neutral and in the CLAUDE.md marker shape', () => {
@@ -157,8 +186,10 @@ describe('friday harness config antigravity', () => {
     const changes = configure({ agentKey: 'ag-1' });
     expect(changes.map((c) => c.display).sort()).toEqual([
       '(private) agent.json',
+      '.agents/.friday/harness/antigravity/hook.mjs',
       '.agents/hooks.json',
       '.agents/mcp_config.json',
+      '.agents/skills/friday/SKILL.md',
       '.friday/harness/antigravity/README.md',
       '.friday/harness/antigravity/hook.mjs',
       '.friday/harness/antigravity/launch-mcp.mjs',
@@ -171,6 +202,8 @@ describe('friday harness config antigravity', () => {
     expect(text('.friday', 'harness', 'antigravity', 'hook.mjs')).toMatch(/^\/\/ friday-hook-launcher-version: \d/);
     expect(text('.friday', 'harness', 'antigravity', 'launch-mcp.mjs')).toBe(LAUNCH_MCP);
     expect(text('AGENTS.md')).toBe(`${AGENTS_MD_BLOCK}\n`);
+    expect(text('.agents', 'skills', 'friday', 'SKILL.md')).toBe(SKILL_MD);
+    expect(text(...HOOK_SHIM_PATH.split('/'))).toBe(HOOK_SHIM);
     const agent = path.join(ws().stateDir, 'projects');
     expect(readdirSync(agent)).toHaveLength(1);
 
@@ -178,10 +211,44 @@ describe('friday harness config antigravity', () => {
     expect(planAntigravity({ projectDir: ws().projectDir, env: env(), agentKey: 'ag-1' })).toEqual([]);
   });
 
+  it('runs the hook command from .agents, where Antigravity starts hooks, and from the workspace root', () => {
+    // The first live session (CLI 1.4.4, 2026-11-16) ran the command in the folder of hooks.json:
+    // "Cannot find module …\.agents\.friday\harness\antigravity\hook.mjs", for every hook.
+    initProject();
+    configure();
+    expect(HOOK_SHIM_PATH).toBe('.agents/.friday/harness/antigravity/hook.mjs');
+    const [node, ...args] = hookCommand('PreToolUse').split(' ');
+    expect(node).toBe('node');
+    const call = (cwd: string, toolCall: Record<string, unknown>) =>
+      spawnSync(process.execPath, args, {
+        cwd,
+        input: JSON.stringify({ conversationId: 'c1', workspacePaths: [ws().projectDir], toolCall, stepIdx: 0 }),
+        // No daemon is reachable from this state folder: the launcher answers by itself.
+        env: { ...process.env, ...env() },
+        encoding: 'utf8',
+        timeout: 20_000,
+        windowsHide: true,
+      });
+    for (const cwd of [file('.agents'), ws().projectDir]) {
+      const read = call(cwd, { name: 'view_file', args: { AbsolutePath: file('.friday', 'project.db') } });
+      expect(read.stderr, cwd).not.toContain('Cannot find module');
+      expect(read.status, cwd).toBe(0);
+      // The launcher itself ran and judged the call: Friday's database is never read.
+      expect(JSON.parse(read.stdout), cwd).toMatchObject({ decision: 'deny' });
+      const shell = call(cwd, { name: 'run_command', args: { CommandLine: 'git status', Cwd: ws().projectDir } });
+      expect(JSON.parse(shell.stdout), cwd).toMatchObject({ decision: 'force_ask' });
+    }
+  }, 60_000);
+
   it('writes JSON without a byte-order mark and with LF endings, and nothing machine-specific', () => {
     initProject();
     configure();
-    for (const rel of [['.agents', 'hooks.json'], ['.agents', 'mcp_config.json'], ['AGENTS.md']]) {
+    for (const rel of [
+      ['.agents', 'hooks.json'],
+      ['.agents', 'mcp_config.json'],
+      ['.agents', 'skills', 'friday', 'SKILL.md'],
+      ['AGENTS.md'],
+    ]) {
       const t = text(...rel);
       expect(t.charCodeAt(0), rel.join('/')).not.toBe(0xfeff);
       expect(t).not.toContain('\r');
@@ -231,6 +298,24 @@ describe('friday harness config antigravity', () => {
     expect(existsSync(file('.agents'))).toBe(false);
     expect(existsSync(file('.friday', 'harness'))).toBe(false);
     expect(planAntigravity({ projectDir: ws().projectDir, env: env(), remove: true })).toEqual([]);
+  });
+
+  it('leaves a skill named friday that the user wrote alone, writing and removing only its own', () => {
+    initProject();
+    mkdirSync(file('.agents', 'skills', 'friday'), { recursive: true });
+    const theirs = '---\nname: friday\ndescription: Our Friday release checklist.\n---\nShip on Fridays.\n';
+    writeFileSync(file('.agents', 'skills', 'friday', 'SKILL.md'), theirs);
+    expect(configure().map((c) => c.display)).not.toContain(SKILL_PATH);
+    expect(text('.agents', 'skills', 'friday', 'SKILL.md')).toBe(theirs);
+    expect(configure({ remove: true }).map((c) => c.display)).not.toContain(SKILL_PATH);
+    expect(text('.agents', 'skills', 'friday', 'SKILL.md')).toBe(theirs);
+
+    // Friday's own is rewritten when it changed, and removed with its folders.
+    writeFileSync(file('.agents', 'skills', 'friday', 'SKILL.md'), `${SKILL_MARKER}\nan older Friday skill\n`);
+    expect(configure().map((c) => c.display)).toContain(SKILL_PATH);
+    expect(text('.agents', 'skills', 'friday', 'SKILL.md')).toBe(SKILL_MD);
+    configure({ remove: true });
+    expect(existsSync(file('.agents', 'skills'))).toBe(false);
   });
 
   it('gives back a differently formatted user file with the same values', () => {

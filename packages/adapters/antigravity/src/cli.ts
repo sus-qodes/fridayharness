@@ -125,9 +125,11 @@ export function antigravityConfigCli(
       lines.push(
         '  3. approve the friday tools when Antigravity asks (or allow mcp(friday/*) in your Antigravity settings)',
       );
-      lines.push('  4. ask the agent to call friday_whoami and take its Friday task');
       lines.push(
-        'Commit .agents/hooks.json, .agents/mcp_config.json, AGENTS.md and .friday/harness/antigravity/ so teammates get the same setup.',
+        '  4. type /friday to take your Friday task (or ask the agent to call friday_whoami and take it); each /friday is one task',
+      );
+      lines.push(
+        'Commit .agents/hooks.json, .agents/mcp_config.json, .agents/skills/friday/, AGENTS.md and .friday/harness/antigravity/ so teammates get the same setup.',
       );
       lines.push('Check everything with: friday harness doctor antigravity');
     }

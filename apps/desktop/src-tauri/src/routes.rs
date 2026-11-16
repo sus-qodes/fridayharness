@@ -180,6 +180,9 @@ pub static ROUTES: &[Route] = &[
     post("agent-processes/{key}/forget"),
     get("agent-setup/claude-code", &["agent"]),
     post("agent-setup/claude-code"),
+    // Antigravity only attaches: these write the project's files, nothing starts it.
+    get("agent-setup/antigravity", &["agent"]),
+    post("agent-setup/antigravity"),
 ];
 
 /// Why a request was not forwarded. `code` is the shell's own error code (`DESKTOP-xxxx`).
@@ -532,6 +535,18 @@ mod tests {
         assert!(req("GET", &p("graph/query?path=src%2Findex.ts&depth=2")).is_ok());
         assert!(req("GET", &p("events?since=4&limit=200&type=task.created&type=task.updated")).is_ok());
         assert!(req("POST", &p("agent-processes/claude-1/stop")).is_ok());
+    }
+
+    #[test]
+    fn connecting_antigravity_is_a_preview_and_an_apply_and_nothing_else() {
+        let c = req("GET", &p("agent-setup/antigravity?agent=dev-1")).unwrap();
+        assert_eq!(c.route.owner, Owner::Request);
+        let body = json!({"agent_key": "dev-1"});
+        assert!(for_request("POST", &p("agent-setup/antigravity"), Some(&body), PID, PORT).is_ok());
+        // The preview takes the agent key only, and no route under it starts or stops anything.
+        assert!(refused("GET", &p("agent-setup/antigravity?agent=dev-1&run=1")));
+        assert!(refused("POST", &p("agent-setup/antigravity/start")));
+        assert!(refused("POST", &p("agent-setup/gemini")));
     }
 
     #[test]

@@ -28,10 +28,10 @@ import { AGENT_KEY_RE } from './start-agent.js';
 export const DEFAULT_SETUP_KEY = 'dev-1';
 
 /** The confirmation's lines: tracked files are named, since they change for everyone who pulls. */
-export function applyWarning(changes: readonly ClaudeSetupChange[]): string[] {
+export function applyWarning(changes: readonly ClaudeSetupChange[], host = 'Claude Code'): string[] {
   const tracked = changes.filter((c) => c.tracked);
   const lines = [
-    `Friday writes ${changes.length === 1 ? '1 file' : `${changes.length} files`} for Claude Code in this project.`,
+    `Friday writes ${changes.length === 1 ? '1 file' : `${changes.length} files`} for ${host} in this project.`,
   ];
   if (tracked.length) {
     lines.push(`Git tracks ${tracked.length === 1 ? 'this one' : 'these'}, so the change shows in your next commit:`);
@@ -40,7 +40,7 @@ export function applyWarning(changes: readonly ClaudeSetupChange[]): string[] {
   return lines;
 }
 
-function doctorTone(status: string): 'good' | 'warn' | 'danger' | 'muted' {
+export function doctorTone(status: string): 'good' | 'warn' | 'danger' | 'muted' {
   const s = status.toLowerCase();
   if (s === 'ok' || s === 'pass' || s === 'passed' || s === 'good') return 'good';
   if (s === 'warn' || s === 'warning') return 'warn';
@@ -48,7 +48,8 @@ function doctorTone(status: string): 'good' | 'warn' | 'danger' | 'muted' {
   return 'muted';
 }
 
-function changeView(c: ClaudeSetupChange): HTMLElement {
+/** One file of a setup plan: what happens to it, whether git tracks it, and its diff. */
+export function changeView(c: ClaudeSetupChange): HTMLElement {
   return h(
     'li',
     { class: 'pn-item pn-change' },

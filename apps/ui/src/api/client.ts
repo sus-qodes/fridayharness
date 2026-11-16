@@ -8,6 +8,8 @@ import type {
   AgentProcess,
   AgentProcessesView,
   AgentView,
+  AntigravitySetupPlan,
+  AntigravitySetupResult,
   ClaudeSetupPlan,
   ClaudeSetupResult,
   ContextExplanation,
@@ -480,6 +482,15 @@ export class FridayApi {
 
   claudeSetupApply(agentKey: string): Promise<ClaudeSetupResult> {
     return this.post('/agent-setup/claude-code', { agent_key: agentKey }, { timeoutMs: TIMEOUTS.setup });
+  }
+
+  /** What `harness config antigravity` would change: Antigravity attaches when the person opens it. */
+  antigravitySetupPlan(agentKey: string): Promise<AntigravitySetupPlan> {
+    return this.get(`/agent-setup/antigravity?agent=${encodeURIComponent(agentKey)}`, { timeoutMs: TIMEOUTS.setup });
+  }
+
+  antigravitySetupApply(agentKey: string): Promise<AntigravitySetupResult> {
+    return this.post('/agent-setup/antigravity', { agent_key: agentKey }, { timeoutMs: TIMEOUTS.setup });
   }
 
   // ---- preferences: the project's copy, which outlives the page's origin (plan §6 rule 8)

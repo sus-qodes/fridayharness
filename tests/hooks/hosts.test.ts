@@ -140,6 +140,23 @@ const EXPECTED: Record<OtherVendor, Record<string, Partial<NormalizedHook>>> = {
     'PreToolUse.mcp-single': { tool_name: 'mcp__github__search_code', host_tool_name: 'mcp_github_search_code' },
     'PreToolUse.mcp-friday': { tool_name: 'mcp__friday__friday_whoami' },
     'PreToolUse.ask_question': { event: 'PreToolUse', tool_name: null, host_tool_name: 'ask_question' },
+    // The tool names of CLI 1.5 and its two ways to call an MCP tool (the first live session, 1.5.9).
+    'PreToolUse.read_file': {
+      tool_name: 'Read',
+      host_tool_name: 'read_file',
+      tool_input: { file_path: p('README.md') },
+    },
+    'PreToolUse.edit_file': { tool_name: 'Edit', host_tool_name: 'edit_file', paths: [p('src', 'a.ts')] },
+    'PreToolUse.write_file': {
+      tool_name: 'Write',
+      host_tool_name: 'write_file',
+      tool_input: { file_path: p('src', 'a.ts') },
+    },
+    'PreToolUse.call_mcp_tool.friday': { tool_name: 'mcp__friday__friday_whoami', host_tool_name: 'call_mcp_tool' },
+    'PreToolUse.mcp-eager-friday': {
+      tool_name: 'mcp__friday__friday_whoami',
+      host_tool_name: 'mcp_friday_friday_whoami',
+    },
     PreInvocation: { event: null },
     PostToolUse: { event: 'PostToolUse', tool_name: 'Shell', error: null },
     'PostToolUse.error': { event: 'PostToolUseFailure', tool_name: 'Shell', error: 'exit status 1' },
@@ -456,7 +473,7 @@ describe('host modules write their hosts’ replies', () => {
     expect(renderFor('cursor', 'postToolUse', { decision: 'none' }).stdout).toBe('{}');
   });
 
-  it('Antigravity: deny, force_ask for this call, no decision as {}; context as an injected step; always exit 0', () => {
+  it('Antigravity: deny, force_ask for this call, no objection as ask; context as an injected step; always exit 0', () => {
     expect(renderFor('antigravity', 'PreToolUse', { decision: 'deny', reason: 'r' })).toEqual({
       stdout: JSON.stringify({ decision: 'deny', reason: 'Friday: r' }),
       stderr: '',
@@ -466,7 +483,23 @@ describe('host modules write their hosts’ replies', () => {
       decision: 'force_ask',
       reason: 'Friday: r',
     });
-    expect(renderFor('antigravity', 'PreToolUse', { decision: 'none' }).stdout).toBe('{}');
+    // A tool-call reply without a decision is a denial in Antigravity (CLI 1.5.9). A call Friday
+    // did not judge is `ask`: the person and their own permissions decide.
+    expect(parsed(renderFor('antigravity', 'PreToolUse', { decision: 'none' }).stdout)).toEqual({
+      decision: 'ask',
+      reason: 'Friday: not judged by Friday; your Antigravity permissions decide',
+    });
+    // A call Friday's own rules pass goes ahead there (the owner's choice of 2026-11-16), and
+    // nowhere else: every other host reads Friday's allow as no decision.
+    expect(parsed(renderFor('antigravity', 'PreToolUse', { decision: 'allow', reason: 'r' }).stdout)).toEqual({
+      decision: 'allow',
+      reason: 'Friday: r',
+    });
+    expect(renderFor('cursor', 'preToolUse', { decision: 'allow', reason: 'r' }).stdout).toBe('{}');
+    expect(renderFor('gemini', 'BeforeTool', { decision: 'allow', reason: 'r' }).stdout).toBe('');
+    // The other events expect an empty object when Friday has nothing to add.
+    expect(renderFor('antigravity', 'PostToolUse', { decision: 'none' }).stdout).toBe('{}');
+    expect(renderFor('antigravity', 'Stop', { decision: 'none' }).stdout).toBe('{}');
     expect(parsed(renderFor('antigravity', 'SessionStart', { decision: 'context', text: 'ctx' }).stdout)).toEqual({
       injectSteps: [{ systemMessage: { systemMessage: 'ctx' } }],
     });

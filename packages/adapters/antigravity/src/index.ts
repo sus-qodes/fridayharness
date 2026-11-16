@@ -2,8 +2,8 @@
  * @friday/adapter-antigravity
  * Antigravity adapter, attach only and experimental (plan M8b.3): `friday harness config
  * antigravity` writes Friday's hooks into `.agents/hooks.json`, the friday MCP server into
- * `.agents/mcp_config.json` and Friday's guidance into `AGENTS.md`; `friday harness doctor
- * antigravity` checks them. The hooks run the one launcher of @friday/adapter-claude, whose
+ * `.agents/mcp_config.json`, the `/friday` command into `.agents/skills/friday/` and Friday's
+ * guidance into `AGENTS.md`; `friday harness doctor antigravity` checks them. The hooks run the one launcher of @friday/adapter-claude, whose
  * Antigravity module answers deny, ask or nothing, never an approval. There is no spawn mode.
  */
 export const PACKAGE_NAME = '@friday/adapter-antigravity';
@@ -57,12 +57,18 @@ export {
   HOOK_EVENTS,
   HOOK_GROUP,
   HOOK_PATH,
+  HOOK_SHIM,
+  HOOK_SHIM_PATH,
   HOOK_TIMEOUTS_S,
   hookCommand,
   LAUNCH_MCP,
   LAUNCH_MCP_PATH,
   launcherBudgetMs,
   MCP_ENTRY,
+  SKILL_DIR,
+  SKILL_MARKER,
+  SKILL_MD,
+  SKILL_PATH,
   TOOL_MATCHER,
   VENDOR,
 } from './templates.js';

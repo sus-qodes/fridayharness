@@ -149,6 +149,7 @@ export type ModalKind =
   | 'recover'
   | 'land'
   | 'claude-setup'
+  | 'antigravity-setup'
   | 'start-agent'
   | 'plan-review'
   | 'feedback';

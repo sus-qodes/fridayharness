@@ -17,26 +17,65 @@ const EVENTS: Record<string, string> = {
 };
 
 /**
- * Friday's reply when it has no decision: an empty object, since `allow` and `auto_approve` are the
- * host's words for passing a call on. Whether the host reads `{}` as no objection is part of the
- * live check (plan M8b.3); a hook that printed nothing was read as no objection from CLI 1.0.16.
+ * Friday's reply to a call it has no objection to. Antigravity requires a decision ("`decision`
+ * (string, required)" in the hooks guide shipped with the CLI): a reply without one, the `{}`
+ * Friday sent until the first live session, is read as a denial with no reason ("tool call denied
+ * by pre-tool hook: ", CLI 1.5.9, 2026-11-16), so not one call ran in a session with Friday's hooks.
+ *
+ * `ask` hands the call to the person and to their own Antigravity permissions: it prompts, and it
+ * "respects the Always Allow cache". It is the reply to a call Friday did not judge: a tool it has
+ * no rule for, or any call while Friday is down. A call Friday did judge and pass is answered
+ * `allow` (`render`, the owner's choice of 2026-11-16); `auto_approve` is never sent.
  */
-export const ANTIGRAVITY_NO_DECISION = '{}';
+export const ANTIGRAVITY_NO_DECISION = JSON.stringify({
+  decision: 'ask',
+  reason: 'Friday: not judged by Friday; your Antigravity permissions decide',
+});
 
-const WRITES = new Set(['write_to_file', 'replace_file_content', 'multi_replace_file_content']);
+/** Writes by the names of CLI 1.4 and before; from CLI 1.5 the tools are `write_file` and `edit_file`. */
+const WRITES = new Set([
+  'write_to_file',
+  'replace_file_content',
+  'multi_replace_file_content',
+  'write_file',
+  'edit_file',
+]);
+const WHOLE_FILE = new Set(['write_to_file', 'write_file']);
+
+/**
+ * A file tool's path. `TargetFile` and `AbsolutePath` are the documented names of CLI 1.4; the
+ * tools of CLI 1.5 (`read_file`, `write_file`, `edit_file`) take `Path` (seen for `read_file` in a
+ * session of 1.5.9; the other two are not documented, so each known spelling is read). A write
+ * whose path is under none of them is declined, never passed unjudged.
+ */
+function filePath(args: Record<string, unknown>): string | null {
+  for (const key of ['Path', 'AbsolutePath', 'TargetFile', 'FilePath']) {
+    const p = str(args[key]);
+    if (p) return p;
+  }
+  return null;
+}
 
 /** One Antigravity tool in Friday's vocabulary; the argument names are the host's documented ones. */
 function tool(name: string, args: Record<string, unknown>, pre: boolean): MappedTool {
-  if (name === 'view_file') {
-    const p = str(args.AbsolutePath);
+  if (name === 'view_file' || name === 'read_file') {
+    const p = filePath(args);
     return p
       ? { tool: 'Read', input: { file_path: p, ...lineRange(args.StartLine, args.EndLine) } }
       : { tool: null, input: null };
   }
   if (WRITES.has(name)) {
-    const p = str(args.TargetFile);
-    if (p) return { tool: name === 'write_to_file' ? 'Write' : 'Edit', input: { file_path: p } };
+    const p = filePath(args);
+    if (p) return { tool: WHOLE_FILE.has(name) ? 'Write' : 'Edit', input: { file_path: p } };
     return { tool: 'Write', input: {}, shape_error: pre ? unreadableWrite('Antigravity', name) : null };
+  }
+  // A lazily loaded MCP tool (the default from CLI 1.5): one built-in tool carries the server and the tool.
+  if (name === 'call_mcp_tool') {
+    const server = str(args.ServerName);
+    const called = str(args.ToolName);
+    return server && called
+      ? { tool: mcpName(server, called), input: obj(args.Arguments) }
+      : { tool: null, input: null };
   }
   if (name === 'list_dir') return { tool: 'Glob', input: { path: str(args.DirectoryPath) } };
   if (name === 'find_by_name') {
@@ -55,7 +94,8 @@ function tool(name: string, args: Record<string, unknown>, pre: boolean): Mapped
   }
   if (name === 'search_web') return { tool: 'WebSearch', input: { query: str(args.query) } };
   if (name === 'read_url_content') return { tool: 'WebFetch', input: { url: str(args.Url) } };
-  // How MCP tools are named in hook input is not documented: both MCP spellings are read.
+  // An eagerly loaded MCP tool is registered as `mcp_<server>_<tool>`; the double-underscore
+  // spelling of other hosts is read too.
   if (name.startsWith('mcp__')) return { tool: name, input: args };
   const mcp = /^mcp_([^_]+)_(.+)$/.exec(name);
   if (mcp?.[1] && mcp[2]) return { tool: mcpName(mcp[1], mcp[2]), input: args };
@@ -63,41 +103,29 @@ function tool(name: string, args: Record<string, unknown>, pre: boolean): Mapped
   return { tool: null, input: null };
 }
 
+/**
+ * The fields every hook input carries. `lastUserInput`, `hookEventName` and `cwd` (the agent's
+ * working directory, not the hook's) came with CLI 1.5.
+ */
+const COMMON_KEYS = [
+  'conversationId',
+  'workspacePaths',
+  'transcriptPath',
+  'artifactDirectoryPath',
+  'modelName',
+  'lastUserInput',
+  'hookEventName',
+  'cwd',
+] as const;
+
 export const antigravity: HostModule = {
   vendor: 'antigravity',
   name: 'Antigravity',
   knownKeys: {
-    SessionStart: ['conversationId', 'workspacePaths', 'transcriptPath', 'artifactDirectoryPath', 'modelName'],
-    PreToolUse: [
-      'conversationId',
-      'workspacePaths',
-      'transcriptPath',
-      'artifactDirectoryPath',
-      'modelName',
-      'toolCall',
-      'stepIdx',
-    ],
-    PostToolUse: [
-      'conversationId',
-      'workspacePaths',
-      'transcriptPath',
-      'artifactDirectoryPath',
-      'modelName',
-      'toolCall',
-      'stepIdx',
-      'error',
-    ],
-    Stop: [
-      'conversationId',
-      'workspacePaths',
-      'transcriptPath',
-      'artifactDirectoryPath',
-      'modelName',
-      'executionNum',
-      'terminationReason',
-      'error',
-      'fullyIdle',
-    ],
+    SessionStart: [...COMMON_KEYS],
+    PreToolUse: [...COMMON_KEYS, 'toolCall', 'stepIdx'],
+    PostToolUse: [...COMMON_KEYS, 'toolCall', 'stepIdx', 'error'],
+    Stop: [...COMMON_KEYS, 'executionNum', 'terminationReason', 'error', 'fullyIdle', 'continuationActive'],
   },
   normalize(raw, hostEvent): NormalizedHook {
     const e = hostEvent || str(raw.hook_event_name) || 'unknown';
@@ -118,15 +146,21 @@ export const antigravity: HostModule = {
       tool_name: mapped.tool,
       host_tool_name: hostTool,
       tool_input: mapped.input,
-      cwd: hostTool === 'run_command' ? str(args.Cwd) : null,
+      // A command's own folder, else the agent's working directory (`cwd`, from CLI 1.5).
+      cwd: hostTool === 'run_command' ? str(args.Cwd) || str(raw.cwd) : null,
       project_dir: str(roots[0]),
       // Hook input does not carry the host's version; the doctor reads it from `agy --version`.
       host_version: null,
       model: str(raw.modelName),
       source: e === 'SessionStart' ? 'startup' : null,
       stop_hook_active: null,
-      // Its page names `model_stop`, `max_steps_exceeded` and `error`; what a human's cancel gives is
-      // not documented, so only the model's own end of its turn counts as completed.
+      // Its page named `model_stop`, `max_steps_exceeded` and `error`; what a human's cancel gives was
+      // not documented, so only the model's own end of its turn counts as completed. The guide
+      // shipped with CLI 1.5 names the model's own end `NO_TOOL_CALL` (and a cancel `USER_CANCELED`),
+      // so on that CLI this is false and Friday never holds a stop. It is left so on purpose: holding
+      // a stop there has a message queue prompt a session that its person should be driving, which
+      // Antigravity's terms keep off a personal account. Reading `NO_TOOL_CALL` (with
+      // `continuationActive` as `stop_hook_active`) is a decision to take, not a correction to make.
       stop_completed: e === 'Stop' ? str(raw.terminationReason) === 'model_stop' : null,
       stop_reason: e === 'Stop' ? str(raw.terminationReason) : null,
       reason: null,
@@ -144,6 +178,11 @@ export const antigravity: HostModule = {
       if (j.decision === 'deny') return reply({ decision: 'deny', reason: `Friday: ${j.reason}` });
       // `ask` would pass a call the human once marked "Always Allow"; Friday's ask is for this call.
       if (j.decision === 'ask') return reply({ decision: 'force_ask', reason: `Friday: ${j.reason}` });
+      // A call Friday's own rules pass, or one of Friday's own tools: it goes ahead. The owner chose
+      // this over a prompt at every such step (HookJudgment, 2026-11-16).
+      if (j.decision === 'allow') return reply({ decision: 'allow', reason: `Friday: ${j.reason}` });
+      // A call Friday did not judge (a tool it has no rule for, or Friday is down): the person and
+      // their own permissions decide.
       return { stdout: ANTIGRAVITY_NO_DECISION, stderr: '', exit_code: 0 };
     }
     if (e === 'SessionStart' && j.decision === 'context') {

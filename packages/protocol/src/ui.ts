@@ -438,6 +438,33 @@ export interface ClaudeSetupResult {
   doctor: { level?: string; checks?: { id: string; status: string; detail?: string }[]; [key: string]: unknown } | null;
 }
 
+/**
+ * What `harness config antigravity` would change or changed. Antigravity only attaches: the person
+ * opens it on the project themselves, so there is nothing here that starts it.
+ */
+export interface AntigravitySetupPlan {
+  agent_key: string;
+  applied: boolean;
+  changes: ClaudeSetupChange[];
+  /** What Friday found on this machine; null when it did not look. */
+  antigravity: {
+    cli: { binary: string; version: string | null } | null;
+    app: { binary: string; version: string | null } | null;
+    hook_level: string;
+  } | null;
+}
+
+export interface AntigravitySetupResult {
+  plan: AntigravitySetupPlan;
+  /** `harness doctor antigravity --quick --json`, or `{ error }` when it gave no answer. */
+  doctor: {
+    achieved?: string;
+    checks?: { id: string; status: string; message?: string; fix?: string }[];
+    error?: string;
+    [key: string]: unknown;
+  } | null;
+}
+
 /** `GET …/files?dir=`: one level of the tracked files (plan §5.11). */
 export interface FilesListing {
   dir: string;

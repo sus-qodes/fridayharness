@@ -1243,11 +1243,12 @@ mod tests {
         // Every drawer and dialog the page names (shell/context.ts), and every tab it opens one on.
         let panels = [
             "inspector", "diff", "graph", "memory", "terminal", "agents", "inbox", "settings", "approval", "question",
-            "new-goal", "halt", "plan-editor", "verify", "recover", "land", "claude-setup", "start-agent", "plan-review",
+            "new-goal", "halt", "plan-editor", "verify", "recover", "land", "claude-setup", "antigravity-setup",
+            "start-agent", "plan-review",
         ];
         let tabs = [
-            "planner", "routing", "pins", "claude", "goal", "overview", "context", "git", "history", "combined", "tools",
-            "errors", "process",
+            "planner", "routing", "pins", "claude", "antigravity", "goal", "overview", "context", "git", "history",
+            "combined", "tools", "errors", "process",
         ];
         for panel in panels {
             for tab in tabs {

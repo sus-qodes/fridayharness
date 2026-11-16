@@ -24,7 +24,7 @@ import { cursorRunsFriday, importedCursorCall } from './hosts/cursor.js';
 import { hostModule, importedByCursor, launcherArgs } from './hosts/index.js';
 import { type HookJudgment, type HostReply, isFridayTool } from './types.js';
 
-export const LAUNCHER_VERSION = '0.2.0';
+export const LAUNCHER_VERSION = '0.2.1';
 
 type Out = Record<string, unknown> | string | null;
 
@@ -187,7 +187,13 @@ export async function main(argv: string[] = process.argv, env: NodeJS.ProcessEnv
   // A host event Friday does nothing with, or a call another of the host's hooks carries in full.
   if (!event || input.judging === 'defer') return none();
   // Friday's own MCP tools are judged by the protocol behind them (ADR-0030 §1): nothing to add.
-  if (toolName && isFridayTool(toolName)) return none();
+  // A host that needs a decision for every call (Antigravity) is told they pass; the others read
+  // that as no decision.
+  if (toolName && isFridayTool(toolName)) {
+    return claude
+      ? 0
+      : answer({ decision: 'allow', reason: 'one of Friday’s own tools, which Friday’s protocol judges' });
+  }
   const start = input.project_dir || input.cwd || process.cwd();
   const root = findRoot(start);
   if (!root) return none(); // not a Friday project: stay out of the way

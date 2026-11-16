@@ -93,13 +93,36 @@ describe('the static role registry', () => {
       [3, 'deepseek-flash', 'deepseek', false],
       [4, 'openai/gpt-6.1-sol', 'codex', true],
       [5, 'z-ai/glm-5.3', 'opencode', true],
+      [6, 'gemini-3.8-flash', 'antigravity', true],
     ]);
     expect(order('frontend_engineer')).toEqual([
       [1, 'gemini-4-argon', 'cursor', true],
       [2, 'claude-sonnet-5-5', 'cursor', true],
       [3, 'gemini-4-argon', 'gemini', true],
       [4, 'claude-opus-5-5', 'claude-code', true],
+      [5, 'gemini-3.8-flash', 'antigravity', true],
     ]);
+    // Antigravity (the owner's addition of 2026-11-16) is last in every working role, so it reorders
+    // nothing, and it classifies nothing: the decision router has no entry for it. No cost or
+    // benchmark is claimed for it.
+    for (const [role, definition] of Object.entries(ROLE_REGISTRY_SOURCE.roles)) {
+      const ag = definition.candidates.filter((c) => c.harness === 'antigravity');
+      if (role === 'decision_router') {
+        expect(ag, role).toEqual([]);
+        continue;
+      }
+      expect(ag, role).toHaveLength(1);
+      expect(definition.candidates.at(-1), role).toMatchObject({
+        harness: 'antigravity',
+        model: 'gemini-3.8-flash',
+        rank: definition.candidates.length,
+        declared_dispatchable: true,
+        last_checked: '2026-11-16',
+        cost: null,
+        benchmark: null,
+      });
+    }
+    expect(models.find((m) => m.id === 'gemini-3.8-flash')?.vendors).toEqual(['gemini', 'antigravity']);
     expect(order('devops_and_terminal')?.[0]).toEqual([1, 'gemini-3.8-flash', 'gemini', true]);
     expect(ROLE_REGISTRY_SOURCE.roles.backend_engineer?.candidates[0]).toMatchObject({
       rank: 1,
@@ -154,7 +177,7 @@ describe('the static role registry', () => {
       backend: [{ model: 'local-coder', harness: 'generic' }],
     });
     expect(extended.roles.backend_engineer?.candidates.at(-1)).toEqual({
-      rank: 6,
+      rank: 7,
       model: 'local-coder',
       harness: 'generic',
       declared_dispatchable: true,

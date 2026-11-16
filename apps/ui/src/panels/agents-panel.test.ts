@@ -4,7 +4,16 @@ import { enforcementWords } from '../model/status.js';
 import { ApiError } from '../platform/transport.js';
 import { makeContext } from '../test/context.js';
 import { makeAgent, makeHarness, makeSnapshot } from '../test/fixtures.js';
-import { agentRows, agentsDrawer, claudeCodeStatus, isConnected, PROCESS_POLL_MS, rowStatus } from './agents-panel.js';
+import {
+  agentRows,
+  agentsDrawer,
+  antigravityStatus,
+  attachedPlace,
+  claudeCodeStatus,
+  isConnected,
+  PROCESS_POLL_MS,
+  rowStatus,
+} from './agents-panel.js';
 import { BIDI, buttonBy, HOSTILE, LONG } from './test-support.js';
 
 function proc(over: Partial<AgentProcess> = {}): AgentProcess {
@@ -129,6 +138,18 @@ describe('agents helpers', () => {
       connected: true,
       hooksSeen: false,
     });
+  });
+
+  it('reads the Antigravity status from its own attached sessions only', () => {
+    const claude = makeHarness({ attach_mode: 'attach', enforcement_status: 'enforcing' });
+    expect(antigravityStatus([claude])).toMatchObject({ connected: false, harness: null });
+    const ag = makeHarness({ vendor: 'antigravity', attach_mode: 'attach', enforcement_status: 'unverified' });
+    expect(antigravityStatus([claude, ag])).toMatchObject({ connected: true, hooksSeen: true, harness: ag });
+    expect(claudeCodeStatus([ag])).toMatchObject({ connected: false, harness: null });
+    // A spawned session would be one Friday started: Antigravity has none, and one is not counted.
+    expect(antigravityStatus([makeHarness({ vendor: 'antigravity' })]).harness).toBeNull();
+    expect(attachedPlace('antigravity')).toBe('Antigravity');
+    expect(attachedPlace('claude-code')).toBe('VS Code');
   });
 });
 
@@ -432,6 +453,31 @@ describe('agents drawer', () => {
       /^Enforcement level L1 \(enforcing\)/,
     );
     expect(d.el.textContent).not.toContain('No agent yet');
+    d.destroy();
+  });
+
+  it('connects Antigravity from its own card, which offers no way to start it', async () => {
+    const ctx = makeContext({ answers: { ...quiet, 'GET /agent-processes': { processes: [], profiles: [] } } });
+    const d = agentsDrawer(ctx, { kind: 'agents', tab: 'antigravity' });
+    const card = d.el.querySelector('.pn-antigravity')?.closest('section');
+    expect(card?.textContent).toContain('You open Antigravity yourself');
+    expect(card?.textContent).toContain('never launches it');
+    expect([...(card?.querySelectorAll('button') ?? [])].map((b) => b.textContent)).toEqual(['Connect']);
+    buttonBy(d.el, 'Connect').click();
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'antigravity-setup' });
+    await vi.advanceTimersByTimeAsync(0);
+    ctx.board(
+      makeSnapshot({
+        harnesses: [makeHarness({ vendor: 'antigravity', attach_mode: 'attach', enforcement_status: 'unverified' })],
+      }),
+    );
+    expect(d.el.querySelector('.pn-antigravity')?.textContent).toContain('yes: it connected');
+    // The Claude Code card is another host's: an Antigravity session does not show there.
+    expect(d.el.querySelector('.pn-claude')?.textContent).toContain('not seen yet');
+    expect(rows(d.el)).toHaveLength(1);
+    expect(rows(d.el)[0]?.textContent).toContain('attached in Antigravity');
+    // Friday did not start it, so the row offers no Stop, Start again or Forget.
+    expect(shownButtons(rows(d.el)[0] as HTMLElement)).toEqual([]);
     d.destroy();
   });
 
