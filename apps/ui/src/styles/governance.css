@@ -994,3 +994,16 @@
   margin-top: 6px;
   font-size: var(--text-sm);
 }
+
+/* The card for a check that failed where the install failed: what "Install again" did. */
+.gv-setup-result:empty {
+  display: none;
+}
+
+.gv-setup-result p {
+  margin: 6px 0 0;
+}
+
+.gv-setup-ok {
+  color: var(--green-2);
+}

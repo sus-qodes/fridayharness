@@ -172,6 +172,8 @@ function buildBody(kit: Kit): Built {
       return integrationBody(kit);
     case 'unanswered':
       return unansweredBody(kit);
+    case 'setup':
+      return setupBody(kit);
     case 'brain':
       return brainBody(kit);
   }
@@ -793,6 +795,128 @@ function cancelTaskButton(kit: Kit): HTMLButtonElement {
     },
     'btn btn-danger',
   );
+}
+
+// ---- setup_failed: the checks failed where the install failed (2026-11-17)
+
+/** The install's command and the end of what it printed, from a question's evidence lines. */
+export function installEvidence(evidence: string[]): { command: string | null; output: string | null } {
+  const of = (prefix: string): string | null => {
+    const line = evidence.find((x) => x.startsWith(prefix));
+    return line ? line.slice(prefix.length).trim() || null : null;
+  };
+  return { command: of('install:'), output: of('install output:') };
+}
+
+/**
+ * A task failed its checks in a folder whose dependencies were never installed. That read "A task
+ * keeps failing verification" after the agent had been sent back to fail the same way; the planner
+ * now stops at the first such failure and asks. The card says so in a person's words and leads with
+ * the way out: **Install again** (after fixing what kept it from installing: the network, a
+ * registry, a lockfile), then **Send it back to the agent**, whose next result is checked in the
+ * installed folder. A failed task cannot be checked again as it stands, so there is no such button.
+ */
+function setupBody(kit: Kit): Built {
+  const { spec, ctx } = kit;
+  const taskId = spec.taskId ?? '';
+  const board = ctx.store.select('board');
+  const root = board?.runs[taskId]?.execution_root ?? null;
+  const first = installEvidence(spec.evidence);
+  const result = h('div', { class: 'gv-setup-result', role: 'status' });
+  let installed = false;
+
+  const rework = decisionButton('Send it back to the agent', kit, async (b) => {
+    b.disabled = true;
+    const reason = installed
+      ? 'The dependencies are installed in the task folder now. The earlier check most likely failed for want of them: run the checks, fix what still fails, and finish.'
+      : 'Sent back by a person. The dependencies of the task folder were not installed, so a check may fail for that reason.';
+    const r = await ctx.act(
+      'Send the task back',
+      () => ctx.api.taskAction(taskId, 'rework', reason),
+      'Sent back to the agent',
+    );
+    b.disabled = false;
+    if (r) kit.done('Sent back to the agent');
+  });
+
+  const install = decisionButton(
+    'Install again',
+    kit,
+    async (b) => {
+      b.disabled = true;
+      setText(kit.status, 'Installing… (this can take a few minutes)');
+      const r = await ctx.act('Install again', () => ctx.api.setupWorktree(taskId));
+      b.disabled = false;
+      setText(kit.status, '');
+      if (r === undefined) return;
+      const s = r.setup;
+      if (s?.status === 'passed') {
+        installed = true;
+        install.classList.remove('btn-primary');
+        rework.classList.add('btn-primary');
+        replace(
+          result,
+          h(
+            'p',
+            { class: 'gv-setup-ok' },
+            'Installed. Send the task back to its agent: its next result is checked in the installed folder.',
+          ),
+        );
+        return;
+      }
+      installed = false;
+      replace(
+        result,
+        h(
+          'p',
+          { class: 'field-error' },
+          s
+            ? `The install did not finish: ${truncate(cleanText(s.reason), 300)}.`
+            : 'Nothing was installed: this project declares no install for a task folder.',
+        ),
+        s?.output_tail ? agentText('What the install printed', s.output_tail.slice(-1500)) : null,
+      );
+    },
+    'btn btn-primary',
+  );
+
+  const open = root
+    ? button([icon('expand', 14), 'Open the folder in VS Code'], () => ctx.platform.openInEditor(root), {
+        class: 'btn btn-ghost',
+      })
+    : null;
+  const cancel = cancelTaskButton(kit);
+
+  return {
+    body: present([
+      h(
+        'p',
+        { class: 'gv-question-text' },
+        'This task failed its checks, and the dependencies of its folder were not installed. That is most likely a setup problem, not the work of the agent.',
+      ),
+      spec.why
+        ? h('p', { class: 'gv-why' }, h('span', { class: 'gv-k' }, 'The install: '), decisionText(spec.why))
+        : null,
+      h(
+        'p',
+        { class: 'field-hint' },
+        'Fix what kept it from installing (the network, a registry, a lockfile), then install again. Friday sends nothing back on its own here: another attempt would fail the same way.',
+      ),
+      taskId ? h('div', { class: 'gv-actions' }, install, rework, open, cancel) : null,
+      result,
+      h(
+        'details',
+        { class: 'gv-details' },
+        h('summary', null, 'Details'),
+        h('p', { class: 'muted' }, decisionText(spec.question)),
+        first.command ? agentText('The install command', first.command) : null,
+        first.output ? agentText('What the install printed', first.output) : null,
+        root ? agentText('The task folder', root) : null,
+      ),
+      cliHints(spec),
+    ]),
+    decisions: taskId ? [install, rework, cancel] : [],
+  };
 }
 
 // ---- integration_conflict, integration_failed

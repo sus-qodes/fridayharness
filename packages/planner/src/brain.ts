@@ -626,6 +626,7 @@ export class MasterBrain {
           .brainJobs(projectId, ['pending', 'waiting', 'calling', 'done', 'failed'])
           .some((j) => j.kind === 'role' && j.task_id === taskId),
       failuresOf: (taskId) => state.q.verificationFailures(taskId),
+      setupTrouble: (taskId) => state.worktreeSetupTrouble(projectId, taskId),
       replansOf: (goalId) => {
         const g = state.q.findGoal(projectId, goalId);
         return (g?.plan_id ? state.q.planVersions(g.plan_id) : []).filter(
@@ -635,6 +636,8 @@ export class MasterBrain {
       brainEscalation: (id) => {
         const row = state.q.escalation(id);
         if (row?.requested_by_kind !== 'master_brain' || !row.goal_id) return null;
+        // An answer to "the install failed" is a person's decision on record; the plan is not at fault.
+        if (row.kind === 'setup_failed') return null;
         if (row.kind !== 'ambiguous_intent') return { goal_id: String(row.goal_id), replan: true, force: false };
         // A question asked by a proposal: re-propose (replacing it) only if it is still undecided.
         const d = JSON.parse(String(row.details_json ?? '{}')) as { plan_id?: string; plan_version?: number };
@@ -1419,6 +1422,15 @@ export class MasterBrain {
         ],
         action: 'wait for a human decision before revising again',
       },
+      setup_failed: {
+        question: `The checks of ${what} failed, and its dependencies were not installed in its folder (${detail}). This looks like a setup problem, not the agent's work. How should Friday continue?`,
+        options: [
+          'fix what kept it from installing, then install again ("friday task setup <task>")',
+          'send it back to its agent ("friday task rework <task>")',
+          'cancel it ("friday task cancel <task>")',
+        ],
+        action: 'wait: another attempt would fail the same way',
+      },
       action_failed: {
         question: `The Master Brain could not finish its work on ${what}: ${detail}. How should it continue?`,
         options: [
@@ -1438,7 +1450,12 @@ export class MasterBrain {
       question: s.question,
       options: s.options,
       proposed_action: s.action,
-      evidence: [...(taskId ? this.#evidence(taskId, null) : []), ...errors],
+      evidence: [
+        ...(taskId ? this.#evidence(taskId, null) : []),
+        ...errors,
+        // What the install printed last, for the card that offers to run it again.
+        ...(reason === 'setup_failed' && taskId ? state.worktreeSetupEvidence(projectId, taskId) : []),
+      ],
     });
     const id = state.raiseEscalation(projectId, MASTER_BRAIN, {
       kind: esc.reason,

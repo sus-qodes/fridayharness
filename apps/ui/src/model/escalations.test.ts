@@ -30,6 +30,7 @@ describe('escalation kinds → cards (plan FD-21)', () => {
     ['budget_exceeded', 'brain'],
     ['plan_rejected', 'brain'],
     ['action_failed', 'brain'],
+    ['setup_failed', 'setup'],
     ['something_new', 'brain'],
   ];
   it.each(table)('%s → %s', (kind, card) => {
@@ -103,6 +104,21 @@ describe('classifyEscalation', () => {
       'later',
     ]);
     expect(classifyEscalation(makeEscalation({ kind: 'recovery_needed', task_id: null }), READY).actions).toEqual([
+      'later',
+    ]);
+  });
+
+  it('setup_failed runs the install again, sends the task back or cancels it: never a plan revision', () => {
+    const s = classifyEscalation(
+      makeEscalation({ kind: 'setup_failed', requested_by_kind: 'master_brain', goal_id: 'goal_1', options: ['x'] }),
+      READY,
+    );
+    expect(s.card).toBe('setup');
+    expect(s.title).toBe("A task's dependencies were not installed");
+    expect(s.actions).toEqual(['install-again', 'rework-task', 'cancel-task', 'later']);
+    expect(s.choices).toEqual([]);
+    expect(s.cliHints).toEqual(['x']);
+    expect(classifyEscalation(makeEscalation({ kind: 'setup_failed', task_id: null }), READY).actions).toEqual([
       'later',
     ]);
   });

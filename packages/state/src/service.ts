@@ -674,6 +674,8 @@ export interface TokenInfo {
 
 /** Observation events that callers may record directly; they never change domain rows. */
 const OBSERVATION_TYPES = new Set([
+  // A person ran the install of a task's worktree again (2026-11-17).
+  'worktree.setup_ran',
   'policy.evaluated',
   'agent.event',
   'agent.turn_ended',
@@ -736,6 +738,7 @@ const SYSTEM_QUESTIONS = new Set([...RECOVERY_QUESTIONS, ...ROUTING_QUESTIONS, .
  */
 const PLANNING_QUESTIONS = new Set(['planner_unavailable', 'invalid_plan', 'budget_exceeded', 'action_failed']);
 const FAILURE_QUESTIONS = new Set([
+  'setup_failed',
   'planner_unavailable',
   'budget_exceeded',
   'invalid_plan',
@@ -1277,6 +1280,49 @@ export class FridayState {
         { kind: 'run', id: runId },
       ],
     });
+  }
+
+  /**
+   * What the last install of a task's worktree dependencies did: when an attempt's worktree was
+   * prepared (`run.workspace_ready`), or when a person ran the install again
+   * (`worktree.setup_ran`). Null when none was ever attempted.
+   */
+  latestWorktreeSetup(projectId: string, taskId: string): { setup: WorkspaceSetupRecord; at: string } | null {
+    const events = this.store.readByRef(projectId, 'task', taskId, {
+      types: ['run.workspace_ready', 'worktree.setup_ran'],
+    });
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const e = events[i];
+      if (!e) continue;
+      const setup = (e.payload as { setup?: unknown }).setup;
+      if (setup && typeof setup === 'object') return { setup: setup as WorkspaceSetupRecord, at: e.occurred_at };
+    }
+    return null;
+  }
+
+  /**
+   * Why a task's last failed verification is likely its setup and not its work (2026-11-17): the
+   * dependencies of its folder were not installed (the install failed, or was refused), and a
+   * check of the project's own failed there. A failure of Friday's own checks alone (scope,
+   * credentials, evidence) is the work's whatever the install did. Null otherwise.
+   */
+  worktreeSetupTrouble(projectId: string, taskId: string): string | null {
+    const last = this.latestWorktreeSetup(projectId, taskId);
+    if (!last || (last.setup.status !== 'failed' && last.setup.status !== 'refused')) return null;
+    const v = this.q.latestVerification(taskId);
+    if (v?.status !== 'FAILED') return null;
+    return v.checks.some((c) => c.status === 'FAILED' && c.origin !== 'friday') ? last.setup.reason : null;
+  }
+
+  /** The command of the last install and the end of what it printed, as lines for a question's evidence. */
+  worktreeSetupEvidence(projectId: string, taskId: string): string[] {
+    const last = this.latestWorktreeSetup(projectId, taskId);
+    if (!last) return [];
+    const s = last.setup;
+    return [
+      ...(s.command ? [`install: ${[s.command, ...s.args].join(' ')}`.slice(0, 500)] : []),
+      ...(s.output_tail ? [`install output: ${s.output_tail.slice(-1500)}`] : []),
+    ];
   }
 
   /** Sets the daemon's router (ADR-0031 §6); without one, runs carry no model. */

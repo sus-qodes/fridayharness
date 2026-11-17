@@ -319,6 +319,10 @@
   font-size: var(--text-sm);
 }
 
+.dr-check-name {
+  font-weight: 500;
+}
+
 .dr-check-summary {
   flex-basis: 100%;
   font-size: var(--text-caption);

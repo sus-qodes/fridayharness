@@ -221,6 +221,36 @@ export class FridayApi {
     });
   }
 
+  /**
+   * What a check (or an operation) printed: the end of it, bounded, with how much came before.
+   * `ref` is `artifact:<id>` as a check's `artifact_ref` gives it; the request carries the id
+   * alone, because the desktop shell forwards no path that holds an encoded character.
+   */
+  artifactText(ref: string): Promise<{
+    artifact_ref: string;
+    kind: string;
+    text: string;
+    lines: number;
+    from_line: number;
+    truncated: boolean;
+  }> {
+    const id = ref.startsWith('artifact:') ? ref.slice('artifact:'.length) : ref;
+    return this.get(`/artifacts/${encodeURIComponent(id)}`, { timeoutMs: MEDIUM });
+  }
+
+  /** Runs the install of a task's folder again; answers what it did. */
+  setupWorktree(taskId: string): Promise<{
+    setup: {
+      status: string;
+      reason: string;
+      command: string | null;
+      args: string[];
+      output_tail: string | null;
+    } | null;
+  }> {
+    return this.post(`/tasks/${encodeURIComponent(taskId)}/setup`, {}, { timeoutMs: LONG });
+  }
+
   recovery(taskId: string): Promise<{ assessment: RecoveryAssessment }> {
     return this.get(`/tasks/${encodeURIComponent(taskId)}/recovery`, { timeoutMs: 60_000 });
   }

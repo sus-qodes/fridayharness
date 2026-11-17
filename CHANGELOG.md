@@ -2,6 +2,17 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — ease of use, part 4: checks you can read
+
+Findings of the 2026-11-17 review of verification, as a person meets it.
+
+- **"Show output" on a check.** What a project's check printed was kept and shown nowhere: a failed test read "exit 1". A check that kept its output now has **Show output**, in the task inspector and in the Verify dialog, which reads it on request (`GET artifacts/:id`: the operator only, one file by its id, credentials redacted) and shows the end of it, where a failing check says what failed, with which lines those are when the output was long.
+- **What a check found, in words.** Friday's own checks were named as the daemon writes them (`friday.diff`) over a line of rule codes ("2 changed file(s); failed: diff.outside_team_scope"). They go by what they check ("Changes stay where the task may work", "No credentials in the changes", "The work was run"), and each finding is its sentence with the files it is about, the failures before what is only worth a look. The code stays in the tooltip.
+- **A failed install is told apart from failed work.** When a task folder's dependencies could not be installed, the agent worked on, the project's checks failed for want of them, and Friday treated that as the work failing: the task went back to its agent to fail the same way, until it read "A task keeps failing verification". The verdict now says so ("the project's dependencies were not installed in this task's folder (npm exited with 1), so a failing check may be the setup and not the work"), and the planner neither sends the task back nor revises the plan: it asks at the first such failure (`setup_failed`). A failure of Friday's own checks alone (scope, credentials, evidence) is the work's whatever the install did.
+- **The card for it leads with the way out.** "A task's dependencies were not installed" says it is most likely the setup, gives the install's reason, and offers **Install again** (`POST tasks/:tid/setup`, also `friday task setup <task>`), which runs the install in the folder as it stands and says what it did, with the end of what it printed when it fails again; then **Send it back to the agent**, whose next result is checked in the installed folder; the folder in VS Code; and Cancel task. A failed task cannot be checked again as it stands, so no button says it can. The install is not run while an agent works in the folder.
+
+Changed on purpose: `EscalationReason` has `setup_failed`, answered by a decision and never by a revision; `worktree.setup_ran` is an observation; the page asks for an artifact by its id alone, since the desktop shell forwards no path with an encoded character.
+
 ## Unreleased — ease of use, part 3: planning
 
 Findings of the 2026-11-17 review of goals and planning.

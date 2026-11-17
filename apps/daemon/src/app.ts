@@ -85,6 +85,8 @@ export interface AppDeps {
   context: ContextService;
   /** Task worktrees (M5a). */
   workspaces?: WorkspaceManager;
+  /** Runs the install of a task's worktree dependencies again, and records what it did. */
+  setupWorktree?: (taskId: string, actor: Actor) => Promise<unknown>;
   /** Integration into goal branches (M5c). */
   integration?: IntegrationManager;
   /** Recovery of lost and failed attempts (M5d). */
@@ -1222,6 +1224,49 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.post(`${P}/tasks/:tid/worktree`, allow(...OPERATOR), async (c) =>
     c.json(await workspaces().forTask(c.req.param('tid'), HUMAN), 201),
   );
+  // The install of a task's worktree dependencies, run again by a person (2026-11-17): after a
+  // failed install nothing but a new attempt ran it, and that attempt failed the same way.
+  app.post(`${P}/tasks/:tid/setup`, allow(...OPERATOR), async (c) => {
+    if (!deps.setupWorktree) {
+      throw new FridayError('capability_unsupported', 'this daemon installs no worktree dependencies');
+    }
+    return c.json({ setup: await deps.setupWorktree(c.req.param('tid'), HUMAN) });
+  });
+
+  // What a check, an operation or a long message printed (2026-11-17): the end of it, where a
+  // failing check says what failed. Before, a person saw "exit code 1" and had the file to find.
+  // Redacted when stored and again here; bounded, with how much came before.
+  app.get(`${P}/artifacts/:id`, allow(...OPERATOR), (c) => {
+    if (!state.artifacts) throw new FridayError('capability_unsupported', 'this daemon keeps no artifacts');
+    const id = c.req.param('id').replace(/^artifact:/, '');
+    const record = /^[A-Za-z0-9_-]{1,80}$/.test(id) ? state.artifacts.get(id) : undefined;
+    if (!record || record.project_id !== pid)
+      throw new FridayError('invalid_request', 'that output is not kept (any more)');
+    const whole = state.redactor.redactString(state.artifacts.readText(id)).value;
+    const lines = whole.split('\n');
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+    const MAX_LINES = 400;
+    const MAX_CHARS = 60_000;
+    let from = Math.max(0, lines.length - MAX_LINES);
+    let text = lines.slice(from).join('\n');
+    if (text.length > MAX_CHARS) {
+      text = text.slice(-MAX_CHARS);
+      // Whole lines only: the first one kept may be cut.
+      const cut = text.indexOf('\n');
+      if (cut >= 0) text = text.slice(cut + 1);
+      from = lines.length - text.split('\n').length;
+    }
+    return c.json({
+      artifact_ref: `artifact:${id}`,
+      kind: record.kind,
+      created_at: record.created_at,
+      text,
+      lines: lines.length,
+      /** The first line shown, counted from 1; above 1 when the start was left out. */
+      from_line: from + 1,
+      truncated: from > 0,
+    });
+  });
 
   // The project's policy and this clone's trust (M6b, ADR-0028).
   const effective = (): EffectivePolicy => {

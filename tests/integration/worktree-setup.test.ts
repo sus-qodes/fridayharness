@@ -215,3 +215,189 @@ describe('dependencies in a fresh task worktree', () => {
     180_000,
   );
 });
+
+describe('a check that fails where the install failed (2026-11-17)', () => {
+  /** Installs only once `node_modules/.allow` is there: what a person fixes between two tries. */
+  const INSTALL =
+    "const fs=require('fs');if(!fs.existsSync('node_modules/.allow')){console.error('registry unreachable');process.exit(3)}fs.writeFileSync('node_modules/.friday-setup','ok')";
+  /** A check of the project's own that needs what the install leaves. */
+  const CHECKS =
+    '  checks:\n    - name: tests\n      command: node\n      args: ["-e", "require(\'fs\').accessSync(\'node_modules/.friday-setup\')"]\n';
+
+  it('waits for a person with the reason, shows what the check printed, and installs again on request', async () => {
+    const td = await startTestDaemon(ws(), {
+      git: true,
+      brain: { autoStart: false },
+      extensions: [claudeCodeHooks()],
+      extraConfig: declared(INSTALL),
+      editConfig: (y) => y.replace('  checks: []\n', CHECKS),
+    });
+    const dir = ws().projectDir;
+    const pid = td.project.project_id;
+    const P = (p: string) => td.operator.projectPath(p);
+    mkdirSync(path.join(dir, 'src'), { recursive: true });
+    writeFileSync(path.join(dir, 'src', 'a.ts'), 'export const a = 1;\n');
+    await deterministicGit(dir, { startEpoch: 1_767_225_700 }).commitAll('source');
+    expect((await cli(['--project', dir, 'policy', 'trust', '--yes'])).code).toBe(0);
+
+    // A goal with one task, so what follows a failed check is the planner's to decide.
+    const goal = await td.operator.post<{ goal_id: string }>(P('/goals'), { request: 'Change a', plan: false });
+    const v1 = await td.operator.post<{ plan_id: string; version: number }>(P(`/goals/${goal.goal_id}/plans`), {
+      draft: {
+        objective: 'Change a',
+        summary: 'One task',
+        tasks: [
+          {
+            key: 'a',
+            summary: 'Change a',
+            acceptance_criteria: ['tests pass'],
+            scope: { write: ['src/**'], read: ['**'] },
+            depends_on: [],
+          },
+        ],
+      },
+    });
+    await td.operator.post(P(`/plans/${v1.plan_id}/versions/${v1.version}/approve`), {});
+    const taskId = td.daemon.state.q.tasks(pid, {}).find((t) => t.goal_id === goal.goal_id)?.task_id as string;
+    const fake = await FakeHarness.connect(td, { agentKey: 'be-1' });
+    await td.operator.post(P(`/tasks/${taskId}/assign`), { agent_key: 'be-1' });
+    const start = (await fake.waitFor('task.start', 30_000)).params as TaskStartParams;
+    // The install failed, and the agent was told; it works on, as it may by default.
+    expect(start.note).toContain("Friday could not install this worktree's dependencies");
+    await until(
+      () => taskOf(td, taskId),
+      (t) => t.status === 'RUNNING',
+      'the task to run',
+    );
+    writeFileSync(path.join(start.working_directory, 'src', 'a.ts'), 'export const a = 2;\n');
+    await fake.client.reportResult({
+      task_id: taskId,
+      run_id: start.run_id,
+      status: 'completed_claim',
+      summary: 'changed a',
+      changed_paths: ['src/a.ts'],
+      checks: [],
+    });
+    await fake.close();
+
+    type Verified = {
+      task: TaskView;
+      verification: {
+        summary: string;
+        checks: { name: string; status: string; origin: string; artifact_ref: string | null }[];
+      };
+    };
+    const verified = await td.operator.post<Verified>(P(`/tasks/${taskId}/verify`), {}, { timeoutMs: 120_000 });
+    expect(verified.task.status).toBe('FAILED');
+    // The verdict says what it most likely is.
+    expect(verified.verification.summary).toContain(
+      "the project's dependencies were not installed in this task's folder (node exited with 3), so a failing check may be the setup and not the work",
+    );
+    expect(td.daemon.state.worktreeSetupTrouble(pid, taskId)).toBe('node exited with 3');
+
+    // The planner does not send it back to fail the same way, nor revise the plan: a person is asked.
+    await td.operator.post(P('/brain/run-once'), {});
+    const questions = () => td.daemon.state.q.escalations(pid, 'pending').filter((e) => e.task_id === taskId);
+    expect(questions().map((e) => e.kind)).toEqual(['setup_failed']);
+    expect(questions()[0]?.question).toContain(
+      'its dependencies were not installed in its folder (node exited with 3). This looks like a setup problem',
+    );
+    const details = JSON.parse(String(questions()[0]?.details_json)) as { evidence: string[] };
+    expect(details.evidence.join('\n')).toContain('install: node -e');
+    expect(details.evidence.join('\n')).toContain('registry unreachable');
+    expect((await taskOf(td, taskId)).status).toBe('FAILED');
+    // A second pass asks nothing more.
+    await td.operator.post(P('/brain/run-once'), {});
+    expect(questions()).toHaveLength(1);
+
+    // What the failing check printed can be read.
+    const check = verified.verification.checks.find((c) => c.name === 'tests');
+    expect(check).toMatchObject({ status: 'FAILED', origin: 'configured' });
+    const ref = String(check?.artifact_ref);
+    expect(ref).toMatch(/^artifact:/);
+    type Output = {
+      artifact_ref: string;
+      kind: string;
+      text: string;
+      lines: number;
+      from_line: number;
+      truncated: boolean;
+    };
+    const output = await td.operator.get<Output>(P(`/artifacts/${encodeURIComponent(ref)}`));
+    expect(output).toMatchObject({ artifact_ref: ref, kind: 'verification', from_line: 1, truncated: false });
+    expect(output.text).toContain('$ node -e');
+    expect(output.text).toContain('ENOENT');
+    // By its bare id too; nothing else is served from there, and only to the operator.
+    expect((await td.operator.get<Output>(P(`/artifacts/${ref.slice('artifact:'.length)}`))).text).toBe(output.text);
+    await expect(td.operator.get(P('/artifacts/nope'))).rejects.toThrow(/not kept/);
+    await expect(td.operator.get(P(`/artifacts/${encodeURIComponent('../config.yaml')}`))).rejects.toThrow();
+    await expect(td.bootstrap.get(td.bootstrap.projectPath(`/artifacts/${encodeURIComponent(ref)}`))).rejects.toThrow();
+
+    // The install is run again as it stands: it fails the same way, and that is on record.
+    type Setup = { setup: { status: string; reason: string; output_tail: string | null } };
+    const again = await td.operator.post<Setup>(P(`/tasks/${taskId}/setup`), {}, { timeoutMs: 120_000 });
+    expect(again.setup).toMatchObject({ status: 'failed', reason: 'node exited with 3' });
+    expect(again.setup.output_tail).toContain('registry unreachable');
+    // The person fixes what kept it from installing, and runs it again.
+    mkdirSync(path.join(start.working_directory, 'node_modules'), { recursive: true });
+    writeFileSync(path.join(start.working_directory, 'node_modules', '.allow'), '');
+    const fixed = await td.operator.post<Setup>(P(`/tasks/${taskId}/setup`), {}, { timeoutMs: 120_000 });
+    expect(fixed.setup).toMatchObject({ status: 'passed', reason: 'ok' });
+    expect(readFileSync(path.join(start.working_directory, 'node_modules', '.friday-setup'), 'utf8')).toBe('ok');
+    expect(td.daemon.state.latestWorktreeSetup(pid, taskId)?.setup.status).toBe('passed');
+    // With the dependencies in place, a failure from here on is the work's.
+    expect(td.daemon.state.worktreeSetupTrouble(pid, taskId)).toBeNull();
+
+    // Sent back to its agent, the question is settled.
+    await td.operator.post(P(`/tasks/${taskId}/rework`), { reason: 'the dependencies are installed now' });
+    expect(questions()).toEqual([]);
+    expect((await taskOf(td, taskId)).status).toBe('READY');
+    // Not while an agent works there, and not for a task with no folder of its own.
+    const loose = await td.operator.post<TaskView>(P('/tasks'), { summary: 'no folder yet', ready: true });
+    await expect(td.operator.post(P(`/tasks/${loose.task_id}/setup`), {})).rejects.toThrow(/no folder of its own/);
+  }, 180_000);
+
+  it('leaves a failure of the work itself to the usual course, whatever the install did', async () => {
+    const td = await startTestDaemon(ws(), {
+      git: true,
+      brain: { autoStart: false },
+      extensions: [claudeCodeHooks()],
+      extraConfig: declared(INSTALL),
+    });
+    const dir = ws().projectDir;
+    const pid = td.project.project_id;
+    const P = (p: string) => td.operator.projectPath(p);
+    mkdirSync(path.join(dir, 'src'), { recursive: true });
+    writeFileSync(path.join(dir, 'src', 'a.ts'), 'export const a = 1;\n');
+    await deterministicGit(dir, { startEpoch: 1_767_225_700 }).commitAll('source');
+    expect((await cli(['--project', dir, 'policy', 'trust', '--yes'])).code).toBe(0);
+    const fake = await FakeHarness.connect(td, { agentKey: 'be-1' });
+    const { task, start } = await take(td, fake, 'be-1');
+    await until(
+      () => taskOf(td, task.task_id),
+      (t) => t.status === 'RUNNING',
+      'the task to run',
+    );
+    // The work breaks the task's scope: Friday's own check fails, and no check of the project ran.
+    mkdirSync(path.join(start.working_directory, 'docs'), { recursive: true });
+    writeFileSync(path.join(start.working_directory, 'docs', 'x.md'), 'outside\n');
+    await fake.client.reportResult({
+      task_id: task.task_id,
+      run_id: start.run_id,
+      status: 'completed_claim',
+      summary: 'wrote docs',
+      changed_paths: ['docs/x.md'],
+      checks: [],
+    });
+    await fake.close();
+    const verified = await td.operator.post<{ task: TaskView; verification: { summary: string } }>(
+      P(`/tasks/${task.task_id}/verify`),
+      {},
+      { timeoutMs: 120_000 },
+    );
+    expect(verified.task.status).toBe('FAILED');
+    expect(verified.verification.summary).not.toContain('dependencies were not installed');
+    expect(td.daemon.state.latestWorktreeSetup(pid, task.task_id)?.setup.status).toBe('failed');
+    expect(td.daemon.state.worktreeSetupTrouble(pid, task.task_id)).toBeNull();
+  }, 180_000);
+});

@@ -465,6 +465,20 @@ export function buildProgram(): Command {
       });
   }
   task
+    .command('setup <task>')
+    .description("run the install of a task's folder again (after a failed install was fixed)")
+    .action(async (id: string) => {
+      const { client } = operator(g());
+      type Setup = { status: string; reason: string; output_tail: string | null } | null;
+      const res = await client.post<{ setup: Setup }>(client.projectPath(`/tasks/${id}/setup`), {});
+      out(g(), res, () => {
+        const s = res.setup;
+        if (!s) return `${id}  nothing to install: the project declares no install for a task folder`;
+        const tail = s.status === 'passed' || !s.output_tail ? '' : `\n${s.output_tail}`;
+        return `${id}  install ${s.status}: ${s.reason}${tail}`;
+      });
+    });
+  task
     .command('role <task> <role>')
     .description('set the task contract role explicitly (a human role assignment)')
     .action(async (id: string, role: string) => {

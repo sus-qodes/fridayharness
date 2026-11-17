@@ -436,8 +436,22 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     return { task: interrupted, verification: state.q.verification(verification_id) };
   }
   const ok = requiredFailed === 0;
+  // A project check that failed where the folder's dependencies were never installed is said as
+  // what it most likely is; the question that follows offers to run the install again.
+  const last = ok ? null : state.latestWorktreeSetup(pid, taskId);
+  const notInstalled =
+    last &&
+    (last.setup.status === 'failed' || last.setup.status === 'refused') &&
+    state.q.verification(verification_id)?.checks.some((c) => c.status === 'FAILED' && c.origin !== 'friday')
+      ? last.setup.reason
+      : null;
   const parts = [
     `${requiredRan - requiredFailed}/${requiredRan} required checks passed`,
+    ...(notInstalled
+      ? [
+          `the project's dependencies were not installed in this task's folder (${notInstalled}), so a failing check may be the setup and not the work`,
+        ]
+      : []),
     ...(advisoryFailed ? [`${advisoryFailed} advisory check(s) failed`] : []),
     ...(warnings ? [`${warnings} warning(s)`] : []),
     ...(configured.length === 0

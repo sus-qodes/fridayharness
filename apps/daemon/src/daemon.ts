@@ -675,6 +675,37 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     graph,
     context,
     workspaces,
+    // The install of a task's worktree, run again at a person's word.
+    setupWorktree: async (taskId, actor) => {
+      const task = state.q.task(project.project_id, taskId);
+      const tree = state.q.worktreeForTask(taskId);
+      if (!tree || !existsSync(tree.path)) {
+        throw new FridayError('invalid_request', `${taskId} has no folder of its own to install into`);
+      }
+      if (!worktreeSetup)
+        throw new FridayError('capability_unsupported', 'this daemon installs no worktree dependencies');
+      // Never under an agent that works there now.
+      if (task.status === 'ASSIGNED' || task.status === 'RUNNING') {
+        throw new FridayError(
+          'invalid_state_transition',
+          `an agent is working in the folder of ${taskId} now; run the install once it has stopped`,
+        );
+      }
+      const run_id = state.q.runs(taskId).at(-1)?.run_id ?? null;
+      const outcome = await worktreeSetup.run(
+        { path: tree.path },
+        { task_id: taskId, run_id: run_id ?? '' },
+        { again: true },
+      );
+      state.recordObservation(
+        project.project_id,
+        actor,
+        'worktree.setup_ran',
+        { task_id: taskId, run_id, setup: outcome },
+        [{ kind: 'task', id: taskId }],
+      );
+      return outcome;
+    },
     integration,
     recovery,
     stateDir: path.dirname(path.dirname(privateDir)),

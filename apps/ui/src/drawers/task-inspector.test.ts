@@ -184,6 +184,85 @@ describe('the task inspector: Overview', () => {
     drawer.destroy();
   });
 
+  it('says what a failed check found in words, and shows what a check printed on request (2026-11-17)', async () => {
+    const board = boardWith('FAILED');
+    board.verifications = {
+      [TID]: makeVerification({
+        task_id: TID,
+        status: 'FAILED',
+        summary: '1 of 2 required checks failed',
+        checks: [
+          {
+            name: 'unit tests',
+            kind: 'test',
+            status: 'FAILED',
+            exit_code: 1,
+            artifact_ref: 'artifact:out1',
+            summary: 'exit 1',
+            required: true,
+            origin: 'configured',
+            duration_ms: 900,
+            details: null,
+          },
+          {
+            name: 'friday.diff',
+            kind: 'diff',
+            status: 'FAILED',
+            exit_code: null,
+            artifact_ref: null,
+            summary: '2 changed file(s); failed: diff.outside_team_scope',
+            required: true,
+            origin: 'friday',
+            duration_ms: 30,
+            details: {
+              findings: [
+                {
+                  rule: 'diff.outside_team_scope',
+                  severity: 'fail',
+                  message: `Files were changed outside what this task may change ${IMG}`,
+                  paths: ['docs/x.md'],
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    };
+    const ctx = makeContext({
+      snapshot: board,
+      answers: {
+        'GET /artifacts/out1': {
+          artifact_ref: 'artifact:out1',
+          kind: 'verification',
+          text: '$ npm test\n1 failing',
+          lines: 2,
+          from_line: 1,
+          truncated: false,
+        },
+      },
+    });
+    const drawer = createTaskInspector(ctx, { kind: 'inspector', id: TID });
+    const rows = [...drawer.el.querySelectorAll<HTMLElement>('.dr-check')];
+    expect(rows).toHaveLength(2);
+    // Friday's check by what it checks, its finding as a sentence with the file, and no rule code read out.
+    expect(rows[1]?.textContent).toContain('Changes stay where the task may work');
+    expect(rows[1]?.textContent).toContain(`Files were changed outside what this task may change ${IMG}`);
+    expect(rows[1]?.textContent).toContain('docs/x.md');
+    expect(rows[1]?.textContent).not.toContain('diff.outside_team_scope');
+    expect(rows[1]?.textContent).not.toContain('friday.diff');
+    expect(buttonNamed(rows[1] as HTMLElement, 'Show output')).toBeUndefined();
+    expect(drawer.el.querySelector('img')).toBeNull();
+    // The project's own check keeps its name and summary, and its output is one click away.
+    expect(rows[0]?.textContent).toContain('unit tests');
+    expect(rows[0]?.textContent).toContain('exit 1');
+    expect(ctx.transport.to('GET', '/artifacts/out1')).toHaveLength(0);
+    buttonNamed(rows[0] as HTMLElement, 'Show output')?.click();
+    await settle();
+    expect(ctx.transport.to('GET', '/artifacts/out1')).toHaveLength(1);
+    expect(rows[0]?.querySelector('pre')?.textContent).toBe('$ npm test\n1 failing');
+    drawer.destroy();
+  });
+
   it('jumps to dependencies and dependents', () => {
     const ctx = makeContext({ snapshot: boardWith('READY') });
     const drawer = createTaskInspector(ctx, { kind: 'inspector', id: TID });

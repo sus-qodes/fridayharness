@@ -119,6 +119,86 @@ describe('verification panel', () => {
     m.destroy();
   });
 
+  it('shows what a failed check found in words, with its output one click away (2026-11-17)', async () => {
+    const failed = makeVerification({
+      status: 'FAILED',
+      summary: '1 of 2 required checks failed',
+      checks: [
+        {
+          name: 'tests',
+          kind: 'test',
+          status: 'FAILED',
+          exit_code: 1,
+          artifact_ref: 'artifact:out1',
+          summary: 'exit 1',
+          required: true,
+          origin: 'configured',
+          duration_ms: 900,
+          details: null,
+        },
+        {
+          name: 'friday.secrets',
+          kind: 'secrets',
+          status: 'FAILED',
+          exit_code: null,
+          artifact_ref: null,
+          summary: 'failed: secrets.token',
+          required: true,
+          origin: 'friday',
+          duration_ms: 12,
+          details: {
+            findings: [
+              {
+                rule: 'secrets.token',
+                severity: 'fail',
+                message: `A token is in the change ${HOSTILE}`,
+                paths: ['src/a.ts'],
+              },
+            ],
+          },
+        },
+      ],
+    } as never);
+    const ctx = makeContext({
+      snapshot: scenario(),
+      answers: {
+        'GET /tasks/task_0000000000000000000000aa01/diff': {
+          task_id: TID,
+          source: 'worktree',
+          root: 'C:/wt',
+          base: 'b',
+          files: [file('src/a.ts')],
+          truncated: false,
+          notes: [],
+        },
+        'POST /tasks/task_0000000000000000000000aa01/verify': { task: makeTask(), verification: failed },
+        'GET /artifacts/out1': {
+          artifact_ref: 'artifact:out1',
+          kind: 'verification',
+          text: '1 failing',
+          lines: 900,
+          from_line: 501,
+          truncated: true,
+        },
+      },
+    });
+    const m = verifyModal(ctx, { kind: 'verify', id: TID }, () => undefined);
+    await flush();
+    buttonBy(m.el, 'Run checks').click();
+    await flush();
+    const result = m.el.querySelector('.pn-verification') as HTMLElement;
+    expect(result.textContent).toContain('No credentials in the changes');
+    expect(result.textContent).toContain(`A token is in the change ${HOSTILE}`);
+    expect(result.textContent).toContain('src/a.ts');
+    expect(result.textContent).not.toContain('secrets.token');
+    expect(result.querySelector('img')).toBeNull();
+    buttonBy(result, 'Show output').click();
+    await flush();
+    expect(result.querySelector('pre')?.textContent).toBe('1 failing');
+    expect(result.textContent).toContain('The end of the output: lines 501 to 900 of 900.');
+    m.destroy();
+  });
+
   it('follows the task on the board: once it is verified the status says so and Close appears', async () => {
     const ctx = makeContext({ snapshot: scenario([]) });
     let closed = 0;

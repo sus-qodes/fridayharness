@@ -558,6 +558,47 @@ describe('Master Brain trigger table', () => {
       facts(),
       [{ kind: 'delegate' }],
     ],
+    [
+      // 2026-11-17: the folder's dependencies were never installed, so a failing check of the project
+      // is not the work's: a person is asked at the first failure, with the reason.
+      'plan task failed where its install failed',
+      ev('task.failed', { task_id: 'task_g1' }),
+      facts({ setupTrouble: (id) => (id === 'task_g1' ? 'npm exited with 1' : null) }),
+      [
+        {
+          kind: 'escalate',
+          goal_id: 'goal_1',
+          task_id: 'task_g1',
+          reason: 'setup_failed',
+          detail: 'npm exited with 1',
+        },
+      ],
+    ],
+    [
+      'the failed install comes before the failure count, the revision limit and a missing planner',
+      ev('task.failed', { task_id: 'task_g1' }),
+      facts({
+        setupTrouble: () => 'the install is not trusted on this machine',
+        failuresOf: () => 9,
+        replansOf: () => 9,
+        planner: { available: false, reason: 'no key is stored' },
+      }),
+      [
+        {
+          kind: 'escalate',
+          goal_id: 'goal_1',
+          task_id: 'task_g1',
+          reason: 'setup_failed',
+          detail: 'the install is not trusted on this machine',
+        },
+      ],
+    ],
+    [
+      'a failure with the install in order takes the usual course',
+      ev('task.failed', { task_id: 'task_g1' }),
+      facts({ setupTrouble: () => null }),
+      [{ kind: 'replan', goal_id: 'goal_1', task_id: 'task_g1', reason: 'verification failed' }],
+    ],
     ['human answers an agent', ev('escalation.answered', { escalation_id: 'esc_agent' }), facts(), []],
     [
       'Friday closes a question its task made moot',

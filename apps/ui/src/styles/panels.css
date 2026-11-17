@@ -885,3 +885,57 @@
 .pn-planner-model select {
   max-width: 320px;
 }
+
+/* What a check found, in words (2026-11-17): the findings, the files they are about, and the
+   output behind "Show output". Shared by the task inspector and the Verify dialog. */
+.pn-findings {
+  flex-basis: 100%;
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  font-size: var(--text-sm);
+}
+
+.pn-finding {
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+
+.pn-finding-mark {
+  font-weight: 600;
+}
+
+.pn-finding-fail .pn-finding-mark {
+  color: var(--red-text);
+}
+
+.pn-finding-warn .pn-finding-mark {
+  color: var(--color-amber);
+}
+
+.pn-finding-paths {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0 0 0 12px;
+  font-size: var(--text-caption);
+  color: var(--color-slate-400);
+}
+
+.pn-check-more {
+  flex-basis: 100%;
+}
+
+.pn-check-output-toggle {
+  padding: 2px 8px;
+  font-size: var(--text-caption);
+}
+
+.pn-check-output {
+  margin-top: 4px;
+}
+
+.pn-check-output .agent-text {
+  margin: 4px 0 0;
+  max-height: 320px;
+  overflow: auto;
+}

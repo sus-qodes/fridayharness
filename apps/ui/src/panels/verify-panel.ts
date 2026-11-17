@@ -11,6 +11,7 @@ import { openDrawer } from '../shell/context.js';
 import { append, button, h, replace } from '../ui/dom.js';
 import { duration, humanize } from '../ui/format.js';
 import { icon } from '../ui/svg.js';
+import { checkName, checkOutput, findingsList, summaryIsCodes } from './check-details.js';
 import {
   agentText,
   errorOf,
@@ -119,7 +120,7 @@ export const CHECKS_EXAMPLE = [
   '      args: ["test"]',
 ].join('\n');
 
-function verificationView(v: VerificationView): HTMLElement {
+function verificationView(ctx: AppContext, v: VerificationView): HTMLElement {
   const look = v.status === 'PASSED' ? 'badge-good' : v.status === 'FAILED' ? 'badge-danger' : 'badge-info';
   return h(
     'div',
@@ -145,10 +146,12 @@ function verificationView(v: VerificationView): HTMLElement {
                 },
                 humanize(c.status),
               ),
-              h('span', { class: 'mono' }, plain(c.name, 120)),
+              h('span', { class: c.origin === 'friday' ? '' : 'mono', title: plain(c.name, 120) }, checkName(c.name)),
               c.required ? null : h('span', { class: 'muted' }, 'advisory'),
               h('span', { class: 'muted' }, duration(c.duration_ms)),
-              c.summary ? h('span', { class: 'muted pn-grow' }, plain(c.summary, 300)) : null,
+              c.summary && !summaryIsCodes(c) ? h('span', { class: 'muted pn-grow' }, plain(c.summary, 300)) : null,
+              findingsList(c),
+              checkOutput(ctx, c.artifact_ref),
             ),
           ),
         )
@@ -402,7 +405,7 @@ export function verifyModal(
   }
 
   function showResult(v: VerificationView | undefined | null) {
-    replace(resultBox, v ? verificationView(v) : null);
+    replace(resultBox, v ? verificationView(ctx, v) : null);
   }
 
   async function runChecks() {
@@ -485,7 +488,8 @@ export function verifyModal(
     decideSection,
     howSection,
   );
-  if (latest) append(resultBox, h('div', { class: 'field-label' }, 'Latest verification'), verificationView(latest));
+  if (latest)
+    append(resultBox, h('div', { class: 'field-label' }, 'Latest verification'), verificationView(ctx, latest));
   updateButtons();
   renderDiscrepancies();
 

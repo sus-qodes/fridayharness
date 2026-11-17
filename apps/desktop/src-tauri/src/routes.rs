@@ -120,6 +120,9 @@ pub static ROUTES: &[Route] = &[
     post("tasks/{tid}/unreserve"),
     confirm("tasks/{tid}/cancel", Confirm::CancelTask),
     post("tasks/{tid}/assign"),
+    // The install of a task's folder, run again; and what a check printed.
+    post("tasks/{tid}/setup"),
+    get("artifacts/{id}", &[]),
     post("tasks/{tid}/verify"),
     post("tasks/{tid}/integrate"),
     post("tasks/{tid}/recover"),
@@ -554,6 +557,25 @@ mod tests {
         assert!(req("GET", &p("graph/query?path=src%2Findex.ts&depth=2")).is_ok());
         assert!(req("GET", &p("events?since=4&limit=200&type=task.created&type=task.updated")).is_ok());
         assert!(req("POST", &p("agent-processes/claude-1/stop")).is_ok());
+    }
+
+    #[test]
+    fn what_a_check_printed_is_read_and_an_install_is_run_again() {
+        // What a check printed, by the id alone, as the page asks for it.
+        let c = req("GET", &p("artifacts/A1b2_c3-d4")).unwrap();
+        assert_eq!(c.route.template, "artifacts/{id}");
+        assert_eq!(c.param("id"), Some("A1b2_c3-d4"));
+        assert!(req("POST", &p("tasks/task_1/setup")).is_ok());
+        // The whole reference (`artifact:<id>`) would need an encoded ':', which no path may hold.
+        assert!(refused("GET", &p("artifacts/artifact%3AA1b2_c3-d4")));
+        assert!(refused("GET", &p("artifacts/artifact:A1b2_c3-d4")));
+        // One file by its id: no folders, no query, no writing.
+        assert!(refused("GET", &p("artifacts")));
+        assert!(refused("GET", &p("artifacts/a/b")));
+        assert!(refused("GET", &p("artifacts/a?path=x")));
+        assert!(refused("GET", &p("artifacts/..%2Fconfig.yaml")));
+        assert!(refused("POST", &p("artifacts/a")));
+        assert!(refused("GET", &p("tasks/task_1/setup")));
     }
 
     #[test]

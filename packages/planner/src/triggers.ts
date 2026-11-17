@@ -57,6 +57,11 @@ export interface TriggerFacts {
   roleClassificationAttempted(taskId: string): boolean;
   planner: { available: boolean; reason: string };
   limits: { escalateAfterFailures: number; maxReplans: number; autoApprove: boolean };
+  /**
+   * Why the task's last failed verification is likely the setup and not the work: its folder's
+   * dependencies were not installed, and a check of the project's own failed there. Null otherwise.
+   */
+  setupTrouble?(taskId: string): string | null;
 }
 
 const transitionTo = (e: TriggerEvent) => (e.payload.transition as { to?: string } | undefined)?.to;
@@ -67,6 +72,11 @@ const transitionTo = (e: TriggerEvent) => (e.payload.transition as { to?: string
  * at the revision limit, or without a planner; otherwise a revision.
  */
 export function failureAction(task_id: string, goal_id: string, f: TriggerFacts): BrainAction {
+  // The folder's dependencies were never installed (2026-11-17): the task is not sent back to its
+  // agent, nor the plan revised, to fail the same way; a person fixes the install. Before, this
+  // counted as the work failing, was retried up to the limit, and then read "keeps failing".
+  const trouble = f.setupTrouble?.(task_id) ?? null;
+  if (trouble) return { kind: 'escalate', goal_id, task_id, reason: 'setup_failed', detail: trouble };
   const failures = f.failuresOf(task_id);
   if (failures >= f.limits.escalateAfterFailures) {
     return {

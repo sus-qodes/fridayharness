@@ -676,6 +676,129 @@ describe('question cards by kind (plan FD-21)', () => {
     card.destroy();
   });
 
+  describe('a check that failed where the install failed (2026-11-17)', () => {
+    const SETUP = `POST /tasks/${TASK}/setup`;
+    const failedSetup = (over: Partial<EscalationView> = {}) =>
+      makeEscalation({
+        kind: 'setup_failed',
+        goal_id: GOAL,
+        requested_by_kind: 'master_brain',
+        question:
+          'The checks of the task failed, and its dependencies were not installed in its folder (npm exited with 1). This looks like a setup problem.',
+        options: ['fix what kept it from installing, then install again ("friday task setup <task>")'],
+        details: {
+          why: 'npm exited with 1',
+          proposed_action: 'wait: another attempt would fail the same way',
+          evidence: ['install: npm ci', `install output: npm ERR! network ${HOSTILE}`],
+        },
+        ...over,
+      });
+
+    it('says it is the setup, not the work, and leads with installing again', () => {
+      const card = mount(failedSetup());
+      expect(card.el.querySelector('.gv-card-title')?.textContent).toBe("A task's dependencies were not installed");
+      expect(card.el.textContent).toContain('most likely a setup problem, not the work of the agent');
+      expect(card.el.textContent).toContain('The install: npm exited with 1');
+      // The buttons that do something here, and none that would revise the plan or check a failed task again.
+      const names = [...card.el.querySelectorAll('.gv-actions button')].map((b) => b.textContent?.trim());
+      expect(names).toEqual([
+        'Install again',
+        'Send it back to the agent',
+        'Open the folder in VS Code',
+        'Cancel task',
+        'Later',
+      ]);
+      expect(buttonNamed(card.el, 'Install again').classList.contains('btn-primary')).toBe(true);
+      expect(card.el.querySelector('textarea')).toBeNull();
+      // What the install ran and printed is one step away, as text.
+      const details = card.el.querySelector('.gv-details') as HTMLElement;
+      expect(details.textContent).toContain('npm ci');
+      expect(details.textContent).toContain(`npm ERR! network ${HOSTILE}`);
+      expect(card.el.querySelector('img')).toBeNull();
+      card.destroy();
+    });
+
+    it('Install again runs the install; when it fails again it says why and shows what it printed', async () => {
+      const card = mount(
+        failedSetup(),
+        {},
+        {
+          [SETUP]: {
+            setup: {
+              status: 'failed',
+              reason: 'npm exited with 1',
+              command: 'npm',
+              args: ['ci'],
+              output_tail: 'npm ERR! still offline',
+            },
+          },
+        },
+      );
+      arm(card.el);
+      buttonNamed(card.el, 'Install again').click();
+      await flush();
+      expect(ctx.transport.to('POST', `/tasks/${TASK}/setup`)).toHaveLength(1);
+      const result = card.el.querySelector('.gv-setup-result') as HTMLElement;
+      expect(result.querySelector('.field-error')?.textContent).toBe('The install did not finish: npm exited with 1.');
+      expect(result.textContent).toContain('npm ERR! still offline');
+      // Still the first thing to do, and nothing was sent back or answered.
+      expect(buttonNamed(card.el, 'Install again').classList.contains('btn-primary')).toBe(true);
+      expect(ctx.transport.to('POST', `/tasks/${TASK}/rework`)).toHaveLength(0);
+      expect(answers(ctx)).toEqual([]);
+      card.destroy();
+    });
+
+    it('once it installs, sending the task back becomes the next step, and tells the agent why', async () => {
+      const card = mount(
+        failedSetup(),
+        {},
+        {
+          [SETUP]: { setup: { status: 'passed', reason: 'ok', command: 'npm', args: ['ci'], output_tail: null } },
+          [`POST /tasks/${TASK}/rework`]: { task: { task_id: TASK } },
+        },
+      );
+      arm(card.el);
+      buttonNamed(card.el, 'Install again').click();
+      await flush();
+      expect(card.el.querySelector('.gv-setup-ok')?.textContent).toContain(
+        'Installed. Send the task back to its agent',
+      );
+      expect(buttonNamed(card.el, 'Install again').classList.contains('btn-primary')).toBe(false);
+      const back = buttonNamed(card.el, 'Send it back to the agent');
+      expect(back.classList.contains('btn-primary')).toBe(true);
+      back.click();
+      await flush();
+      const sent = ctx.transport.to('POST', `/tasks/${TASK}/rework`);
+      expect(sent).toHaveLength(1);
+      expect((sent[0]?.body as { reason?: string } | undefined)?.reason).toContain(
+        'The dependencies are installed in the task folder now',
+      );
+      card.destroy();
+    });
+
+    it('sends it back as it is when a person chooses to, and says the install was not fixed', async () => {
+      const card = mount(failedSetup(), {}, { [`POST /tasks/${TASK}/rework`]: { task: { task_id: TASK } } });
+      arm(card.el);
+      buttonNamed(card.el, 'Send it back to the agent').click();
+      await flush();
+      const sent = ctx.transport.to('POST', `/tasks/${TASK}/rework`);
+      expect((sent[0]?.body as { reason?: string } | undefined)?.reason).toContain('were not installed');
+      expect(ctx.transport.to('POST', `/tasks/${TASK}/setup`)).toHaveLength(0);
+      card.destroy();
+    });
+
+    it('says so when the project declares nothing to install', async () => {
+      const card = mount(failedSetup(), {}, { [SETUP]: { setup: null } });
+      arm(card.el);
+      buttonNamed(card.el, 'Install again').click();
+      await flush();
+      expect(card.el.querySelector('.gv-setup-result')?.textContent).toContain(
+        'Nothing was installed: this project declares no install for a task folder.',
+      );
+      card.destroy();
+    });
+  });
+
   describe('Master Brain kinds', () => {
     it('with a planner: Revise with a note answers the question, which revises the plan', async () => {
       const card = mount(

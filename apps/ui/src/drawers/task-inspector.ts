@@ -19,6 +19,7 @@ import type {
 } from '@friday/protocol';
 import { notStartedText, PRIORITY, RISK, TASK_KIND, WAITING_REASON } from '../model/status.js';
 import { visible } from '../model/text.js';
+import { checkName, checkOutput, findingsList, summaryIsCodes } from '../panels/check-details.js';
 import { cancelTask } from '../shell/cancel-task.js';
 import { type AppContext, type Component, type DrawerRequest, openDrawer, openModal } from '../shell/context.js';
 import { append, button, type Child, h, replace } from '../ui/dom.js';
@@ -306,11 +307,21 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
                 'li',
                 { class: 'dr-check' },
                 badge(humanize(c.status), TONE_OF_CHECK[c.status] ?? 'muted'),
-                h('span', { class: 'dr-mono' }, cleanText(c.name)),
+                // Friday's own checks by what they check; the name as the daemon has it in the tooltip.
+                h(
+                  'span',
+                  { class: c.origin === 'friday' ? 'dr-check-name' : 'dr-mono', title: cleanText(c.name) },
+                  checkName(c.name),
+                ),
                 h('span', { class: 'muted' }, duration(c.duration_ms)),
                 c.required ? null : badge('advisory', 'muted'),
                 c.origin === 'friday' ? badge('Friday', 'info', "Friday's own check: it runs no project code") : null,
-                c.summary ? h('div', { class: 'dr-check-summary muted' }, truncate(cleanText(c.summary), 300)) : null,
+                // What it found, in words, in place of a line of rule codes.
+                findingsList(c),
+                c.summary && !summaryIsCodes(c)
+                  ? h('div', { class: 'dr-check-summary muted' }, truncate(cleanText(c.summary), 300))
+                  : null,
+                checkOutput(ctx, c.artifact_ref),
               ),
             ),
           )
