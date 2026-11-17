@@ -17,6 +17,7 @@ const NAMES: Record<string, string> = {
   'providers.claude-code.allow_remote': 'planning through Claude Code',
   'providers.claude-code.daily_budget_usd': 'the project’s spending limit for planning through Claude Code',
   'verification.auto_on_completion': 'checking finished work automatically',
+  'landing.mode': 'putting finished work into your project without asking',
   'daemon.port': 'the port Friday answers on',
   'worktrees.mode': 'whether each task gets its own folder',
   sandbox: 'treating this folder as disposable',

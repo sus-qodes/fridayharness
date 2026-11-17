@@ -407,6 +407,15 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.post(`${P}/goals/:gid/land`, allow(...OPERATOR), async (c) =>
     c.json(await landGoal(state, project, c.req.param('gid'), humanOf(c))),
   );
+  // When this goal's work lands, chosen by a person for this goal alone (the tick on Approve): it
+  // overrides the project's `landing.mode` for it. A person's own act, so it needs no trust.
+  app.post(`${P}/goals/:gid/landing`, allow(...OPERATOR), async (c) => {
+    const body = z.object({ mode: z.enum(['ask', 'goal', 'task']) }).parse(await json(c));
+    const goalId = c.req.param('gid');
+    if (!state.q.findGoal(pid, goalId)) throw new FridayError('goal_not_found', `no goal ${goalId}`);
+    state.recordObservation(pid, humanOf(c), 'goal.landing_choice', { goal_id: goalId, mode: body.mode }, []);
+    return c.json({ goal_id: goalId, mode: body.mode });
+  });
   // What that would do, read before anyone clicks: the branch it lands into, or what is in the way.
   app.get(`${P}/goals/:gid/land`, allow(...OPERATOR), async (c) =>
     c.json(await landPlan(state, project, c.req.param('gid'))),

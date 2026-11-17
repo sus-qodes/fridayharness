@@ -341,6 +341,12 @@ export interface UiSnapshot {
    */
   config: { loaded_hash: string; current_hash: string | null; changes?: ConfigChanges };
   control: ControlState;
+  /**
+   * When finished work is put into the project (`landing.mode`): `mode` is what is in force on this
+   * computer, `requested` what config.yaml asks for (not yet trusted when they differ). Absent from
+   * an older daemon.
+   */
+  landing?: { mode: 'ask' | 'goal' | 'task'; requested: 'ask' | 'goal' | 'task' };
   verification: {
     checks: { name: string; kind: string; required: boolean }[];
     /** Automatic verification is in force: asked for in config.yaml and trusted on this clone. */

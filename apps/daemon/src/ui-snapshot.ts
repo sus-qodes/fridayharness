@@ -59,6 +59,8 @@ export interface UiSnapshotInfo {
   config: UiSnapshot['config'];
   /** Claims are verified automatically (`verification.auto_on_completion`, once trusted). */
   auto_verification: boolean;
+  /** When verified work lands without a click (`landing.mode`, once trusted); null: a person lands it. */
+  auto_landing?: 'goal' | 'task' | null;
   /**
    * Whether the effective policy's loosening applies on this clone (`EffectivePolicy.trusted`).
    * Left out, the snapshot reports nothing untrusted: the daemon that knows its policy says so.
@@ -305,6 +307,7 @@ export function buildUiSnapshot(deps: {
     },
     config: info.config,
     control: state.q.control(pid),
+    landing: { mode: info.auto_landing ?? 'ask', requested: project.config.landing.mode },
     verification: {
       checks: project.config.verification.checks.map((c) => ({ name: c.name, kind: c.kind, required: c.required })),
       auto_on_completion: info.auto_verification,

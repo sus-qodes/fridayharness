@@ -159,7 +159,7 @@ export async function sameAsTip(root: string, tip: string, file: string): Promis
   return mine.code === 0 && mine.stdout.trim() === theirs.stdout.trim();
 }
 
-async function inspect(state: FridayState, project: ProjectRef, goalId: string): Promise<Inspection> {
+async function inspect(state: FridayState, project: ProjectRef, goalId: string, partial = false): Promise<Inspection> {
   const pid = project.project_id;
   const goal = state.q.findGoal(pid, goalId);
   if (!goal) throw new FridayError('goal_not_found', `no goal ${goalId}`);
@@ -170,7 +170,8 @@ async function inspect(state: FridayState, project: ProjectRef, goalId: string):
   const into = current.code === 0 ? current.stdout.trim() : null;
   const base: LandPlan = { goal_id: goalId, branch, into, state: 'ready', reason: null, files: [], commits: 0, work };
   const none = { tip: null, before: null, touched: [], status: [] };
-  if (goal.status !== 'COMPLETED') {
+  // `partial`: what the goal has so far, while it is still worked on (landing each task).
+  if (goal.status !== 'COMPLETED' && !(partial && goal.status === 'ACTIVE')) {
     return {
       plan: { ...base, state: 'not_completed', reason: `the goal is ${goal.status}; only a completed goal lands` },
       ...none,
@@ -364,6 +365,7 @@ export async function landGoal(
   project: ProjectRef,
   goalId: string,
   actor: Actor,
+  opts: { partial?: boolean } = {},
 ): Promise<LandResult> {
   const pid = project.project_id;
   if (landing.has(pid)) {
@@ -371,11 +373,14 @@ export async function landGoal(
   }
   landing.add(pid);
   try {
-    const i = await inspect(state, project, goalId);
+    const i = await inspect(state, project, goalId, opts.partial === true);
     const { plan } = i;
     const root = project.root;
-    const record = (result: LandResult, before: string | null) =>
-      state.recordObservation(pid, actor, 'goal.landed', { ...result, before }, []);
+    // A goal still worked on is not "landed" yet: the board learns that when its last work lands.
+    const whole = state.q.findGoal(pid, goalId)?.status === 'COMPLETED';
+    const record = (result: LandResult, before: string | null) => {
+      if (whole) state.recordObservation(pid, actor, 'goal.landed', { ...result, before }, []);
+    };
     if (plan.state === 'not_completed')
       throw new FridayError('invalid_state_transition', `goal ${goalId}: ${plan.reason}`);
     if (plan.state === 'in_folder' || plan.state === 'blocked') {

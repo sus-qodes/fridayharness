@@ -1021,3 +1021,36 @@
 .pn-land-cleanup {
   margin-top: 8px;
 }
+
+/* ---- "Put finished work into my project": one choice of three (2026-11-17) --------------------- */
+
+.pn-landing-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pn-landing-choice {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  text-align: left;
+}
+
+.pn-landing-choice.is-on {
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--ink);
+}
+
+.pn-landing-choice:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.pn-landing-what {
+  font-size: var(--text-caption);
+  font-weight: var(--weight-regular, 400);
+  white-space: normal;
+}

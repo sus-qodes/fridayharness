@@ -55,6 +55,7 @@ export interface PolicySourceData {
   operations?: Record<string, OperationSpec>;
   execution?: { binaries?: string[]; env_passthrough?: string[] };
   auto_verification?: boolean;
+  auto_landing?: 'goal' | 'task';
   mcp?: Record<string, { default?: string; tools?: Record<string, string> }>;
   elicitation?: boolean;
   /** `daemon.port` when fixed (loosening, plan M9 §5.13). */
@@ -83,6 +84,7 @@ export function readPolicySources(
       operations: config.operations,
       execution: config.execution,
       auto_verification: config.verification.auto_on_completion,
+      ...(config.landing.mode !== 'ask' ? { auto_landing: config.landing.mode } : {}),
       mcp: config.mcp.servers,
       elicitation: config.approvals.elicitation,
       ...(config.sandbox ? { sandbox: true } : {}),

@@ -389,6 +389,127 @@ function looseningSwitch(ctx: AppContext, td: Teardown, spec: LooseningSwitch): 
 }
 
 /** "Check the work automatically": verification runs as soon as an agent claims a task. */
+const LANDING = 'landing.mode';
+type LandingMode = 'ask' | 'goal' | 'task';
+
+const LANDING_CHOICES: { mode: LandingMode; label: string; what: string }[] = [
+  { mode: 'ask', label: 'Ask me', what: 'Finished work waits until you press Land.' },
+  {
+    mode: 'goal',
+    label: 'When the whole goal has passed',
+    what: 'Friday puts a goal into your project once every task of it has passed its checks.',
+  },
+  {
+    mode: 'task',
+    label: 'Each task as it passes',
+    what: 'Friday puts each task into your project as soon as it has passed its checks.',
+  },
+];
+
+/** What is in force for landing on this computer, and what config.yaml asks for. */
+export function landingState(board: UiSnapshot | null | undefined): { mode: LandingMode; requested: LandingMode } {
+  return { mode: board?.landing?.mode ?? 'ask', requested: board?.landing?.requested ?? 'ask' };
+}
+
+/**
+ * "Put finished work into my project" (2026-11-17): `landing.mode`. A finished goal waited for a
+ * click on Land, always. The two other choices are loosenings this computer trusts first, they
+ * apply only in a project with a required check, and Friday never pushes; a file you changed
+ * yourself always stops it, and the goal then waits for its Land button as before.
+ */
+export function landingChoice(ctx: AppContext, td: Teardown): HTMLElement {
+  let busy = false;
+  const body = h('div', { class: 'pn-qs-body' });
+  const el = h(
+    'div',
+    { class: 'pn-quick-setup', dataset: { setup: 'landing' } },
+    h('div', { class: 'pn-qs-title' }, 'Put finished work into my project'),
+    note(
+      'When work has passed its checks it is merged into the branch your project folder is on. Friday never sends anything to GitHub, and it stops and leaves everything as it is when a file you changed yourself is in the way.',
+    ),
+    body,
+  );
+
+  async function choose(mode: LandingMode) {
+    if (busy) return;
+    busy = true;
+    render();
+    try {
+      const { mode: now, requested } = landingState(ctx.store.select('board'));
+      if (mode === 'ask') {
+        const set = await ctx.act(
+          'Ask me before landing',
+          () => ctx.api.editSettings({ [LANDING]: 'ask' }),
+          'Finished work waits for you to press Land',
+        );
+        if (set) await trustWhatStays(ctx);
+      } else {
+        const set =
+          requested === mode && now !== mode
+            ? true
+            : await ctx.act('Land without asking', () => ctx.api.editSettings({ [LANDING]: mode }));
+        if (set) {
+          await trustLoosening(ctx, {
+            expects: LANDING,
+            missing: 'Landing without asking is not among the settings that wait for trust',
+            success: mode === 'task' ? 'Each task now lands as it passes' : 'A goal now lands when it has passed',
+          });
+        }
+      }
+    } finally {
+      busy = false;
+      if (!td.done) {
+        ctx.refresh();
+        render();
+      }
+    }
+  }
+
+  function render() {
+    const board = ctx.store.select('board');
+    const { mode, requested } = landingState(board);
+    const checked = board ? board.verification.checks.some((c) => c.required) : true;
+    replace(
+      body,
+      checked
+        ? null
+        : note(
+            'This project has no required check of its own yet, so Friday lands nothing by itself whatever is chosen here: unchecked work always waits for you.',
+          ),
+      h(
+        'div',
+        {
+          class: 'pn-landing-choices',
+          role: 'radiogroup',
+          aria: { label: 'When finished work is put into the project' },
+        },
+        LANDING_CHOICES.map((c) =>
+          button(
+            [h('span', { class: 'pn-landing-label' }, c.label), h('span', { class: 'pn-landing-what muted' }, c.what)],
+            () => void choose(c.mode),
+            {
+              class: ['btn', 'pn-landing-choice', mode === c.mode ? 'is-on' : ''].filter(Boolean).join(' '),
+              disabled: busy || (mode === c.mode && requested === c.mode),
+              role: 'radio',
+              aria: { checked: mode === c.mode ? 'true' : 'false' },
+              dataset: { mode: c.mode },
+            },
+          ),
+        ),
+      ),
+      requested !== mode
+        ? note(
+            'config.yaml already asks for landing without asking; it applies once you trust it on this computer: choose it again here.',
+          )
+        : null,
+    );
+  }
+
+  td.add(ctx.store.subscribe('board', () => (busy ? undefined : render())));
+  render();
+  return el;
+}
+
 export function autoVerifySwitch(ctx: AppContext, td: Teardown): HTMLElement {
   return looseningSwitch(ctx, td, {
     setup: 'verify',

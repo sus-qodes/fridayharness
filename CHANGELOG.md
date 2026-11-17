@@ -2,6 +2,15 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — agents working together, part 8: landing without a click
+
+A finished goal always waited for a click on Land. That stays the default, and it is now a choice.
+
+- **Settings → Checks has "Put finished work into my project"**, one choice of three: **Ask me**, **When the whole goal has passed**, or **Each task as it passes**. The two automatic choices are trusted on this computer before they apply, like the other things a project may ask for.
+- **A tick on the plan's Approve does it for one goal**: "When every task of this goal has passed its checks, put it into my project without asking".
+- **Unchecked work never lands by itself.** Nothing lands automatically in a project without a required check, nor while Friday is paused. Every revision on a goal's branch has already passed the project's checks in Friday's own checkout, so what lands was checked as a whole.
+- **A file you changed yourself always stops it.** Nothing is touched then, the reason is recorded, and the goal waits for its Land button as before. Friday never pushes.
+
 ## Unreleased — agents working together, part 7: a check that could not run is not the agent's mistake
 
 - **When a project check cannot even start on this computer, nobody is sent back to fix it.** The program a check names may not be installed, or the check may be misspelt in the settings. Nothing of the agent's work was judged then, yet the task counted as failed and went back to its agent, again and again, until it read "keeps failing verification". Friday now asks you at the first such failure, says which check could not start and what the computer said, and offers **Open the checks** and **Send it back to the agent** (once it is put right). It joins the case already handled, where the project's packages were not installed.

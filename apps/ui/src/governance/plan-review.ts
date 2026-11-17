@@ -221,6 +221,23 @@ export function planReview(
     placeholder: 'What should be different (the planner reads it when it plans again)',
   });
   const approve = button('Approve plan', () => undefined, { class: 'btn btn-primary gv-decide' });
+  // "Put this goal into my project when it has all passed" (2026-11-17): a choice for this goal
+  // alone. Offered where it can apply (the project has a required check) and is not the project's
+  // rule already.
+  const boardNow = ctx.store.select('board');
+  const landTick = h('input', { type: 'checkbox', class: 'gv-land-tick' }) as HTMLInputElement;
+  const landOffered =
+    (boardNow?.verification.checks.some((c) => c.required) ?? false) && (boardNow?.landing?.mode ?? 'ask') === 'ask';
+  const landRow = h(
+    'label',
+    { class: 'gv-land-row', hidden: !landOffered },
+    landTick,
+    h(
+      'span',
+      null,
+      'When every task of this goal has passed its checks, put it into my project without asking. Friday still stops if a file I changed is in the way.',
+    ),
+  );
   const reject = button('Reject with note', () => undefined, { class: 'btn btn-danger gv-decide' });
   // The plan as it was proposed, in the editor: what a person changes there replaces this version.
   const editFirst = button(
@@ -277,6 +294,7 @@ export function planReview(
       h('label', { class: 'field-label', for: noteId }, 'Note (sent with a rejection)'),
       note,
     ),
+    landRow,
     h('div', { class: 'gv-actions' }, approve, editFirst, again, reject),
     gone,
     hint,
@@ -353,6 +371,10 @@ export function planReview(
       approve.disabled = true;
       setText(status, 'Approving…');
       const r = await ctx.act('Approve the plan', () => ctx.api.approvePlan(p.plan_id, p.version), 'Plan approved');
+      // The tick for this goal: said after the approval stands, and only when it differs from the project's own.
+      if (r && landTick.checked) {
+        await ctx.act('Land this goal without asking', () => ctx.api.goalLanding(goalId, 'goal'));
+      }
       busy = false;
       approve.disabled = false;
       if (r) {

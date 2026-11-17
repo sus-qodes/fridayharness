@@ -45,7 +45,7 @@ import {
 import { plannerModelRow } from './planner-model.js';
 import { plannerSpendingCard } from './planner-spending.js';
 import { projectChecksCard } from './project-checks.js';
-import { autoApproveSwitch, autoVerifySwitch, plannerQuickSetup } from './quick-setup.js';
+import { autoApproveSwitch, autoVerifySwitch, landingChoice, plannerQuickSetup } from './quick-setup.js';
 import { routingPins } from './routing-pins.js';
 import {
   clampNumber,
@@ -795,6 +795,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
     return [
       h('div', { class: 'hub-card' }, projectChecksCard(ctx, tabTd)),
       h('div', { class: 'hub-card' }, autoVerifySwitch(ctx, tabTd)),
+      h('div', { class: 'hub-card' }, landingChoice(ctx, tabTd)),
     ];
   }
 

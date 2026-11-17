@@ -37,6 +37,11 @@ const short = (text: string, max = 160): string => truncate(visible(text), max);
 export function looseningWords(l: Pick<LooseningItem, 'setting' | 'to'>): string | null {
   const { setting, to } = l;
   if (setting === 'verification.auto_on_completion') return 'Finished work is checked automatically';
+  if (setting === 'landing.mode') {
+    return to === 'task'
+      ? 'Each task that passes its checks is put into your project without asking'
+      : 'A goal that has passed its checks is put into your project without asking';
+  }
   if (setting === 'master_brain.auto_approve') return 'Plans start without waiting for your approval';
   if (setting === 'sandbox') {
     return 'This folder is treated as disposable: commands that would wait for your approval run on their own';

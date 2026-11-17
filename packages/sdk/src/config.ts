@@ -368,6 +368,14 @@ export const FridayConfig = z
       })
       .prefault({}),
     /**
+     * When a goal's verified work is merged into the branch the project folder has checked out
+     * (2026-11-17): `ask` (a person presses Land), `goal` (once the whole goal is complete) or
+     * `task` (each task as it is integrated). Anything but `ask` is a loosening this clone trusts
+     * first, and it applies only in a project with a required check: unverified work never lands
+     * by itself. Friday never pushes.
+     */
+    landing: z.object({ mode: z.enum(['ask', 'goal', 'task']).default('ask') }).prefault({}),
+    /**
      * Conflict-prone files (ADR-0025): writing under a `required` pattern takes an exclusive
      * reservation for the task; `ttl_ms` is how long it outlives a task that stands still.
      */
@@ -516,6 +524,7 @@ export const LIVE_CONFIG_KEYS: readonly string[] = [
   'risk',
   'security',
   'verification',
+  'landing',
   'reservations',
   'recovery',
   'context',
@@ -634,6 +643,8 @@ export function loadConfig(path: string): FridayConfig {
  */
 export const EDITABLE_SETTINGS = {
   'verification.auto_on_completion': z.boolean(),
+  // Landing without a click: a loosening, in force once this clone trusts it.
+  'landing.mode': z.enum(['ask', 'goal', 'task']),
   'master_brain.provider': z.enum(['anthropic', 'claude-code', 'none']),
   // Plans start without a person's approval: a loosening, in force once this clone trusts it.
   'master_brain.auto_approve': z.boolean(),

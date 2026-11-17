@@ -142,6 +142,8 @@ pub static ROUTES: &[Route] = &[
     confirm("goals/{gid}/cancel", Confirm::CancelGoal),
     confirm("goals/{gid}/land", Confirm::LandGoal),
     post("goals/{gid}/replan"),
+    // When this goal's finished work is put into the project: the tick on the plan's Approve.
+    post("goals/{gid}/landing"),
     post("goals/{gid}/plans"),
     post("plans/{plan}/versions/{v}/approve"),
     post("plans/{plan}/versions/{v}/reject"),

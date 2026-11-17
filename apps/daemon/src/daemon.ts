@@ -40,6 +40,7 @@ import { DependencyCache, dependencyCacheDir } from './dependency-cache.js';
 import { profileCache } from './execution.js';
 import { GraphService } from './graph-service.js';
 import { IntegrationManager } from './integration.js';
+import { landGoal } from './land.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
 import { OperationManager } from './operations.js';
 import { type EffectivePolicy, loadEffectivePolicy, reloadingPolicy, writePolicyTrust } from './policy.js';
@@ -490,6 +491,58 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       );
     },
   );
+  // Landing without a click (2026-11-17). A person chose it: for the project (`landing.mode`, a
+  // loosening this clone trusted) or for one goal (the tick on Approve). `goal`: when the goal is
+  // complete; `task`: each time a task's work reaches the goal branch. Only in a project with a
+  // required check, never while Friday is paused, and with every refusal of a landing by hand
+  // (a file of the person's in the way, a merge in progress): then nothing is touched, the reason
+  // is recorded, and the goal waits for its Land button as before.
+  const landingFor = (goalId: string): 'ask' | 'goal' | 'task' => {
+    const own = state.store
+      .readSince(project.project_id, 0, { types: ['goal.landing_choice'], limit: 2000 })
+      .filter((e) => (e.payload as { goal_id?: unknown }).goal_id === goalId)
+      .at(-1)?.payload as { mode?: unknown } | undefined;
+    if (own?.mode === 'ask' || own?.mode === 'goal' || own?.mode === 'task') return own.mode;
+    return currentPolicy().auto_landing ?? 'ask';
+  };
+  const landItself = async (goalId: string): Promise<void> => {
+    const goal = state.q.findGoal(project.project_id, goalId);
+    if (!goal) return;
+    const mode = landingFor(goalId);
+    const whole = goal.status === 'COMPLETED';
+    if (mode === 'ask' || (mode === 'goal' && !whole) || (!whole && goal.status !== 'ACTIVE')) return;
+    if (state.q.control(project.project_id).paused) return;
+    if (!project.config.verification.checks.some((c) => c.required)) return;
+    try {
+      const r = await landGoal(state, project, goalId, { kind: 'system', id: 'friday' }, { partial: !whole });
+      logger.info('goal landed without a click', { goal_id: goalId, mode, status: r.status, head: r.head });
+    } catch (e) {
+      const reason = (e as Error).message.slice(0, 600);
+      logger.info('landing by itself was held', { goal_id: goalId, mode, reason });
+      state.recordObservation(
+        project.project_id,
+        { kind: 'system', id: 'friday' },
+        'goal.landing_held',
+        { goal_id: goalId, mode, reason },
+        [],
+      );
+    }
+  };
+  const stopLanding = state.transport.subscribe(
+    { project_id: project.project_id, types: ['goal.status_changed', 'integration.completed'] },
+    (e) => {
+      const p = e.payload as {
+        goal_id?: string;
+        transition?: { to?: string };
+        integration?: { goal_id?: string };
+      };
+      const goalId = e.type === 'goal.status_changed' ? p.goal_id : p.integration?.goal_id;
+      if (!goalId || (e.type === 'goal.status_changed' && p.transition?.to !== 'COMPLETED')) return;
+      void landItself(goalId).catch((err) =>
+        logger.warn('landing by itself failed', { goal_id: goalId, message: (err as Error).message }),
+      );
+    },
+  );
   // Lost and failed attempts: assessed, preserved, fenced and reassigned within limits (ADR-0026).
   const recovery = new RecoveryManager({
     state,
@@ -650,6 +703,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
         worktrees_mode: worktreeMode,
         config: { loaded_hash: configHash.loaded, current_hash: configHash.current(), changes: configs.changes() },
         auto_verification: autoVerifies(),
+        auto_landing: currentPolicy().auto_landing,
         // Whether the project's loosening applies on this clone: the rail's "Policy change not yet
         // trusted" row and the checklist's item rest on it (M9k.8).
         policy_trusted: currentPolicy().trusted,
@@ -863,6 +917,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       if (timer) clearInterval(timer);
       clearInterval(sweep);
       stopWorkspaces();
+      stopLanding();
       stopAutoVerify();
       stopResumeSweep();
       // Integrations and worktree jobs in flight finish first, within a bound: no git process the

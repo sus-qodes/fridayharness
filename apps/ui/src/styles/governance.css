@@ -1007,3 +1007,17 @@
 .gv-setup-ok {
   color: var(--green-2);
 }
+
+/* The tick on a plan's Approve: land this goal without asking (2026-11-17). */
+.gv-land-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 4px 0 8px;
+  color: var(--color-slate-300);
+  font-size: var(--text-caption);
+}
+
+.gv-land-row[hidden] {
+  display: none;
+}

@@ -73,6 +73,8 @@ export interface PolicySource {
   execution?: { binaries?: string[]; env_passthrough?: string[] };
   /** `verification.auto_on_completion` (ADR-0029 §6). */
   auto_verification?: boolean;
+  /** `landing.mode` when it is not `ask`: verified work is landed without a person's click. */
+  auto_landing?: 'goal' | 'task';
   /** Levels for third-party MCP servers (ADR-0030 §3). */
   mcp?: Record<string, McpServerPolicy>;
   /** `approvals.elicitation`: false keeps every decision on the CLI and the status page (ADR-0030 §5). */
@@ -118,6 +120,8 @@ export interface ProjectPolicy {
   execution: { binaries: string[]; env_passthrough: string[] };
   /** Whether a completion claim starts verification without a human. */
   auto_verification: boolean;
+  /** When verified work is landed without a click, once trusted: per goal, per task, or never (null). */
+  auto_landing: 'goal' | 'task' | null;
   /** Each source's levels for third-party MCP servers; loosening counted only when trusted. */
   mcp: { source: string; server: string; default?: Autonomy; tools: Record<string, Autonomy> }[];
   /** Whether a human may decide low- and medium-risk approvals in the host (MCP elicitation). */
@@ -213,6 +217,9 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     }
     if (s.auto_verification) {
       loosening.push({ source: s.name, setting: 'verification.auto_on_completion', from: 'false', to: 'true' });
+    }
+    if (s.auto_landing) {
+      loosening.push({ source: s.name, setting: 'landing.mode', from: 'ask', to: s.auto_landing });
     }
     if (s.sandbox) loosening.push({ source: s.name, setting: 'sandbox', from: 'false', to: 'true' });
     if (s.daemon_port) {
@@ -328,6 +335,10 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     env_passthrough: trusted ? [...new Set(sources.flatMap((s) => s.execution?.env_passthrough ?? []))].sort() : [],
   };
   const auto_verification = trusted && sources.some((s) => s.auto_verification === true);
+  // The widest any source asks for: `task` lands more often than `goal`.
+  const asked = sources.map((s) => s.auto_landing).filter(Boolean);
+  const auto_landing: 'goal' | 'task' | null =
+    !trusted || !asked.length ? null : asked.includes('task') ? 'task' : 'goal';
   const daemon_port = trusted ? (sources.find((s) => s.daemon_port)?.daemon_port ?? null) : null;
   const level = (v: string | undefined): Autonomy | undefined =>
     v && isAutonomy(v) && (trusted || A[v] >= A.review) ? v : undefined;
@@ -367,6 +378,7 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     operations,
     execution,
     auto_verification,
+    auto_landing,
     mcp,
     elicitation,
     daemon_port,

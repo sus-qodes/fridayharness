@@ -1116,6 +1116,103 @@ describe('landing a completed goal', () => {
     expect(text('src/a.mjs')).toBe('export const a = 3; // mine\n');
   });
 
+  describe('landing without a click (2026-11-17)', () => {
+    const LAND_GOAL = '\nlanding:\n  mode: goal\n';
+    const trust = async (td: TestDaemon) => {
+      const view = await td.operator.get<{ policy: { loosening_hash: string } }>(td.operator.projectPath('/policy'));
+      await td.operator.post(td.operator.projectPath('/policy/trust'), { loosening_hash: view.policy.loosening_hash });
+    };
+    const oneTaskDone = async (td: TestDaemon) => {
+      const { goalId, ids } = await goalWith(td, [{ key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] }]);
+      await work(td, 'be-1', ids['raise-a'] as string, { 'src/a.mjs': 'export const a = 2;\n' });
+      await integrationOf(td, ids['raise-a'] as string);
+      await runOnce(td);
+      await eventually(
+        () => td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`)),
+        (g) => g.goal.status === 'COMPLETED',
+        'the goal to complete',
+      );
+      return goalId;
+    };
+    const tipOf = async (goalId: string) => (await git(['rev-parse', `friday/goal-${goalId}`])).trim();
+    const landings = (td: TestDaemon, type: string) =>
+      td.daemon.state.store.readSince(td.project.project_id, 0, { types: [type], limit: 20 });
+
+    it('lands a finished goal by itself once this computer trusts the setting', async () => {
+      const td = await project(CHECKS, {}, LAND_GOAL);
+      await trust(td);
+      const goalId = await oneTaskDone(td);
+      const tip = await tipOf(goalId);
+      await eventually(head, (h) => h === tip, 'the goal to land by itself');
+      expect(text('src/a.mjs')).toBe('export const a = 2;\n');
+      expect((await runGit(ws().projectDir, ['status', '--porcelain'])).stdout).toBe('');
+      const landed = await eventually(
+        () => landings(td, 'goal.landed'),
+        (es) => es.length === 1,
+        'the landing on record',
+      );
+      expect(landed[0]?.actor).toMatchObject({ kind: 'system' });
+    });
+
+    it('does nothing while the setting is not trusted, or where the project has no check', async () => {
+      const untrusted = await project(CHECKS, {}, LAND_GOAL);
+      const before = await head();
+      await oneTaskDone(untrusted);
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(await head()).toBe(before);
+      expect(landings(untrusted, 'goal.landed')).toEqual([]);
+    });
+
+    it('never lands unchecked work: a project without a required check keeps its Land button', async () => {
+      // Its one check is advisory: nothing whose failure would stop anything.
+      const td = await project(`${CHECKS}      required: false\n`, {}, LAND_GOAL);
+      await trust(td);
+      const before = await head();
+      const goalId = await oneTaskDone(td);
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(await head()).toBe(before);
+      expect(await plan(td, goalId)).toMatchObject({ state: 'ready' });
+    });
+
+    it('takes a choice made for one goal: each task lands as it is integrated', async () => {
+      const td = await project();
+      const before = await head();
+      const { goalId, ids } = await goalWith(td, [
+        { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+        { key: 'note-b', summary: 'Say what b is for', write: ['src/b.mjs'], depends_on: ['raise-a'] },
+      ]);
+      await td.operator.post(td.operator.projectPath(`/goals/${goalId}/landing`), { mode: 'task' });
+      await work(td, 'be-1', ids['raise-a'] as string, { 'src/a.mjs': 'export const a = 2;\n' });
+      await integrationOf(td, ids['raise-a'] as string);
+      // The goal is still worked on, and its first task is in the folder already.
+      const tip = await tipOf(goalId);
+      await eventually(head, (h) => h === tip, 'the first task to land');
+      expect(tip).not.toBe(before);
+      expect(text('src/a.mjs')).toBe('export const a = 2;\n');
+      expect((await td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`))).goal.status).toBe(
+        'ACTIVE',
+      );
+      // Not "landed" on the board yet: that is said when the whole goal is in.
+      expect(landings(td, 'goal.landed')).toEqual([]);
+    });
+
+    it('holds back, touching nothing, when a file of the person is in the way', async () => {
+      const td = await project(CHECKS, {}, LAND_GOAL);
+      await trust(td);
+      const before = await head();
+      writeFileSync(file('src/a.mjs'), 'export const a = 3; // mine\n');
+      await oneTaskDone(td);
+      const held = await eventually(
+        () => landings(td, 'goal.landing_held'),
+        (es) => es.length >= 1,
+        'the held landing on record',
+      );
+      expect(String((held[0]?.payload as { reason?: string }).reason)).toContain('not committed');
+      expect(await head()).toBe(before);
+      expect(text('src/a.mjs')).toBe('export const a = 3; // mine\n');
+    });
+  });
+
   it('has nothing to land for work made in the project folder itself, and says to commit it', async () => {
     // Worktrees off: every run works in the main checkout, as a session attached from an editor does.
     const td = await project(CHECKS, {}, '\nworktrees:\n  mode: off\n');

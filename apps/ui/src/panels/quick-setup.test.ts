@@ -17,6 +17,8 @@ import {
   autoVerifySwitch,
   CLAUDE_CODE_BUDGET,
   claudeCodePlanning,
+  landingChoice,
+  landingState,
   plannerQuickSetup,
 } from './quick-setup.js';
 import { buttonBy, flush, HOSTILE } from './test-support.js';
@@ -578,5 +580,73 @@ describe('starting plans without asking (2026-11-17)', () => {
     expect(sent(on, '/config/settings')).toEqual([{ set: { 'master_brain.auto_approve': false } }]);
     expect(on.toasts.at(-1)).toEqual({ kind: 'success', text: 'Each plan waits for your approval' });
     td2.run();
+  });
+});
+
+describe('putting finished work into the project (2026-11-17)', () => {
+  const CHECKED = { checks: [{ name: 'tests', kind: 'test', required: true }], auto_on_completion: false };
+  const LAND_POLICY = (to: string) => ({
+    policy: {
+      loosening: [{ source: '.friday/config.yaml', setting: 'landing.mode', from: 'ask', to }],
+      loosening_hash: 'hash0123456789ab',
+      trusted: false,
+    },
+  });
+  const choice = (el: HTMLElement, mode: string) => {
+    const b = el.querySelector<HTMLButtonElement>(`.pn-landing-choice[data-mode="${mode}"]`);
+    if (!b) throw new Error(`no choice ${mode}`);
+    return b;
+  };
+
+  it('reads "ask me" from an older daemon, and what is in force otherwise', () => {
+    expect(landingState(null)).toEqual({ mode: 'ask', requested: 'ask' });
+    expect(landingState(makeSnapshot({ landing: { mode: 'ask', requested: 'goal' } }))).toEqual({
+      mode: 'ask',
+      requested: 'goal',
+    });
+  });
+
+  it('sets the choice, then asks before trusting it on this computer', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ verification: CHECKED }),
+      answers: { 'GET /policy': LAND_POLICY('goal'), 'POST /policy/trust': LAND_POLICY('goal') },
+    });
+    const td = new Teardown();
+    const el = landingChoice(ctx, td);
+    // "Ask me" is what holds, so it is not a choice to make again.
+    expect(choice(el, 'ask').getAttribute('aria-checked')).toBe('true');
+    expect(choice(el, 'ask').disabled).toBe(true);
+    choice(el, 'goal').click();
+    await flush();
+    expect(sent(ctx, '/config/settings')).toEqual([{ set: { 'landing.mode': 'goal' } }]);
+    expect(ctx.confirms).toHaveLength(1);
+    expect(ctx.confirms[0]?.body).toContain(
+      'A goal that has passed its checks is put into your project without asking (landing.mode: ask → goal, .friday/config.yaml)',
+    );
+    expect(sent(ctx, '/policy/trust')).toEqual([{ loosening_hash: 'hash0123456789ab' }]);
+    ctx.board(makeSnapshot({ verification: CHECKED, landing: { mode: 'goal', requested: 'goal' } }));
+    expect(choice(el, 'goal').getAttribute('aria-checked')).toBe('true');
+    td.run();
+  });
+
+  it('going back to "Ask me" is in force at once and needs no trust', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ verification: CHECKED, landing: { mode: 'task', requested: 'task' } }),
+      answers: { 'GET /policy': { policy: { loosening: [], loosening_hash: null, trusted: true } } },
+    });
+    const td = new Teardown();
+    const el = landingChoice(ctx, td);
+    choice(el, 'ask').click();
+    await flush();
+    expect(sent(ctx, '/config/settings')).toEqual([{ set: { 'landing.mode': 'ask' } }]);
+    expect(ctx.confirms).toHaveLength(0);
+    td.run();
+  });
+
+  it('says that nothing lands by itself in a project without a required check', () => {
+    const ctx = makeContext({ snapshot: makeSnapshot({ verification: { checks: [], auto_on_completion: false } }) });
+    const td = new Teardown();
+    expect(landingChoice(ctx, td).textContent).toContain('no required check');
+    td.run();
   });
 });

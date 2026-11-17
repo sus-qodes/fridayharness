@@ -730,6 +730,9 @@ const OBSERVATION_TYPES = new Set([
   'setup.failed',
   // A person landed a completed goal's branch into their own branch, from the interface (2026-11-16).
   'goal.landed',
+  // A person chose, for one goal, when its work lands; and a landing Friday tried by itself was held.
+  'goal.landing_choice',
+  'goal.landing_held',
   // The goal's finished work was written into the project folder before a session there took a task.
   'folder.synced',
   // A person changed one of the settings the interface may change in config.yaml (2026-11-16).

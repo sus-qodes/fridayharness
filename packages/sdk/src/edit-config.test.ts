@@ -145,6 +145,7 @@ describe('editConfigText', () => {
     expect(Object.keys(EDITABLE_SETTINGS).sort()).toEqual(
       [
         'verification.auto_on_completion',
+        'landing.mode',
         'master_brain.provider',
         'master_brain.auto_approve',
         'providers.claude-code.allow_remote',

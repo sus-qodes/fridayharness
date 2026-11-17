@@ -561,6 +561,11 @@ export class FridayApi {
     return this.post('/readiness/clear', { host, model });
   }
 
+  /** A person's choice for one goal: when its finished work is put into the project. */
+  goalLanding(goalId: string, mode: 'ask' | 'goal' | 'task'): Promise<{ goal_id: string; mode: string }> {
+    return this.post(`/goals/${encodeURIComponent(goalId)}/landing`, { mode });
+  }
+
   /** Merges a completed goal's branch into the branch the project folder has checked out. */
   landGoal(goalId: string): Promise<LandResult> {
     // Longer than the daemon gives the merge itself (120 s), so its own answer is what arrives.
