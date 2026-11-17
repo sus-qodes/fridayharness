@@ -24,13 +24,13 @@ describe('makeAct (plan §6 rule 6)', () => {
     expect(toasts.at(-1)).toEqual({ kind: 'success', text: '3 agents continue' });
   });
 
-  it("shows Friday's code and message when the daemon refuses", async () => {
+  it("shows what went wrong, then Friday's code for it, when the daemon refuses", async () => {
     const { toasts, act } = setup();
     const r = await act('Approve', async () => {
       throw new ApiError(409, 'COS-2002', 'invalid_state_transition', 'approval is already granted');
     });
     expect(r).toBeUndefined();
-    expect(toasts).toEqual([{ kind: 'error', text: 'Approve', detail: 'COS-2002: approval is already granted' }]);
+    expect(toasts).toEqual([{ kind: 'error', text: 'Approve', detail: 'approval is already granted (COS-2002)' }]);
   });
 
   it('says Friday is not reachable when nothing answered', async () => {
@@ -43,14 +43,16 @@ describe('makeAct (plan §6 rule 6)', () => {
   });
 
   it('formats every kind of failure without throwing', () => {
-    expect(errorDetail(new AuthError('COS-3005', 'expired'))).toBe('COS-3005: expired');
+    expect(errorDetail(new AuthError('COS-3005', 'expired'))).toBe('expired (COS-3005)');
     expect(errorDetail(new Error('plain'))).toBe('plain');
     expect(errorDetail('a string')).toBe('something went wrong');
     expect(errorDetail(null)).toBe('something went wrong');
     const hostile = errorDetail(
       new ApiError(400, 'COS-1000', 'x', `<img src=x onerror=alert(1)>‮\u001b[31m${'y'.repeat(5000)}`),
     );
-    expect(hostile.startsWith('COS-1000: <img src=x onerror=alert(1)>')).toBe(true);
+    // What went wrong first, as text; Friday's code for it last.
+    expect(hostile.startsWith('<img src=x onerror=alert(1)>')).toBe(true);
+    expect(hostile.endsWith(' (COS-1000)')).toBe(true);
     expect(hostile).not.toContain('‮');
     expect(hostile).not.toContain('\u001b');
     expect(Array.from(hostile).length).toBeLessThanOrEqual(400);

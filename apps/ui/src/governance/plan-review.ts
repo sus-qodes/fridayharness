@@ -251,7 +251,13 @@ export function planReview(
     p.rationale
       ? h('p', { class: 'gv-why' }, h('span', { class: 'gv-k' }, 'Rationale: '), decisionText(p.rationale))
       : null,
-    h('p', { class: 'field-hint' }, `Trigger: ${cleanText(p.trigger)}`),
+    // Why this version came to be (a failed check, a note, written by hand): one step away.
+    h(
+      'details',
+      { class: 'gv-details' },
+      h('summary', null, 'Why this version was proposed'),
+      h('p', { class: 'muted' }, cleanText(p.trigger)),
+    ),
     p.needs_human
       ? h(
           'div',

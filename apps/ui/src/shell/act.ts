@@ -21,9 +21,16 @@ export function isCancelled(e: unknown): boolean {
   return e instanceof ApiError && e.code === DIALOG_CANCELLED;
 }
 
-/** The second line of an error toast: `<code>: <message>` for Friday's errors. */
+/**
+ * The second line of an error toast: what went wrong, then Friday's code for it in brackets. The
+ * code led the line ("COS-2002: approval is already granted"), so a person read the code first
+ * (2026-11-17); it stays, last, for whoever reports the error.
+ */
 export function errorDetail(e: unknown): string {
-  if (e instanceof ApiError) return truncate(cleanText(`${e.code}: ${e.message}`), DETAIL_MAX);
+  if (e instanceof ApiError) {
+    const code = e.code ? ` (${cleanText(e.code)})` : '';
+    return `${truncate(cleanText(e.message), DETAIL_MAX - Array.from(code).length)}${code}`;
+  }
   if (e instanceof OfflineError) return OFFLINE_DETAIL;
   if (e instanceof Error && e.message) return truncate(cleanText(e.message), DETAIL_MAX);
   return 'something went wrong';

@@ -184,7 +184,7 @@ describe('createAppContext', () => {
     await ctx.act('Approve', async () => {
       throw new ApiError(409, 'COS-2002', 'invalid_state_transition', 'already decided');
     });
-    expect(toasts).toEqual([{ kind: 'error', text: 'Approve', detail: 'COS-2002: already decided' }]);
+    expect(toasts).toEqual([{ kind: 'error', text: 'Approve', detail: 'already decided (COS-2002)' }]);
     const quiet = createAppContext({
       store: base.store,
       api: base.api,

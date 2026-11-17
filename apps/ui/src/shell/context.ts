@@ -19,7 +19,7 @@ export type ToastKind = 'info' | 'success' | 'warn' | 'error';
 export interface Toast {
   kind: ToastKind;
   text: string;
-  /** A second line: the error code and message, or what happens next. */
+  /** A second line: what went wrong (with Friday's code for it last), or what happens next. */
   detail?: string;
   /** Default 5 s; 0 keeps it until dismissed. */
   timeoutMs?: number;

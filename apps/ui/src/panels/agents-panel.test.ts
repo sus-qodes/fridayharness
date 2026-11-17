@@ -296,7 +296,11 @@ describe('agents drawer', () => {
     expect(first.querySelector('.badge-info')?.getAttribute('title')).toBe(enforcementWords('L1', 'reported').title);
     expect(first.textContent).toContain('busy');
     expect(first.textContent).toContain('model claude-haiku-5-5');
-    expect(first.textContent).toContain('pid 4242');
+    // The process id is for whoever looks for it: the tooltip of the line, not the line.
+    expect(first.textContent).not.toContain('4242');
+    expect([...first.querySelectorAll<HTMLElement>('[title]')].some((e) => e.title.includes('process 4242'))).toBe(
+      true,
+    );
     expect(first.textContent).toContain('starts with Friday');
     // The limit in words, and Edit beside the process controls for an agent Friday remembers.
     expect(first.textContent).toContain('stops an attempt at $1');

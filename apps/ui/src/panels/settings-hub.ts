@@ -192,7 +192,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
   const statusDot = h('i', { class: 'dot' });
   const statusText = h('span', null, 'Connecting…');
   const statusLine = h('div', { class: 'hub-status' }, statusDot, statusText);
-  const versionLine = h('div', { class: 'hub-version' }, `Friday ${UI_VERSION} · API ${UI_API}`);
+  const versionLine = h('div', { class: 'hub-version', title: `Interface API ${UI_API}` }, `Friday ${UI_VERSION}`);
 
   side.append(h('div', { class: 'spacer' }), statusLine, versionLine);
 
@@ -204,7 +204,8 @@ export function mountSettingsHub(ctx: AppContext): Component {
     if (sys.connection === 'live') {
       statusDot.style.background = 'var(--hub-green)';
       statusDot.style.color = 'var(--hub-green)';
-      statusText.textContent = port ? `Ready · ${port}` : 'Ready · Connected';
+      statusText.textContent = 'Friday is running';
+      statusLine.title = port ? `Friday answers on ${port}` : '';
     } else if (sys.connection === 'reconnecting') {
       statusDot.style.background = 'var(--hub-amber)';
       statusDot.style.color = 'var(--hub-amber)';
@@ -872,7 +873,13 @@ export function mountSettingsHub(ctx: AppContext): Component {
             'div',
             { class: 'text' },
             h('span', { class: 'title' }, p.trusted ? 'Trusted on this computer' : 'Waiting for your trust'),
-            p.hash ? h('span', { class: 'mono detail' }, `List ${visible(p.hash)}`) : null,
+            h(
+              'span',
+              { class: 'detail', ...(p.hash ? { title: `This list’s fingerprint: ${visible(p.hash)}` } : {}) },
+              p.trusted
+                ? 'These apply here. If a file of the project changes the list, Friday asks again.'
+                : 'None of these applies here yet.',
+            ),
           ),
           p.trusted ? badge('trusted', 'good') : badge('not in force', 'warn'),
         ),

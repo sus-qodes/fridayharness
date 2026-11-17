@@ -10,7 +10,7 @@ import { button, h, replace } from '../ui/dom.js';
 import { icon } from '../ui/svg.js';
 import { linkButton, plannerState, projectPath, Teardown } from './common.js';
 
-export type ChecklistId = 'running' | 'policy' | 'agent' | 'planner' | 'checks' | 'commit' | 'notify';
+export type ChecklistId = 'policy' | 'agent' | 'planner' | 'checks' | 'commit' | 'notify';
 
 export interface ChecklistItem {
   id: ChecklistId;
@@ -46,7 +46,9 @@ export function checklist(board: UiSnapshot | null, context: Partial<ChecklistCo
   const checks = board?.verification.checks.length ?? 0;
   const commit = board?.project.has_commit ?? true;
   const when = c.native ? 'while the Notch is hidden or the screen is locked' : 'while this tab is hidden';
-  const items: ChecklistItem[] = [{ id: 'running', done: true, title: 'Friday is running', detail: '', fix: null }];
+  // "Friday is running" stood first, always ticked (the list is not there when it is not): it
+  // told nobody anything, and made the count read one better than it was (2026-11-17).
+  const items: ChecklistItem[] = [];
   // Only while it applies: once trusted (or when nothing loosens), the item leaves the list.
   if (board?.policy_untrusted === true) {
     items.push({

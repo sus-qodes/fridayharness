@@ -2,6 +2,14 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — plain words, part 3
+
+- **An error says what went wrong first.** A refusal read "COS-2002: approval is already granted", the code before the words. It reads "approval is already granted (COS-2002)": the code stays, last, for whoever reports the error. The same on the connection strip.
+- **The checklist lists what there is to do.** "Friday is running" stood first, always ticked, and made the count read one better than it was; it is gone.
+- **An agent's row** keeps its process id and exit code in the tooltip of the line, not in the line.
+- **A proposed plan** keeps why it was proposed ("Trigger: …") under "Why this version was proposed".
+- **Settings** says "Friday is running" where it said "Ready · 127.0.0.1:4310" (the address is in the tooltip, and under About), names its version without the API number, and says what a trusted list means in place of its hash, which is in the tooltip.
+
 ## Unreleased — plain words, part 2
 
 - **An approval says what the agent asks as the act it is.** The card and the full view named it as the policy does, in a monospaced line ("shell.git.commit", "package.install"). They read "Asks to: Commit or change branches", "Install packages"; the policy's name is in the tooltip, and what exactly would run is shown in full under "Exactly this", with the agent's own reason under "The agent’s reason". The tray's row, the notification and the history use the same words. A capability Friday has no words for is shown as written.

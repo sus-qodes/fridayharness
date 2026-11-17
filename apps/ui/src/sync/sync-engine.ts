@@ -67,7 +67,8 @@ export function isDraining(e: unknown): boolean {
 }
 
 function describe(e: unknown): string {
-  if (e instanceof ApiError) return truncate(cleanText(`${e.code}: ${e.message}`), 300);
+  // What went wrong first; Friday's code for it last, for whoever reports it.
+  if (e instanceof ApiError) return truncate(cleanText(`${e.message} (${e.code})`), 300);
   if (e instanceof Error) return truncate(cleanText(e.message || e.name), 300);
   return 'unknown error';
 }

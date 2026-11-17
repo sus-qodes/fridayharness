@@ -397,10 +397,8 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
         row.role ? `role ${plain(row.role, 32)}` : '',
         x ? (x.observed_model ? `model ${plain(x.observed_model, 80)}` : 'model not reported') : '',
         x && connected ? humanize(x.status).toLowerCase() : '',
-        p?.pid ? `pid ${p.pid}` : '',
         p?.started_at ? `started ${timeAgo(p.started_at, ctx.now())}` : '',
         p?.ended_at ? `ended ${timeAgo(p.ended_at, ctx.now())}` : '',
-        p && p.exit_code !== null ? `exit code ${p.exit_code}` : '',
         fridayRow
           ? row.profile
             ? row.profile.autostart
@@ -415,6 +413,10 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
           : '',
       ].filter(Boolean);
       meta.textContent = plain(parts.join(' · '), 600);
+      // The process id and the exit code are in the tooltip: a person reads the line above.
+      meta.title = [p?.pid ? `process ${p.pid}` : '', p && p.exit_code !== null ? `exit code ${p.exit_code}` : '']
+        .filter(Boolean)
+        .join(' · ');
       opts.textContent = plain(
         optionsText((p?.options ?? row.profile?.options) as Record<string, unknown> | undefined),
         300,
