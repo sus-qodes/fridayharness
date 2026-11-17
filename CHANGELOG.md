@@ -2,6 +2,13 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — agents working together, part 3: one copy of Friday
+
+Found in the same live run: the coding tools a person opens themselves were starting a copy of Friday installed on 2026-10-31, while the desktop app ran the current one. An Antigravity session then registered under the wrong name, showed as two agents and was refused work, and the setup check said "ok".
+
+- **Opening the desktop app makes those tools use the app's own copy of Friday.** At start the app compares the copy it runs with the one the machine's record names for Antigravity, Claude Code, Cursor and Gemini CLI, and rewrites the record when they differ. Before, it did so only when the record was missing or broken.
+- **The setup check of each tool warns when another copy would be started**, in words: which copy, when it was set up, and that opening the desktop app once, or running friday setup, switches them.
+
 ## Unreleased — agents working together, part 2
 
 The other half of the hand-over: work an agent does in your own project folder (Antigravity, Claude Code in an editor) now reaches the agents Friday starts. In the live run of 2026-11-17 it stayed uncommitted in the folder, so the next task's folder was cut without it and its agent reported itself blocked.

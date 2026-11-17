@@ -323,17 +323,29 @@ pub fn running(p: &Project) -> Option<Discovery> {
 pub struct Install {
     pub node: PathBuf,
     pub cli: PathBuf,
+    /// True when the CLI was found through `install.json` itself, false when in a folder
+    /// (`FRIDAY_HOME`, the checkout this app was built from, or one the person chose).
+    pub from_file: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct InstallFile {
     node_path: Option<String>,
     cli_entry: Option<String>,
+    mcp_server_entry: Option<String>,
 }
 
 fn cli_in(home: &Path) -> Option<PathBuf> {
     let cli = home.join("apps").join("cli").join("bin").join("friday.mjs");
     cli.is_file().then_some(cli)
+}
+
+/// The MCP server launcher of the copy of Friday a CLI entry belongs to, when it is there:
+/// `<home>\apps\cli\bin\friday.mjs` gives `<home>\packages\mcp-server\bin\friday-mcp.mjs`, the
+/// path that copy's `friday setup` records as `mcp_server_entry`.
+fn mcp_entry_beside(cli: &Path) -> Option<PathBuf> {
+    let entry = cli.ancestors().nth(4)?.join("packages").join("mcp-server").join("bin").join("friday-mcp.mjs");
+    entry.is_file().then_some(entry)
 }
 
 /// `node.exe` on PATH (never the current folder), else the default install folder.
@@ -358,11 +370,44 @@ fn read_install_file(state: &Path) -> Option<InstallFile> {
     serde_json::from_str(&fs::read_to_string(state.join("install.json")).ok()?).ok()
 }
 
+/// The folders Friday is looked for in before `install.json`: `FRIDAY_HOME` (a Friday checkout),
+/// then the checkout this app was built from.
+fn own_homes() -> Vec<PathBuf> {
+    let built_from = option_env!("FRIDAY_BUILD_HOME").map(PathBuf::from);
+    env_path("FRIDAY_HOME").map(PathBuf::from).into_iter().chain(built_from).collect()
+}
+
+/// Friday's own program, and whether `install.json` is where it was found: the first of `homes`
+/// that holds it, then `install.json` (written by `friday setup`), then `chosen` (a folder the
+/// user picked).
+fn find_cli(homes: &[PathBuf], file: Option<&InstallFile>, chosen: Option<&Path>) -> Option<(PathBuf, bool)> {
+    homes
+        .iter()
+        .find_map(|h| cli_in(h))
+        .map(|cli| (cli, false))
+        .or_else(|| {
+            file.and_then(|f| f.cli_entry.as_deref())
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute() && p.is_file())
+                .map(|cli| (cli, true))
+        })
+        .or_else(|| chosen.and_then(cli_in).map(|cli| (cli, false)))
+}
+
+/// Node.js: the one `install.json` names, else `node.exe` on PATH or in its default folder.
+fn find_node(file: Option<&InstallFile>) -> Option<PathBuf> {
+    file.and_then(|f| f.node_path.as_deref())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute() && p.is_file())
+        .or_else(node_on_path)
+}
+
 /// The install: `FRIDAY_HOME` (a Friday checkout), then the checkout this app was built from,
 /// then `install.json` (written by `friday setup`), then `chosen` (a folder the user picked).
 pub fn find_install(chosen: Option<&Path>) -> Option<Install> {
-    let (cli, node) = find_parts(chosen);
-    Some(Install { node: node?, cli: cli? })
+    let file = read_install_file(&state_dir());
+    let (cli, from_file) = find_cli(&own_homes(), file.as_ref(), chosen)?;
+    Some(Install { node: find_node(file.as_ref())?, cli, from_file })
 }
 
 /// The two things an install is made of, each found or not: Friday's own program, and Node.js to
@@ -370,30 +415,70 @@ pub fn find_install(chosen: Option<&Path>) -> Option<Install> {
 /// asked again and again where Friday is.
 pub fn find_parts(chosen: Option<&Path>) -> (Option<PathBuf>, Option<PathBuf>) {
     let file = read_install_file(&state_dir());
-    let cli = env_path("FRIDAY_HOME")
-        .and_then(|h| cli_in(Path::new(&h)))
-        .or_else(|| option_env!("FRIDAY_BUILD_HOME").and_then(|h| cli_in(Path::new(h))))
-        .or_else(|| {
-            file.as_ref()
-                .and_then(|f| f.cli_entry.as_deref())
-                .map(PathBuf::from)
-                .filter(|p| p.is_absolute() && p.is_file())
-        })
-        .or_else(|| chosen.and_then(cli_in));
-    let node = file
-        .as_ref()
-        .and_then(|f| f.node_path.as_deref())
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute() && p.is_file())
-        .or_else(node_on_path);
-    (cli, node)
+    (find_cli(&own_homes(), file.as_ref(), chosen).map(|(cli, _)| cli), find_node(file.as_ref()))
 }
 
-/// True when `install.json` names an existing node and CLI (hooks and MCP launchers need it).
-pub fn install_file_ok() -> bool {
-    read_install_file(&state_dir()).is_some_and(|f| {
-        f.node_path.is_some_and(|p| Path::new(&p).is_file()) && f.cli_entry.is_some_and(|p| Path::new(&p).is_file())
-    })
+/// A path as text to compare with another: the real path where it exists (links and short names
+/// resolved), else the absolute one; `\` between folders, none at the end, and no case.
+fn comparable(p: &Path) -> String {
+    real_path(p).to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase()
+}
+
+/// Whether two paths name the same file, however each is written.
+pub fn same_file(a: &Path, b: &Path) -> bool {
+    comparable(a) == comparable(b)
+}
+
+/// Why this app's own `friday setup` has to write `install.json` (in `state`) again, or `None`
+/// when the file can stay.
+///
+/// The coding tools a person opens themselves start Friday's MCP server through a launcher that
+/// reads `install.json` each time it runs. A file that names another copy of Friday leaves them
+/// on that copy while this app runs its own: on 2026-11-17 a 17-day-old file gave a new daemon an
+/// old MCP server, and a session registered under the wrong name, showed as two agents and was
+/// refused work. So the file is written again when it is missing or broken (as before), and when
+/// the app found its Friday in a folder and the file names another copy.
+fn setup_reason_in(state: &Path, install: &Install) -> Option<&'static str> {
+    let Some(file) = read_install_file(state) else {
+        return Some("is missing or cannot be read");
+    };
+    let there = |p: &Option<String>| p.as_deref().is_some_and(|p| Path::new(p).is_file());
+    if !there(&file.node_path) || !there(&file.cli_entry) {
+        return Some("names a Node.js or a Friday that is not there");
+    }
+    // Found through the file itself: it names this Friday, and there is nothing to compare.
+    if install.from_file {
+        return None;
+    }
+    // A copy without its MCP server has nothing to give those tools: a file that works stays.
+    let own_mcp = mcp_entry_beside(&install.cli)?;
+    let names =
+        |recorded: &Option<String>, own: &Path| recorded.as_deref().is_some_and(|r| same_file(Path::new(r), own));
+    if names(&file.cli_entry, &install.cli) && names(&file.mcp_server_entry, &own_mcp) {
+        None
+    } else {
+        Some("names another copy of Friday")
+    }
+}
+
+/// Makes `install.json` name the Friday this app runs (see `setup_reason_in`), with that Friday's
+/// own `friday setup`. One try: `Err` says what went wrong, for the caller to note and carry on.
+pub fn refresh_install_file(install: &Install) -> Result<(), String> {
+    let state = state_dir();
+    let Some(why) = setup_reason_in(&state, install) else {
+        return Ok(());
+    };
+    let out = run_cli(install, None, &["setup", "--json"], None, Duration::from_secs(60))
+        .map_err(|e| format!("install.json {why}, and friday setup could not run: {e}"))?;
+    if out.code != Some(0) {
+        let said = out.stderr.lines().chain(out.stdout.lines()).find(|l| !l.trim().is_empty());
+        let said = said.unwrap_or("it printed nothing").trim();
+        return Err(format!("install.json {why}, and friday setup failed: {said}"));
+    }
+    match setup_reason_in(&state, install) {
+        None => Ok(()),
+        Some(still) => Err(format!("friday setup ran, and install.json still {still}")),
+    }
 }
 
 /// What a CLI run printed.
@@ -639,6 +724,170 @@ mod tests {
         let p = open_project(Path::new(&dir)).unwrap().expect("a Friday project");
         assert_eq!(p.key, key);
         assert_eq!(p.private_dir, state_dir().join("projects").join(&key));
+    }
+
+    /// A folder of this test's own under the temp folder, removed when the test ends. Nothing here
+    /// reads the state folder of the person running the tests.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("friday-desktop-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            Scratch(dir)
+        }
+
+        /// A stand-in copy of Friday in `<scratch>\<name>`: the two launchers `friday setup`
+        /// records, empty (they are never run). Returns the CLI entry and the MCP server entry.
+        fn copy(&self, name: &str) -> (PathBuf, PathBuf) {
+            let home = self.0.join(name);
+            let cli = home.join("apps").join("cli").join("bin").join("friday.mjs");
+            let mcp = home.join("packages").join("mcp-server").join("bin").join("friday-mcp.mjs");
+            for f in [&cli, &mcp] {
+                fs::create_dir_all(f.parent().unwrap()).unwrap();
+                fs::write(f, "").unwrap();
+            }
+            (cli, mcp)
+        }
+
+        /// A stand-in `node.exe` (never run) and an empty state folder.
+        fn node_and_state(&self) -> (PathBuf, PathBuf) {
+            let node = self.0.join("node.exe");
+            fs::write(&node, "").unwrap();
+            let state = self.0.join("state");
+            fs::create_dir_all(&state).unwrap();
+            (node, state)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// `install.json` as `friday setup` writes it, with the paths given as text.
+    fn write_install_file(state: &Path, node: &str, cli: Option<&str>, mcp: Option<&str>) {
+        let info = serde_json::json!({
+            "friday_version": "0.1.0",
+            "node_path": node,
+            "cli_entry": cli,
+            "daemon_entry": null,
+            "mcp_server_entry": mcp,
+            "written_at": "2026-10-31T09:00:00.000Z",
+        });
+        fs::write(state.join("install.json"), serde_json::to_string_pretty(&info).unwrap()).unwrap();
+    }
+
+    fn text(p: &Path) -> &str {
+        p.to_str().unwrap()
+    }
+
+    #[test]
+    fn a_path_is_the_same_file_however_it_is_written() {
+        // Files that do not exist are compared as written: without case, either slash, no last one.
+        let a = Path::new(r"Z:\Friday\apps\cli\bin\friday.mjs");
+        assert!(same_file(a, Path::new(r"z:\friday\APPS\cli\bin\FRIDAY.mjs")));
+        assert!(same_file(a, Path::new("Z:/Friday/apps/cli/bin/friday.mjs")));
+        assert!(same_file(a, Path::new(r"Z:\Friday\apps\..\apps\cli\.\bin\friday.mjs")));
+        assert!(same_file(Path::new(r"Z:\Friday\"), Path::new("z:/friday")));
+        assert!(!same_file(a, Path::new(r"Z:\Friday2\apps\cli\bin\friday.mjs")));
+        assert!(!same_file(a, Path::new(r"Y:\Friday\apps\cli\bin\friday.mjs")));
+        // A file that exists is the same through its real path, whatever the case and the slashes.
+        let scratch = Scratch::new("same-file");
+        let (cli, mcp) = scratch.copy("Friday");
+        assert!(same_file(&cli, Path::new(&text(&cli).to_uppercase())));
+        assert!(same_file(&cli, Path::new(&text(&cli).to_lowercase().replace('\\', "/"))));
+        assert!(same_file(&cli, &cli.parent().unwrap().join("..").join("bin").join("friday.mjs")));
+        assert!(!same_file(&cli, &mcp));
+    }
+
+    #[test]
+    fn friday_is_found_in_a_folder_before_install_json_names_it() {
+        let scratch = Scratch::new("find-cli");
+        let (own_cli, _) = scratch.copy("own");
+        let (other_cli, _) = scratch.copy("other");
+        let (picked_cli, _) = scratch.copy("picked");
+        let (node, state) = scratch.node_and_state();
+        write_install_file(&state, text(&node), Some(text(&other_cli)), None);
+        let file = read_install_file(&state);
+        let (own, picked, empty) = (scratch.0.join("own"), scratch.0.join("picked"), scratch.0.join("empty"));
+        // A folder that holds Friday comes first, and the file is then not where it was found.
+        assert_eq!(find_cli(&[own.clone()], file.as_ref(), None), Some((own_cli.clone(), false)));
+        assert_eq!(find_cli(&[empty.clone(), own], file.as_ref(), Some(&picked)), Some((own_cli, false)));
+        // No such folder: the file names it, and that is remembered.
+        assert_eq!(find_cli(&[empty.clone()], file.as_ref(), Some(&picked)), Some((other_cli, true)));
+        // A file that names nothing usable: the folder the person chose.
+        write_install_file(&state, text(&node), Some(text(&scratch.0.join("gone").join("friday.mjs"))), None);
+        let stale = read_install_file(&state);
+        assert_eq!(find_cli(&[empty.clone()], stale.as_ref(), Some(&picked)), Some((picked_cli.clone(), false)));
+        assert_eq!(find_cli(&[], None, Some(&picked)), Some((picked_cli, false)));
+        assert_eq!(find_cli(&[empty], None, None), None);
+    }
+
+    #[test]
+    fn install_json_is_written_again_when_it_names_another_copy_of_friday() {
+        let scratch = Scratch::new("install-file");
+        let (own_cli, own_mcp) = scratch.copy("own");
+        let (other_cli, other_mcp) = scratch.copy("other");
+        let (node, state) = scratch.node_and_state();
+        let in_folder = Install { node: node.clone(), cli: own_cli.clone(), from_file: false };
+        let other = Some("names another copy of Friday");
+
+        // As before: no file, a file that is not JSON, a file that names what is not there.
+        assert_eq!(setup_reason_in(&state, &in_folder), Some("is missing or cannot be read"));
+        fs::write(state.join("install.json"), "{ not json").unwrap();
+        assert_eq!(setup_reason_in(&state, &in_folder), Some("is missing or cannot be read"));
+        let gone = scratch.0.join("gone").join("friday.mjs");
+        write_install_file(&state, text(&node), Some(text(&gone)), Some(text(&own_mcp)));
+        assert_eq!(setup_reason_in(&state, &in_folder), Some("names a Node.js or a Friday that is not there"));
+        write_install_file(&state, text(&gone), Some(text(&own_cli)), Some(text(&own_mcp)));
+        assert_eq!(setup_reason_in(&state, &in_folder), Some("names a Node.js or a Friday that is not there"));
+        write_install_file(&state, text(&node), None, Some(text(&own_mcp)));
+        assert_eq!(setup_reason_in(&state, &in_folder), Some("names a Node.js or a Friday that is not there"));
+
+        // The file of 2026-11-17: both entries exist, in another copy than the one this app runs.
+        write_install_file(&state, text(&node), Some(text(&other_cli)), Some(text(&other_mcp)));
+        assert_eq!(setup_reason_in(&state, &in_folder), other);
+        // Half another copy is another copy: this CLI with that MCP server, or with none recorded.
+        write_install_file(&state, text(&node), Some(text(&own_cli)), Some(text(&other_mcp)));
+        assert_eq!(setup_reason_in(&state, &in_folder), other);
+        write_install_file(&state, text(&node), Some(text(&own_cli)), None);
+        assert_eq!(setup_reason_in(&state, &in_folder), other);
+        write_install_file(&state, text(&node), Some(text(&other_cli)), Some(text(&own_mcp)));
+        assert_eq!(setup_reason_in(&state, &in_folder), other);
+
+        // This copy, as `friday setup` writes it, and written with another case and other slashes.
+        write_install_file(&state, text(&node), Some(text(&own_cli)), Some(text(&own_mcp)));
+        assert_eq!(setup_reason_in(&state, &in_folder), None);
+        let shouted = text(&own_cli).to_uppercase();
+        let slashed = text(&own_mcp).to_lowercase().replace('\\', "/");
+        write_install_file(&state, text(&node), Some(&shouted), Some(&slashed));
+        assert_eq!(setup_reason_in(&state, &in_folder), None);
+
+        // Friday found through the file itself: it is the file's copy, there is nothing to compare.
+        write_install_file(&state, text(&node), Some(text(&other_cli)), Some(text(&other_mcp)));
+        let through_file = Install { node: node.clone(), cli: other_cli.clone(), from_file: true };
+        assert_eq!(setup_reason_in(&state, &through_file), None);
+        write_install_file(&state, text(&node), Some(text(&other_cli)), None);
+        assert_eq!(setup_reason_in(&state, &through_file), None);
+
+        // A copy without its MCP server has nothing to offer: a file that works is left alone.
+        fs::remove_file(&own_mcp).unwrap();
+        write_install_file(&state, text(&node), Some(text(&other_cli)), Some(text(&other_mcp)));
+        assert_eq!(setup_reason_in(&state, &in_folder), None);
+    }
+
+    #[test]
+    fn the_mcp_server_entry_is_the_one_beside_the_cli() {
+        let scratch = Scratch::new("mcp-beside");
+        let (cli, mcp) = scratch.copy("friday");
+        assert_eq!(mcp_entry_beside(&cli), Some(mcp.clone()));
+        fs::remove_file(&mcp).unwrap();
+        assert_eq!(mcp_entry_beside(&cli), None);
+        // A CLI entry that is not four folders deep has no copy around it.
+        assert_eq!(mcp_entry_beside(Path::new(r"C:\friday.mjs")), None);
     }
 
     #[test]

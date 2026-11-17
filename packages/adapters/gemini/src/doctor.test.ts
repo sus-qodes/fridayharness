@@ -128,4 +128,39 @@ describe('friday harness doctor gemini', () => {
     const report = await geminiDoctor(loadProject(dir), { env: env(), install: installed, quick: true });
     expect(byId(report.checks, 'gemini.others')).toMatchObject({ status: 'warn' });
   });
+
+  it('warns when the Gemini CLI you open yourself would start another copy of Friday', async () => {
+    const dir = configured('copies');
+    // install.json as another copy's "friday setup" left it; nothing names an entry by hand.
+    const old = path.join(ws().root, 'old-friday');
+    const oldEntry = path.join(old, 'packages', 'mcp-server', 'bin', 'friday-mcp.mjs');
+    mkdirSync(path.dirname(oldEntry), { recursive: true });
+    writeFileSync(oldEntry, '');
+    writeFileSync(
+      path.join(ws().stateDir, 'install.json'),
+      JSON.stringify({ mcp_server_entry: oldEntry, written_at: '2026-10-31T12:00:00.000Z' }),
+    );
+    const { FRIDAY_MCP_ENTRY: _named, ...unnamed } = env();
+    const recorded = (ownMcpEntry?: string) =>
+      geminiDoctor(loadProject(dir), {
+        env: unnamed,
+        install: installed,
+        quick: true,
+        ...(ownMcpEntry ? { ownMcpEntry } : {}),
+      });
+
+    const other = await recorded();
+    expect(byId(other.checks, 'gemini.install')).toEqual({
+      id: 'gemini.install',
+      status: 'warn',
+      message: `Apps you open yourself start another copy of Friday (${old}, set up on 31 October 2026), not this one. Open the Friday desktop app once, or run friday setup, to switch them to this copy.`,
+    });
+    expect(other.achieved).toBe('L1 degraded');
+    // Read by the copy the file names, the check says what it always said.
+    expect(byId((await recorded(oldEntry)).checks, 'gemini.install')).toEqual({
+      id: 'gemini.install',
+      status: 'ok',
+      message: `MCP server entry: ${oldEntry}`,
+    });
+  });
 });

@@ -124,4 +124,40 @@ describe('friday harness doctor cursor', () => {
     expect(r.achieved).toBe('not attached');
     expect(check(r, 'cursor.host')).toMatchObject({ status: 'warn' });
   });
+
+  it('warns when the Cursor you open yourself would start another copy of Friday', async () => {
+    const root = configured();
+    // install.json as another copy's "friday setup" left it; nothing names an entry by hand.
+    const old = path.join(ws().root, 'old-friday');
+    const oldEntry = path.join(old, 'packages', 'mcp-server', 'bin', 'friday-mcp.mjs');
+    mkdirSync(path.dirname(oldEntry), { recursive: true });
+    writeFileSync(oldEntry, '');
+    writeFileSync(
+      path.join(ws().stateDir, 'install.json'),
+      JSON.stringify({ mcp_server_entry: oldEntry, written_at: '2026-10-31T12:00:00.000Z' }),
+    );
+    const { FRIDAY_MCP_ENTRY: _named, ...unnamed } = process.env;
+    const recorded = (ownMcpEntry?: string) =>
+      cursorDoctor(loadProject(root), {
+        skipMcp: true,
+        env: { ...unnamed, FRIDAY_STATE_DIR: ws().stateDir },
+        ide: { dir: path.join(ws().root, 'cursor'), version: '3.24.0', version_source: null },
+        cli: NO_CLI,
+        ...(ownMcpEntry ? { ownMcpEntry } : {}),
+      });
+
+    const other = await recorded();
+    expect(check(other, 'cursor.install')).toEqual({
+      id: 'cursor.install',
+      status: 'warn',
+      message: `Apps you open yourself start another copy of Friday (${old}, set up on 31 October 2026), not this one. Open the Friday desktop app once, or run friday setup, to switch them to this copy.`,
+    });
+    expect(other.achieved).toBe('L1 enforcing');
+    // Read by the copy the file names, the check says what it always said.
+    expect(check(await recorded(oldEntry), 'cursor.install')).toEqual({
+      id: 'cursor.install',
+      status: 'ok',
+      message: `MCP server entry: ${oldEntry}`,
+    });
+  });
 });
