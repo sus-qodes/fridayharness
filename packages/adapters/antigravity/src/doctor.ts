@@ -9,7 +9,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import os from 'node:os';
 import path from 'node:path';
 import { bundledHookSource, compareVersions } from '@friday/adapter-claude';
-import { DaemonClient, type ProjectRef, readDiscovery, readInstallInfo, readToken } from '@friday/sdk';
+import { DaemonClient, installCheck, type ProjectRef, readDiscovery, readToken } from '@friday/sdk';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import {
@@ -67,6 +67,8 @@ export interface AntigravityDoctorOptions {
   found?: AntigravityFound;
   /** Override the recorded failure behaviour (tests). */
   evidence?: FailureEvidence;
+  /** The MCP server entry of the copy of Friday that runs the check (tests); null for none. */
+  ownMcpEntry?: string | null;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -403,19 +405,14 @@ export async function antigravityDoctor(
         : { id: 'ag.skill', status: 'warn', message: 'the /friday command is missing', fix: CONFIG_FIX },
   );
 
-  const info = readInstallInfo(env);
-  const mcpEntry = env.FRIDAY_MCP_ENTRY ?? info?.mcp_server_entry ?? undefined;
-  const entryOk = Boolean(mcpEntry && existsSync(mcpEntry));
-  checks.push(
-    entryOk
-      ? { id: 'ag.install', status: 'ok', message: `MCP server entry: ${mcpEntry}` }
-      : {
-          id: 'ag.install',
-          status: 'fail',
-          message: 'Friday is not set up on this machine (install.json has no MCP server entry)',
-          fix: 'run "pnpm build" in the Friday repository, then "friday setup"',
-        },
-  );
+  // A warning when the Antigravity a person opens would start another copy of Friday than this one.
+  const { entry: mcpEntry, ...machine } = installCheck({
+    env,
+    named: env.FRIDAY_MCP_ENTRY,
+    own: opts.ownMcpEntry,
+  });
+  const entryOk = mcpEntry !== undefined;
+  checks.push({ id: 'ag.install', ...machine });
 
   // Secrets: the live tokens must not appear in any file Antigravity loads from the project.
   const live = [readToken(ref, 'operator', env), readToken(ref, 'bootstrap', env)].filter((t): t is string =>

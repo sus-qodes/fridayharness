@@ -783,7 +783,33 @@ fn set_up_here(app: &AppHandle, dir: &std::path::Path) -> bool {
     }
 }
 
-/// Friday's install; `friday setup` runs when `install.json` is missing or stale.
+/// Keeps the install found for this run, after making `install.json` name it (`friday setup`, when
+/// the file is missing, broken or names another copy): the coding tools a person opens themselves
+/// start the Friday that file names, so it has to be the one this app runs. One try, and the
+/// install is then kept for the run; a failure goes to the error output (a console under
+/// `cargo run`) and the app carries on with the install it found.
+fn adopt_install(app: &AppHandle, install: daemon::Install) -> daemon::Install {
+    if let Err(e) = daemon::refresh_install_file(&install) {
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), "friday-desktop: {e}");
+    }
+    *state(app).install.lock().unwrap() = Some(install.clone());
+    install
+}
+
+/// The same for a start that opens no project, where nothing else looks for Friday: the install is
+/// adopted when it is found without asking anything, and left for `ensure_install` when it is not.
+fn adopt_install_quietly(app: &AppHandle) {
+    if state(app).install.lock().unwrap().is_some() {
+        return;
+    }
+    if let Some(i) = daemon::find_install(None) {
+        adopt_install(app, i);
+    }
+}
+
+/// Friday's install, asked for when it is not found; `install.json` is made to name it (see
+/// `adopt_install`).
 fn ensure_install(app: &AppHandle) -> Option<daemon::Install> {
     if let Some(i) = state(app).install.lock().unwrap().clone() {
         return Some(i);
@@ -791,11 +817,7 @@ fn ensure_install(app: &AppHandle) -> Option<daemon::Install> {
     let mut chosen: Option<PathBuf> = None;
     loop {
         if let Some(i) = daemon::find_install(chosen.as_deref()) {
-            if !daemon::install_file_ok() {
-                let _ = daemon::run_cli(&i, None, &["setup", "--json"], None, Duration::from_secs(60));
-            }
-            *state(app).install.lock().unwrap() = Some(i.clone());
-            return Some(i);
+            return Some(adopt_install(app, i));
         }
         // Friday's own program is there and Node.js is not: another folder would change nothing.
         // It asked for the folder again each time, and never named Node.js (2026-11-17).
@@ -986,6 +1008,9 @@ fn boot(app: AppHandle, initial: Option<PathBuf>, show: bool, use_last: bool) {
         if show {
             show_studio_window(&app, None);
         }
+        // No daemon starts, so nothing below looks for Friday: `install.json` is still made to
+        // name this copy, for the coding tools the person opens themselves.
+        adopt_install_quietly(&app);
         return;
     };
     *state(&app).project.write().unwrap() = Some(project);

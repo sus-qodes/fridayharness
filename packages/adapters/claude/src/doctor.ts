@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DaemonClient, type ProjectRef, readDiscovery, readInstallInfo, readToken } from '@friday/sdk';
+import { DaemonClient, installCheck, type ProjectRef, readDiscovery, readToken } from '@friday/sdk';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { bundledHookSource } from './config/claude-code.js';
@@ -40,6 +40,8 @@ export interface ClaudeDoctorOptions {
   skipMcp?: boolean;
   /** Override Claude Code detection (tests). */
   install?: ClaudeInstall | null;
+  /** The MCP server entry of the copy of Friday that runs the check (tests); null for none. */
+  ownMcpEntry?: string | null;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -362,19 +364,14 @@ export async function claudeDoctor(ref: ProjectRef, opts: ClaudeDoctorOptions = 
     });
   }
 
-  const info = readInstallInfo(opts.env);
-  const mcpEntry = opts.env?.FRIDAY_MCP_ENTRY ?? info?.mcp_server_entry ?? undefined;
-  const entryOk = Boolean(mcpEntry && existsSync(mcpEntry));
-  checks.push(
-    entryOk
-      ? { id: 'cc.install', status: 'ok', message: `MCP server entry: ${mcpEntry}` }
-      : {
-          id: 'cc.install',
-          status: 'fail',
-          message: 'Friday is not set up on this machine (install.json has no MCP server entry)',
-          fix: 'run "pnpm build" in the Friday repository, then "friday setup"',
-        },
-  );
+  // A warning when the Claude Code a person opens would start another copy of Friday than this one.
+  const { entry: mcpEntry, ...machine } = installCheck({
+    env: opts.env,
+    named: opts.env?.FRIDAY_MCP_ENTRY,
+    own: opts.ownMcpEntry,
+  });
+  const entryOk = mcpEntry !== undefined;
+  checks.push({ id: 'cc.install', ...machine });
 
   // Secrets: the live tokens must not appear in any file Claude can read in the project.
   const live = [readToken(ref, 'operator', opts.env), readToken(ref, 'bootstrap', opts.env)].filter((t): t is string =>
