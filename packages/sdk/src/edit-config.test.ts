@@ -152,6 +152,7 @@ describe('editConfigText', () => {
         'providers.claude-code.daily_budget_usd',
         'providers.anthropic.allow_remote',
         'providers.anthropic.daily_budget_usd',
+        'worktrees.files',
         ...ASKABLE_COMMAND_CLASSES.map((c) => `autonomy.${c}`),
       ].sort(),
     );
@@ -215,5 +216,39 @@ describe('editConfigText', () => {
     expect(c.providers.anthropic).toMatchObject({ allow_remote: true, daily_budget_usd: 20 });
     expect(() => editConfigText(fresh(), { 'master_brain.auto_approve': 'yes' })).toThrow(/master_brain.auto_approve/);
     expect(() => editConfigText(fresh(), { 'providers.anthropic.daily_budget_usd': 1e9 })).toThrow(/daily_budget_usd/);
+  });
+
+  it('writes the files every copy of the project gets, a list, and keeps the comments (2026-11-17)', () => {
+    const before = fresh();
+    const files = [{ from: '.env.agents.local', to: '.env' }, { from: 'apps/api/.env.local' }];
+    const on = editConfigText(before, { 'worktrees.files': files });
+    expect(on.changed).toEqual(['worktrees.files']);
+    expect(parseConfig(on.text).worktrees.files).toEqual(files);
+    // The rest of the file reads as before, and what explains it is still there.
+    expect(parseConfig(on.text).verification).toEqual(parseConfig(before).verification);
+    expect(on.text).toContain('# Friday project configuration.');
+    expect(on.text).toContain('# Dependencies in a fresh task worktree.');
+    // The same list again changes nothing; another list replaces it; an empty one takes it away.
+    expect(editConfigText(on.text, { 'worktrees.files': files })).toEqual({ text: on.text, changed: [] });
+    const one = editConfigText(on.text, { 'worktrees.files': [{ from: '.env' }] });
+    expect(parseConfig(one.text).worktrees.files).toEqual([{ from: '.env' }]);
+    expect(parseConfig(editConfigText(one.text, { 'worktrees.files': [] }).text).worktrees.files).toEqual([]);
+  });
+
+  it('refuses a file that is not inside the project', () => {
+    for (const from of [
+      '../other/.env',
+      'C:\\Users\\me\\.ssh\\id_rsa',
+      '/etc/passwd',
+      '~/.aws/credentials',
+      '.git/config',
+      '.friday/project.db',
+    ]) {
+      expect(() => editConfigText(fresh(), { 'worktrees.files': [{ from }] }), from).toThrow(/worktrees.files/);
+    }
+    expect(() => editConfigText(fresh(), { 'worktrees.files': [{ from: '.env', to: '../.env' }] })).toThrow(
+      /worktrees.files/,
+    );
+    expect(() => editConfigText(fresh(), { 'worktrees.files': '.env' })).toThrow(/worktrees.files/);
   });
 });

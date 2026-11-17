@@ -90,6 +90,11 @@ export interface PolicySource {
    */
   worktree_setup?: { command?: string; args?: string[]; allow_scripts?: boolean };
   /**
+   * `worktrees.files`: files outside version control that every copy of the project gets. Programs
+   * an agent runs there can read them (a settings file with keys in it), so each is a loosening.
+   */
+  worktree_files?: { from: string; to?: string | undefined }[];
+  /**
    * `sandbox`: this checkout is disposable, so every command class whose autonomy is `review`
    * runs on its own (`manual` and `never` stay). A loosening.
    */
@@ -134,6 +139,10 @@ export interface ProjectPolicy {
   worktree_setup_held: { source: string; reason: string } | null;
   /** Whether a worktree install may run lifecycle scripts (trusted `allow_scripts`). */
   worktree_scripts: boolean;
+  /** The files every copy of the project gets, once trusted: `from` in the project folder, `to` in the copy. */
+  worktree_files: { source: string; from: string; to: string }[];
+  /** Files asked for and not given, because this clone has not trusted the list. */
+  worktree_files_held: { source: string; from: string; to: string }[];
   /** Whether this checkout is a trusted sandbox: reviewable command classes run on their own. */
   sandbox: boolean;
   /** What tracked files loosen, with where each comes from. */
@@ -237,6 +246,15 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     }
     if (s.worktree_setup?.allow_scripts) {
       loosening.push({ source: s.name, setting: 'worktrees.setup.allow_scripts', from: 'false', to: 'true' });
+    }
+    // A file from outside version control in every copy: what an agent runs there can read it.
+    for (const f of s.worktree_files ?? []) {
+      loosening.push({
+        source: s.name,
+        setting: 'worktrees.files',
+        from: 'none',
+        to: f.to && f.to !== f.from ? `${f.from} as ${f.to}` : f.from,
+      });
     }
     // A third-party MCP tool without review (ADR-0030 §3).
     for (const [server, m] of Object.entries(s.mcp ?? {})) {
@@ -366,6 +384,16 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
       ? { source: declaredSetup[0].source, reason: 'waits for "friday policy trust"' }
       : null;
   const worktree_scripts = trusted && sources.some((s) => s.worktree_setup?.allow_scripts === true);
+  // One file per name in the copy: the first source that gives a name decides what it holds.
+  const askedFiles: ProjectPolicy['worktree_files'] = [];
+  for (const s of sources) {
+    for (const f of s.worktree_files ?? []) {
+      const to = f.to ?? f.from;
+      if (!askedFiles.some((a) => a.to === to)) askedFiles.push({ source: s.name, from: f.from, to });
+    }
+  }
+  const worktree_files = trusted ? askedFiles : [];
+  const worktree_files_held = trusted ? [] : askedFiles;
 
   const effective = {
     autonomy,
@@ -384,12 +412,14 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     daemon_port,
     worktree_setup,
     worktree_scripts,
+    worktree_files,
     sandbox,
   };
   return {
     ...effective,
     operations_held,
     worktree_setup_held,
+    worktree_files_held,
     loosening,
     loosening_hash,
     trusted,

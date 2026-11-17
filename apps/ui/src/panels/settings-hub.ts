@@ -42,6 +42,7 @@ import {
   select,
   Teardown,
 } from './common.js';
+import { copyFilesCard } from './copy-files.js';
 import { plannerModelRow } from './planner-model.js';
 import { plannerSpendingCard } from './planner-spending.js';
 import { projectChecksCard } from './project-checks.js';
@@ -796,6 +797,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
       h('div', { class: 'hub-card' }, projectChecksCard(ctx, tabTd)),
       h('div', { class: 'hub-card' }, autoVerifySwitch(ctx, tabTd)),
       h('div', { class: 'hub-card' }, landingChoice(ctx, tabTd)),
+      h('div', { class: 'hub-card' }, copyFilesCard(ctx, tabTd)),
     ];
   }
 

@@ -2,6 +2,13 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — a real project, part 1: the settings file its tests read
+
+- **A project whose tests read a `.env` file can be checked.** Each agent Friday starts works in its own copy of the project, and Friday checks combined work in a copy of its own. A copy is made from version control, so a settings file the project keeps out of it was in none of them: every test that read it failed there, in the agent's hands and in Friday's, though the work was right. Settings → Checks now has "Settings files for agents' copies": Friday lists the settings files it found, and the copies get the ones you tick. In `config.yaml` this is `worktrees.files`.
+- **You decide, on each computer.** Programs an agent runs in its copy can read what the copy was given, so the list waits for your approval like every other setting that loosens something. Until then the agent is told that its copy lacks the file, so it does not take a failing check for a fault of its work.
+- **Your real keys can stay in your folder.** Save a version of the file without them as `.env.agents.local` and tick that one: the copies get it under the name `.env`, and your own `.env` is not copied anywhere.
+- **What it never does.** It reads no file outside the project, writes over no file of the project, and puts the file only where the copy's own ignore rules keep it out of a commit. Nothing of a file's content is logged or recorded, and agents are still kept from opening a `.env` file themselves.
+
 ## Unreleased — agents working together, part 12: a session that reconnects, and words for a person
 
 - **An agent that reconnects in the same conversation can take work again.** When Friday was restarted, or the app reloaded its connection, in the middle of a conversation, the new session read "no Friday hook has reached the daemon" and could take no task until you started a new conversation: its hooks were still counted for the session that had ended. They now follow it to the session that is there.

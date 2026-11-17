@@ -5256,6 +5256,8 @@ export class FridayState {
       setup?: WorkspaceSetupRecord | null;
       refresh?: WorkspaceRefreshRecord | null;
       note?: string | null;
+      /** What the worktree lacks of the files the project lists for its copies (`worktrees.files`); said with the rest. */
+      lacking?: string | null;
     },
   ): RunView {
     return this.exec({ name: 'run.workspace', project_id: projectId, actor: SYSTEM, params: { runId } }, (ctx) => {
@@ -5323,14 +5325,18 @@ export class FridayState {
       const agent = this.q.agent(run.agent_id);
       // An agent whose dependencies could not be installed is told so, never left to find out.
       const setup = alloc.setup;
-      const trouble =
+      const first =
         alloc.note ??
         (setup && (setup.status === 'failed' || setup.status === 'refused')
           ? `Friday could not install this worktree's dependencies (${setup.reason}). If the task needs them, install them yourself; that may need an approval.`
           : null);
+      const trouble = [first, alloc.lacking].filter(Boolean).join('\n\n') || null;
       const start = this.taskStartParams(projectId, task, ready, agent.role, trouble);
       // A refresh conflict is the immediate work: keep its report ahead of an older continuation note.
-      if (alloc.note) start.note = alloc.note.slice(0, 2000);
+      if (alloc.note) {
+        const tail = alloc.lacking ? `\n\n${alloc.lacking.slice(0, 700)}` : '';
+        start.note = `${alloc.note.slice(0, 2000 - tail.length)}${tail}`;
+      }
       this.enqueue(ctx, run.harness_id, 'task.start', start, run.run_id);
       return ready;
     });

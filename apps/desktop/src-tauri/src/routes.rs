@@ -189,6 +189,8 @@ pub static ROUTES: &[Route] = &[
     // The project's checks: read with what its package.json suggests, and changed by name only
     // (the daemon builds the command from that list; the page sends none).
     get("config/checks", &[]),
+    // The settings files a copy of the project may be given (names only); set through config/settings.
+    get("config/copy-files", &[]),
     post("config/checks"),
     // How this person plans on this machine (kept outside config.yaml); the spending approval and
     // the restart it needs stay the shell's own dialogs.
@@ -621,6 +623,8 @@ mod tests {
     #[test]
     fn the_checks_are_read_and_changed_and_spending_is_only_ever_taken_back() {
         assert!(req("GET", &p("config/checks")).is_ok());
+        assert!(req("GET", &p("config/copy-files")).is_ok());
+        assert!(refused("POST", &p("config/copy-files")));
         assert!(req("POST", &p("config/checks")).is_ok());
         assert!(refused("GET", &p("config/checks?root=x")));
         assert!(refused("GET", &p("config/checks/tests")));

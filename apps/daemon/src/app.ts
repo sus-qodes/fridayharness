@@ -50,6 +50,7 @@ import type { BrainHandle } from './brain.js';
 import { escalationView, mountBrainRoutes } from './brain-routes.js';
 import type { CompileInput, ContextService } from './context.js';
 import type { ControlManager } from './control.js';
+import { findSettingsFiles } from './copy-files.js';
 import { countMatches, listFiles } from './files.js';
 import { bothVersions, FOLDER_CONFLICT, keptFiles, putBack, syncFolder, takeTheirs, tipBlob } from './folder-sync.js';
 import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
@@ -581,6 +582,18 @@ export function buildApp(deps: AppDeps): Hono<Env> {
       );
     }
     return c.json({ added, removed, ...checksView() });
+  });
+  // Files from outside version control that every copy of the project gets (2026-11-17): the list
+  // config.yaml asks for, the one in force on this computer (it waits for trust), and the settings
+  // files Friday found in the project folder that git ignores. Names only. The list is set through
+  // `config/settings` (`worktrees.files`), where each path is checked to be inside the project.
+  app.get(`${P}/config/copy-files`, allow(...OPERATOR), async (c) => {
+    const asked = parseConfig(readFileSync(configFile, 'utf8'), `${FRIDAY_DIR}/${CONFIG_FILE}`).worktrees.files;
+    return c.json({
+      files: asked.map((f) => ({ from: f.from, to: f.to ?? f.from })),
+      in_force: deps.policy ? deps.policy().worktree_files.map((f) => ({ from: f.from, to: f.to })) : [],
+      found: await findSettingsFiles(project.root),
+    });
   });
   // The scope picker's view of the repository (plan M9 §5.11): tracked files only, capped.
   app.get(`${P}/files`, allow(...OPERATOR), async (c) =>

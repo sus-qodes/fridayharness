@@ -62,6 +62,8 @@ export interface PolicySourceData {
   daemon_port?: number;
   /** `worktrees.setup`: the project's own install command, and lifecycle scripts (loosenings, plan Phase 7). */
   worktree_setup?: { command?: string; args?: string[]; allow_scripts?: boolean };
+  /** `worktrees.files`: files outside version control that every copy of the project gets (loosening). */
+  worktree_files?: { from: string; to?: string | undefined }[];
   /** `sandbox`: this checkout is disposable; command classes a human would review run on their own (loosening). */
   sandbox?: boolean;
 }
@@ -99,6 +101,7 @@ export function readPolicySources(
             },
           }
         : {}),
+      ...(config.worktrees.files.length ? { worktree_files: config.worktrees.files.map((f) => ({ ...f })) } : {}),
     },
   ];
   const errors: { file: string; error: string }[] = [];

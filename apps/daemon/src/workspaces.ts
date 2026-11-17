@@ -18,6 +18,7 @@ import {
 import { type Actor, FridayError, type WorktreeView } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
+import type { FileCopier } from './copy-files.js';
 import { InFlight } from './in-flight.js';
 import type { Logger } from './log.js';
 import type { SetupOutcome } from './worktree-setup.js';
@@ -85,6 +86,12 @@ export class WorkspaceManager {
       setup?: (worktree: { path: string }, ids: { task_id: string; run_id: string }) => Promise<SetupOutcome | null>;
       /** What a failed or refused install does to the attempt: `warn` (the agent is told) or `fail`. */
       setupFailure?: () => 'warn' | 'fail';
+      /**
+       * Gives the worktree the files the project keeps out of version control and lists for its
+       * copies (`worktrees.files`, a settings file such as `.env`); answers what the agent should
+       * know when one could not be given.
+       */
+      files?: FileCopier;
     },
   ) {}
 
@@ -236,11 +243,14 @@ export class WorkspaceManager {
       // a fresh worktree gets it as uncommitted edits, and its agent is told. Anything that does not
       // apply cleanly is left out, and the worktree is as it was cut.
       if (alloc.created && !note) note = await this.#continueFolderWork(run.task_id, alloc.path);
+      // Every attempt, since the person's file may have changed and a clean-up may have removed it.
+      const lacking = await this.opts.files?.(alloc.path, { task_id: run.task_id, run_id: runId });
       state.workspaceReady(this.pid, runId, {
         ...alloc,
         setup,
         refresh: refresh?.commits.length ? refresh : null,
         note,
+        lacking: lacking ?? null,
       });
       logger.info('task worktree ready', {
         task_id: run.task_id,

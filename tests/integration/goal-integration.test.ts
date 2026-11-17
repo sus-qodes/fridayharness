@@ -2,7 +2,7 @@
  * Integration of verified task branches into goal branches (plan M5c, ADR-0025).
  */
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { GenericHarnessClient } from '@friday/adapter-generic';
 import { closeDatabase, openDatabase } from '@friday/db';
@@ -1434,4 +1434,69 @@ describe('turning automatic verification on', () => {
     );
     expect(done.status).toBe('COMPLETED');
   });
+});
+
+describe('a project whose checks read a settings file kept out of version control (2026-11-17)', () => {
+  /** The test reads `.env`, as a project's tests read the address of their database. */
+  const NEEDS_ENV = [
+    "import assert from 'node:assert';",
+    "import { readFileSync } from 'node:fs';",
+    "import { test } from 'node:test';",
+    "import { a } from '../src/a.mjs';",
+    "const limit = Number(/^LIMIT=([0-9]+)$/m.exec(readFileSync(new URL('../.env', import.meta.url), 'utf8'))?.[1]);",
+    "test('a stays under the limit of the settings file', () => assert.ok(a <= limit));",
+    '',
+  ].join('\n');
+  const FILES = '\nworktrees:\n  files:\n    - from: .env.agents.local\n      to: .env\n';
+  const trust = async (td: TestDaemon) => {
+    const view = await td.operator.get<{ policy: { loosening_hash: string } }>(td.operator.projectPath('/policy'));
+    await td.operator.post(td.operator.projectPath('/policy/trust'), { loosening_hash: view.policy.loosening_hash });
+  };
+
+  it('gives each copy the file the person chose, once trusted: the task and the merged revision both pass', async () => {
+    const td = await project(CHECKS, { 'test/sum.test.mjs': NEEDS_ENV, '.gitignore': '.env\n.env.*.local\n' }, FILES);
+    const dir = ws().projectDir;
+    // The person's own file, with what must stay theirs, and the one kept for agents.
+    writeFileSync(path.join(dir, '.env'), 'LIMIT=3\nPAYMENT_KEY=the-real-one\n');
+    writeFileSync(path.join(dir, '.env.agents.local'), 'LIMIT=3\n');
+    const { goalId, ids } = await goalWith(td, [
+      { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+      { key: 'add-c', summary: 'Add c', write: ['src/c.mjs'] },
+    ]);
+
+    // Not trusted yet: the copy has no settings file, and its agent is told why a check may fail.
+    const first = await begin(td, 'be-1', ids['raise-a'] as string);
+    expect(existsSync(path.join(first.start.working_directory, '.env'))).toBe(false);
+    expect(first.start.note ?? '').toContain("wait for the person's approval");
+    await first.fake.close();
+    await td.operator.post(td.operator.projectPath(`/tasks/${ids['raise-a']}/release`), { reason: 'trust first' });
+
+    await trust(td);
+    const ra = await begin(td, 'be-2', ids['raise-a'] as string);
+    const given = path.join(ra.start.working_directory, '.env');
+    expect(readFileSync(given, 'utf8')).toBe('LIMIT=3\n');
+    expect(ra.start.note ?? '').not.toContain('approval');
+    // Both start from the same commit, so the second to finish needs a real merge, which Friday
+    // checks in a checkout of its own.
+    const rc = await begin(td, 'be-3', ids['add-c'] as string);
+    await finish(td, ra, { 'src/a.mjs': 'export const a = 2;\n' });
+    expect((await integrationOf(td, ids['raise-a'] as string)).status).toBe('integrated');
+    await finish(td, rc, { 'src/c.mjs': 'export const c = 1;\n' });
+    // That checkout has the file too: without it the same check failed there, and correct work
+    // was sent back.
+    const two = await integrationOf(td, ids['add-c'] as string);
+    expect(two.checks.map((c) => [c.name, c.status])).toEqual([['tests', 'PASSED']]);
+    expect(two.status, two.summary ?? '').toBe('integrated');
+    await runOnce(td);
+    expect((await td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`))).goal.status).toBe(
+      'COMPLETED',
+    );
+    // The file is in no revision, the person's own never left the project folder, and nothing of
+    // either is in what Friday recorded.
+    const tree = await git(['ls-tree', '-r', '--name-only', `friday/goal-${goalId}`]);
+    expect(tree.split('\n')).not.toContain('.env');
+    expect(readFileSync(path.join(dir, '.env'), 'utf8')).toContain('PAYMENT_KEY=the-real-one');
+    const events = JSON.stringify(td.daemon.state.store.readAll?.(td.project.project_id) ?? []);
+    expect(events).not.toContain('the-real-one');
+  }, 240_000);
 });

@@ -49,6 +49,9 @@ export function looseningWords(l: Pick<LooseningItem, 'setting' | 'to'>): string
   if (setting === 'reservations.mode') return 'Agents are not kept from changing the same files at the same time';
   if (setting === 'daemon.port') return `Friday always answers on port ${short(to, 12)}`;
   if (setting === 'worktrees.setup.command') return `Task folders are prepared by running: ${short(to)}`;
+  if (setting === 'worktrees.files') {
+    return `Every copy of the project an agent works in gets your file ${short(to, 120)}; programs run there can read it`;
+  }
   if (setting === 'execution.binaries') return `Checks may run the program “${short(to, 60)}”`;
   if (setting === 'execution.env_passthrough') return `Checks see this computer’s variable ${short(to, 60)}`;
   if (setting.startsWith('autonomy.')) {

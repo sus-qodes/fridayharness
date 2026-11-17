@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { FridayError, TaskKind, TaskScope } from '@friday/protocol';
-import { isMap, isScalar, parseDocument, parse as parseYaml } from 'yaml';
+import { isMap, isNode, isScalar, parseDocument, parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
 /**
@@ -79,6 +79,23 @@ export const ExecutionSettings = z
   })
   .strict()
   .prefault({});
+
+/**
+ * A path inside the project, as `worktrees.files` names one: relative, no drive, no `..`, never
+ * git's or Friday's own folder. Checked again against the real file when it is copied.
+ */
+const InsidePath = z
+  .string()
+  .trim()
+  .min(1)
+  .max(300)
+  .refine(
+    (p) =>
+      !/^([A-Za-z]:|[\\/]|~)/.test(p) &&
+      !p.split(/[\\/]/).some((part) => part === '..' || part === '.git' || part === '.friday' || part === ''),
+    'name a file inside the project by its path from the project folder (no "..", no drive, not .git or .friday)',
+  );
+const CopiedFileSpec = z.object({ from: InsidePath, to: InsidePath.optional() }).strict();
 
 const McpLevel = z.enum(['auto', 'review', 'manual', 'never']);
 const MCP_NAME = /^[A-Za-z0-9_-]{1,64}$/;
@@ -394,6 +411,18 @@ export const FridayConfig = z
       .object({
         mode: z.enum(['per_task', 'off']).default('per_task'),
         /**
+         * Files that are in the project folder and not in version control, which every copy of the
+         * project gets (2026-11-17): a task's worktree, and Friday's checkout of a merged revision.
+         * A copy is made from version control, so a settings file such as `.env` is not in it, and
+         * a project whose tests read one fails every check there. `from` is the file in the project
+         * folder, `to` its name in the copy (the same when left out), so a file kept for agents
+         * (`.env.agents.local`, with no real key in it) can stand in for the person's own `.env`.
+         * A loosening: programs an agent runs can read what is copied, so it waits for
+         * `friday policy trust` on every clone. Never written over a tracked file, and only where
+         * the copy's own ignore rules keep it out of a commit.
+         */
+        files: z.array(CopiedFileSpec).max(20).default([]),
+        /**
          * Dependencies in a fresh task worktree (plan Phase 7): Friday installs them before the agent
          * starts, in the execution profile. Without a command, the lockfile decides (pnpm, npm, yarn,
          * bun; frozen, offline first, lifecycle scripts ignored). The project's own command, and
@@ -525,6 +554,8 @@ export const LIVE_CONFIG_KEYS: readonly string[] = [
   'security',
   'verification',
   'landing',
+  // Read when a copy is prepared, so a change needs no restart (the rest of `worktrees` does).
+  'worktrees.files',
   'reservations',
   'recovery',
   'context',
@@ -635,6 +666,12 @@ export function loadConfig(path: string): FridayConfig {
   return parseConfig(readFileSync(path, 'utf8'), path);
 }
 
+/** One file every copy of the project gets (`worktrees.files`): project-relative, forward or back slashes. */
+export interface CopiedFile {
+  from: string;
+  to?: string | undefined;
+}
+
 /**
  * The settings a person may change from the interface (2026-11-16), each with the values it takes.
  * Nothing here applies on its own say: automatic verification is a loosening this clone trusts
@@ -660,6 +697,8 @@ export const EDITABLE_SETTINGS = {
   'autonomy.process.kill': z.enum(['auto', 'review']),
   'autonomy.network.fetch': z.enum(['auto', 'review']),
   'autonomy.unknown': z.enum(['auto', 'review']),
+  // Files outside version control that every copy of the project gets: a loosening, trusted first.
+  'worktrees.files': z.array(CopiedFileSpec).max(20),
 } as const;
 export type EditableSetting = keyof typeof EDITABLE_SETTINGS;
 
@@ -849,7 +888,8 @@ export function editConfigText(
     } catch {
       now = undefined;
     }
-    if (now !== checked.data) wanted.push([setting, at, checked.data]);
+    const held = isNode(now) ? now.toJSON() : now;
+    if (!sameValue(held, checked.data)) wanted.push([setting, at, checked.data]);
   }
   if (!wanted.length) return { text, changed: [] };
   const goal = expected(
@@ -867,7 +907,8 @@ export function editConfigText(
   // The small edit, one setting after another (a second key may go into a section the first made).
   let out: string | null = lf;
   for (const [, at, value] of wanted) {
-    out = out === null ? null : patchOne(out, at, value);
+    // A list is not a value the small edit writes: the document is then written whole.
+    out = out === null || (typeof value === 'object' && value !== null) ? null : patchOne(out, at, value);
   }
   if (out !== null && !reads(out)) out = null;
 
@@ -888,7 +929,7 @@ export function editConfigText(
             );
           }
         }
-        doc.setIn(at, value);
+        doc.setIn(at, typeof value === 'object' && value !== null ? doc.createNode(value) : value);
       }
       out = doc.toString({ lineWidth: 0 });
     } catch (e) {
@@ -966,6 +1007,15 @@ verification:
 #       cache:                              # a lockfile install is paid once per lockfile, then cloned
 #         enabled: true
 #         max_mb: 4096
+#
+# A copy of the project is made from version control, so a settings file such as .env is not in it.
+# List the files every copy should get; "to" gives it another name there. Programs an agent runs can
+# read them, so the list waits for "friday policy trust" on every clone.
+#   worktrees:
+#     files:
+#       - from: .env
+#       - from: .env.agents.local             # a file with no real key in it,
+#         to: .env                            # given to the copies as .env
 
 # What "friday init" does once for a new project: build the code graph right away, so the Studio
 # and every agent start from a ready one (it then follows your changes). false: built on first use.

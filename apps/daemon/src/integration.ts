@@ -24,6 +24,7 @@ import type { Actor, IntegrationView, TaskView } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
 import { selectChecks, summarizeOutcome } from '@friday/verification';
+import type { FileCopier } from './copy-files.js';
 import { runCheckInProfile } from './execution.js';
 import { InFlight } from './in-flight.js';
 import type { Logger } from './log.js';
@@ -76,6 +77,11 @@ export class IntegrationManager {
        * that passed in each task's worktree failed there for the want of them (2026-11-17).
        */
       setup?: (checkout: { path: string }, ids: { task_id: string; run_id: string }) => Promise<SetupOutcome | null>;
+      /**
+       * Gives the checkout the files the project lists for its copies (`worktrees.files`), as a
+       * task worktree gets them: the merged revision's checks read the same settings file.
+       */
+      files?: FileCopier;
     },
   ) {}
 
@@ -485,10 +491,14 @@ export class IntegrationManager {
     const dependencies = await this.#dependencies(dir, task);
     // Not installed (refused, or the install failed): the checks still run, since not every check
     // needs them, and a failure then says so instead of blaming the merged work alone.
-    const unprepared =
+    // After the dependencies: their clean-up removes what git ignores, these files included.
+    const lacking = await this.opts.files?.(dir, { task_id: task.task_id, goal_id: goalId });
+    const unprepared = [
       dependencies && (dependencies.status === 'failed' || dependencies.status === 'refused')
         ? `; the project's dependencies were not installed in Friday's checkout of it (${dependencies.reason}), which may be why`
-        : '';
+        : '',
+      lacking ? `; Friday's checkout of it lacks a file the project lists for its copies, which may be why` : '',
+    ].join('');
     let failed = 0;
     for (const check of checks) {
       const outcome = await runCheckInProfile(

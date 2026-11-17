@@ -139,6 +139,20 @@ export interface ProjectChecksView {
   manager: string;
 }
 
+/** One file every copy of the project gets: `from` in the project folder, `to` its name in the copy. */
+export interface CopiedFile {
+  from: string;
+  to: string;
+}
+
+/** `GET config/copy-files`: what config.yaml asks for, what is in force here, and what Friday found. */
+export interface CopyFilesView {
+  files: CopiedFile[];
+  in_force: CopiedFile[];
+  /** Settings files in the project folder that version control ignores, by path. */
+  found: string[];
+}
+
 export interface PolicyView {
   policy: {
     version: string;
@@ -507,6 +521,11 @@ export class FridayApi {
   /** Sets a few config.yaml settings (the daemon's `EDITABLE_SETTINGS`); answers those that changed. */
   editSettings(set: Record<string, unknown>): Promise<{ changed: string[] }> {
     return this.post('/config/settings', { set });
+  }
+
+  /** The settings files the copies of the project get, and the ones Friday found (names only). */
+  copyFiles(): Promise<CopyFilesView> {
+    return this.get('/config/copy-files');
   }
 
   /**

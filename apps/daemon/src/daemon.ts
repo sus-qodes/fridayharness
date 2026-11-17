@@ -36,6 +36,7 @@ import { type BrainHandle, createMasterBrain } from './brain.js';
 import { reloadingConfig } from './config-reload.js';
 import { type CompileInput, createContextService } from './context.js';
 import { ControlManager } from './control.js';
+import { fileCopier } from './copy-files.js';
 import { DependencyCache, dependencyCacheDir } from './dependency-cache.js';
 import { profileCache } from './execution.js';
 import { GraphService } from './graph-service.js';
@@ -421,6 +422,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   // Task worktrees: prepared as soon as a run needs one, released when its task ends (ADR-0023).
   // Set once the execution profile exists (below): a fresh worktree's dependencies (plan Phase 7).
   let worktreeSetup: WorktreeSetup | undefined;
+  // Files the project keeps out of version control and lists for its copies (a settings file).
+  const copyFiles = fileCopier({ root: project.root, policy: currentPolicy, logger });
   const workspaces = new WorkspaceManager({
     state,
     project,
@@ -429,6 +432,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     quiesce: (taskId) => quiesce(taskId, 'a new attempt needs its worktree'),
     setup: (w, ids) => (worktreeSetup ? worktreeSetup.run(w, ids) : Promise.resolve(null)),
     setupFailure: () => project.config.worktrees.setup.on_failure,
+    files: (dir, ids) => copyFiles(dir, ids),
   });
   // Installed trees kept per lockfile beside the worktrees folder: a worktree whose lockfile was
   // installed before gets the tree back as hard links instead of installing again.
@@ -464,6 +468,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     groups,
     // The merged revision's checkout gets its dependencies as a task worktree does, cache included.
     setup: (w, ids) => (worktreeSetup ? worktreeSetup.run(w, ids) : Promise.resolve(null)),
+    files: (dir, ids) => copyFiles(dir, ids),
   });
   const stopWorkspaces = state.transport.subscribe(
     { project_id: project.project_id, types: ['run.created', 'task.cancelled', 'task.completed'] },
