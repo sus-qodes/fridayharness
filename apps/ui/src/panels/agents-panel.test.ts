@@ -4,7 +4,7 @@ import { enforcementWords } from '../model/status.js';
 import { ApiError } from '../platform/transport.js';
 import { openDrawer } from '../shell/context.js';
 import { makeContext } from '../test/context.js';
-import { makeAgent, makeHarness, makeSnapshot } from '../test/fixtures.js';
+import { makeAgent, makeHarness, makeSnapshot, makeTask } from '../test/fixtures.js';
 import {
   agentRows,
   agentsDrawer,
@@ -232,6 +232,33 @@ describe('agents drawer', () => {
     buttonBy(d.el, 'Forget').click();
     await vi.advanceTimersByTimeAsync(0);
     expect(ctx.transport.to('POST', '/agent-processes/claude-1/forget')).toHaveLength(1);
+    d.destroy();
+  });
+
+  it('asks before stopping an agent in the middle of a task, and says what it is working on (2026-11-17)', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({
+        tasks: [makeTask({ status: 'RUNNING', agent_key: 'claude-1', summary: 'Add discount codes' })],
+      }),
+      answers: {
+        ...quiet,
+        'GET /agent-processes': { processes: [proc()], profiles: [profile()] },
+        'POST /agent-processes/claude-1/stop': { process: proc({ status: 'stopping' }) },
+      },
+    });
+    const d = agentsDrawer(ctx, { kind: 'agents' });
+    await vi.advanceTimersByTimeAsync(0);
+    ctx.confirmAnswer = false;
+    buttonBy(d.el, 'Stop').click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ctx.confirms.at(-1)?.title).toBe('Stop claude-1 while it is working?');
+    expect([ctx.confirms.at(-1)?.body].flat().join(' ')).toContain('It is working on “Add discount codes”.');
+    expect(ctx.confirms.at(-1)?.cancelLabel).toBe('Let it work');
+    expect(ctx.transport.to('POST', '/agent-processes/claude-1/stop')).toHaveLength(0);
+    ctx.confirmAnswer = true;
+    buttonBy(d.el, 'Stop').click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ctx.transport.to('POST', '/agent-processes/claude-1/stop')).toHaveLength(1);
     d.destroy();
   });
 

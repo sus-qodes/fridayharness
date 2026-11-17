@@ -22,6 +22,16 @@ export function isCancelled(e: unknown): boolean {
 }
 
 /**
+ * Friday's refusals name the terminal command for what they suggest, in brackets: `Reject it
+ * ("friday plan reject") and ask for a new one ("friday goal replan").` The sentence stands without
+ * them, and the interface has a button for each (2026-11-17): the brackets are left out. A command
+ * that is part of the sentence itself stays.
+ */
+export function withoutCommands(text: string): string {
+  return text.replace(/\s*\("friday [^"\n]{0,200}"\)/g, '');
+}
+
+/**
  * The second line of an error toast: what went wrong, then Friday's code for it in brackets. The
  * code led the line ("COS-2002: approval is already granted"), so a person read the code first
  * (2026-11-17); it stays, last, for whoever reports the error.
@@ -29,7 +39,7 @@ export function isCancelled(e: unknown): boolean {
 export function errorDetail(e: unknown): string {
   if (e instanceof ApiError) {
     const code = e.code ? ` (${cleanText(e.code)})` : '';
-    return `${truncate(cleanText(e.message), DETAIL_MAX - Array.from(code).length)}${code}`;
+    return `${truncate(withoutCommands(cleanText(e.message)), DETAIL_MAX - Array.from(code).length)}${code}`;
   }
   if (e instanceof OfflineError) return OFFLINE_DETAIL;
   if (e instanceof Error && e.message) return truncate(cleanText(e.message), DETAIL_MAX);

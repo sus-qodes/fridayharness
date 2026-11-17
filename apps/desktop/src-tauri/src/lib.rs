@@ -797,11 +797,28 @@ fn ensure_install(app: &AppHandle) -> Option<daemon::Install> {
             *state(app).install.lock().unwrap() = Some(i.clone());
             return Some(i);
         }
+        // Friday's own program is there and Node.js is not: another folder would change nothing.
+        // It asked for the folder again each time, and never named Node.js (2026-11-17).
+        if let (Some(_), None) = daemon::find_parts(chosen.as_deref()) {
+            let again = ask(
+                app,
+                &Dialog {
+                    title: "Friday: Node.js is needed".into(),
+                    text: "Friday runs on Node.js, and none was found on this computer.\n\nInstall Node.js 22 or newer from nodejs.org (the installer's defaults are fine), then choose Look again.".into(),
+                    confirm: "Look again".into(),
+                    danger: false,
+                },
+            );
+            if !again {
+                return None;
+            }
+            continue;
+        }
         let go = ask(
             app,
             &Dialog {
                 title: "Friday: where is Friday installed?".into(),
-                text: "The desktop app could not find Friday (apps\\cli\\bin\\friday.mjs and node.exe). Choose the folder of your Friday checkout, built with pnpm build.".into(),
+                text: "The desktop app could not find Friday's own files (apps\\cli\\bin\\friday.mjs). Choose the folder Friday was installed or built in.".into(),
                 confirm: "Choose the folder".into(),
                 danger: false,
             },
@@ -809,7 +826,7 @@ fn ensure_install(app: &AppHandle) -> Option<daemon::Install> {
         if !go {
             return None;
         }
-        chosen = Some(pick_folder(app, "Friday: choose the Friday checkout")?);
+        chosen = Some(pick_folder(app, "Friday: choose Friday's folder")?);
     }
 }
 

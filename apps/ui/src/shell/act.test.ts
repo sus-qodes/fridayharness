@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, AuthError, OfflineError } from '../platform/transport.js';
-import { errorDetail, isCancelled, makeAct, OFFLINE_DETAIL } from './act.js';
+import { errorDetail, isCancelled, makeAct, OFFLINE_DETAIL, withoutCommands } from './act.js';
 import type { Toast } from './context.js';
 
 function setup() {
@@ -40,6 +40,24 @@ describe('makeAct (plan §6 rule 6)', () => {
     });
     expect(toasts[0]).toEqual({ kind: 'error', text: 'Verify', detail: OFFLINE_DETAIL });
     expect(OFFLINE_DETAIL).toBe('Friday is not reachable');
+  });
+
+  it('leaves the terminal command in brackets out of a refusal, and keeps the sentence (2026-11-17)', () => {
+    expect(
+      withoutCommands(
+        'plan plan_1 v2 is out of date: task_x no longer exists. Reject it ("friday plan reject") and ask for a new one ("friday goal replan").',
+      ),
+    ).toBe('plan plan_1 v2 is out of date: task_x no longer exists. Reject it and ask for a new one.');
+    // A command that is part of the sentence stays, as does any other bracket.
+    expect(withoutCommands('restore it with "friday task worktree t1" (or ask)')).toBe(
+      'restore it with "friday task worktree t1" (or ask)',
+    );
+    expect(withoutCommands('nothing to change')).toBe('nothing to change');
+    expect(
+      errorDetail(
+        new ApiError(409, 'COS-2010', 'invalid_state_transition', 'it is stale. Reject it ("friday plan reject").'),
+      ),
+    ).toBe('it is stale. Reject it. (COS-2010)');
   });
 
   it('formats every kind of failure without throwing', () => {

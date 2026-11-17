@@ -227,6 +227,25 @@ describe('notifications (plan FD-25)', () => {
     }
   });
 
+  it('does not announce a plan to the person who just proposed it (2026-11-17)', () => {
+    const f = fakeEnv();
+    const ctx = ctxWith();
+    start(ctx, f.env);
+    const goal = makeGoal();
+    // Written in the plan editor: the person is looking at it.
+    const own = makePlan({ status: 'PROPOSED', proposed_by: { kind: 'human', id: 'local-operator' } });
+    ctx.board(makeSnapshot({ goals: [goal], plans: { [goal.goal_id]: { active: null, proposed: own } } }));
+    expect(f.shown).toEqual([]);
+    // The planner's next version of it is news.
+    const next = makePlan({
+      status: 'PROPOSED',
+      version: 2,
+      proposed_by: { kind: 'master_brain', id: 'master-brain' },
+    });
+    ctx.board(makeSnapshot({ goals: [goal], plans: { [goal.goal_id]: { active: null, proposed: next } } }));
+    expect(f.shown.map((n) => n.title)).toEqual(['A plan waits for your review — Friday — shop']);
+  });
+
   it('announces questions, proposed plans, blocked agents, failures and lost agents', () => {
     const f = fakeEnv();
     const ctx = ctxWith();
@@ -236,7 +255,12 @@ describe('notifications (plan FD-25)', () => {
       makeSnapshot({
         goals: [goal],
         escalations: [makeEscalation({ question: `Stack? ${HOSTILE}` })],
-        plans: { [goal.goal_id]: { active: null, proposed: makePlan({ status: 'PROPOSED' }) } },
+        plans: {
+          [goal.goal_id]: {
+            active: null,
+            proposed: makePlan({ status: 'PROPOSED', proposed_by: { kind: 'master_brain', id: 'master-brain' } }),
+          },
+        },
         tasks: [
           makeTask({
             task_id: 'tb',

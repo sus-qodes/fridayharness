@@ -90,10 +90,17 @@ function failedTasks(board: UiSnapshot): SnapshotTask[] {
   return board.tasks.filter((t) => t.status === 'FAILED' || t.status === 'HARNESS_LOST');
 }
 
-function planKeys(board: UiSnapshot): { key: string; goalId: string }[] {
-  const out: { key: string; goalId: string }[] = [];
+function planKeys(board: UiSnapshot): { key: string; goalId: string; own: boolean }[] {
+  const out: { key: string; goalId: string; own: boolean }[] = [];
   for (const [goalId, p] of Object.entries(board.plans)) {
-    if (p.proposed) out.push({ key: `plan:${p.proposed.plan_id}:${p.proposed.version}`, goalId });
+    if (p.proposed) {
+      out.push({
+        key: `plan:${p.proposed.plan_id}:${p.proposed.version}`,
+        goalId,
+        // Written by a person in the plan editor: they are looking at it.
+        own: p.proposed.proposed_by?.kind === 'human',
+      });
+    }
   }
   return out;
 }
@@ -171,6 +178,9 @@ export function diffNotices(memory: NoticeMemory, board: UiSnapshot, now: number
   for (const p of planKeys(board)) {
     if (memory.seen.has(p.key)) continue;
     memory.seen.add(p.key);
+    // A plan a person proposed themselves is not announced to them (2026-11-17): it said "A plan
+    // waits for your review" the moment they pressed Propose. It still waits in the list.
+    if (p.own) continue;
     const goal = board.goals.find((g) => g.goal_id === p.goalId);
     notices.push({
       key: p.key,

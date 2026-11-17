@@ -336,6 +336,26 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
         });
         if (!ok) return;
       }
+      // Stopping an agent in the middle of a task ended its attempt without a word (2026-11-17):
+      // asked first, with what it is working on. An idle agent stops as before, with no question.
+      if (what === 'stop') {
+        const busy = ctx.store
+          .select('board')
+          ?.tasks.find((t) => t.agent_key === k && (t.status === 'RUNNING' || t.status === 'ASSIGNED'));
+        if (busy) {
+          const ok = await ctx.confirm({
+            title: `Stop ${visible(k)} while it is working?`,
+            body: [
+              `It is working on “${plain(busy.summary, 160)}”.`,
+              'Its attempt ends. The work so far is kept, and the task waits for a decision in “Waiting for you”: give it to another agent, or start it again.',
+            ],
+            confirmLabel: 'Stop the agent',
+            cancelLabel: 'Let it work',
+            danger: true,
+          });
+          if (!ok) return;
+        }
+      }
       const label =
         what === 'stop' ? 'Stop the agent' : what === 'start' ? 'Start the agent again' : 'Forget the agent';
       const call =

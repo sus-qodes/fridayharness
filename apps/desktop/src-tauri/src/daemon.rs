@@ -361,6 +361,14 @@ fn read_install_file(state: &Path) -> Option<InstallFile> {
 /// The install: `FRIDAY_HOME` (a Friday checkout), then the checkout this app was built from,
 /// then `install.json` (written by `friday setup`), then `chosen` (a folder the user picked).
 pub fn find_install(chosen: Option<&Path>) -> Option<Install> {
+    let (cli, node) = find_parts(chosen);
+    Some(Install { node: node?, cli: cli? })
+}
+
+/// The two things an install is made of, each found or not: Friday's own program, and Node.js to
+/// run it. Told apart (2026-11-17) so a computer without Node.js is told so, in place of being
+/// asked again and again where Friday is.
+pub fn find_parts(chosen: Option<&Path>) -> (Option<PathBuf>, Option<PathBuf>) {
     let file = read_install_file(&state_dir());
     let cli = env_path("FRIDAY_HOME")
         .and_then(|h| cli_in(Path::new(&h)))
@@ -371,14 +379,14 @@ pub fn find_install(chosen: Option<&Path>) -> Option<Install> {
                 .map(PathBuf::from)
                 .filter(|p| p.is_absolute() && p.is_file())
         })
-        .or_else(|| chosen.and_then(cli_in))?;
+        .or_else(|| chosen.and_then(cli_in));
     let node = file
         .as_ref()
         .and_then(|f| f.node_path.as_deref())
         .map(PathBuf::from)
         .filter(|p| p.is_absolute() && p.is_file())
-        .or_else(node_on_path)?;
-    Some(Install { node, cli })
+        .or_else(node_on_path);
+    (cli, node)
 }
 
 /// True when `install.json` names an existing node and CLI (hooks and MCP launchers need it).

@@ -2,6 +2,13 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — loose ends, part 2
+
+- **A refusal says what to do, not which command to type.** Friday's refusals name a terminal command in brackets for what they suggest ("Reject it ("friday plan reject") and ask for a new one ("friday goal replan")"), and the toast showed them, for example on approving a plan version that had gone out of date. The brackets are left out: the sentence stands without them, and the interface has a button for each.
+- **A plan you proposed yourself is not announced to you.** Pressing Propose in the plan editor raised "A plan waits for your review". It still waits in the list; the notification is for a plan someone else (the planner) proposed.
+- **Stopping an agent in the middle of a task asks first**, with what it is working on and what happens to the task. An idle agent stops as before.
+- **A computer without Node.js is told so.** The desktop app asked where Friday is installed, again and again, when Friday's own files were there and Node.js was not. It now says that Node.js is needed, where to get it, and looks again.
+
 ## Unreleased — loose ends, part 1
 
 The remaining medium and low findings of the 2026-11-17 review, the ones a person meets first.
