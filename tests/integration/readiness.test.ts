@@ -78,6 +78,8 @@ describe('runtime readiness', () => {
     ]);
     expect(codex?.assessments.find((a) => a.model === 'openai/gpt-6.1-sol')?.roles).toEqual([
       { role: 'backend_engineer', rank: 4 },
+      // Codex's place in frontend work, added 2026-11-17 after the ranked entries.
+      { role: 'frontend_engineer', rank: 5 },
       { role: 'qa_and_debugging', rank: 2 },
       { role: 'devops_and_terminal', rank: 2 },
     ]);

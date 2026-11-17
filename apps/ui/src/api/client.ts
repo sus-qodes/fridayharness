@@ -43,6 +43,7 @@ import type {
   VerificationView,
   WorktreeView,
 } from '@friday/protocol';
+import type { ModelInfo } from '../model/models.js';
 import type { HttpRequestOptions } from '../platform/http-transport.js';
 import type { RequestOptions, Transport } from '../platform/transport.js';
 import { TIMEOUTS } from './timeouts.js';
@@ -397,7 +398,7 @@ export class FridayApi {
 
   // ---- routing
   models(): Promise<{
-    models: { id: string; provider?: string; local?: boolean }[];
+    models: ModelInfo[];
     evidence: ModelEvidenceView[];
     settings: Record<string, unknown>;
   }> {

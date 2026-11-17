@@ -2,6 +2,19 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — ease of use, part 2: who does the work, and on which model
+
+Findings of the 2026-11-17 review of model choice and of which agent takes a task, with the owner's decisions.
+
+- **"Assign to" is followed.** A task a person gave to an agent could wait for good: routing decided again whether it might run there, and refused where the ranking had no entry for that agent's host in the task's role, where the role was one it did not know ("fullstack"), or where a model was pinned that the agent cannot run. Nothing said so at the moment of assigning. A person's choice of agent now stands: the ranking only chooses the model (the one it has for that host, else the agent's own), and a pin the agent cannot run is set aside and said in the decision. It holds for a task kept for a busy agent and for the rework of such an attempt. A hard constraint (local only, sensitive work), a host that is signed out or at its limit, and a split nobody has decided still stop it.
+- **Every agent Friday can start takes every kind of work.** Codex had no place in two roles of the ranking (frontend, and review and security), so such a task could not be done by it at all. It now stands in both, after the ranked entries and before Antigravity, so no existing order changes (registry `2026-11-17.1`).
+- **A task with no agent to run it says why, and leads with the way out.** The card showed the decision's own sentence ("no dispatchable candidate for role "frontend_engineer" on this harness"), a "Why" button and a list of every model id in the catalog, the dearest first and most of them runnable by no agent on the machine; it fixed one task at a time. It now says what is wrong in words, lists the connected agents the task can be given to (**Run it on claude-1 (Claude Code)**, with "busy now" or "your editor" where that applies; `offers` in `GET routing/explain/:tid`), and offers **Start an agent** when none can take it. **Choose a model…** lists models by name with the app that runs each, the everyday one first, for this task or for every task of its kind. The decision's own words are under "Details".
+- **One choice for "use this model for everything".** Settings → Models (was "Routing & Pins") opens on *Which model does the work?*: let Friday choose, or always use one model. Before, the same took a pin per kind of work through a form with a free-text role, where a mistyped role matched nothing and said nothing. A model for one kind of work or one task is a fold underneath, with kinds to pick from and each choice listed in words ("Frontend and UI → Claude Sonnet 5.5", a task by its summary, not its id).
+- **A model choice no longer blocks agents you run in your own editor.** A pin cannot be applied to a session that chooses its own model (Antigravity, Claude Code in VS Code), and a pin of a model such a host does not run stopped every task there. It is set aside for that session, the decision says so, and the page says the choice does not reach those agents. An agent Friday gives its model to is held to a pin as before.
+- **The model list is current.** Claude Fable 5.2 is in the catalog (and in the planner's prices, without which the planner could not count a call against the budget and refused the model) and takes Fable 5.1's place in the ranking, at a lower price; Haiku 5.5's context window is 1M, not 200K. Pickers show only models an agent Friday starts can run, or ones the project declared itself.
+
+Changed on purpose: a routing decision's `source` may be `assignment`; `RunRouter` is told `assigned`; the readiness callback of `decideRoute` may be asked about a host alone (a null model).
+
 ## Unreleased — ease of use, part 1: starting and connecting agents
 
 Findings of the 2026-11-17 review of starting and connecting agents, with the owner's decisions on which hosts to offer and on the spending limit.

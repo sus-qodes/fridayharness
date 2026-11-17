@@ -181,8 +181,9 @@ describe('start agent modal', () => {
     expect(m.el.textContent).toContain('There is no model to choose here');
     expect(m.el.querySelector('input[name="model"], [aria-label*="Model"]')).toBeNull();
     // The boxes that could leave an agent without work are gone.
-    expect(m.el.textContent).not.toContain('Cost class');
-    expect(m.el.textContent).not.toContain('Models');
+    const labels = Array.from(m.el.querySelectorAll('.field-label')).map((l) => l.textContent);
+    expect(labels).not.toContain('Cost class');
+    expect(labels).not.toContain('Models');
     // A typed key is kept when the host changes.
     type(key, 'my-agent');
     choose(controlBy<HTMLSelectElement>(m.el, 'Host'), 'claude-code');
@@ -395,11 +396,11 @@ describe('start agent modal', () => {
     m.destroy();
   });
 
-  it('links to the routing pins in Settings → Routing, closing the dialog first', () => {
+  it('links to the model choices in Settings → Models, closing the dialog first', () => {
     const ctx = makeContext();
     const m = startAgentModal(ctx, { kind: 'start-agent' }, () => undefined);
-    expect(m.el.textContent).toContain('Settings → Routing');
-    buttonBy(m.el, 'Open routing pins').click();
+    expect(m.el.textContent).toContain('Settings → Models');
+    buttonBy(m.el, 'Open the model choices').click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'routing' });
     expect(ctx.store.select('ui').modal).toBeNull();
     m.destroy();
@@ -489,7 +490,7 @@ describe('changing a remembered agent', () => {
     expect(amount(m.el).value).toBe('1.5');
     expect(m.el.textContent).toContain('A new spending limit applies from the agent’s next attempt.');
     expect(m.el.textContent).toContain('Everything else applies the next time it starts');
-    expect(m.el.textContent).not.toContain('Open routing pins');
+    expect(m.el.textContent).not.toContain('Open the model choices');
 
     choose(controlBy<HTMLSelectElement>(m.el, 'Spending limit per attempt'), 'none');
     type(controlBy(m.el, 'Role'), 'frontend');

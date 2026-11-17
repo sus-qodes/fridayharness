@@ -1293,6 +1293,8 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     const tid = c.req.param('tid');
     return c.json({
       dry_run: routingOf().explain(tid),
+      // The connected agents it could be given to, and whether it would start there.
+      offers: routingOf().offers(tid),
       decisions: state.q.routingDecisions(pid, { task_id: tid }),
       role_decision: state.q.latestTaskRoleDecision(pid, tid) ?? null,
     });

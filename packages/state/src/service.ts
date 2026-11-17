@@ -104,7 +104,13 @@ export interface RunRouting {
     [key: string]: unknown;
   };
 }
-export type RunRouter = (args: { task: TaskView; harness: HarnessRecord; agent: AgentView }) => RunRouting | null;
+export type RunRouter = (args: {
+  task: TaskView;
+  harness: HarnessRecord;
+  agent: AgentView;
+  /** A person gave this task to this agent ("Assign to"): routing chooses the model, not whether it runs there. */
+  assigned?: boolean;
+}) => RunRouting | null;
 
 /** What installing a fresh worktree's dependencies did (plan Phase 7), carried by `run.workspace_ready`. */
 export interface WorkspaceSetupRecord {
@@ -1122,6 +1128,8 @@ export class FridayState {
     harnessId: string,
     agentId: string,
     ws: Workspace = { execution_root: null, base_commit: null, branch_ref: null, workspace: 'ready' },
+    /** A person assigns the task to this agent in this very command. */
+    assignedNow = false,
   ): RunView {
     // Nobody else works where an operation of an earlier attempt still runs (review F07).
     const owner = this.q.operationRuns(ctx.project_id, { task_id: task.task_id, status: 'running', limit: 1 })[0];
@@ -1169,8 +1177,24 @@ export class FridayState {
         ],
       });
     }
-    this.routeWithin(ctx, task, harness, agentId, run_id);
+    this.routeWithin(ctx, task, harness, agentId, run_id, assignedNow);
     return this.q.run(run_id);
+  }
+
+  /**
+   * Whether a person gave this task to this agent ("Assign to", 2026-11-17): they assign it in this
+   * command, the task was kept for the agent at their word, or it comes back to the same agent for
+   * rework after an attempt a person had given it. Routing then chooses the model and no longer
+   * whether the work may run there: before, a task assigned to an agent the ranking had no entry
+   * for waited for good, with no word at the moment of assigning.
+   */
+  private assignedByPerson(ctx: CommandContext, task: TaskView, agent: AgentView, assignedNow: boolean): boolean {
+    if (assignedNow) return true;
+    if (task.reserved_for_agent_key !== agent.agent_key) return false;
+    if (task.reserved_by === 'human') return true;
+    if (task.reserved_by !== 'rework') return false;
+    const [last] = this.q.routingDecisions(ctx.project_id, { task_id: task.task_id, limit: 1 });
+    return Boolean(last?.reason_codes.includes('assignment.human'));
   }
 
   /**
@@ -1179,11 +1203,24 @@ export class FridayState {
    * transaction is abandoned with `routing_blocked`, and the caller records the block. A router
    * that fails cannot show that the work may run here, so it blocks too.
    */
-  private routeWithin(ctx: CommandContext, task: TaskView, harness: HarnessRecord, agentId: string, runId: string) {
+  private routeWithin(
+    ctx: CommandContext,
+    task: TaskView,
+    harness: HarnessRecord,
+    agentId: string,
+    runId: string,
+    assignedNow = false,
+  ) {
     if (!this.router) return;
     let decision: RunRouting['decision'];
     try {
-      const r = this.router({ task, harness, agent: this.q.agent(agentId) });
+      const agent = this.q.agent(agentId);
+      const r = this.router({
+        task,
+        harness,
+        agent,
+        assigned: this.assignedByPerson(ctx, task, agent, assignedNow),
+      });
       if (!r) return;
       decision = r.decision;
     } catch (e) {
@@ -2266,7 +2303,8 @@ export class FridayState {
         };
       }
       const ws = this.workspaceFor(ctx, projectId, task, harness);
-      const run = this.createRun(ctx, task, harness.harness_id, agent.agent_id, ws);
+      // An operator's own assignment (not the Master Brain's delegation, which also passes here).
+      const run = this.createRun(ctx, task, harness.harness_id, agent.agent_id, ws, ctx.actor.kind === 'human');
       task = this.moveTask(ctx, task, 'task.assign', {
         changes: {
           assigned_agent_id: agent.agent_id,

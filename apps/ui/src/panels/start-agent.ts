@@ -602,10 +602,10 @@ export function startAgentModal(
           'div',
           { class: 'pn-models-note' },
           note(
-            'There is no model to choose here: Friday picks the model for each task from routing. To steer it, pin a model to a role, a task or a kind in Settings → Routing.',
+            'There is no model to choose here: Friday picks the model for each task. To use one model for everything, or for one kind of work, open Settings → Models.',
           ),
           // A drawer under a dialog takes no input: the dialog closes first (plan §7.4).
-          linkButton('Open routing pins', () => {
+          linkButton('Open the model choices', () => {
             closeModal(ctx);
             openDrawer(ctx, { kind: 'settings', tab: 'routing' });
           }),

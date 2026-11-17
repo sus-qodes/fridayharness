@@ -84,7 +84,7 @@ export const BRAIN_KINDS: readonly string[] = [
 const TITLES: Record<string, string> = {
   ambiguous_intent: 'The Master Brain asks what you mean',
   recovery_needed: 'A task needs a recovery decision',
-  routing_blocked: 'Routing does not let a task start',
+  routing_blocked: 'A task has no agent to run it',
   routing_violated: 'Routing stopped a task',
   integration_conflict: 'Integration conflict',
   integration_failed: 'Integration failed',

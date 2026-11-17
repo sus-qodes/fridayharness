@@ -1,5 +1,5 @@
 {
-  "version": "2026-11-16.1",
+  "version": "2026-11-17.1",
   "aliases": {
     "classifier": "decision_router",
     "router": "decision_router",
@@ -132,7 +132,7 @@
         },
         {
           "rank": 2,
-          "model": "claude-fable-5-1",
+          "model": "claude-fable-5-2",
           "harness": "claude-code",
           "declared_dispatchable": true,
           "reason_if_unavailable": null,
@@ -418,6 +418,23 @@
         },
         {
           "rank": 5,
+          "model": "openai/gpt-6.1-sol",
+          "harness": "codex",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-11-17",
+          "cost": null,
+          "benchmark": null
+        },
+        {
+          "rank": 6,
           "model": "gemini-3.8-flash",
           "harness": "antigravity",
           "declared_dispatchable": true,
@@ -727,6 +744,23 @@
         },
         {
           "rank": 5,
+          "model": "openai/gpt-6-astra",
+          "harness": "codex",
+          "declared_dispatchable": true,
+          "reason_if_unavailable": null,
+          "requirements": {
+            "mcp_required": true,
+            "auth_required": true,
+            "host_verified": true,
+            "model_verified": true,
+            "mcp_verified": true
+          },
+          "last_checked": "2026-11-17",
+          "cost": null,
+          "benchmark": null
+        },
+        {
+          "rank": 6,
           "model": "gemini-3.8-flash",
           "harness": "antigravity",
           "declared_dispatchable": true,

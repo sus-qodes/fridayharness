@@ -497,6 +497,26 @@ export interface AgentProcessesView {
 }
 
 /** One file `harness config claude-code` writes (plan §5.10). */
+/**
+ * Where a task could run if a person gave it to an agent now (`GET routing/explain/:tid`, 2026-11-17):
+ * one per connected agent that may take work, for the "Run it on …" buttons of a task routing does
+ * not let start.
+ */
+export interface RoutingOfferView {
+  agent_key: string;
+  /** The agent's host (`claude-code`, `codex`, `antigravity`, …). */
+  host: string;
+  /** `spawn`: Friday starts the work there. `attach`: the person takes it in their own session. */
+  attach_mode: string;
+  /** Not working on something else now. */
+  free: boolean;
+  /** It would not start there even so (a hard constraint, a host that is not ready). */
+  blocked: boolean;
+  /** The model it would run; null for the agent's own. */
+  model: string | null;
+  reason: string;
+}
+
 export interface ClaudeSetupChange {
   path: string;
   action: string;

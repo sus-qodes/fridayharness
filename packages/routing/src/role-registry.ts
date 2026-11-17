@@ -150,6 +150,17 @@ const ranked = (rank: number, model: string, harness: string, options: Candidate
  * as for every host that chooses its own model. The owner added it on 2026-11-16, after the first
  * live sessions. It reorders nothing, and no cost or benchmark is claimed for it.
  */
+/**
+ * Codex, in the two working roles the ranking had no entry for it in (frontend, and review and
+ * security). The owner decided on 2026-11-17 that every agent Friday can start takes every kind of
+ * work: without an entry, a frontend or review task given to a Codex agent ended "no dispatchable
+ * candidate" and waited for good, and a person who had only Codex could not have such work done at
+ * all. It stands after the ranked entries and before Antigravity, so it reorders nothing; the model
+ * is the one the ranking already uses for Codex in the neighbouring roles. No cost or benchmark is
+ * claimed for it.
+ */
+const codexToo = (rank: number, model: string) =>
+  candidate(rank, model, 'codex', { cost: null, last_checked: '2026-11-17' });
 const ANTIGRAVITY_MODEL = 'gemini-3.8-flash';
 const antigravity = (rank: number) =>
   candidate(rank, ANTIGRAVITY_MODEL, 'antigravity', { cost: null, last_checked: '2026-11-16' });
@@ -166,7 +177,7 @@ const antigravity = (rank: number) =>
  * no ranking exists that the owner did not write.
  */
 export const ROLE_REGISTRY_SOURCE: RoleRegistry = {
-  version: '2026-11-16.1',
+  version: '2026-11-17.1',
   aliases: {
     classifier: 'decision_router',
     router: 'decision_router',
@@ -221,7 +232,7 @@ export const ROLE_REGISTRY_SOURCE: RoleRegistry = {
       description: 'Bounds system architecture, interfaces, trade-offs and migration plans; investigates code.',
       candidates: [
         ranked(1, 'claude-opus-5-5', 'claude-code'),
-        ranked(2, 'claude-fable-5-1', 'claude-code'),
+        ranked(2, 'claude-fable-5-2', 'claude-code'),
         ranked(3, 'openai/gpt-6-astra', 'codex'),
         ranked(4, 'anthropic/claude-opus-5.5', 'opencode'),
         antigravity(5),
@@ -247,7 +258,8 @@ export const ROLE_REGISTRY_SOURCE: RoleRegistry = {
         ranked(2, 'claude-sonnet-5-5', 'cursor'),
         ranked(3, 'gemini-4-argon', 'gemini'),
         ranked(4, 'claude-opus-5-5', 'claude-code'),
-        antigravity(5),
+        codexToo(5, 'openai/gpt-6.1-sol'),
+        antigravity(6),
       ],
     },
     qa_and_debugging: {
@@ -280,7 +292,8 @@ export const ROLE_REGISTRY_SOURCE: RoleRegistry = {
         ranked(2, 'claude-sonnet-5-5', 'cursor'),
         ranked(3, 'gemini-4-argon', 'gemini'),
         ranked(4, 'z-ai/glm-5.3', 'opencode'),
-        antigravity(5),
+        codexToo(5, 'openai/gpt-6-astra'),
+        antigravity(6),
       ],
     },
   },

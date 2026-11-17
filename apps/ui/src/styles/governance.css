@@ -961,3 +961,36 @@
 .gv-tray-empty {
   padding: 16px 8px;
 }
+
+/* A task with no agent to run it: the agents it can be given to, and the decision's own words. */
+.gv-run-on {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gv-run-on .field-label {
+  margin: 0;
+}
+
+.gv-details {
+  font-size: var(--text-caption);
+  color: var(--color-slate-400);
+}
+
+.gv-details summary {
+  cursor: pointer;
+}
+
+.gv-details p {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.gv-pin-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: var(--text-sm);
+}

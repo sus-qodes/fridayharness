@@ -1,4 +1,10 @@
-import { CostClass, type ReadinessAssessmentView, type ReadinessReport, type TaskView } from '@friday/protocol';
+import {
+  CostClass,
+  type ReadinessAssessmentView,
+  type ReadinessReport,
+  type RoutingOfferView,
+  type TaskView,
+} from '@friday/protocol';
 import {
   decideRoute,
   loadModelCatalog,
@@ -56,7 +62,7 @@ export class RoutingService {
   /** The checks that judge each kind of task now, as versions: outcomes under others are another cohort. */
   checksVersion = (kind: string): string => checksVersion(this.deps.project.config.verification.checks, kind);
 
-  private input(task: TaskView, harness: HarnessRecord | null): RouteInput {
+  private input(task: TaskView, harness: HarnessRecord | null, assigned = false): RouteInput {
     const caps = (harness?.capabilities ?? {}) as { models?: unknown; model_control?: unknown };
     const declared = Array.isArray(caps.models) ? caps.models.filter((m): m is string => typeof m === 'string') : null;
     return {
@@ -71,6 +77,8 @@ export class RoutingService {
       role_registry: this.roleRegistry,
       // What this machine has seen of the host and model (ADR-0035 §2): filters, never reorders.
       readiness: (host, model) => this.deps.state.readiness.assess(this.pid, host, model),
+      // A person gave the task to this agent: the ranking chooses its model, not whether it runs there.
+      ...(assigned ? { assigned_by_human: true } : {}),
     };
   }
 
@@ -110,8 +118,8 @@ export class RoutingService {
   }
 
   /** The router the state calls for every new run (ADR-0031 §6). */
-  readonly router: RunRouter = ({ task, harness }) => {
-    const decision = decideRoute(this.input(task, harness));
+  readonly router: RunRouter = ({ task, harness, assigned }) => {
+    const decision = decideRoute(this.input(task, harness, assigned === true));
     if (decision.blocked) {
       this.deps.logger.info('routing blocked the run', { task_id: task.task_id, reason: decision.reason });
     }
@@ -144,6 +152,42 @@ export class RoutingService {
       cost: Math.round(cost * 1000) / 1000,
       cost_class: declared.success ? declared.data : d.model ? modelCostClass(model) : 'standard',
     };
+  }
+
+  /**
+   * Where a task could run if a person gave it to an agent now: every connected agent that may take
+   * work, with whether it would start there and on which model. What the card of a task routing
+   * does not let start offers as "Run it on …" (2026-11-17); nothing is recorded.
+   */
+  offers(taskId: string): RoutingOfferView[] {
+    const { state } = this.deps;
+    const task = state.q.task(this.pid, taskId);
+    const now = state.clock.now();
+    const out: RoutingOfferView[] = [];
+    for (const agent of state.q.agents(this.pid)) {
+      const harness = agent.harness_id ? state.q.findHarness(agent.harness_id) : undefined;
+      if (!harness || agent.shadow || harness.shadow) continue;
+      if (!state.q.isHarnessLive(harness.harness_id, now)) continue;
+      // A session below the project's enforcement requirement takes no work at all.
+      if (state.enforcementGap(harness) !== null) continue;
+      const d = decideRoute(this.input(task, harness, true));
+      out.push({
+        agent_key: agent.agent_key,
+        host: harness.vendor,
+        attach_mode: harness.attach_mode,
+        free: agent.status === 'AVAILABLE' && !agent.current_task_id,
+        blocked: d.blocked,
+        model: d.model,
+        reason: d.reason,
+      });
+    }
+    // What would start first: not blocked, then free, then by name.
+    return out.sort(
+      (a, b) =>
+        Number(a.blocked) - Number(b.blocked) ||
+        Number(b.free) - Number(a.free) ||
+        a.agent_key.localeCompare(b.agent_key),
+    );
   }
 
   /** What routing would choose for a task now, on any harness (a dry run; nothing is recorded). */

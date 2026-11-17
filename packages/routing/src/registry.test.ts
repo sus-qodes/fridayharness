@@ -100,8 +100,33 @@ describe('the static role registry', () => {
       [2, 'claude-sonnet-5-5', 'cursor', true],
       [3, 'gemini-4-argon', 'gemini', true],
       [4, 'claude-opus-5-5', 'claude-code', true],
-      [5, 'gemini-3.8-flash', 'antigravity', true],
+      [5, 'openai/gpt-6.1-sol', 'codex', true],
+      [6, 'gemini-3.8-flash', 'antigravity', true],
     ]);
+    // Every agent Friday can start, and the one a person attaches, has a place in every working
+    // role (2026-11-17): a kind of work no connected agent may take waits for good.
+    for (const [role, definition] of Object.entries(ROLE_REGISTRY_SOURCE.roles)) {
+      if (role === 'decision_router') continue;
+      for (const host of ['claude-code', 'codex', 'antigravity']) {
+        expect(
+          definition.candidates.some((c) => c.harness === host && c.declared_dispatchable),
+          `${role} on ${host}`,
+        ).toBe(true);
+      }
+    }
+    // Codex's two added entries stand after the ranked ones and claim neither a cost nor a benchmark.
+    for (const role of ['frontend_engineer', 'code_reviewer_and_security']) {
+      const added = ROLE_REGISTRY_SOURCE.roles[role]?.candidates.find((c) => c.harness === 'codex');
+      expect(added, role).toMatchObject({ rank: 5, cost: null, benchmark: null, last_checked: '2026-11-17' });
+    }
+    // The current top model, not the one it replaced, which costs more.
+    expect(order('system_architect')?.[1]).toEqual([2, 'claude-fable-5-2', 'claude-code', true]);
+    expect(models.find((m) => m.id === 'claude-fable-5-2')).toMatchObject({
+      context_tokens: 1_000_000,
+      price: { input: 8, output: 40 },
+      vendors: ['claude-code'],
+    });
+    expect(models.find((m) => m.id === 'claude-haiku-5-5')?.context_tokens).toBe(1_000_000);
     // Antigravity (the owner's addition of 2026-11-16) is last in every working role, so it reorders
     // nothing, and it classifies nothing: the decision router has no entry for it. No cost or
     // benchmark is claimed for it.

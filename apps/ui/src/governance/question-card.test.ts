@@ -288,6 +288,197 @@ describe('question cards by kind (plan FD-21)', () => {
       card.destroy();
     });
 
+    describe('a task with no agent to run it', () => {
+      const blocked = (codes: string[]) =>
+        makeEscalation({
+          kind: 'routing_blocked',
+          requested_by_kind: 'system',
+          question: `${TASK} cannot start: no dispatchable candidate for role "frontend_engineer" on this harness`,
+          options: [`friday routing explain ${TASK}`, 'friday routing pin --task <task> --model <model>'],
+          details: { harness_id: null, reason_codes: codes },
+        });
+      const offer = (over: Record<string, unknown> = {}) => ({
+        agent_key: 'claude-1',
+        host: 'claude-code',
+        attach_mode: 'spawn',
+        free: true,
+        blocked: false,
+        model: 'claude-sonnet-5-5',
+        reason: 'x',
+        ...over,
+      });
+      const runOn = (el: Element) => [...el.querySelectorAll('.gv-run-on button')].map((b) => b.textContent);
+
+      it('says what is wrong in words and leads with the agents it can be given to', async () => {
+        const card = mount(
+          blocked(['registry.none_eligible']),
+          {},
+          {
+            [`GET /routing/explain/${TASK}`]: {
+              offers: [
+                offer(),
+                offer({ agent_key: `codex${HOSTILE}`, host: 'codex', free: false }),
+                offer({ agent_key: 'antigravity-1', host: 'antigravity', attach_mode: 'attach' }),
+                // One it would not start on even so is not offered.
+                offer({ agent_key: 'local-1', host: 'generic', blocked: true }),
+              ],
+            },
+            [`POST /tasks/${TASK}/assign`]: { mode: 'assigned', task: {} },
+          },
+        );
+        expect(card.el.querySelector('.gv-card-title')?.textContent).toBe('A task has no agent to run it');
+        expect(card.el.querySelector('.gv-question-text')?.textContent).toBe(
+          'None of your connected agents can take this task as things are.',
+        );
+        // The decision's own sentence is one step away, and no terminal command is offered.
+        const details = card.el.querySelector('details.gv-details') as HTMLDetailsElement;
+        expect(details.open).toBe(false);
+        expect(details.textContent).toContain('no dispatchable candidate for role');
+        expect(card.el.querySelector('.gv-cli')).toBeNull();
+        expect(card.el.textContent).not.toContain('friday routing pin');
+        expect(card.el.textContent).toContain('Looking for an agent that can take it');
+        await flush();
+        expect(runOn(card.el)).toEqual([
+          'claude-1 (Claude Code)',
+          // A busy agent and one the person runs themselves say so on the button.
+          `codex${HOSTILE} (Codex, busy now)`,
+          'antigravity-1 (Antigravity, your editor)',
+        ]);
+        expect(card.el.querySelector('img')).toBeNull();
+        // One click gives it to the agent, which Friday then follows.
+        arm(card.el);
+        buttonNamed(card.el, 'claude-1 (Claude Code)').click();
+        await flush();
+        expect(ctx.transport.to('POST', `/tasks/${TASK}/assign`)[0]?.body).toEqual({ agent_key: 'claude-1' });
+        expect(card.el.querySelector('.gv-status')?.textContent).toBe('Given to claude-1: it starts now.');
+        card.destroy();
+      });
+
+      it('says how a kept task starts: when a busy agent is free, or when the person takes it in their editor', async () => {
+        const answersFor = {
+          [`GET /routing/explain/${TASK}`]: {
+            offers: [
+              offer({ agent_key: 'codex-1', host: 'codex', free: false }),
+              offer({ agent_key: 'antigravity-1', host: 'antigravity', attach_mode: 'attach' }),
+            ],
+          },
+          [`POST /tasks/${TASK}/assign`]: { mode: 'reserved', task: {} },
+        };
+        const busy = mount(blocked(['pin.unavailable']), {}, answersFor);
+        expect(busy.el.querySelector('.gv-question-text')?.textContent).toBe(
+          'A model was chosen for this work that the agent it reached cannot run.',
+        );
+        await flush();
+        arm(busy.el);
+        buttonNamed(busy.el, 'codex-1').click();
+        await flush();
+        expect(busy.el.querySelector('.gv-status')?.textContent).toBe(
+          'Kept for codex-1: it starts when that agent is free.',
+        );
+        // The question is still open (it closes when the task starts), so nothing is switched off.
+        expect(buttonNamed(busy.el, 'Cancel task').disabled).toBe(false);
+        busy.destroy();
+        const own = mount(blocked(['role.unsupported']), {}, answersFor);
+        expect(own.el.querySelector('.gv-question-text')?.textContent).toBe(
+          'Friday could not tell what kind of work this task is, so it chose no agent for it.',
+        );
+        await flush();
+        arm(own.el);
+        buttonNamed(own.el, 'antigravity-1').click();
+        await flush();
+        expect(own.el.querySelector('.gv-status')?.textContent).toBe(
+          'Kept for antigravity-1: take it there, in Antigravity, with /friday.',
+        );
+        own.destroy();
+      });
+
+      it('offers to start an agent when none can take it, and stays usable when the answer does not come', async () => {
+        const none = mount(
+          blocked(['delegation.all_blocked']),
+          {},
+          { [`GET /routing/explain/${TASK}`]: { offers: [] } },
+        );
+        await flush();
+        expect(none.el.textContent).toContain('No agent is connected that can take work.');
+        buttonNamed(none.el, 'Start an agent').click();
+        expect(ctx.store.select('ui').modal).toEqual({ kind: 'start-agent' });
+        none.destroy();
+        const refused = mount(
+          blocked(['constraint.sensitive']),
+          {},
+          { [`GET /routing/explain/${TASK}`]: { offers: [offer({ blocked: true })] } },
+        );
+        await flush();
+        expect(refused.el.textContent).toContain('None of the connected agents can take it, whoever it is given to.');
+        expect(refused.el.querySelector('.gv-question-text')?.textContent).toContain('marked sensitive');
+        refused.destroy();
+        // An older Friday, or an answer that failed: no agents are listed, the other ways remain.
+        const silent = mount(blocked([]), {}, {});
+        await flush();
+        expect(runOn(silent.el)).toEqual([]);
+        expect(silent.el.textContent).not.toContain('Looking for an agent');
+        expect(buttonNamed(silent.el, 'Choose a model').disabled).toBe(false);
+        silent.destroy();
+      });
+
+      it('chooses a model from those an agent here can run, for this task or for every task of its kind', async () => {
+        const models = {
+          models: [
+            { id: 'claude-fable-5-1', vendors: ['claude-code'], source: 'seed' },
+            { id: 'z-ai/glm-5.3', vendors: ['opencode'], source: 'seed' },
+            { id: 'claude-sonnet-5-5', vendors: ['claude-code'], source: 'seed' },
+            { id: 'openai/gpt-6.1-sol', vendors: ['codex'], source: 'seed' },
+          ],
+          evidence: [],
+          settings: {},
+        };
+        const card = mount(
+          blocked(['registry.none_eligible']),
+          {},
+          { 'GET /models': models, 'POST /routing/pins': { pin: {} } },
+        );
+        buttonNamed(card.el, 'Choose a model').click();
+        await flush();
+        const select = card.el.querySelector('.gv-pin-select') as HTMLSelectElement;
+        // Names, the app that runs each, the everyday model first and chosen; nothing no agent here runs.
+        expect([...select.options].map((o) => o.textContent)).toEqual([
+          'Claude Sonnet 5.5 (Claude Code)',
+          'Claude Fable 5.1 (Claude Code)',
+          'GPT-6.1 Sol (Codex)',
+        ]);
+        expect(select.value).toBe('claude-sonnet-5-5');
+        expect(card.el.textContent).toContain('Use it for every coding task, not only this one');
+        arm(card.el);
+        buttonNamed(card.el, 'Use this model').click();
+        await flush();
+        expect(ctx.transport.to('POST', '/routing/pins')[0]?.body).toMatchObject({
+          scope: 'task',
+          target: TASK,
+          model: 'claude-sonnet-5-5',
+        });
+        card.destroy();
+        const every = mount(
+          blocked(['registry.none_eligible']),
+          {},
+          { 'GET /models': models, 'POST /routing/pins': { pin: {} } },
+        );
+        buttonNamed(every.el, 'Choose a model').click();
+        await flush();
+        (every.el.querySelector('.gv-pin-select') as HTMLSelectElement).value = 'openai/gpt-6.1-sol';
+        (every.el.querySelector('.gv-pin-all input') as HTMLInputElement).checked = true;
+        arm(every.el);
+        buttonNamed(every.el, 'Use this model').click();
+        await flush();
+        expect(ctx.transport.to('POST', '/routing/pins')[0]?.body).toMatchObject({
+          scope: 'kind',
+          target: 'implementation',
+          model: 'openai/gpt-6.1-sol',
+        });
+        expect(ctx.toasts.at(-1)?.text).toBe('GPT-6.1 Sol for every coding task');
+        every.destroy();
+      });
+    });
+
     it('says which host is kept out and why, and tries it again when the person signed in', async () => {
       const card = mount(makeEscalation({ kind: 'routing_blocked' }), {}, { 'POST /readiness/clear': { ended: [] } });
       // Nothing is kept out: the card is as before.

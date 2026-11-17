@@ -843,3 +843,12 @@
 .pn-raise-what {
   margin: 0 0 12px;
 }
+
+/* Settings → Models: the one choice, then the finer ones folded under it. */
+.pn-one-model {
+  margin-bottom: 12px;
+}
+
+.pn-pins-more .pn-pin-form {
+  margin-top: 8px;
+}

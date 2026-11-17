@@ -4,7 +4,7 @@ import { desktopPlatform, TEST_BODY, TEST_TITLE } from '../platform/desktop-plat
 import type { TauriCore } from '../platform/tauri-transport.js';
 import { UI_VERSION } from '../shell/version.js';
 import { makeContext } from '../test/context.js';
-import { makeRun, makeSnapshot, makeTask } from '../test/fixtures.js';
+import { makeRun, makeSnapshot } from '../test/fixtures.js';
 import {
   clampNumber,
   pageActions,
@@ -14,7 +14,7 @@ import {
   settingsDrawer,
   worktreesInUse,
 } from './settings.js';
-import { BIDI, buttonBy, check, choose, controlBy, flush, HOSTILE, type } from './test-support.js';
+import { buttonBy, check, choose, controlBy, flush, HOSTILE, type } from './test-support.js';
 
 const brain = (over: Partial<BrainStatusView> = {}): BrainStatusView => ({
   provider: 'anthropic',
@@ -575,93 +575,17 @@ describe('settings drawer', () => {
     d.destroy();
   });
 
-  // ---- Routing: the pins' home, as they worked from the Agents drawer before (review decision 2)
+  // ---- Models: the page is `routingPins`, tested on its own in routing-pins.test.ts (2026-11-17)
 
-  it('says dispatch is the static role registry beside the pins, and lists no models when none are known', async () => {
-    const ctx = makeContext({ answers: { 'GET /models': MODELS, 'GET /routing/pins': { pins: [] } } });
+  it('holds the model choices under Routing', async () => {
+    const ctx = makeContext({ answers: { 'GET /models': MODELS, 'GET /routing/pins': { pins: [PIN] } } });
     const d = settingsDrawer(ctx, { kind: 'settings', tab: 'routing' });
     await flush();
     const routing = section(d.el, 'Routing') as HTMLElement;
-    expect(routing.textContent).toContain('static role registry');
-    expect(routing.textContent).toContain('pins beat registry rank');
-    expect(routing.textContent).toContain('No pins');
-    expect(() => buttonBy(routing, 'Open routing pins')).toThrow();
-    d.destroy();
-    const bare = settingsDrawer(makeContext({ answers: { 'GET /models': { models: [] } } }), { kind: 'settings' });
-    await flush();
-    expect(bare.el.textContent).toContain('No models known');
-    bare.destroy();
-  });
-
-  it('pins a model to a role and unpins, from Settings', async () => {
-    const ctx = makeContext({
-      snapshot: makeSnapshot({ tasks: [makeTask()] }),
-      answers: {
-        'GET /models': MODELS,
-        'GET /routing/pins': { pins: [PIN] },
-        'POST /routing/pins': { pin: {} },
-        'POST /routing/pins/pin1/revoke': { pin: {} },
-      },
-    });
-    const d = settingsDrawer(ctx, { kind: 'settings', tab: 'routing' });
-    await flush();
-    const routing = section(d.el, 'Routing') as HTMLElement;
-    choose(controlBy<HTMLSelectElement>(routing, 'Model'), 'gpt-5.6');
-    buttonBy(routing, /^Pin$/).click();
-    await flush();
-    expect(ctx.transport.to('POST', '/routing/pins')[0]?.body).toEqual({
-      scope: 'role',
-      target: 'developer',
-      model: 'gpt-5.6',
-    });
-    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Pinned gpt-5.6' });
-    choose(controlBy<HTMLSelectElement>(routing, 'Pin for'), 'kind');
-    choose(controlBy<HTMLSelectElement>(routing, 'Which'), 'review');
-    buttonBy(routing, /^Pin$/).click();
-    await flush();
-    expect(ctx.transport.to('POST', '/routing/pins')[1]?.body).toMatchObject({ scope: 'kind', target: 'review' });
-    // A task pin offers the open tasks of the board.
-    choose(controlBy<HTMLSelectElement>(routing, 'Pin for'), 'task');
-    expect(controlBy<HTMLSelectElement>(routing, 'Which').value).toBe('task_0000000000000000000000aa01');
-    buttonBy(routing, 'Unpin the kind pin for docs').click();
-    await flush();
-    expect(ctx.transport.to('POST', '/routing/pins/pin1/revoke')).toHaveLength(1);
-    expect(ctx.transport.to('GET', '/routing/pins').length).toBeGreaterThanOrEqual(2);
+    expect(routing.textContent).toContain('Which model does the work?');
+    expect(routing.textContent).toContain('Every documentation task');
     d.destroy();
   });
-
-  it('shows hostile pin text as text and says when the pins could not be read', async () => {
-    const ctx = makeContext({
-      answers: {
-        'GET /models': MODELS,
-        'GET /routing/pins': { pins: [{ ...PIN, scope: 'role', target: BIDI, model: HOSTILE, note: HOSTILE }] },
-      },
-    });
-    const d = settingsDrawer(ctx, { kind: 'settings', tab: 'routing' });
-    await flush();
-    expect(d.el.querySelector('img')).toBeNull();
-    const text = section(d.el, 'Routing')?.textContent ?? '';
-    expect(text).toContain(HOSTILE);
-    expect(text).toContain('⟨U+202E⟩');
-    expect(text).not.toContain('\u202E');
-    d.destroy();
-    const failing = settingsDrawer(
-      makeContext({
-        answers: {
-          'GET /models': MODELS,
-          'GET /routing/pins': () => {
-            throw new Error('offline');
-          },
-        },
-      }),
-      { kind: 'settings' },
-    );
-    await flush();
-    expect(failing.el.textContent).toContain('Could not read the pins: offline');
-    failing.destroy();
-  });
-
-  // ---- Friday: the worktrees in use and their clean-up, log out, stop
 
   it('counts the worktrees in use and cleans up released ones with the palette’s prune', async () => {
     const ctx = makeContext({

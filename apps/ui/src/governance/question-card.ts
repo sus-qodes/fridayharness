@@ -9,9 +9,11 @@
  * types an answer into is labelled "Reply to <agent>": one wording for one act.
  */
 
-import type { EscalationView } from '@friday/protocol';
+import type { EscalationView, RoutingOfferView } from '@friday/protocol';
 import { classifyEscalation, composeAnswer, LET_AGENT_DECIDE, type QuestionSpec } from '../model/escalations.js';
 import { blockSentence, hostBlocks, hostName, liftLabel } from '../model/host-blocks.js';
+import { defaultModel, hostLabel, modelLabel, modelName, usableModels } from '../model/models.js';
+import { kindWord, routingBlockWords } from '../model/routing-words.js';
 import { hasHidden, visible } from '../model/text.js';
 import { cancelTask } from '../shell/cancel-task.js';
 import { type AppContext, type Component, openDrawer, openModal } from '../shell/context.js';
@@ -162,7 +164,9 @@ function buildBody(kit: Kit): Built {
     case 'recovery':
       return recoveryBody(kit);
     case 'routing':
-      return routingBody(kit);
+      // A task with no agent to run it gets the card that leads with "Run it on …"; a host that ran
+      // a model its constraints forbid keeps the card that explains and pins.
+      return kit.spec.kind === 'routing_blocked' ? routingBlockedBody(kit) : routingBody(kit);
     case 'integration':
       return integrationBody(kit);
     case 'unanswered':
@@ -405,9 +409,241 @@ function recoveryBody(kit: Kit): Built {
   };
 }
 
-// ---- routing_blocked, routing_violated
+// ---- routing_blocked: who runs this task? (2026-11-17)
+
+/**
+ * A task routing does not let start. The card said the decision's own sentence, offered "Why" and a
+ * list of every model id in the catalog (the dearest first, most of which no agent here could run),
+ * and fixed one task at a time. It now says what is wrong in a person's words and leads with the way
+ * out: give the task to a connected agent ("Run it on …"), which Friday follows with that agent's
+ * model. Choosing a model, for this task or for every task of its kind, and the decision's own
+ * words are one step further.
+ */
+function routingBlockedBody(kit: Kit): Built {
+  const { spec, ctx } = kit;
+  const taskId = spec.taskId ?? '';
+  const d = (kit.e.details ?? {}) as Record<string, unknown>;
+  const codes = Array.isArray(d.reason_codes) ? (d.reason_codes as unknown[]).filter((c) => typeof c === 'string') : [];
+  const task = ctx.store.select('board')?.tasks.find((t) => t.task_id === taskId);
+  const said = h('p', { class: 'gv-question-text' }, routingBlockWords(codes as string[]));
+  const details = h(
+    'details',
+    { class: 'gv-details' },
+    h('summary', null, 'Details'),
+    h('p', { class: 'muted' }, decisionText(spec.question)),
+  );
+  const runOn = h(
+    'div',
+    { class: 'gv-run-on', aria: { live: 'polite' } },
+    taskId ? h('p', { class: 'muted' }, 'Looking for an agent that can take it…') : null,
+  );
+  const whyBox = h('div', { class: 'gv-routing-why', hidden: true });
+  const pinBox = h('div', { class: 'gv-pin', hidden: true });
+
+  const give = (offer: RoutingOfferView): HTMLButtonElement => {
+    const own = offer.attach_mode !== 'spawn';
+    // What happens on the click is in the label: the arming of a decision owns the button's tooltip.
+    const how = own ? ', your editor' : offer.free ? '' : ', busy now';
+    const b = decisionButton(
+      `${visible(offer.agent_key)} (${hostLabel(offer.host)}${how})`,
+      kit,
+      async (btn) => {
+        btn.disabled = true;
+        const r = await ctx.act('Give the task to an agent', () => ctx.api.assign(taskId, offer.agent_key));
+        if (!r) {
+          btn.disabled = false;
+          return;
+        }
+        if (r.mode === 'assigned') {
+          kit.done(`Given to ${visible(offer.agent_key)}: it starts now.`);
+          return;
+        }
+        // Kept for the agent: the question closes by itself when the task starts there.
+        ctx.refresh();
+        setText(
+          kit.status,
+          own
+            ? `Kept for ${visible(offer.agent_key)}: take it there, in ${hostLabel(offer.host)}, with /friday.`
+            : `Kept for ${visible(offer.agent_key)}: it starts when that agent is free.`,
+        );
+      },
+      'btn btn-primary',
+    );
+    return b;
+  };
+
+  const showOffers = (offers: RoutingOfferView[] | null): void => {
+    if (offers === null) {
+      // The answer did not come: the other ways below still work.
+      replace(runOn);
+      return;
+    }
+    const can = offers.filter((o) => !o.blocked);
+    if (!can.length) {
+      replace(
+        runOn,
+        h(
+          'p',
+          null,
+          offers.length
+            ? 'None of the connected agents can take it, whoever it is given to.'
+            : 'No agent is connected that can take work.',
+        ),
+        h(
+          'div',
+          { class: 'gv-actions' },
+          button('Start an agent', () => openModal(ctx, { kind: 'start-agent' }), { class: 'btn btn-primary' }),
+        ),
+      );
+      return;
+    }
+    const buttons = can.slice(0, 6).map(give);
+    for (const b of buttons) kit.arming().register(b);
+    replace(runOn, h('p', { class: 'field-label' }, 'Run it on'), h('div', { class: 'gv-actions' }, ...buttons));
+    kit.arming().check();
+  };
+  if (taskId) {
+    ctx.api.get<RoutingExplain>(`/routing/explain/${encodeURIComponent(taskId)}`).then(
+      (r) => showOffers(Array.isArray(r?.offers) ? r.offers : null),
+      () => showOffers(null),
+    );
+  }
+
+  const pinOpen = button(
+    'Choose a model…',
+    async () => {
+      pinBox.hidden = false;
+      replace(pinBox, h('p', { class: 'muted' }, 'Reading the models…'));
+      const r = await ctx.act('Read the models', () => ctx.api.models());
+      const models = usableModels(r?.models);
+      if (!r || !models.length) {
+        replace(
+          pinBox,
+          h(
+            'p',
+            { class: 'muted' },
+            r ? 'Friday knows no model an agent here can run.' : 'The models could not be read.',
+          ),
+        );
+        return;
+      }
+      const selectId = nextId('pin-model');
+      const select = h(
+        'select',
+        { class: 'select gv-pin-select', id: selectId },
+        ...models.map((m) => h('option', { value: m.id }, visible(modelLabel(m)))),
+      );
+      select.value = defaultModel(models);
+      const allId = nextId('pin-all');
+      const all = h('input', { type: 'checkbox', id: allId });
+      const pin = decisionButton(
+        'Use this model',
+        kit,
+        async (b) => {
+          const model = select.value;
+          if (!model) return;
+          const kind = all.checked && task?.kind ? task.kind : null;
+          b.disabled = true;
+          const ok = await ctx.act(
+            'Choose a model',
+            () =>
+              ctx.api.pin(
+                kind
+                  ? { scope: 'kind', target: kind, model, note: 'chosen for a task that had no agent' }
+                  : { scope: 'task', target: taskId, model, note: 'chosen for a task that had no agent' },
+              ),
+            kind ? `${modelName(model)} for every ${kindWord(kind)} task` : `${modelName(model)} for this task`,
+          );
+          b.disabled = false;
+          if (ok) kit.done(`${modelName(model)} is chosen; the question closes when the task starts.`);
+        },
+        'btn btn-primary',
+      );
+      kit.arming().register(pin);
+      replace(
+        pinBox,
+        h('label', { class: 'field-label', for: selectId }, 'Model'),
+        h('div', { class: 'row' }, select, pin),
+        task?.kind
+          ? h(
+              'label',
+              { class: 'check gv-pin-all', for: allId },
+              all,
+              h('span', null, `Use it for every ${kindWord(task.kind)} task, not only this one`),
+            )
+          : null,
+        h(
+          'p',
+          { class: 'muted gv-pin-home' },
+          'Only an agent that can run the model takes the work. Choices are kept in Settings → Models.',
+        ),
+      );
+      kit.arming().check();
+    },
+    { class: 'btn' },
+  );
+  const why = button(
+    'Why',
+    async () => {
+      whyBox.hidden = false;
+      replace(whyBox, h('p', { class: 'muted' }, 'Asking routing…'));
+      const r = await ctx.act('Explain routing', () =>
+        ctx.api.get<RoutingExplain>(`/routing/explain/${encodeURIComponent(taskId)}`),
+      );
+      replace(whyBox, r ? explainView(r) : h('p', { class: 'muted' }, 'Routing did not answer.'));
+    },
+    { class: 'btn btn-ghost' },
+  );
+  const cancel = cancelTaskButton(kit);
+  const blockRows = hostBlockRows(kit);
+  return {
+    body: present([
+      said,
+      ...blockRows,
+      taskId ? runOn : null,
+      taskId ? h('div', { class: 'gv-actions' }, pinOpen, why, cancel) : null,
+      pinBox,
+      whyBox,
+      details,
+    ]),
+    decisions: [cancel],
+  };
+}
+
+/** A host that is kept out (not signed in, a limit), each with the button that tries it again. */
+function hostBlockRows(kit: Kit): HTMLElement[] {
+  const { ctx } = kit;
+  return hostBlocks(ctx.store.select('board')).map((b) => {
+    const lift = button(
+      liftLabel(b),
+      async () => {
+        lift.disabled = true;
+        const done = await ctx.act(
+          b.kind === 'sign_in' ? 'Try the sign-in again' : 'Try the host again',
+          () => ctx.api.clearReadiness(b.host, b.model),
+          `${hostName(b.host)} is tried again with the next task`,
+        );
+        if (done) {
+          ctx.refresh();
+          kit.status.textContent = 'Friday offers the task again now; this question closes when it starts.';
+        } else lift.disabled = false;
+      },
+      { class: b.kind === 'sign_in' ? 'btn btn-primary' : 'btn' },
+    );
+    return h(
+      'div',
+      { class: 'gv-host-block', dataset: { host: b.host, kind: b.kind } },
+      h('p', null, blockSentence(b)),
+      h('div', { class: 'gv-actions' }, lift),
+    );
+  });
+}
+
+// ---- routing_violated
 
 interface RoutingExplain {
+  /** The connected agents the task could be given to, and whether it would start there. */
+  offers?: RoutingOfferView[];
   dry_run?: {
     blocked?: boolean;
     reason?: string;
@@ -480,7 +716,7 @@ function routingBody(kit: Kit): Built {
               h('label', { class: 'field-label', for: selectId }, 'Model'),
               h('div', { class: 'row' }, select, pin),
               // The card keeps its own Pin (review §5); the pins' home is Settings → Routing (M9k.4).
-              h('p', { class: 'muted gv-pin-home' }, 'Pins are kept in Settings → Routing.'),
+              h('p', { class: 'muted gv-pin-home' }, 'Pins are kept in Settings → Models.'),
             ]
           : h('p', { class: 'muted' }, 'Friday knows no models to pin.'),
       );
@@ -489,33 +725,8 @@ function routingBody(kit: Kit): Built {
   );
   const cancel = cancelTaskButton(kit);
   // A host that is kept out (not signed in, a limit) is often why no agent may run the task: said
-  // here in plain words, with the button that tries it again (2026-11-17). Before, the only way
-  // back from a failed sign-in was a terminal command, whatever the person did in the host.
-  const blocks = hostBlocks(ctx.store.select('board'));
-  const blockRows = blocks.map((b) => {
-    const lift = button(
-      liftLabel(b),
-      async () => {
-        lift.disabled = true;
-        const done = await ctx.act(
-          b.kind === 'sign_in' ? 'Try the sign-in again' : 'Try the host again',
-          () => ctx.api.clearReadiness(b.host, b.model),
-          `${hostName(b.host)} is tried again with the next task`,
-        );
-        if (done) {
-          ctx.refresh();
-          kit.status.textContent = 'Friday offers the task again now; this question closes when it starts.';
-        } else lift.disabled = false;
-      },
-      { class: b.kind === 'sign_in' ? 'btn btn-primary' : 'btn' },
-    );
-    return h(
-      'div',
-      { class: 'gv-host-block', dataset: { host: b.host, kind: b.kind } },
-      h('p', null, blockSentence(b)),
-      h('div', { class: 'gv-actions' }, lift),
-    );
-  });
+  // in plain words, with the button that tries it again (2026-11-17).
+  const blockRows = hostBlockRows(kit);
   return {
     body: present([
       ...context(spec),

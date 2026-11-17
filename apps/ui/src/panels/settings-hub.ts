@@ -97,8 +97,8 @@ export const HUB_PAGES: HubPageDef[] = [
     id: 'routing',
     group: 'AI & Governance',
     icon: 'compass',
-    title: 'Routing & Pins',
-    subtitle: 'Task-to-model routing rules, role pins, and reasoning fallbacks.',
+    title: 'Models',
+    subtitle: 'Which model does the work: let Friday choose, or pick one.',
   },
   {
     id: 'policy',
@@ -711,13 +711,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
     const pins = routingPins(ctx, tabTd);
     pins.load();
 
-    card.append(
-      h('div', { class: 'hub-card-title' }, 'Model Assignment & Routing'),
-      note(
-        'Friday assigns each task to the most appropriate AI model. Pins force specific roles or tasks to dedicated models.',
-      ),
-      pins.el,
-    );
+    card.append(h('div', { class: 'hub-card-title' }, 'Which model does the work'), pins.el);
 
     return [card];
   }

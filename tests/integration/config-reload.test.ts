@@ -266,7 +266,7 @@ describe('config.yaml read again while Friday runs', () => {
       model: 'claude-sonnet-5-5',
       role: 'backend_engineer',
       role_source: 'kind_fallback',
-      registry_version: '2026-11-16.1',
+      registry_version: '2026-11-17.1',
       selected_rank: 1,
       selected_harness: 'claude-code',
     });
@@ -293,7 +293,7 @@ describe('config.yaml read again while Friday runs', () => {
       blocked: true,
       role: 'backend_engineer',
       role_source: 'kind_fallback',
-      registry_version: '2026-11-16.1',
+      registry_version: '2026-11-17.1',
       // Appended after the owner's six backend ranks (Antigravity is the sixth); it never reorders them.
       selected_rank: 7,
       selected_harness: 'generic',
