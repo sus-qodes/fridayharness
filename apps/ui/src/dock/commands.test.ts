@@ -124,7 +124,7 @@ describe('core commands', () => {
     await run(ctx, 'resume');
     expect(ctx.transport.to('POST', '/control/resume')).toHaveLength(1);
     expect(ctx.toasts.at(-1)?.text).toBe(
-      'Friday runs again. Sessions attached in VS Code need a prompt there to continue.',
+      'Friday runs again. Agents connected from VS Code continue when you prompt them there.',
     );
   });
 
@@ -190,7 +190,7 @@ describe('core commands', () => {
     });
     await run(ctx, 'prune-worktrees');
     const t = ctx.toasts.at(-1);
-    expect(t?.text).toBe('Removed 2 clean worktrees; kept 1');
+    expect(t?.text).toBe('Removed 2 finished task folders; kept 1');
     expect(t?.detail).toBe('Removed C:/wt/a\nRemoved C:/wt/b\nKept C:/wt/c: 3 uncommitted changes');
     expect(t?.timeoutMs).toBe(0);
   });
@@ -211,7 +211,10 @@ describe('core commands', () => {
 
 describe('pruneToast', () => {
   it('says when there was nothing to prune', () => {
-    expect(pruneToast({ removed: [], kept: [] })).toEqual({ kind: 'info', text: 'No released worktree to prune' });
+    expect(pruneToast({ removed: [], kept: [] })).toEqual({
+      kind: 'info',
+      text: 'No finished task folder to clean up',
+    });
   });
 
   it('caps the list and counts the rest', () => {

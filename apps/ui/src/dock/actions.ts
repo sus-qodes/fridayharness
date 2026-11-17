@@ -21,7 +21,7 @@ export function attachedSessions(board: UiSnapshot | null): number {
   return board.harnesses.filter((h) => h.attach_mode === 'attach' && h.status !== 'TERMINATED').length;
 }
 
-export const ATTACHED_NOTE = 'Sessions attached in VS Code need a prompt there to continue.';
+export const ATTACHED_NOTE = 'Agents connected from VS Code continue when you prompt them there.';
 
 /** What a pause did, in one sentence. */
 export function pauseText(result: ControlResult): string {

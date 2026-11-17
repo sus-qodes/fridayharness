@@ -532,7 +532,7 @@ async fn open_in_editor(app: AppHandle, path: String, line: Option<u32>) -> Resu
         let own = project.key.rsplit('-').next().unwrap_or_default().to_string();
         let roots = [project.root.clone(), daemon::worktrees_dir().join(own)];
         let real = paths::allowed(&path, &project.root, &roots)
-            .ok_or_else(|| CmdError::bad_request("only files of the project and its worktrees open in the editor"))?;
+            .ok_or_else(|| CmdError::bad_request("only files of the project and its task folders open in the editor"))?;
         if platform_windows::shell_open(&paths::vscode_uri(&real, line)) {
             Ok(())
         } else {
@@ -644,12 +644,12 @@ async fn allow_spending(app: AppHandle, budget: f64, provider: Option<String>) -
         let whose = if provider == "claude-code" {
             "your Claude Code sign-in (your subscription or key, as Claude Code uses it)"
         } else {
-            "your provider key"
+            "your Anthropic API key"
         };
         let d = Dialog {
-            title: "Friday: allow this clone to spend?".into(),
+            title: "Friday: allow planning to spend?".into(),
             text: format!(
-                "Let this clone of {} use {} for the Master Brain's plans, at most ${} a day?\n\nThe project's own budget still applies; the lower of the two wins.",
+                "Let Friday write plans for {} with {} on this computer, spending at most ${} a day?\n\nThe project's own limit still applies; the lower of the two holds.",
                 visible(&project.name),
                 whose,
                 amount
@@ -762,7 +762,7 @@ fn set_up_here(app: &AppHandle, dir: &std::path::Path) -> bool {
     match daemon::run_cli(&install, Some(dir), &["init", "--json"], None, Duration::from_secs(60)) {
         Ok(out) if out.code == Some(0) => {
             let mut text = format!(
-                "Friday is set up in {}.\n\nCommit these two files so every clone shares the project:\n  .friday/config.yaml\n  .friday/.gitignore",
+                "Friday is set up in {}.\n\nCommit these two files so everyone who works on the project shares its settings:\n  .friday/config.yaml\n  .friday/.gitignore",
                 visible(&dir.to_string_lossy())
             );
             if !daemon::has_commit(dir) {
@@ -1027,7 +1027,7 @@ fn switch_project(app: &AppHandle, initial: Option<PathBuf>) {
     }
     if daemon::running(&old).is_some() {
         let text = format!(
-            "Keep Friday running in {} while you work in {}?\n\nAgents there keep working, and opening that project again brings you back to them. Stopping it keeps the work in its worktrees.",
+            "Keep Friday running in {} while you work in {}?\n\nAgents there keep working, and opening that project again brings you back to them. Stopping it keeps the work in its task folders.",
             visible(&old.name),
             visible(&new.name)
         );

@@ -238,9 +238,10 @@ function noticeItem(item: WaitingItem, handlers: ViewHandlers): HTMLElement | nu
     line = 'Agents recorded them; approve or retract each.';
     door = 'Open Project memory';
   } else if (item.kind === 'policy') {
-    title = 'Policy change not yet trusted';
-    line = "The project's files loosen Friday's defaults; nothing of it applies until you trust it.";
-    door = 'Open Settings → Policy';
+    title = 'Project settings wait for your trust';
+    line =
+      'This project’s files ask to let Friday or its agents do more than the defaults. None of it applies on this computer until you trust it.';
+    door = 'Open Settings → Permissions';
   } else return null;
   return h(
     'div',

@@ -306,7 +306,7 @@ describe('agents drawer', () => {
     // The person attached claude-2 in VS Code: connected, enforcement and model shown, no process
     // state and none of Friday's process controls.
     expect(second.querySelector('.pn-agent-key')?.textContent).toBe('claude-2');
-    expect(second.textContent).toContain('attached in VS Code');
+    expect(second.textContent).toContain('connected from VS Code');
     expect(shownBadges(second)).toEqual(['connected', 'Enforced']);
     expect(second.textContent).not.toContain('L1 enforcing');
     expect(second.textContent).toContain('role reviewer');
@@ -504,7 +504,7 @@ describe('agents drawer', () => {
     // The Claude Code card is another host's: an Antigravity session does not show there.
     expect(d.el.querySelector('.pn-claude')?.textContent).toContain('not seen yet');
     expect(rows(d.el)).toHaveLength(1);
-    expect(rows(d.el)[0]?.textContent).toContain('attached in Antigravity');
+    expect(rows(d.el)[0]?.textContent).toContain('connected from Antigravity');
     // Friday did not start it, so the row offers no Stop, Start again or Forget.
     expect(shownButtons(rows(d.el)[0] as HTMLElement)).toEqual([]);
     d.destroy();

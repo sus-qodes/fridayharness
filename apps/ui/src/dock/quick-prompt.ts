@@ -63,7 +63,7 @@ export function quickPrompt(ctx: AppContext, opts: QuickPromptOptions = {}): Com
     const r = await ctx.act(
       'Create a goal',
       () => ctx.api.createGoal({ request: text, constraints: [], outcomes: [], priority: 'normal', plan }),
-      plan ? 'Goal created: the Master Brain plans it' : 'Goal created: write its plan',
+      plan ? 'Goal created: Friday is planning it' : 'Goal created: write its plan',
     );
     if (destroyed) return;
     if (!r) {

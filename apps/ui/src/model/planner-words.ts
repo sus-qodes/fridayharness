@@ -6,6 +6,7 @@
  * for a usage limit, was offered "Write a revision".
  */
 import { cleanText, truncate } from '../ui/format.js';
+import { modelName } from './models.js';
 
 /** The kinds of question that mean planning itself failed (packages/planner `EscalationReason`). */
 export const PLANNER_FAILURES: readonly string[] = [
@@ -58,4 +59,43 @@ export function plannerTroubleWords(trouble: PlannerTrouble, why: string | null 
 /** Whether "Planner settings" is where this trouble is fixed. */
 export function fixedInSettings(trouble: PlannerTrouble): boolean {
   return trouble === 'not_set_up' || trouble === 'budget' || trouble === 'sign_in';
+}
+
+/**
+ * Who writes the plans, in a person's words (2026-11-17): the model by its name and how it is
+ * reached. Settings showed the planner as the daemon names it ("anthropic · claude-opus-5-5
+ * (remote)").
+ */
+export function plannerWords(brain: { provider: string; model: string }): string {
+  const model = modelName(truncate(cleanText(brain.model), 80));
+  switch (brain.provider) {
+    case 'anthropic':
+      return `${model}, with your Anthropic API key`;
+    case 'claude-code':
+      return `${model}, through your Claude Code sign-in`;
+    case 'local':
+      return `${model}, a model on this computer`;
+    case 'none':
+      return 'You: no planner is chosen';
+    case 'fake':
+      return 'A test planner (no model)';
+    default:
+      return `${truncate(cleanText(brain.provider), 40)} · ${model}`;
+  }
+}
+
+/** Where the planner's key stands, in words; the key itself is never shown. */
+export function keyWords(key: string): string {
+  switch (key) {
+    case 'stored':
+      return 'Stored on this computer';
+    case 'environment':
+      return 'Taken from this computer’s environment';
+    case 'missing':
+      return 'Not stored yet';
+    case 'not needed':
+      return 'Not needed';
+    default:
+      return truncate(cleanText(key), 40);
+  }
 }

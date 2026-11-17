@@ -12,7 +12,7 @@ import { visible } from '../model/text.js';
 import { type AppContext, openDrawer } from '../shell/context.js';
 import type { AgentActivity, ToolActivity } from '../store/state.js';
 import { button, h, replace, toggleClass } from '../ui/dom.js';
-import { compact, duration, humanize, shortId, truncate, usd } from '../ui/format.js';
+import { cleanText, compact, duration, humanize, shortId, truncate, usd } from '../ui/format.js';
 import { badge, fingerprint, fromControl, type NodeView, nodeIcon } from './common.js';
 import { statText } from './task-node.js';
 
@@ -198,10 +198,21 @@ export function createAgentPod(ctx: AppContext, initial: PodCardModel): NodeView
       h(
         'span',
         { class: 'nd-mode' },
-        pod.harness?.attach_mode === 'spawn' ? 'spawned' : pod.harness ? 'attached' : 'no session',
+        pod.harness?.attach_mode === 'spawn'
+          ? 'started by Friday'
+          : pod.harness
+            ? 'connected from your editor'
+            : 'not connected',
       ),
       h('span', { class: 'muted' }, `· ${humanize(pod.agent.status)}`),
-      pod.taskId ? h('span', { class: 'muted mono', title: pod.taskId }, `· ${shortId(pod.taskId)}`) : null,
+      // What it works on, by its name; the id in the tooltip.
+      pod.taskId
+        ? h(
+            'span',
+            { class: 'muted nd-pod-task', title: pod.taskId },
+            `· ${pod.task ? truncate(cleanText(pod.task.summary), 40) : shortId(pod.taskId)}`,
+          )
+        : null,
       h('span', { class: 'spacer' }),
       shadow ? badge('shadow', 'warn', 'Another live session holds this agent key; this one only observes') : null,
     );

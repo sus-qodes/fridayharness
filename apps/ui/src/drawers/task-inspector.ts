@@ -667,7 +667,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
   function renderChangesInfo(v: View): void {
     const run = v.run;
     if (!run) {
-      replace(changesInfo, empty('No attempt yet: the task has no worktree.'));
+      replace(changesInfo, empty('No attempt yet: the task has no folder of its own.'));
       return;
     }
     const root = run.execution_root;
@@ -676,11 +676,11 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
       facts([
         [
           'Attempt',
-          `${run.attempt} · ${humanize(run.status)}${run.workspace === 'pending' ? ' · worktree being prepared' : ''}`,
+          `${run.attempt} · ${humanize(run.status)}${run.workspace === 'pending' ? ' · its folder is being prepared' : ''}`,
         ],
         ['Branch', run.branch_ref ? mono(run.branch_ref) : '—'],
         [
-          'Worktree',
+          'Task folder',
           root
             ? h(
                 'span',
@@ -688,7 +688,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
                 mono(root),
                 button(icon('expand', 14), () => ctx.platform.openInEditor(root), {
                   class: 'btn btn-ghost btn-icon',
-                  ariaLabel: 'Open the worktree in VS Code',
+                  ariaLabel: 'Open the task folder in VS Code',
                   title: 'Open in VS Code',
                 }),
               )

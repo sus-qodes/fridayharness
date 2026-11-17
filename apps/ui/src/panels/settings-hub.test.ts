@@ -121,7 +121,7 @@ describe('the Settings Hub, Planner', () => {
       claude_code: { ...found, approved: true },
     });
     const ready = hubAt(on.ctx, 'planner');
-    expect(ready.el.textContent).toContain('The Master Brain plans through Claude Code.');
+    expect(ready.el.textContent).toContain('Friday plans through Claude Code.');
     expect(ready.el.textContent).toContain('I’ll write plans myself instead');
     ready.destroy();
   });
@@ -276,7 +276,7 @@ describe('the Settings Hub, Policy and Friday', () => {
     buttonBy(hub.el, 'Trust this list').click();
     await flush();
     expect(ctx.confirms.at(-1)?.body).toEqual([
-      'autonomy.git.push: manual → auto (.friday/policy.yaml)',
+      'Agents may push to a remote without asking (autonomy.git.push: manual → auto, .friday/policy.yaml)',
       expect.stringContaining('exactly this list (hash abc123def4567890)'),
     ]);
     hub.destroy();
@@ -286,11 +286,11 @@ describe('the Settings Hub, Policy and Friday', () => {
     const ctx = makeContext();
     ctx.confirmAnswer = false;
     const hub = hubAt(ctx, 'friday');
-    expect(hub.el.textContent).toContain('Active Worktrees (0)');
+    expect(hub.el.textContent).toContain('Task folders in use: 0');
     buttonBy(hub.el, 'Stop Friday').click();
     await flush();
     expect(ctx.confirms.at(-1)?.body).toContain(
-      'Work in worktrees is kept. Start it again from its shortcut, the desktop app, or friday run.',
+      'The work in the task folders is kept. Start Friday again from its shortcut or the desktop app.',
     );
     const board = ctx.store.select('board');
     ctx.store.setState({
@@ -299,7 +299,7 @@ describe('the Settings Hub, Policy and Friday', () => {
         runs: { r1: makeRun({ run_id: 'r1', status: 'ACTIVE', workspace: 'ready', execution_root: 'C:/wt/a' }) },
       },
     });
-    expect(hub.el.textContent).toContain('Active Worktrees (1)');
+    expect(hub.el.textContent).toContain('Task folders in use: 1');
     hub.destroy();
   });
 });

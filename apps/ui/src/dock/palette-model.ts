@@ -165,7 +165,7 @@ export function boardEntries(board: UiSnapshot | null, activity: ActivityState |
       id: `task:${task.task_id}`,
       group: 'task',
       label: summaryLabel(task.summary) || shortId(task.task_id),
-      detail: `${shortId(task.task_id)} · ${statusLook(task.status).label}${task.agent_key ? ` · ${visible(task.agent_key)}` : ''}`,
+      detail: `Task · ${statusLook(task.status).label}${task.agent_key ? ` · ${visible(task.agent_key)}` : ''}`,
       keywords: [task.task_id, task.plan_key ?? '', task.kind].filter(Boolean).map((k) => visible(k)),
       icon: 'target',
       run: (ctx) => {
@@ -181,7 +181,7 @@ export function boardEntries(board: UiSnapshot | null, activity: ActivityState |
       id: `goal:${goal.goal_id}`,
       group: 'goal',
       label,
-      detail: `${shortId(goal.goal_id)} · ${humanize(goal.status)}`,
+      detail: `Goal · ${humanize(goal.status)}`,
       keywords: [goal.goal_id, summaryLabel(goal.request)],
       icon: 'goal',
       // The interface has one selection; the canvas selects and centres the node whose id it holds.
@@ -194,7 +194,7 @@ export function boardEntries(board: UiSnapshot | null, activity: ActivityState |
         id: `goal-plan:${goal.goal_id}`,
         group: 'goal',
         label: truncate(`Write the plan: ${label}`, LABEL_MAX),
-        detail: `${shortId(goal.goal_id)} · No plan yet`,
+        detail: 'Goal · No plan yet',
         keywords: [goal.goal_id, 'write plan', 'plan editor'],
         icon: 'goal',
         run: (ctx) => openModal(ctx, { kind: 'plan-editor', id: goal.goal_id, mode: 'first' }),

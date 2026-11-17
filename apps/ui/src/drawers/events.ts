@@ -45,7 +45,7 @@ export function actorLabel(actor: { kind?: string; id?: string } | null | undefi
     case 'harness':
       return `session ${shortId(actor.id)}`;
     case 'master_brain':
-      return 'Master Brain';
+      return 'Friday’s planner';
     default:
       return 'Friday';
   }
@@ -73,8 +73,8 @@ const LABELS: Record<string, string> = {
   'run.suspended': 'Attempt suspended',
   'run.resumed': 'Attempt resumed',
   'run.ended': 'Attempt ended',
-  'run.workspace_ready': 'Worktree ready',
-  'run.rebound': 'Work brought into a worktree of this clone',
+  'run.workspace_ready': 'Task folder ready',
+  'run.rebound': 'Work brought into a task folder on this computer',
   'run.model_observed': 'Model observed',
   'verification.started': 'Verification started',
   'verification.check_completed': 'Check finished',
@@ -89,9 +89,9 @@ const LABELS: Record<string, string> = {
   'integration.failed': 'Integration failed',
   'integration.not_needed': 'Integration not needed',
   'recovery.performed': 'Recovery performed',
-  'worktree.allocated': 'Worktree allocated',
-  'worktree.released': 'Worktree released',
-  'worktree.removed': 'Worktree removed',
+  'worktree.allocated': 'Task folder created',
+  'worktree.released': 'Task folder released',
+  'worktree.removed': 'Task folder removed',
   'file.reserved': 'File reserved',
   'file.reservation_ended': 'File reservation ended',
   'routing.decided': 'Model routed',

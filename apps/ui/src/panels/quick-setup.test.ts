@@ -316,7 +316,7 @@ describe('planning with Claude Code', () => {
     await flush();
     expect(steps).toEqual(['restart']);
     ctx.board(makeSnapshot({ brain: viaClaudeCode({ planner_available: true }) }));
-    expect(el.textContent).toContain('The Master Brain plans through Claude Code.');
+    expect(el.textContent).toContain('Friday plans through Claude Code.');
     expect(() => buttonBy(el, 'Use Claude Code to plan')).toThrow();
     // Turning it off again is this person's choice too, with the restart that stops the planner.
     buttonBy(el, 'I’ll write plans myself instead').click();
@@ -364,7 +364,9 @@ describe('checking the work automatically', () => {
     await flush();
     expect(sent(ctx, '/config/settings')).toEqual([{ set: { 'verification.auto_on_completion': true } }]);
     expect(ctx.confirms).toHaveLength(1);
-    expect(ctx.confirms[0]?.body).toContain('verification.auto_on_completion: false → true (.friday/config.yaml)');
+    expect(ctx.confirms[0]?.body).toContain(
+      'Finished work is checked automatically (verification.auto_on_completion: false → true, .friday/config.yaml)',
+    );
     expect(sent(ctx, '/policy/trust')).toEqual([{ loosening_hash: 'hash0123456789ab' }]);
     expect(ctx.refreshes).toBe(1);
     td.run();
@@ -425,7 +427,9 @@ describe('checking the work automatically', () => {
     await flush();
     expect(sent(ctx, '/config/settings')).toEqual([{ set: { 'verification.auto_on_completion': true } }]);
     // Both are shown before the trust: the person sees what else they trust with it.
-    expect(ctx.confirms[0]?.body).toContain('sandbox: false → true (.friday/config.yaml)');
+    expect(ctx.confirms[0]?.body).toContain(
+      'This folder is treated as disposable: commands that would wait for your approval run on their own (sandbox: false → true, .friday/config.yaml)',
+    );
     expect(sent(ctx, '/policy/trust')).toHaveLength(1);
     td.run();
 
@@ -493,7 +497,9 @@ describe('turning a switch off again (2026-11-17)', () => {
     await flush();
     expect(ctx.confirms).toHaveLength(1);
     expect(ctx.confirms[0]?.title).toBe('Keep these settings on?');
-    expect(ctx.confirms[0]?.body[0]).toBe('master_brain.auto_approve: false → true (.friday/config.yaml)');
+    expect(ctx.confirms[0]?.body[0]).toBe(
+      'Plans start without waiting for your approval (master_brain.auto_approve: false → true, .friday/config.yaml)',
+    );
     expect(ctx.confirms[0]?.body[1]).toContain('trusted together with the one you just turned off');
     expect(sent(ctx, '/policy/trust')).toEqual([{ loosening_hash: 'hash0123456789ab' }]);
     td.run();
@@ -536,7 +542,9 @@ describe('starting plans without asking (2026-11-17)', () => {
     buttonBy(el, 'Turn on').click();
     await flush();
     expect(sent(ctx, '/config/settings')).toEqual([{ set: { 'master_brain.auto_approve': true } }]);
-    expect(ctx.confirms[0]?.body).toContain('master_brain.auto_approve: false → true (.friday/config.yaml)');
+    expect(ctx.confirms[0]?.body).toContain(
+      'Plans start without waiting for your approval (master_brain.auto_approve: false → true, .friday/config.yaml)',
+    );
     expect(sent(ctx, '/policy/trust')).toEqual([{ loosening_hash: 'hash0123456789ab' }]);
     expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Plans now start without waiting for you' });
     td.run();

@@ -637,7 +637,7 @@ describe('mounted Notch: messages, memories to review and an untrusted policy (r
     expect(onOpenStudio).toHaveBeenLastCalledWith({ panel: 'memory', tab: 'review' });
     handle.open();
     q<HTMLButtonElement>('[aria-label="Next waiting item"]').click();
-    expect(q('.nt-notice-policy .nt-notice-title').textContent).toBe('Policy change not yet trusted');
+    expect(q('.nt-notice-policy .nt-notice-title').textContent).toBe('Project settings wait for your trust');
     q<HTMLButtonElement>('.nt-studio').click();
     expect(onOpenStudio).toHaveBeenLastCalledWith({ panel: 'settings', tab: 'policy' });
     // A later arrival of the same quiet kinds keeps the card closed too.

@@ -21,7 +21,7 @@ import { visible } from '../model/text.js';
 import { cancelTask } from '../shell/cancel-task.js';
 import { type AppContext, openDrawer, openModal } from '../shell/context.js';
 import { button, h, replace, setVar, toggleClass } from '../ui/dom.js';
-import { cleanText, duration, plural, shortId, truncate } from '../ui/format.js';
+import { cleanText, duration, plural, truncate } from '../ui/format.js';
 import type { IconName } from '../ui/svg.js';
 import {
   actionButton,
@@ -411,8 +411,12 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
     const head = h(
       'div',
       { class: 'nd-head', dataset: { dragHandle: '' } },
-      h('span', { class: 'pill nd-kind', ref: (k) => setVar(k, '--nd-kind', kind.color) }, kind.label),
-      h('span', { class: 'nd-id mono', title: t.task_id }, shortId(t.task_id)),
+      // The id is for whoever looks for it (a terminal, a report): the tooltip, and the inspector.
+      h(
+        'span',
+        { class: 'pill nd-kind', title: `Task ${t.task_id}`, ref: (k) => setVar(k, '--nd-kind', kind.color) },
+        kind.label,
+      ),
       h('span', { class: 'spacer' }),
       badge(priority, PRIORITY_TONE[t.priority] ?? 'muted'),
       h('span', { class: `badge badge-${RISK_TONE[t.risk_level] ?? 'muted'} nd-risk` }, nodeIcon('shield', 10), risk),

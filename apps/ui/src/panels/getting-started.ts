@@ -52,9 +52,9 @@ export function checklist(board: UiSnapshot | null, context: Partial<ChecklistCo
     items.push({
       id: 'policy',
       done: false,
-      title: "Trust this project's policy",
+      title: 'Trust this project’s settings',
       detail:
-        "The project's tracked files loosen Friday's defaults; nothing of it applies on this clone until you trust exactly that list.",
+        'This project’s files ask to let Friday or its agents do more than the defaults. None of it applies on this computer until you trust it.',
       fix: { label: 'Settings → Permissions', action: 'policy' },
     });
   }
@@ -70,10 +70,10 @@ export function checklist(board: UiSnapshot | null, context: Partial<ChecklistCo
     {
       id: 'planner',
       done: planner.ready,
-      title: planner.ready ? 'The Master Brain can plan' : 'The Master Brain cannot plan yet',
+      title: planner.ready ? 'Friday can write plans' : 'Friday cannot write plans yet',
       detail: planner.ready
         ? ''
-        : `${planner.fixes.length ? `To let it plan: ${planner.fixes.join('; ')}.` : planner.text} You can always write plans yourself.`,
+        : `${planner.fixes.length ? `To let Friday plan: ${planner.fixes.join('; ')}.` : planner.text} You can always write plans yourself.`,
       fix: { label: 'Settings → Planner', action: 'planner' },
     },
     {

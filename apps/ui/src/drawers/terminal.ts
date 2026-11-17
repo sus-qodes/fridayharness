@@ -222,7 +222,13 @@ export function createTerminal(ctx: AppContext, request: DrawerRequest): Compone
               agent.status === 'DISCONNECTED' || agent.status === 'UNHEALTHY' ? 'warn' : 'info',
             )
           : badge('not connected', 'muted'),
-        harness ? h('span', { class: 'muted' }, `${cleanText(harness.name)} · ${harness.attach_mode}`) : null,
+        harness
+          ? h(
+              'span',
+              { class: 'muted' },
+              `${cleanText(harness.name)} · ${harness.attach_mode === 'spawn' ? 'started by Friday' : 'connected from your editor'}`,
+            )
+          : null,
         proc ? badge(`process ${proc.status}`, proc.status === 'exited' ? 'muted' : 'good') : null,
         task
           ? button(

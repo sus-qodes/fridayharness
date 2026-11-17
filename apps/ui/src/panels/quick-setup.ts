@@ -192,7 +192,7 @@ export function plannerQuickSetup(ctx: AppContext, td: Teardown): HTMLElement {
     if (state === 'ready') {
       replace(
         body,
-        h('div', { class: 'row' }, badge('on', 'good'), h('span', null, 'The Master Brain plans through Claude Code.')),
+        h('div', { class: 'row' }, badge('on', 'good'), h('span', null, 'Friday plans through Claude Code.')),
         h(
           'div',
           { class: 'pn-actions pn-actions-start' },

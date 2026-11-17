@@ -212,7 +212,7 @@ export function antigravitySetupModal(
           ),
         ),
         note(
-          `Antigravity then works as ${visible(agentKey())}; it shows in the Agents list as “attached in Antigravity”. If Antigravity is open already, close it and open it again so it takes the name.`,
+          `Antigravity then works as ${visible(agentKey())}; it shows in the Agents list as “connected from Antigravity”. If Antigravity is open already, close it and open it again so it takes the name.`,
         ),
       ),
     );

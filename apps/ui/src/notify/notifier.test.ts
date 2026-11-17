@@ -392,7 +392,7 @@ describe('notifications (plan FD-25)', () => {
     });
     ctx.board(makeSnapshot({ inbox: [first, blocking] }));
     expect(f.shown.map((n) => n.options?.tag)).toEqual(['message:dlv_block']);
-    expect(f.shown[0]?.options?.body).toBe('Master Brain: Choose the plan to keep.');
+    expect(f.shown[0]?.options?.body).toBe('Friday’s planner: Choose the plan to keep.');
     // Replied to (or acknowledged): the delivery leaves the inbox and the notification closes.
     ctx.board(makeSnapshot({ inbox: [first] }));
     expect(f.shown[0]?.closed).toBe(true);

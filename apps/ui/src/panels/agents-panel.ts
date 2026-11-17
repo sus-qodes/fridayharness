@@ -372,7 +372,8 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
       const x = row.harness;
       const fridayRow = !!p || !!row.profile;
       keyEl.textContent = visible(row.agent_key || '—');
-      originEl.textContent = row.origin === 'attached' ? `attached in ${attachedPlace(row.host)}` : 'started by Friday';
+      originEl.textContent =
+        row.origin === 'attached' ? `connected from ${attachedPlace(row.host)}` : 'started by Friday';
       const connected = isConnected(x);
       connEl.className = `badge badge-${connected ? 'good' : 'muted'}`;
       connEl.textContent = connected ? 'connected' : 'not connected';

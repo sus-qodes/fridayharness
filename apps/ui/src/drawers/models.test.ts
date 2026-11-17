@@ -65,7 +65,7 @@ describe('History lines', () => {
   it('names who acted', () => {
     expect(actorLabel({ kind: 'agent', id: 'agent_0000000000000000abc' })).toBe('agent agent_00000000');
     expect(actorLabel({ kind: 'system', id: 'friday' })).toBe('Friday');
-    expect(actorLabel({ kind: 'master_brain', id: 'mb' })).toBe('Master Brain');
+    expect(actorLabel({ kind: 'master_brain', id: 'mb' })).toBe('Friday’s planner');
     expect(actorLabel(null)).toBe('Friday');
   });
 

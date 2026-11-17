@@ -1432,7 +1432,7 @@ export class MasterBrain {
         action: 'wait: another attempt would fail the same way',
       },
       action_failed: {
-        question: `The Master Brain could not finish its work on ${what}: ${detail}. How should it continue?`,
+        question: `Friday's planner could not finish its work on ${what}: ${detail}. How should it continue?`,
         options: [
           'fix the cause, then "friday goal replan"',
           'continue by hand ("friday plan propose", "friday task …")',

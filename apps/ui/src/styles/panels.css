@@ -1002,3 +1002,15 @@
   flex-wrap: wrap;
   gap: 4px 12px;
 }
+
+/* The list a computer trusts: what each setting allows, then the exact setting and its file. */
+.pn-loosening-words {
+  flex: 1 1 100%;
+  font-size: var(--text-sm);
+}
+
+.pn-loosening-exact,
+.pn-loosening-source {
+  font-size: var(--text-caption);
+  overflow-wrap: anywhere;
+}

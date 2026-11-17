@@ -192,7 +192,7 @@ export function newGoalModal(
     },
   );
 
-  const planBtn = button([icon('bolt', 14), 'Let the Master Brain plan'], () => void submit(true), {
+  const planBtn = button([icon('bolt', 14), 'Let Friday plan'], () => void submit(true), {
     class: 'btn btn-primary',
   });
   const writeBtn = button([icon('goal', 14), 'Write the plan myself'], () => void submit(false), { class: 'btn' });
@@ -242,7 +242,7 @@ export function newGoalModal(
     const goal = await ctx.act(
       'Create the goal',
       () => ctx.api.createGoal(goalBody(form, plan)),
-      plan ? 'Goal created: the Master Brain is planning it' : 'Goal created: write its plan',
+      plan ? 'Goal created: Friday is planning it' : 'Goal created: write its plan',
     );
     busy = false;
     if (td.done) return;

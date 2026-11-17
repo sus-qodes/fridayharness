@@ -103,7 +103,9 @@ describe('what agents may do without asking (2026-11-17)', () => {
     await flush();
     expect(sent(ctx, '/config/settings')).toEqual([{ set: { 'autonomy.package.install': 'auto' } }]);
     expect(ctx.confirms).toHaveLength(1);
-    expect(ctx.confirms[0]?.body).toContain('autonomy.package.install: review → auto (config.yaml)');
+    expect(ctx.confirms[0]?.body).toContain(
+      'Agents may install packages without asking (autonomy.package.install: review → auto, config.yaml)',
+    );
     expect(sent(ctx, '/policy/trust')).toEqual([{ loosening_hash: 'hash0123456789ab' }]);
     expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Agents install packages without asking' });
     expect(pressed(rowOf(el, 'package.install'))).toBe('allow');
@@ -159,7 +161,9 @@ describe('what agents may do without asking (2026-11-17)', () => {
     // What stays on is shown and trusted again, in words that say why.
     expect(ctx.confirms).toHaveLength(1);
     expect(ctx.confirms[0]?.title).toBe('Keep these settings on?');
-    expect(ctx.confirms[0]?.body[0]).toBe('autonomy.git.mutate: review → auto (config.yaml)');
+    expect(ctx.confirms[0]?.body[0]).toBe(
+      'Agents may commit and change branches without asking (autonomy.git.mutate: review → auto, config.yaml)',
+    );
     expect(sent(ctx, '/policy/trust')).toHaveLength(1);
     expect(pressed(rowOf(el, 'package.install'))).toBe('ask');
     expect(pressed(rowOf(el, 'git.mutate'))).toBe('allow');

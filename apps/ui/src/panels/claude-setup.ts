@@ -192,7 +192,9 @@ export function claudeSetupModal(
           h('li', null, 'Accept the folder-trust prompt, then the prompt that asks to use the MCP server "friday".'),
           h('li', null, 'In the Claude Code panel, type:', copyLine(ctx, '/friday start', 'start command')),
         ),
-        note(`Claude Code then works as ${visible(agentKey())}; it shows in the Agents list as “attached in VS Code”.`),
+        note(
+          `Claude Code then works as ${visible(agentKey())}; it shows in the Agents list as “connected from VS Code”.`,
+        ),
       ),
     );
     if (r.plan) renderPlan(r.plan);

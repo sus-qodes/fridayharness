@@ -55,7 +55,7 @@ interface Kit {
 
 function askerText(ctx: AppContext, e: EscalationView, spec: QuestionSpec): string {
   if (spec.asker === 'agent') return agentKeyOf(ctx.store.select('board'), e.requested_by_id) ?? 'an agent';
-  if (spec.asker === 'master_brain') return 'the Master Brain';
+  if (spec.asker === 'master_brain') return 'Friday’s planner';
   return 'Friday';
 }
 
@@ -210,7 +210,7 @@ function cliHints(spec: QuestionSpec): HTMLElement | null {
   return h(
     'details',
     { class: 'gv-cli' },
-    h('summary', null, 'What the CLI would do'),
+    h('summary', null, 'The same from a terminal'),
     h('ul', null, ...spec.cliHints.map((x) => h('li', { class: 'mono' }, truncate(visible(x), 300)))),
   );
 }
@@ -1006,12 +1006,17 @@ function integrationBody(kit: Kit): Built {
           h('dt', null, 'Goal branch'),
           h('dd', { class: 'mono' }, visible(integration?.branch ?? (goalId ? `friday/goal-${goalId}` : '—'))),
         ),
-        h('div', { class: 'gv-meta-row' }, h('dt', null, 'Worktree'), h('dd', { class: 'mono' }, visible(root ?? '—'))),
+        h(
+          'div',
+          { class: 'gv-meta-row' },
+          h('dt', null, 'Task folder'),
+          h('dd', { class: 'mono' }, visible(root ?? '—')),
+        ),
       ),
       h(
         'p',
         { class: 'field-hint' },
-        'Repair the task branch in its worktree, commit, then choose Integrate my repair. Friday never merges into your own branches.',
+        'Repair the task’s branch in its folder, commit, then choose Integrate my repair. Friday never merges into your own branches.',
       ),
       h(
         'div',
@@ -1202,27 +1207,26 @@ function brainBody(kit: Kit): Built {
   const row = h('div', { class: 'gv-actions' });
 
   if (spec.actions.includes('revise-note') && spec.goalId) {
-    const goalId = spec.goalId;
     const noteId = nextId('revise-note');
     const note = h('textarea', {
       class: 'textarea',
       id: noteId,
       rows: 3,
       maxLength: 2000,
-      placeholder: 'Guidance for the Master Brain’s next revision…',
+      placeholder: 'What the next version of the plan should do differently…',
     });
     const revise = decisionButton(
       'Revise with a note',
       kit,
       async (b) => {
         b.disabled = true;
-        setText(kit.status, 'Asking the Master Brain for a revision… (a model call can take a minute)');
+        setText(kit.status, 'Asking the planner for a new version of the plan… (a model call can take a minute)');
         // Answering settles the question, and the daemon revises the goal's plan from the answer
         // (ADR-0015); a separate replan would leave the question open.
         const text = note.value.trim() || 'Revise the plan.';
         const r = await ctx.act('Revise the plan', () => ctx.api.answer(kit.e.escalation_id, text));
         b.disabled = false;
-        if (r) kit.done(`Revision requested for ${cleanText(goalId)}`);
+        if (r) kit.done('A new version of the plan was requested: it appears on the board for you to review.');
         else setText(kit.status, '');
       },
       'btn btn-primary',
@@ -1297,7 +1301,7 @@ function brainBody(kit: Kit): Built {
       h(
         'div',
         { class: 'field' },
-        h('label', { class: 'field-label', for: replyId }, replyLabel('the Master Brain')),
+        h('label', { class: 'field-label', for: replyId }, replyLabel('Friday’s planner')),
         reply,
       ),
     );

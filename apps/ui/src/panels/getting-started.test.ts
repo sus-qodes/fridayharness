@@ -37,7 +37,9 @@ describe('getting started', () => {
       ['commit', false],
       ['notify', false],
     ]);
-    expect(items[2]?.detail).toBe('To let it plan: allow this clone to spend. You can always write plans yourself.');
+    expect(items[2]?.detail).toBe(
+      'To let Friday plan: allow planning to spend on this computer. You can always write plans yourself.',
+    );
     expect(items[3]?.detail).toMatch(/Verification runs only Friday's own checks/);
     // The way to fix it is the page that suggests them, not a file to write by hand (2026-11-17).
     expect(items[3]?.fix).toEqual({ label: 'Settings → Checks', action: 'checks' });
@@ -80,10 +82,10 @@ describe('getting started', () => {
     expect(items.map((i) => i.id)).toEqual(['running', 'policy', 'agent', 'planner', 'checks', 'commit', 'notify']);
     expect(items[1]).toMatchObject({
       done: false,
-      title: "Trust this project's policy",
+      title: 'Trust this project’s settings',
       fix: { label: 'Settings → Permissions', action: 'policy' },
     });
-    expect(items[1]?.detail).toMatch(/nothing of it applies on this clone until you trust exactly that list/);
+    expect(items[1]?.detail).toMatch(/None of it applies on this computer until you trust it/);
   });
 
   it('links each open item to where to fix it, and dismisses', () => {

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { fixedInSettings, PLANNER_FAILURES, plannerTrouble, plannerTroubleWords } from './planner-words.js';
+import {
+  fixedInSettings,
+  keyWords,
+  PLANNER_FAILURES,
+  plannerTrouble,
+  plannerTroubleWords,
+  plannerWords,
+} from './planner-words.js';
 
 describe('why the planner could not plan', () => {
   it('reads the trouble from the kind and from what the provider said', () => {
@@ -40,5 +47,29 @@ describe('why the planner could not plan', () => {
     expect(
       ['sign_in', 'limit', 'not_set_up', 'budget', 'unreadable', 'other'].map((t) => fixedInSettings(t as never)),
     ).toEqual([true, false, true, true, false, false]);
+  });
+});
+
+describe('who writes the plans, in words (2026-11-17)', () => {
+  it('names the model and how it is reached, never the provider as the code names it', () => {
+    expect(plannerWords({ provider: 'anthropic', model: 'claude-opus-5-5' })).toBe(
+      'Claude Opus 5.5, with your Anthropic API key',
+    );
+    expect(plannerWords({ provider: 'claude-code', model: 'claude-sonnet-5-5' })).toBe(
+      'Claude Sonnet 5.5, through your Claude Code sign-in',
+    );
+    expect(plannerWords({ provider: 'local', model: 'qwen3-coder' })).toBe('qwen3-coder, a model on this computer');
+    expect(plannerWords({ provider: 'none', model: 'auto' })).toBe('You: no planner is chosen');
+    expect(plannerWords({ provider: 'fake', model: 'fake-planner' })).toBe('A test planner (no model)');
+    // One this interface does not know is shown as it is, cleaned.
+    expect(plannerWords({ provider: 'somewhere', model: 'm-1' })).toBe('somewhere · m-1');
+  });
+
+  it('says where the key stands, and nothing of the key', () => {
+    expect(keyWords('stored')).toBe('Stored on this computer');
+    expect(keyWords('environment')).toBe('Taken from this computer’s environment');
+    expect(keyWords('missing')).toBe('Not stored yet');
+    expect(keyWords('not needed')).toBe('Not needed');
+    expect(keyWords('something new')).toBe('something new');
   });
 });

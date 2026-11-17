@@ -12,17 +12,11 @@
  * Trust covers one list. Turning a setting off makes it another, so what stays on would silently
  * stop applying: `trustWhatStays` asks for it again, at once.
  */
+import { looseningLine } from '../model/loosening-words.js';
 import type { AppContext } from '../shell/context.js';
-import { plain } from './common.js';
-import { type Loosening, readLoosening } from './settings.js';
+import { readLoosening } from './settings.js';
 
 export type TrustOutcome = 'trusted' | 'nothing' | 'missing' | 'cancelled' | 'failed';
-
-function lines(items: readonly Loosening[]): string[] {
-  return items.map(
-    (l) => `${plain(l.setting, 120)}: ${plain(l.from, 60)} → ${plain(l.to, 120)} (${plain(l.source, 120)})`,
-  );
-}
 
 /**
  * Asks for this clone's trust in the list that waits. `nothing`: nothing waits (none loosens, or it
@@ -56,7 +50,11 @@ export async function trustLoosening(
   if (!ctx.platform.desktop) {
     const ok = await ctx.confirm({
       title: opts.title ?? 'Trust these settings on this computer?',
-      body: [...lines(p.items), opts.why ?? 'Anyone who can change the project files chose these settings.'],
+      // Each setting as what it allows, with the exact form trust is recorded in.
+      body: [
+        ...p.items.map(looseningLine),
+        opts.why ?? 'Anyone who can change the project files chose these settings.',
+      ],
       confirmLabel: 'Trust them',
       danger: true,
     });

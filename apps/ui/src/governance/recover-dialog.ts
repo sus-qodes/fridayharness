@@ -17,8 +17,11 @@ export const RECOVERY_ACTIONS: Record<string, { label: string; explain: string }
   reconnect: { label: 'Wait for the session', explain: 'The agent’s session may still come back and resume.' },
   reassign: { label: 'Reassign', explain: 'Give the task to another agent; it continues from the preserved work.' },
   restart: { label: 'Restart', explain: 'Start a new attempt; the earlier work is preserved first.' },
-  rebind: { label: 'Rebind', explain: 'Attach the task to the agent’s new session.' },
-  needs_human: { label: 'Ask a human', explain: 'Leave the task waiting with a question for a person.' },
+  rebind: {
+    label: 'Continue in its new session',
+    explain: 'The agent came back in a new session: the task goes on there.',
+  },
+  needs_human: { label: 'Leave it for me', explain: 'The task waits, with a question for you in “Waiting for you”.' },
   cancel: { label: 'Cancel the task', explain: 'The task does not run again; its work stays preserved.' },
 };
 
@@ -121,7 +124,7 @@ export function recoverDialog(
         ? h(
             'div',
             { class: 'gv-meta-row' },
-            h('dt', null, 'Worktree'),
+            h('dt', null, 'Task folder'),
             h(
               'dd',
               { class: 'mono' },

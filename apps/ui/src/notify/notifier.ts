@@ -116,7 +116,7 @@ function short(text: string | null | undefined, max = 160): string {
 /** Who sent a message, as the Messages drawer names them. */
 function sender(m: SnapshotInboxItem): string {
   if (m.from.kind === 'agent') return m.from.agent_key ?? m.from.id;
-  if (m.from.kind === 'master_brain') return 'Master Brain';
+  if (m.from.kind === 'master_brain') return 'Friday’s planner';
   if (m.from.kind === 'system') return 'Friday';
   return m.from.kind;
 }

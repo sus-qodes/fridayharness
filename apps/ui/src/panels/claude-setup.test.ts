@@ -100,7 +100,7 @@ describe('claude code setup', () => {
     expect(passed.querySelector('summary')?.textContent).toBe('1 check with nothing to do');
     expect(passed.textContent).toContain(HOSTILE);
     expect(m.el.querySelector('img')).toBeNull();
-    expect(text).toContain('it shows in the Agents list as “attached in VS Code”');
+    expect(text).toContain('it shows in the Agents list as “connected from VS Code”');
     expect(text).toContain('accept the folder-trust prompt'.replace('accept', 'Accept'));
     expect(text).toContain('/friday start');
     buttonBy(m.el, 'Copy the start command').click();

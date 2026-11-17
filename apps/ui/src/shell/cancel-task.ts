@@ -83,7 +83,7 @@ export async function cancelTask(
       body: [
         opts.line ??
           `“${truncate(cleanText(task.summary ?? task.task_id), 160)}” stops for good: it will not run again.`,
-        'Its worktree and its preserved work are kept.',
+        'Its folder and its preserved work are kept.',
         ...(consequence ? [consequence] : []),
       ],
       confirmLabel: 'Cancel task',

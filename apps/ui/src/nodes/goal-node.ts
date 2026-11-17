@@ -13,7 +13,7 @@ import type { GoalSummary, UiSnapshot } from '@friday/protocol';
 import type { GoalGroup } from '../model/board.js';
 import { type AppContext, openModal } from '../shell/context.js';
 import { button, h, replace, setVar, toggleClass } from '../ui/dom.js';
-import { cleanText, compact, plural, shortId, truncate, usd } from '../ui/format.js';
+import { cleanText, compact, plural, truncate, usd } from '../ui/format.js';
 import { actionButton, badge, fingerprint, type NodeView, nodeIcon, pill, type Tone } from './common.js';
 
 export interface GoalCardModel {
@@ -248,16 +248,16 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
   const writePlan = () => openModal(ctx, { kind: 'plan-editor', id: model.group.goal.goal_id, mode: 'first' });
   const brainPlan = async () => {
     const goalId = model.group.goal.goal_id;
-    const r = await ctx.act('Let the Master Brain plan', () => ctx.api.replan(goalId));
+    const r = await ctx.act('Let Friday plan', () => ctx.api.replan(goalId));
     if (!r) return;
     ctx.refresh();
     const result = typeof r.result === 'string' ? r.result : '';
     if (result.startsWith('proposed'))
-      ctx.toast({ kind: 'success', text: 'The Master Brain proposed a plan: review it on the board' });
+      ctx.toast({ kind: 'success', text: 'Friday proposed a plan: review it on the board' });
     else
       ctx.toast({
         kind: 'warn',
-        text: 'The Master Brain proposed no plan',
+        text: 'Friday proposed no plan',
         ...(result ? { detail: truncate(cleanText(result), 300) } : {}),
       });
   };
@@ -320,8 +320,9 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
       h(
         'div',
         { class: 'nd-head', dataset: { dragHandle: '' } },
+        // The id is for whoever looks for it: the tooltip of "Goal".
         nodeIcon('target', 14),
-        h('span', { class: 'nd-id mono', title: goal.goal_id }, shortId(goal.goal_id)),
+        h('span', { class: 'nd-id', title: `Goal ${goal.goal_id}` }, 'Goal'),
         h('span', { class: 'spacer' }),
         badge(goal.status, GOAL_TONE[goal.status] ?? 'muted'),
       ),
@@ -374,7 +375,7 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
       g.active
         ? badge(`Plan v${g.active.version}`, 'muted', truncate(cleanText(g.active.summary), 300))
         : need?.planning
-          ? badge('Master Brain planning', 'info', 'The Master Brain is writing a plan for this goal')
+          ? badge('Friday is planning', 'info', 'Friday is writing a plan for this goal')
           : need
             ? null
             : badge('No plan yet', 'muted'),
@@ -414,10 +415,10 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
           })
         : null,
       need?.brain
-        ? actionButton('Let the Master Brain plan', 'bolt', brainPlan, {
+        ? actionButton('Let Friday plan', 'bolt', brainPlan, {
             action: 'brain-plan',
             busyLabel: 'Planning…',
-            title: 'Ask the Master Brain for a plan; you review it before anything starts',
+            title: 'Ask Friday for a plan; you review it before anything starts',
           })
         : null,
       goal.status === 'COMPLETED' ? landButton(goal.goal_id) : null,

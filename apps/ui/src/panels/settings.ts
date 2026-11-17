@@ -97,12 +97,12 @@ export function plannerSteps(
     });
   if (!brain?.approved_here)
     steps.push({
-      text: 'Allow this clone to spend, with a daily budget in dollars:',
+      text: 'Allow planning to spend on this computer, with a daily limit in dollars:',
       command: `friday brain allow-remote --budget ${budget}`,
     });
   if (!brain?.allow_remote)
     steps.push({
-      text: 'In .friday/config.yaml set providers.anthropic.allow_remote: true (the project asks for remote planning).',
+      text: 'Allow planning with a key for this project (“Allow it for this project…” above), which sets providers.anthropic.allow_remote: true in .friday/config.yaml.',
     });
   steps.push({ text: 'Restart Friday: it reads its configuration when it starts.' });
   return steps;

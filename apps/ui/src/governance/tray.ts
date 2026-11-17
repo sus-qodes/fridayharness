@@ -74,7 +74,7 @@ const OPENS_PLACE = new Set<TrayItem['kind']>(['plan', 'verify', 'land', 'messag
 
 function senderOf(m: SnapshotInboxItem): string {
   if (m.from.kind === 'agent') return m.from.agent_key ?? m.from.id;
-  if (m.from.kind === 'master_brain') return 'Master Brain';
+  if (m.from.kind === 'master_brain') return 'Friday’s planner';
   if (m.from.kind === 'system') return 'Friday';
   return m.from.kind;
 }
@@ -162,8 +162,8 @@ export function mountDecisionsTray(
         };
       case 'policy':
         return {
-          label: 'Policy change not yet trusted',
-          sub: "The project's files loosen Friday's defaults; nothing of it applies until you trust it.",
+          label: 'Project settings wait for your trust',
+          sub: 'This project’s files ask to let Friday or its agents do more than the defaults. None of it applies on this computer until you trust it.',
         };
     }
   };

@@ -21,7 +21,7 @@ export interface WaitingCardOptions {
 }
 
 /** Shown when Friday cannot continue the session itself. */
-export const ATTACHED_HINT = 'Sessions attached in VS Code need a prompt there to continue.';
+export const ATTACHED_HINT = 'Agents connected from VS Code continue when you prompt them there.';
 
 export function waitingCard(ctx: AppContext, task: SnapshotTask, opts: WaitingCardOptions = {}): Component {
   const board = ctx.store.select('board');
@@ -174,7 +174,7 @@ export function waitingCard(ctx: AppContext, task: SnapshotTask, opts: WaitingCa
           title: 'Release this task?',
           body: [
             'The agent’s attempt ends and the task goes back to READY for any agent.',
-            'Its worktree and commits are kept for the next attempt.',
+            'Its folder and commits are kept for the next attempt.',
           ],
           confirmLabel: 'Release',
         }),

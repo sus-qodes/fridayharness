@@ -46,7 +46,7 @@ export const ONBOARDING_STEPS: readonly TourStep[] = [
     id: 'board',
     target: '.cv-stage',
     title: 'Your board',
-    body: 'Everything I do for you shows up here. Each card is a task, each task runs in its own git worktree, so experiments never touch your checkout.',
+    body: 'Everything I do for you shows up here. Each card is a task, and each task runs in its own copy of the project, so experiments never touch your own files.',
     mood: 'neutral',
   },
   {

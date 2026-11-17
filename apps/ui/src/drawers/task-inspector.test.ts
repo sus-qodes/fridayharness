@@ -608,7 +608,7 @@ describe('the task inspector: Changes', () => {
     ],
   };
 
-  it('shows the branch, worktree, base and head, and the changed files', async () => {
+  it('shows the branch, the task folder, base and head, and the changed files', async () => {
     const ctx = makeContext({ snapshot: boardWith('RUNNING'), answers: { [`GET /tasks/${TID}/diff`]: diff } });
     const open = vi.fn();
     (ctx.platform as { openInEditor: (p: string, l?: number) => void }).openInEditor = open;
@@ -631,7 +631,7 @@ describe('the task inspector: Changes', () => {
     el.querySelector<HTMLButtonElement>('.dr-git-file .btn-icon')?.click();
     expect(open).toHaveBeenCalledWith(`C:/wt/abc/src/${IMG}${ZW}.ts`);
     expect(el.querySelectorAll('.dr-git-file .btn-icon')).toHaveLength(1);
-    el.querySelector<HTMLButtonElement>('[aria-label="Open the worktree in VS Code"]')?.click();
+    el.querySelector<HTMLButtonElement>('[aria-label="Open the task folder in VS Code"]')?.click();
     expect(open).toHaveBeenLastCalledWith('C:/wt/abc');
     drawer.destroy();
   });

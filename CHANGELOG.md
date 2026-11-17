@@ -2,6 +2,21 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — plain words, part 1
+
+The 2026-11-17 review of what the app says to someone who never opened a terminal. Nothing behaves differently; the words, and what is shown, changed.
+
+- **Settings reads as what each thing is.** "Autonomous Planner Status", "Provider Readiness", "Configuration & Spending Bounds", "Git Worktree Management", "Daemon Lifecycle", "Engine Controls", "Dynamic Island Timings" and "System & Architecture" are "The planner", "Can Friday write plans?", "Plan with an Anthropic API key", "Task folders", "Friday itself", "Restart or stop", "The Notch" and "About this Friday". The pages are Appearance, Notifications, Sound, Planner, Models, Checks, Permissions, Friday, Desktop app and About, under General, Planning and agents, and This computer. Each line under a title says what the setting does, in place of how it is built.
+- **The planner is said as who writes the plans**: "Claude Opus 5.5, with your Anthropic API key", "through your Claude Code sign-in", "a model on this computer", in place of "anthropic · claude-opus-5-5 (remote)"; the key as "Stored on this computer" in place of "stored". In the desktop app the terminal steps for a key are under a fold, since the buttons do them.
+- **"Friday" plans.** The part that writes plans was named as the code names it, "the Master Brain", on buttons, cards, notifications and the checklist. It is "Friday" where Friday acts ("Let Friday plan", "Friday proposed a plan") and "Friday's planner" where a message or a question comes from it.
+- **A task has a folder, not a worktree.** "Worktree" is "task folder" on every screen, with one sentence in Settings → Friday on what it is; "Prune clean worktrees" is "Clean up finished task folders". An agent is "started by Friday" or "connected from VS Code", not "spawned" or "attached".
+- **The settings a computer trusts are said as what they allow.** The list, and each confirmation before trusting, showed lines such as "verification.auto_on_completion: false → true". Each known setting now leads with what it allows ("Finished work is checked automatically", "Agents may install packages without asking"), followed by the exact setting and its file, since trust is recorded in exactly that. The desktop's own dialog says the same. A setting Friday has no words for is shown as written.
+- **Ids left the cards.** A task's and a goal's id were a chip on every card and stood before the task's name in sentences ("task_29jxbk8t · Add discount codes"). They are in the tooltip and in the task inspector; cards, lists and the palette show names. An agent's card names the task it works on.
+- **Desktop dialogs** (halt, cancel, restart, stop, allow spending, trust) use the same words: task folders, "the agents Friday started", "on this computer".
+- "What the CLI would do" on a question's card is "The same from a terminal".
+
+Changed on purpose: `taskLine` answers the summary alone; the question of `action_failed` begins "Friday's planner could not finish".
+
 ## Unreleased — ease of use, part 6: another project without a terminal
 
 - **"Open another project…"** in the desktop app: in the tray's menu, on the project's name in the Studio's header (a button there, with the folder in its tooltip), and in the command palette. The app held one project for as long as it ran; another one meant Quit and a start from a terminal with `--project`, and a second launch for another folder only said so. Each of these now shows the folder picker, offers "Set up Friday here" for a folder that is not a project yet, and asks what the project that was open should do, as Quit does: keep its Friday running (agents there keep working) or stop it. Cancelling at any point leaves everything as it was, the remembered project included.

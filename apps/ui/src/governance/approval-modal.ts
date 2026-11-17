@@ -343,7 +343,7 @@ export function approvalModal(
         title: 'Reject and release the task?',
         body: [
           'The request is rejected with your feedback, and the task goes back to READY.',
-          'The agent’s attempt ends; its worktree and commits are kept for the next attempt.',
+          'The agent’s attempt ends; its folder and commits are kept for the next attempt.',
         ],
         confirmLabel: 'Reject and release',
         danger: true,
@@ -354,7 +354,11 @@ export function approvalModal(
       const outcome = await decideApproval(ctx, a, { allow: false, note: note.value });
       if (outcome === 'done' || outcome === 'already') {
         setText(status, 'Releasing the task…');
-        await ctx.act('Release the task', () => ctx.api.taskAction(taskId, 'release'), 'Task released to READY');
+        await ctx.act(
+          'Release the task',
+          () => ctx.api.taskAction(taskId, 'release'),
+          'The task is ready for another attempt',
+        );
         ctx.refresh();
         busy = false;
         finish();

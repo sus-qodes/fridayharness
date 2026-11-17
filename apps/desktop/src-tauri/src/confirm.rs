@@ -83,6 +83,56 @@ fn shown(v: Option<&str>) -> String {
     }
 }
 
+/// What a project setting allows, in a person's words (2026-11-17), for the settings Settings
+/// turns on and the ones a project most often asks for; the same words as the page's
+/// `looseningWords`. None for a setting this dialog cannot put into words: it is shown as written.
+pub(crate) fn loosening_words(setting: &str, to: &str) -> Option<String> {
+    match setting {
+        "verification.auto_on_completion" => return Some("Finished work is checked automatically".into()),
+        "master_brain.auto_approve" => return Some("Plans start without waiting for your approval".into()),
+        "sandbox" => {
+            return Some(
+                "This folder is treated as disposable: commands that would wait for your approval run on their own".into(),
+            )
+        }
+        _ => {}
+    }
+    let class = setting.strip_prefix("autonomy.")?;
+    let what = match class {
+        "git.mutate" => "commit and change branches",
+        "package.install" => "install packages",
+        "fs.destructive" => "delete files with a command",
+        "process.kill" => "stop running programs",
+        "network.fetch" => "download with a command",
+        "unknown" => "run commands Friday does not recognise",
+        "git.push" => "push to a remote",
+        "git.force" => "force-push",
+        "network.publish" => "publish a package",
+        _ => return None,
+    };
+    match to {
+        "auto" => Some(format!("Agents may {what} without asking")),
+        "review" => Some(format!("Agents may {what} once you approve it in Friday")),
+        _ => None,
+    }
+}
+
+/// One line of the list: the words, then the exact setting and its file; without words, the exact
+/// setting alone. Trust is recorded in exactly what the line shows last.
+fn loosening_line(l: &Value) -> String {
+    let exact = format!(
+        "{}: {} → {} (in {})",
+        shown(field(l, "setting")),
+        shown(field(l, "from")),
+        shown(field(l, "to")),
+        shown(field(l, "source"))
+    );
+    match loosening_words(field(l, "setting").unwrap_or(""), field(l, "to").unwrap_or("")) {
+        Some(words) => format!("- {words}\n    {exact}"),
+        None => format!("- {exact}"),
+    }
+}
+
 fn text_field(body: Option<&Value>, name: &str, max: usize) -> Result<Option<String>, CmdError> {
     match body.and_then(|b| b.get(name)) {
         None | Some(Value::Null) => Ok(None),
@@ -257,34 +307,22 @@ pub fn prepare(
                     409,
                     CHANGED,
                     "changed",
-                    "the project's policy changed since it was shown; look at it again",
+                    "the project's settings changed since they were shown; look at them again",
                 ));
             }
             let items: Vec<String> = p
                 .get("loosening")
                 .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .map(|l| {
-                            format!(
-                                "- {} from {} to {} (in {})",
-                                shown(field(l, "setting")),
-                                shown(field(l, "from")),
-                                shown(field(l, "to")),
-                                shown(field(l, "source"))
-                            )
-                        })
-                        .collect()
-                })
+                .map(|a| a.iter().map(loosening_line).collect())
                 .unwrap_or_default();
             let list = items.join("\n");
             too_long(&[&list])?;
             Ok(Prepared {
                 body: json!({"loosening_hash": hash}),
                 dialog: Some(Dialog {
-                    title: "Friday: trust this project's policy?".into(),
+                    title: "Friday: trust this project's settings?".into(),
                     text: format!(
-                        "Files tracked in this repository loosen Friday's policy on this computer:\n\n{}\n\nAnyone who can change those files chose these settings. Trust exactly these settings for this clone?",
+                        "This project's files ask to let Friday or its agents do more than the defaults:\n\n{}\n\nAnyone who can change those files chose these settings. None of them applies on this computer until you trust them. Trust exactly these settings on this computer?",
                         if list.is_empty() { "(nothing listed)".to_string() } else { list }
                     ),
                     confirm: "Trust these settings".into(),
@@ -296,7 +334,7 @@ pub fn prepare(
             body: reason_body(body)?,
             dialog: Some(Dialog {
                 title: "Friday: halt every agent?".into(),
-                text: "Halting pauses Friday and stops every running attempt. Work in the worktrees is kept and the tasks go back to READY; no task is cancelled.\n\nHalt now?".into(),
+                text: "Halting pauses Friday and stops every running attempt. The work in the task folders is kept and the tasks wait, ready to start again; no task is cancelled.\n\nHalt now?".into(),
                 confirm: "Halt".into(),
                 danger: true,
             }),
@@ -317,7 +355,7 @@ pub fn prepare(
                 dialog: Some(Dialog {
                     title: "Friday: cancel this task?".into(),
                     text: format!(
-                        "Task {}: {}\n\nRecovery cancels the task: a cancelled task does not run again. Its worktree is kept until you prune it.\n\nCancel the task?",
+                        "Task {}: {}\n\nRecovery cancels the task: a cancelled task does not run again. Its folder is kept until you clean it up (Settings, Friday).\n\nCancel the task?",
                         visible(&tid),
                         shown(summary)
                     ),
@@ -351,7 +389,7 @@ pub fn prepare(
                 dialog: Some(Dialog {
                     title: "Friday: cancel this task?".into(),
                     text: format!(
-                        "Task {}: {}\n\nA cancelled task does not run again. Its worktree is kept until you prune it.{also}\n\nCancel the task?",
+                        "Task {}: {}\n\nA cancelled task does not run again. Its folder is kept until you clean it up (Settings, Friday).{also}\n\nCancel the task?",
                         visible(&tid),
                         shown(summary)
                     ),
@@ -371,7 +409,7 @@ pub fn prepare(
                 dialog: Some(Dialog {
                     title: "Friday: cancel this goal?".into(),
                     text: format!(
-                        "Goal {}: {}\n\nIts open tasks are cancelled too. Work already in worktrees is kept.\n\nCancel the goal?",
+                        "Goal {}: {}\n\nIts open tasks are cancelled too. Work already in the task folders is kept.\n\nCancel the goal?",
                         visible(&gid),
                         shown(text)
                     ),
@@ -568,7 +606,7 @@ pub fn prepare(
 pub fn restart_dialog() -> Dialog {
     Dialog {
         title: "Friday: restart Friday?".into(),
-        text: "Friday stops for this project and starts again: agents lose their connection for a moment and spawned agents stop. Work in worktrees is kept.\n\nRestart Friday?".into(),
+        text: "Friday stops for this project and starts again: agents lose their connection for a moment, and the agents Friday started stop. The work in the task folders is kept.\n\nRestart Friday?".into(),
         confirm: "Restart Friday".into(),
         danger: true,
     }
@@ -577,7 +615,7 @@ pub fn restart_dialog() -> Dialog {
 pub fn stop_dialog() -> Dialog {
     Dialog {
         title: "Friday: stop Friday?".into(),
-        text: "Friday stops for this project: agents lose their connection and spawned agents stop. Work in worktrees is kept.\n\nStop Friday?".into(),
+        text: "Friday stops for this project: agents lose their connection, and the agents Friday started stop. The work in the task folders is kept.\n\nStop Friday?".into(),
         confirm: "Stop Friday".into(),
         danger: true,
     }
@@ -686,6 +724,44 @@ mod tests {
         let stale = json!({"loosening_hash": "h0"});
         let (c, what) = checked("policy/trust", Some(&stale));
         assert_eq!(prepare(what, &c, PID, Some(&stale), &get).unwrap_err().code(), Some(CHANGED));
+    }
+
+    #[test]
+    fn the_trust_list_says_what_each_setting_allows_and_keeps_the_exact_setting() {
+        assert_eq!(
+            loosening_words("verification.auto_on_completion", "true").as_deref(),
+            Some("Finished work is checked automatically")
+        );
+        assert_eq!(
+            loosening_words("master_brain.auto_approve", "true").as_deref(),
+            Some("Plans start without waiting for your approval")
+        );
+        assert_eq!(
+            loosening_words("autonomy.package.install", "auto").as_deref(),
+            Some("Agents may install packages without asking")
+        );
+        assert_eq!(
+            loosening_words("autonomy.git.push", "review").as_deref(),
+            Some("Agents may push to a remote once you approve it in Friday")
+        );
+        // What it cannot put into words is shown as written.
+        assert_eq!(loosening_words("autonomy.package.install", "manual"), None);
+        assert_eq!(loosening_words("autonomy.something", "auto"), None);
+        assert_eq!(loosening_words("risk.file.delete", "low"), None);
+
+        let policy = json!({"policy": {"loosening_hash": "h1", "loosening": [
+            {"source": "config.yaml", "setting": "autonomy.package.install", "from": "review", "to": "auto"},
+            {"source": "config.yaml", "setting": "risk.file.delete", "from": "high", "to": "low"}]}});
+        let get = move |_: &str| Ok(policy.clone());
+        let body = json!({"loosening_hash": "h1"});
+        let (c, what) = checked("policy/trust", Some(&body));
+        let d = prepare(what, &c, PID, Some(&body), &get).unwrap().dialog.unwrap();
+        assert_eq!(d.title, "Friday: trust this project's settings?");
+        assert!(d.text.contains(
+            "- Agents may install packages without asking\n    autonomy.package.install: review → auto (in config.yaml)"
+        ));
+        assert!(d.text.contains("- risk.file.delete: high → low (in config.yaml)"));
+        assert!(d.text.contains("Trust exactly these settings on this computer?"));
     }
 
     #[test]

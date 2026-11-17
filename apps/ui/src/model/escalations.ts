@@ -84,7 +84,7 @@ export const BRAIN_KINDS: readonly string[] = [
 ];
 
 const TITLES: Record<string, string> = {
-  ambiguous_intent: 'The Master Brain asks what you mean',
+  ambiguous_intent: 'Friday’s planner asks what you mean',
   recovery_needed: 'A task needs a recovery decision',
   routing_blocked: 'A task has no agent to run it',
   routing_violated: 'Routing stopped a task',
@@ -99,7 +99,7 @@ const TITLES: Record<string, string> = {
   invalid_plan: 'The planner produced no valid plan',
   budget_exceeded: "Today's model budget is spent",
   plan_rejected: 'A revision was rejected',
-  action_failed: 'The Master Brain could not finish',
+  action_failed: 'Friday’s planner could not finish',
 };
 
 function str(value: unknown): string | null {

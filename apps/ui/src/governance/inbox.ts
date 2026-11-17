@@ -21,7 +21,7 @@ export function replyTarget(item: Pick<SnapshotInboxItem, 'from'>): string | nul
 
 function senderText(item: Pick<SnapshotInboxItem, 'from'>): string {
   if (item.from.kind === 'agent') return item.from.agent_key ?? item.from.id;
-  if (item.from.kind === 'master_brain') return 'Master Brain';
+  if (item.from.kind === 'master_brain') return 'Friday’s planner';
   if (item.from.kind === 'system') return 'Friday';
   return item.from.kind;
 }

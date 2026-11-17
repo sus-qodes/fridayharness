@@ -108,7 +108,7 @@ export function createCodeGraph(ctx: AppContext, request: DrawerRequest): Compon
       'p',
       { class: 'dr-note' },
       icon('graph', 14),
-      " This is the main checkout's code graph (TS/JS files). Changes still in task worktrees are not in it.",
+      ' This is the code graph of your project folder (TS/JS files). Changes still in task folders are not in it.',
     ),
     form,
     legend,

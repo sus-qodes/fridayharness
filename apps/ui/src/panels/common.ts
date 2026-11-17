@@ -5,6 +5,7 @@
  * on goes through `visible()` (plan §6.2).
  */
 import type { BrainStatusView } from '@friday/protocol';
+import { plannerWords } from '../model/planner-words.js';
 import { hasHidden, visible } from '../model/text.js';
 import { ApiError } from '../platform/transport.js';
 import { isCancelled } from '../shell/act.js';
@@ -334,29 +335,31 @@ export interface PlannerState {
 }
 
 /**
- * The Master Brain's state in interface words (plan §7.1, §7.7): the daemon's reason is a CLI hint,
- * so the structured fields decide the words, and the reason is kept only when nothing else says why.
+ * The planner's state in interface words (plan §7.1, §7.7): the daemon's reason is a CLI hint, so
+ * the structured fields decide the words, and the reason is kept only when nothing else says why.
+ * It is "Friday" that plans (2026-11-17): the part that does it was named as the code names it
+ * ("the Master Brain"), which a person had no way to know.
  */
 export function plannerState(brain: BrainStatusView | null | undefined): PlannerState {
   if (!brain) {
-    return { ready: false, text: 'The Master Brain is not running in this Friday.', fixes: [] };
+    return { ready: false, text: 'Planning is not running in this Friday.', fixes: [] };
   }
   if (brain.planner_available) {
-    return {
-      ready: true,
-      text: `The Master Brain can plan (${plain(brain.provider, 40)} · ${plain(brain.model, 80)}).`,
-      fixes: [],
-    };
+    return { ready: true, text: `Friday can write plans: ${plannerWords(brain)}.`, fixes: [] };
+  }
+  // No planner is chosen: nothing is broken, the person writes the plans.
+  if (brain.provider === 'none') {
+    return { ready: false, text: 'No planner is chosen: you write the plans yourself.', fixes: [] };
   }
   const fixes: string[] = [];
-  if (brain.remote && brain.key === 'missing') fixes.push('store a provider key');
-  if (brain.remote && !brain.approved_here) fixes.push('allow this clone to spend');
-  if (brain.remote && !brain.allow_remote) fixes.push("the project's config does not allow remote planning");
+  if (brain.remote && brain.key === 'missing') fixes.push('store your API key');
+  if (brain.remote && !brain.approved_here) fixes.push('allow planning to spend on this computer');
+  if (brain.remote && !brain.allow_remote) fixes.push('allow it for this project');
   if (fixes.length === 0) {
     const why = brain.reason ? plain(brain.reason, 300) : 'it is not available';
-    return { ready: false, text: `The Master Brain cannot plan: ${why}.`, fixes: [] };
+    return { ready: false, text: `Friday cannot write plans: ${why}.`, fixes: [] };
   }
-  return { ready: false, text: `The Master Brain cannot plan yet: ${fixes.join('; ')}.`, fixes };
+  return { ready: false, text: `Friday cannot write plans yet: ${fixes.join('; ')}.`, fixes };
 }
 
 /** The panel body's frame: a scrolling column. */

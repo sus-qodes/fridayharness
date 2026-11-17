@@ -215,7 +215,7 @@ describe('question cards by kind (plan FD-21)', () => {
       }),
     );
     expect(card.el.querySelectorAll('.gv-chip')).toHaveLength(0);
-    expect(card.el.querySelector('.gv-cli')?.textContent).toContain('What the CLI would do');
+    expect(card.el.querySelector('.gv-cli')?.textContent).toContain('The same from a terminal');
     expect(card.el.querySelector('.gv-cli')?.textContent).toContain(HOSTILE);
     expect(card.el.querySelector('img')).toBeNull();
     card.destroy();

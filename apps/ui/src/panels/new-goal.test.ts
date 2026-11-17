@@ -51,7 +51,7 @@ describe('new goal enabling rules', () => {
     );
     expect(off.canPlan).toBe(false);
     expect(off.valid).toBe(true);
-    expect(off.plannerText).toBe('The Master Brain cannot plan yet: store a provider key.');
+    expect(off.plannerText).toBe('Friday cannot write plans yet: store your API key.');
     expect(goalFormState(form('Add billing'), null).plannerText).toMatch(/not running/);
     expect(goalFormState(form('ab'), brain()).canPlan).toBe(false);
   });
@@ -59,15 +59,15 @@ describe('new goal enabling rules', () => {
   it('turns the planner reasons into interface words', () => {
     const text = (b: Partial<BrainStatusView>) =>
       goalFormState(form('Add billing'), brain({ planner_available: false, ...b })).plannerText;
-    expect(text({ approved_here: false })).toBe('The Master Brain cannot plan yet: allow this clone to spend.');
-    expect(text({ allow_remote: false })).toBe(
-      "The Master Brain cannot plan yet: the project's config does not allow remote planning.",
+    expect(text({ approved_here: false })).toBe(
+      'Friday cannot write plans yet: allow planning to spend on this computer.',
     );
+    expect(text({ allow_remote: false })).toBe('Friday cannot write plans yet: allow it for this project.');
     expect(text({ key: 'missing', approved_here: false, allow_remote: false })).toMatch(
-      /store a provider key; allow this clone to spend; the project's config/,
+      /store your API key; allow planning to spend on this computer; allow it for this project/,
     );
     expect(text({ remote: false, reason: 'the provider "none" cannot plan' })).toBe(
-      'The Master Brain cannot plan: the provider "none" cannot plan.',
+      'Friday cannot write plans: the provider "none" cannot plan.',
     );
   });
 
@@ -87,13 +87,13 @@ describe('new goal enabling rules', () => {
 });
 
 describe('new goal modal', () => {
-  it('disables "Let the Master Brain plan" without a planner and links to Settings → Planner', () => {
+  it('disables "Let Friday plan" without a planner and links to Settings → Planner', () => {
     const ctx = makeContext({ snapshot: makeSnapshot({ brain: brain({ planner_available: false, key: 'missing' }) }) });
     const m = newGoalModal(ctx, { kind: 'new-goal' }, () => undefined);
     type(m.el.querySelector('textarea') as HTMLTextAreaElement, 'Add billing');
-    expect(buttonBy(m.el, 'Let the Master Brain plan').disabled).toBe(true);
+    expect(buttonBy(m.el, 'Let Friday plan').disabled).toBe(true);
     expect(buttonBy(m.el, 'Write the plan myself').disabled).toBe(false);
-    expect(m.el.textContent).toContain('store a provider key');
+    expect(m.el.textContent).toContain('store your API key');
     expect(m.el.textContent).toContain('You can always write the plan yourself');
     buttonBy(m.el, 'Settings → Planner').click();
     expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'planner', drawer: null });
@@ -106,7 +106,7 @@ describe('new goal modal', () => {
     const m = newGoalModal(ctx, { kind: 'new-goal' }, () => {
       closed += 1;
     });
-    const plan = buttonBy(m.el, 'Let the Master Brain plan');
+    const plan = buttonBy(m.el, 'Let Friday plan');
     expect(plan.disabled).toBe(true);
     type(m.el.querySelector('textarea') as HTMLTextAreaElement, 'Add billing');
     buttonBy(m.el, 'Add constraint').click();

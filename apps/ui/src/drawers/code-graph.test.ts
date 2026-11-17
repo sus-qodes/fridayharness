@@ -102,10 +102,10 @@ describe('runningScopes', () => {
 });
 
 describe('the code graph drawer', () => {
-  it("says it is the main checkout's graph and draws the neighbourhood as SVG", async () => {
+  it('says it is the graph of the project folder and draws the neighbourhood as SVG', async () => {
     const { ctx, drawer } = setup();
     await settle();
-    expect(drawer.el.textContent).toContain("main checkout's code graph (TS/JS files)");
+    expect(drawer.el.textContent).toContain('the code graph of your project folder (TS/JS files)');
     const first = ctx.transport.to('GET', '/graph/query')[0];
     expect(params(first).get('path')).toBe(CENTER);
     expect(params(first).get('depth')).toBe('2');

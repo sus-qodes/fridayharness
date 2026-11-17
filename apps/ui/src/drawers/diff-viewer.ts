@@ -218,7 +218,7 @@ function counts(added: number | null | undefined, removed: number | null | undef
 }
 
 const SOURCE: Record<TaskDiff['source'], string> = {
-  worktree: "the current attempt's worktree",
+  worktree: 'the task’s folder, as the current attempt left it',
   verified: 'the verified tree',
   integrated: 'the integrated commit',
   none: 'what the agent reported (no contents)',

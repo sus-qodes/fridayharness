@@ -138,8 +138,11 @@ async function loadEnv(): Promise<DesktopEnv> {
 const STATE_TEXT: Record<DaemonState, { title: string; message: string }> = {
   starting: { title: 'Friday is starting', message: 'The Studio opens as soon as Friday is ready.' },
   ready: { title: 'Friday is ready', message: '' },
-  stopping: { title: 'Friday is stopping', message: 'Work in worktrees is kept.' },
-  stopped: { title: 'Friday is not running', message: 'Start it for this project; work in worktrees is kept.' },
+  stopping: { title: 'Friday is stopping', message: 'The work in the task folders is kept.' },
+  stopped: {
+    title: 'Friday is not running',
+    message: 'Start it for this project; the work in the task folders is kept.',
+  },
   failed: { title: 'Friday could not start', message: 'What stopped it is below.' },
   no_project: {
     title: 'No project is open',
@@ -309,7 +312,8 @@ function safeStorage(): Storage | null {
 }
 
 /** What the strip says in the desktop app once Friday stopped: the app itself starts it again. */
-export const STOPPED_HERE = 'Friday has stopped for this project. Work in worktrees is kept; start it again here.';
+export const STOPPED_HERE =
+  'Friday has stopped for this project. The work in the task folders is kept; start it again here.';
 
 /**
  * Follows the shell's word about the daemon: a restart on another port is read again at once, and

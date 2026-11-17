@@ -226,7 +226,7 @@ describe('the "Waiting for you" tray', () => {
     ctx = makeContext({ snapshot: makeSnapshot({ policy_untrusted: true }) });
     const tray = mountDecisionsTray(ctx, host);
     const row = host.querySelector('.gv-tray-policy') as HTMLElement;
-    expect(row.querySelector('.gv-tray-label')?.textContent).toBe('Policy change not yet trusted');
+    expect(row.querySelector('.gv-tray-label')?.textContent).toBe('Project settings wait for your trust');
     (row.querySelector('.gv-tray-row') as HTMLButtonElement).click();
     expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'policy', drawer: null });
     ctx.board(makeSnapshot({ policy_untrusted: false }));

@@ -243,7 +243,7 @@ export function planReview(
       h(
         'span',
         { class: 'badge badge-info' },
-        p.proposed_by.kind === 'master_brain' ? 'Master Brain' : humanOrOther(p.proposed_by.kind),
+        p.proposed_by.kind === 'master_brain' ? 'Friday’s planner' : humanOrOther(p.proposed_by.kind),
       ),
     ),
     goal ? h('p', { class: 'gv-from' }, 'Goal: ', truncate(cleanText(goal.request), 300)) : null,

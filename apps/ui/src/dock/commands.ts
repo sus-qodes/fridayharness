@@ -37,7 +37,7 @@ export function pruneToast(result: { removed: string[]; kept: { path: string; re
   const removed = result.removed ?? [];
   const kept = result.kept ?? [];
   if (removed.length === 0 && kept.length === 0) {
-    return { kind: 'info', text: 'No released worktree to prune' };
+    return { kind: 'info', text: 'No finished task folder to clean up' };
   }
   const lines: string[] = [];
   for (const p of removed.slice(0, PRUNE_LIST_MAX)) lines.push(`Removed ${visible(p)}`);
@@ -48,7 +48,7 @@ export function pruneToast(result: { removed: string[]; kept: { path: string; re
   if (kept.length > PRUNE_LIST_MAX) lines.push(`… and ${kept.length - PRUNE_LIST_MAX} more kept`);
   return {
     kind: removed.length > 0 ? 'success' : 'info',
-    text: `Removed ${plural(removed.length, 'clean worktree')}; kept ${kept.length}`,
+    text: `Removed ${plural(removed.length, 'finished task folder')}; kept ${kept.length}`,
     detail: lines.join('\n'),
     // Kept worktrees hold uncommitted work: the reasons stay until dismissed.
     timeoutMs: kept.length > 0 ? 0 : 8000,
@@ -66,12 +66,12 @@ export async function reindexGraph(ctx: AppContext): Promise<void> {
 }
 
 export async function pruneWorktrees(ctx: AppContext): Promise<void> {
-  const r = await ctx.act('Prune clean worktrees', () => ctx.api.pruneWorktrees());
+  const r = await ctx.act('Clean up finished task folders', () => ctx.api.pruneWorktrees());
   if (r) ctx.toast(pruneToast(r));
 }
 
 export const STOP_FRIDAY_BODY = [
-  'Friday stops for this project. Agents it started disconnect; their work stays in their worktrees.',
+  'Friday stops for this project. Agents it started disconnect; their work stays in the task folders.',
   'This page cannot reach Friday until you open it again from its shortcut or the desktop app.',
 ];
 
@@ -149,8 +149,8 @@ export function coreCommands(): Command[] {
     },
     {
       id: 'prune-worktrees',
-      label: 'Prune clean worktrees',
-      keywords: ['clean worktrees', 'remove worktrees', 'tidy'],
+      label: 'Clean up finished task folders',
+      keywords: ['prune', 'clean worktrees', 'remove worktrees', 'tidy'],
       available: (c) => isConnected(c),
       show: 'typed',
       run: (c) => pruneWorktrees(c),

@@ -677,7 +677,7 @@ describe('goal card', () => {
         }),
       });
       const node = createGoalNode(ctx, { group: unplanned() });
-      expect(node.el.textContent).toContain('Master Brain planning');
+      expect(node.el.textContent).toContain('Friday is planning');
       expect(actionOf(node.el, 'brain-plan')).toBeNull();
       expect(actionOf(node.el, 'write-plan')).not.toBeNull();
     });
@@ -755,7 +755,7 @@ describe('agent pod', () => {
     expect(t).toContain('18k tokens');
     expect(t).toContain('last tool 1.1 s');
     expect(t).toContain('+14 −2');
-    expect(t).toContain('spawned');
+    expect(t).toContain('started by Friday');
     const file = node.el.querySelector('[data-action="diff"]') as HTMLElement;
     expect(file.textContent).toContain('⟨U+202E⟩');
     expect(Array.from(file.textContent ?? '').length).toBeLessThan(80);
@@ -798,7 +798,7 @@ describe('agent pod', () => {
     expect(t).toContain('(requested)');
     expect(t).toContain('Watched');
     expect(t).not.toContain('L0');
-    expect(t).toContain('attached');
+    expect(t).toContain('connected from your editor');
     expect(podUsage({ pod: p, activity: null })).toEqual({ cost: '—', tokens: '—' });
     expect(podModelName({ pod: { ...p, run: null }, activity: null })).toBeNull();
     expect(vendorLabel({ harness: null })).toBe('Agent');
@@ -887,7 +887,7 @@ describe('proposed plan', () => {
     const bar = createPlanReviewBar(ctx, { goalId: goal.goal_id, plan });
     expectNoMarkup(bar.el);
     expect(bar.el.textContent).toContain('Plan v2 proposed');
-    expect(bar.el.textContent).toContain('by the Master Brain');
+    expect(bar.el.textContent).toContain('by Friday’s planner');
     expect(bar.el.textContent).toContain('1 new · 1 rework · 1 dropped');
     expect(actionOf(bar.el, 'approve')).toBeNull();
     click(actionOf(bar.el, 'review'));
