@@ -758,6 +758,7 @@ const SYSTEM_QUESTIONS = new Set([...RECOVERY_QUESTIONS, ...ROUTING_QUESTIONS, .
 const PLANNING_QUESTIONS = new Set(['planner_unavailable', 'invalid_plan', 'budget_exceeded', 'action_failed']);
 const FAILURE_QUESTIONS = new Set([
   'setup_failed',
+  'check_not_run',
   'planner_unavailable',
   'budget_exceeded',
   'invalid_plan',
@@ -1360,6 +1361,25 @@ export class FridayState {
     const v = this.q.latestVerification(taskId);
     if (v?.status !== 'FAILED') return null;
     return v.checks.some((c) => c.status === 'FAILED' && c.origin !== 'friday') ? last.setup.reason : null;
+  }
+
+  /**
+   * Why a task's last failed verification judged nothing of its work (2026-11-17): every check of
+   * the project's own that failed could not be started on this computer (the command is not
+   * installed, not on the path, or misspelt in the configuration), and none of Friday's own checks
+   * failed. Sending the task back to its agent would fail the same way. Null otherwise.
+   */
+  checksNotRun(taskId: string): string | null {
+    const v = this.q.latestVerification(taskId);
+    if (v?.status !== 'FAILED') return null;
+    const failed = v.checks.filter((c) => c.status === 'FAILED' && c.required);
+    if (!failed.length || failed.some((c) => c.origin === 'friday')) return null;
+    const unstarted = failed.filter((c) => (c.summary ?? '').startsWith('could not start'));
+    if (unstarted.length !== failed.length) return null;
+    return unstarted
+      .map((c) => `the check "${c.name}" ${(c.summary ?? '').slice(0, 300)}`)
+      .join('; ')
+      .slice(0, 900);
   }
 
   /** The command of the last install and the end of what it printed, as lines for a question's evidence. */

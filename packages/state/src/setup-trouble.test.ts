@@ -78,7 +78,7 @@ function installed(taskId: string, record: WorkspaceSetupRecord): void {
 }
 
 /** A failed verification with one failed check of the given origin. */
-function failedCheck(taskId: string, origin: 'friday' | 'configured' | 'targeted'): void {
+function failedCheck(taskId: string, origin: 'friday' | 'configured' | 'targeted', summary = 'failed'): void {
   const { verification_id } = state.startVerification(PROJECT, human, taskId, {
     execution_root: 'C:/worktrees/abcd1234/task0001',
     commit_sha: 'a'.repeat(40),
@@ -93,7 +93,7 @@ function failedCheck(taskId: string, origin: 'friday' | 'configured' | 'targeted
     status: 'FAILED',
     exit_code: origin === 'friday' ? null : 1,
     artifact_ref: null,
-    summary: 'failed',
+    summary,
   });
   state.finishVerification(PROJECT, human, verification_id, false, '1/1 required checks failed');
 }
@@ -174,5 +174,26 @@ describe('a failed verification that is likely the setup', () => {
     expect(state.worktreeSetupTrouble(PROJECT, passed)).toBe('npm exited with 1');
     installed(passed, setup({ status: 'passed', exit_code: 0, reason: 'ok' }));
     expect(state.worktreeSetupTrouble(PROJECT, passed)).toBeNull();
+  });
+});
+
+describe('checks that could not be started (2026-11-17)', () => {
+  it('judged nothing of the work when the only failed check never started', () => {
+    const taskId = claimed();
+    expect(state.checksNotRun(taskId)).toBeNull();
+    failedCheck(taskId, 'configured', 'could not start: spawn pnpm ENOENT');
+    expect(state.checksNotRun(taskId)).toBe('the check "tests" could not start: spawn pnpm ENOENT');
+  });
+
+  it('is the work when the check ran and failed', () => {
+    const taskId = claimed();
+    failedCheck(taskId, 'configured', 'failed (exit 1) in 300 ms');
+    expect(state.checksNotRun(taskId)).toBeNull();
+  });
+
+  it("is the work when one of Friday's own checks failed", () => {
+    const taskId = claimed();
+    failedCheck(taskId, 'friday', 'could not start: nothing');
+    expect(state.checksNotRun(taskId)).toBeNull();
   });
 });

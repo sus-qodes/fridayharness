@@ -2,6 +2,11 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — agents working together, part 7: a check that could not run is not the agent's mistake
+
+- **When a project check cannot even start on this computer, nobody is sent back to fix it.** The program a check names may not be installed, or the check may be misspelt in the settings. Nothing of the agent's work was judged then, yet the task counted as failed and went back to its agent, again and again, until it read "keeps failing verification". Friday now asks you at the first such failure, says which check could not start and what the computer said, and offers **Open the checks** and **Send it back to the agent** (once it is put right). It joins the case already handled, where the project's packages were not installed.
+- **One plan through three agents is a test now**: two agents Friday starts and one in the project folder, with every step that broke in the live run of 2026-11-17 asserted. It uses no model.
+
 ## Unreleased — agents working together, part 6: your turn
 
 - **Friday says when it is your turn.** A task kept for an agent you run yourself (Antigravity, Claude Code in an editor) starts only when you prompt that agent, and the card only said "for antigravity-1". It is now listed with what waits for you: "Your turn in Antigravity", which agent takes the task, and what to type there (`/friday`). It shows in the Notch, in the Studio's waiting list and as one notification, and it counts in the status line.

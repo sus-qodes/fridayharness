@@ -594,6 +594,26 @@ describe('Master Brain trigger table', () => {
       ],
     ],
     [
+      // The project's checks could not start on this computer: nothing was judged, so no agent is
+      // sent back and no plan revised; a person is asked at once.
+      'plan task failed where its checks could not be started',
+      ev('task.failed', { task_id: 'task_g1' }),
+      facts({
+        checkTrouble: (id) => (id === 'task_g1' ? 'the check "tests" could not start: spawn pnpm ENOENT' : null),
+        failuresOf: () => 9,
+        planner: { available: false, reason: 'no key is stored' },
+      }),
+      [
+        {
+          kind: 'escalate',
+          goal_id: 'goal_1',
+          task_id: 'task_g1',
+          reason: 'check_not_run',
+          detail: 'the check "tests" could not start: spawn pnpm ENOENT',
+        },
+      ],
+    ],
+    [
       'a failure with the install in order takes the usual course',
       ev('task.failed', { task_id: 'task_g1' }),
       facts({ setupTrouble: () => null }),

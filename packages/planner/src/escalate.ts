@@ -18,7 +18,12 @@ export type EscalationReason =
    * A project check failed in a task folder whose dependencies were never installed (2026-11-17):
    * most likely the setup, not the work, and another attempt would fail the same way.
    */
-  | 'setup_failed';
+  | 'setup_failed'
+  /**
+   * The project's checks could not be started on this computer (2026-11-17): the work was not
+   * judged at all, and another attempt would end the same way.
+   */
+  | 'check_not_run';
 
 export interface EscalationDetails {
   blocked: string;
@@ -48,6 +53,7 @@ const CAPABILITY: Record<EscalationReason, string> = {
   plan_rejected: 'human.decision',
   action_failed: 'human.decision',
   setup_failed: 'human.decision',
+  check_not_run: 'human.decision',
 };
 
 export function buildEscalation(input: {

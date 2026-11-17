@@ -8,7 +8,15 @@
 import type { EscalationView } from '@friday/protocol';
 
 /** Which card a question gets. */
-export type QuestionCardKind = 'free' | 'recovery' | 'routing' | 'integration' | 'unanswered' | 'setup' | 'brain';
+export type QuestionCardKind =
+  | 'free'
+  | 'recovery'
+  | 'routing'
+  | 'integration'
+  | 'unanswered'
+  | 'setup'
+  | 'checks'
+  | 'brain';
 
 /** A button a question card offers. */
 export type QuestionAction =
@@ -92,6 +100,7 @@ const TITLES: Record<string, string> = {
   integration_failed: 'Integration failed',
   unanswered_request: 'An agent waits for an answer',
   setup_failed: "A task's dependencies were not installed",
+  check_not_run: 'A check could not be run on this computer',
   repeated_verification_failures: 'A task keeps failing verification',
   repeated_failures: 'A task keeps failing',
   replan_limit: 'The plan reached its revision limit',
@@ -139,6 +148,7 @@ export function cardKindOf(kind: string | null): QuestionCardKind {
   if (kind === 'unanswered_request') return 'unanswered';
   // The Master Brain's too, but it is not answered by revising the plan: the install is run again.
   if (kind === 'setup_failed') return 'setup';
+  if (kind === 'check_not_run') return 'checks';
   // Every other kind is the Master Brain's, or one this interface does not know yet: it is
   // answered by revising the plan (or, without a goal, by a recorded reply).
   return 'brain';
@@ -174,6 +184,9 @@ export function classifyEscalation(e: EscalationView, env: { plannerAvailable: b
       break;
     case 'setup':
       if (taskId) actions.push('install-again', 'rework-task', 'cancel-task');
+      break;
+    case 'checks':
+      if (taskId) actions.push('rework-task', 'cancel-task');
       break;
     case 'brain':
       if (goalId) actions.push(env.plannerAvailable ? 'revise-note' : 'write-revision');

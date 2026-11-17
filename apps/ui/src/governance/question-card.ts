@@ -174,6 +174,8 @@ function buildBody(kit: Kit): Built {
       return unansweredBody(kit);
     case 'setup':
       return setupBody(kit);
+    case 'checks':
+      return checksBody(kit);
     case 'brain':
       return brainBody(kit);
   }
@@ -795,6 +797,61 @@ function cancelTaskButton(kit: Kit): HTMLButtonElement {
     },
     'btn btn-danger',
   );
+}
+
+// ---- check_not_run: the project's checks could not be started here (2026-11-17)
+
+/**
+ * A task "failed" because a check of the project could not even start on this computer: the
+ * program it names is not installed, or the check is misspelt. Nothing of the agent's work was
+ * judged. Before, the task went back to its agent, which cannot install a program for the person,
+ * until it read "keeps failing verification". The card says what could not start and leads to
+ * where checks are changed; once that is put right, **Send it back to the agent** has its next
+ * result checked.
+ */
+function checksBody(kit: Kit): Built {
+  const { spec, ctx } = kit;
+  const taskId = spec.taskId ?? '';
+  const rework = decisionButton('Send it back to the agent', kit, async (b) => {
+    b.disabled = true;
+    const r = await ctx.act(
+      'Send the task back',
+      () =>
+        ctx.api.taskAction(
+          taskId,
+          'rework',
+          'Sent back by a person. The project check that could not be started is put right: report the work as done again so it is checked; change nothing that was not asked for.',
+        ),
+      'Sent back to the agent',
+    );
+    b.disabled = false;
+    if (r) kit.done('Sent back to the agent');
+  });
+  const open = button(
+    [icon('gear', 14), 'Open the checks'],
+    () => openDrawer(ctx, { kind: 'settings', tab: 'checks' }),
+    { class: 'btn btn-primary' },
+  );
+  const cancel = cancelTaskButton(kit);
+  return {
+    body: present([
+      h(
+        'p',
+        { class: 'gv-question-text' },
+        'This task was not really checked: a check of this project could not be started on this computer. That is the setup, not the work of the agent.',
+      ),
+      spec.why
+        ? h('p', { class: 'gv-why' }, h('span', { class: 'gv-k' }, 'What happened: '), decisionText(spec.why))
+        : null,
+      h(
+        'p',
+        { class: 'field-hint' },
+        'Install the program the check needs, or correct the check in Settings. Then send the task back: the agent reports it again and it is checked. Friday sends nothing back on its own here: another attempt would end the same way.',
+      ),
+      taskId ? h('div', { class: 'gv-actions' }, open, rework, cancel) : null,
+    ]),
+    decisions: [rework, cancel],
+  };
 }
 
 // ---- setup_failed: the checks failed where the install failed (2026-11-17)

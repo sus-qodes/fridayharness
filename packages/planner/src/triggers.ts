@@ -62,6 +62,11 @@ export interface TriggerFacts {
    * dependencies were not installed, and a check of the project's own failed there. Null otherwise.
    */
   setupTrouble?(taskId: string): string | null;
+  /**
+   * Why the task's last failed verification judged nothing: the project's checks could not be
+   * started on this computer. Null otherwise.
+   */
+  checkTrouble?(taskId: string): string | null;
 }
 
 const transitionTo = (e: TriggerEvent) => (e.payload.transition as { to?: string } | undefined)?.to;
@@ -77,6 +82,10 @@ export function failureAction(task_id: string, goal_id: string, f: TriggerFacts)
   // counted as the work failing, was retried up to the limit, and then read "keeps failing".
   const trouble = f.setupTrouble?.(task_id) ?? null;
   if (trouble) return { kind: 'escalate', goal_id, task_id, reason: 'setup_failed', detail: trouble };
+  // Nor when the checks could not even start here: nothing of the work was judged, and no agent can
+  // install a missing program on the person's computer by trying again.
+  const unstarted = f.checkTrouble?.(task_id) ?? null;
+  if (unstarted) return { kind: 'escalate', goal_id, task_id, reason: 'check_not_run', detail: unstarted };
   const failures = f.failuresOf(task_id);
   if (failures >= f.limits.escalateAfterFailures) {
     return {

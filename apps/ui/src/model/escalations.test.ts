@@ -31,6 +31,7 @@ describe('escalation kinds → cards (plan FD-21)', () => {
     ['plan_rejected', 'brain'],
     ['action_failed', 'brain'],
     ['setup_failed', 'setup'],
+    ['check_not_run', 'checks'],
     ['something_new', 'brain'],
   ];
   it.each(table)('%s → %s', (kind, card) => {
@@ -106,6 +107,16 @@ describe('classifyEscalation', () => {
     expect(classifyEscalation(makeEscalation({ kind: 'recovery_needed', task_id: null }), READY).actions).toEqual([
       'later',
     ]);
+  });
+
+  it('check_not_run sends the task back or cancels it, and is not a plan revision', () => {
+    const s = classifyEscalation(
+      makeEscalation({ kind: 'check_not_run', requested_by_kind: 'master_brain', goal_id: 'goal_1' }),
+      READY,
+    );
+    expect(s.card).toBe('checks');
+    expect(s.title).toBe('A check could not be run on this computer');
+    expect(s.actions).toEqual(['rework-task', 'cancel-task', 'later']);
   });
 
   it('setup_failed runs the install again, sends the task back or cancels it: never a plan revision', () => {

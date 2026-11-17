@@ -627,6 +627,7 @@ export class MasterBrain {
           .some((j) => j.kind === 'role' && j.task_id === taskId),
       failuresOf: (taskId) => state.q.verificationFailures(taskId),
       setupTrouble: (taskId) => state.worktreeSetupTrouble(projectId, taskId),
+      checkTrouble: (taskId) => state.checksNotRun(taskId),
       replansOf: (goalId) => {
         const g = state.q.findGoal(projectId, goalId);
         return (g?.plan_id ? state.q.planVersions(g.plan_id) : []).filter(
@@ -637,7 +638,7 @@ export class MasterBrain {
         const row = state.q.escalation(id);
         if (row?.requested_by_kind !== 'master_brain' || !row.goal_id) return null;
         // An answer to "the install failed" is a person's decision on record; the plan is not at fault.
-        if (row.kind === 'setup_failed') return null;
+        if (row.kind === 'setup_failed' || row.kind === 'check_not_run') return null;
         if (row.kind !== 'ambiguous_intent') return { goal_id: String(row.goal_id), replan: true, force: false };
         // A question asked by a proposal: re-propose (replacing it) only if it is still undecided.
         const d = JSON.parse(String(row.details_json ?? '{}')) as { plan_id?: string; plan_version?: number };
@@ -1430,6 +1431,14 @@ export class MasterBrain {
           'cancel it ("friday task cancel <task>")',
         ],
         action: 'wait: another attempt would fail the same way',
+      },
+      check_not_run: {
+        question: `The work on ${what} was not checked: ${detail}. This is the setup of this computer or of the project's checks, not the agent's work. How should Friday continue?`,
+        options: [
+          'install what the check needs, or correct the check, then send the task back to its agent',
+          'cancel it',
+        ],
+        action: 'wait: another attempt would end the same way',
       },
       action_failed: {
         question: `Friday's planner could not finish its work on ${what}: ${detail}. How should it continue?`,
