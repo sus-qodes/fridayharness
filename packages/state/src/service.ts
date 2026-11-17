@@ -127,6 +127,17 @@ export interface WorkspaceSetupRecord {
   cache?: { key: string; from: 'cache' | 'install'; files: number; duration_ms: number } | null;
 }
 
+/** Git-only refresh metadata, stored with the run's workspace events. */
+export interface WorkspaceRefreshRecord {
+  from: string;
+  goal_head: string;
+  head: string;
+  commits: string[];
+  preserved_ref: string | null;
+  conflicts: string[];
+  artifact_ref?: string | null;
+}
+
 /** What a `routing_blocked` error carries (review F01). */
 interface RoutingBlock {
   task_id: string;
@@ -1100,6 +1111,13 @@ export class FridayState {
     // then prepares the worktree for this run (review F07). A worktree of another clone is never
     // reused (review F08): the daemon decides what the run gets.
     const owned = this.q.operationRuns(projectId, { task_id: task.task_id, status: 'running', limit: 1 }).length > 0;
+    // A goal task that already has a worktree gets the goal's newer commits before `task.start` is
+    // sent, on every new attempt (2026-11-17): after a refused claim, a restart, a reassignment.
+    // Before, a retained worktree was used as it stood, so a task restarted because an earlier
+    // task's work was missing started again without it. The daemon prepares it (`pending`).
+    if (wt && task.goal_id) {
+      return { execution_root: null, base_commit: null, branch_ref: null, workspace: 'pending' };
+    }
     if (wt && existsSync(wt.path) && !owned && this.inThisClone(wt.path)) {
       if (wt.status !== 'active') {
         ctx.emit({
@@ -5167,6 +5185,8 @@ export class FridayState {
       warnings: string[];
       /** What installing the worktree's dependencies did; null when nothing was attempted. */
       setup?: WorkspaceSetupRecord | null;
+      refresh?: WorkspaceRefreshRecord | null;
+      note?: string | null;
     },
   ): RunView {
     return this.exec({ name: 'run.workspace', project_id: projectId, actor: SYSTEM, params: { runId } }, (ctx) => {
@@ -5223,6 +5243,7 @@ export class FridayState {
           worktree_id: worktree?.worktree_id ?? null,
           warnings: alloc.warnings,
           setup: alloc.setup ?? null,
+          ...(alloc.refresh ? { refresh: alloc.refresh } : {}),
         },
         refs: [
           { kind: 'task', id: task.task_id },
@@ -5234,17 +5255,48 @@ export class FridayState {
       // An agent whose dependencies could not be installed is told so, never left to find out.
       const setup = alloc.setup;
       const trouble =
-        setup && (setup.status === 'failed' || setup.status === 'refused')
+        alloc.note ??
+        (setup && (setup.status === 'failed' || setup.status === 'refused')
           ? `Friday could not install this worktree's dependencies (${setup.reason}). If the task needs them, install them yourself; that may need an approval.`
-          : null;
-      this.enqueue(
-        ctx,
-        run.harness_id,
-        'task.start',
-        this.taskStartParams(projectId, task, ready, agent.role, trouble),
-        run.run_id,
-      );
+          : null);
+      const start = this.taskStartParams(projectId, task, ready, agent.role, trouble);
+      // A refresh conflict is the immediate work: keep its report ahead of an older continuation note.
+      if (alloc.note) start.note = alloc.note.slice(0, 2000);
+      this.enqueue(ctx, run.harness_id, 'task.start', start, run.run_id);
       return ready;
+    });
+  }
+
+  /** A refresh conflict is agent work: decline the unstarted run and return the task through rework. */
+  workspaceConflict(projectId: string, runId: string, refresh: WorkspaceRefreshRecord, reason: string): void {
+    this.exec({ name: 'run.workspace_conflict', project_id: projectId, actor: SYSTEM, params: { runId } }, (ctx) => {
+      const run = this.q.run(runId);
+      const task = this.q.task(projectId, run.task_id);
+      if (
+        run.workspace !== 'pending' ||
+        run.status !== 'STARTING' ||
+        task.current_run_id !== runId ||
+        task.status !== 'ASSIGNED'
+      )
+        return;
+      ctx.emit({
+        type: 'run.workspace_refresh_conflicted',
+        payload: { run_id: runId, task_id: task.task_id, refresh, reason },
+        ...(refresh.artifact_ref ? { artifact_refs: [refresh.artifact_ref] } : {}),
+        refs: [
+          { kind: 'run', id: runId },
+          { kind: 'task', id: task.task_id },
+        ],
+      });
+      this.moveRun(ctx, run, 'DECLINED', reason, { outcome: 'declined', ended_at: ctx.now });
+      this.expireOutboxForRun(ctx, runId);
+      const rework = this.moveTask(ctx, task, 'workspace.conflict', {
+        reason,
+        changes: { assigned_agent_id: null, assigned_harness_id: null, current_run_id: null },
+      });
+      this.releaseAgent(ctx, run.agent_id, task.task_id);
+      this.syncHarnessBusy(ctx, run.harness_id);
+      this.moveTask(ctx, rework, 'task.ready', { reason });
     });
   }
 

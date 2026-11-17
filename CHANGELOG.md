@@ -2,6 +2,16 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — agents working together, part 1
+
+Found by running Claude Code, Codex and a stand-in for Antigravity on one plan (2026-11-17): a task that was restarted because an earlier task's work was missing started again without it, and bringing that work in by hand made its check fail.
+
+- **A task's folder takes in the goal's finished work before every new attempt.** A task Friday starts works in its own folder, cut when the task first began. When the task is restarted, given to another agent or sent back after a refused claim, Friday first merges what the goal branch gained since then into that folder, keeping the agent's uncommitted edits. Before, the folder was used as it stood.
+- **The check then measures from that point.** What came in from the goal is not counted as the task's own change, so it can no longer fail the check as "changed outside the write scope".
+- **A collision goes to the agent, not to you.** When the goal's work and the task's edits change the same lines, nothing in the folder is touched: the attempt is not started, the task goes back with both sides of each file as its note, and the next attempt resolves it.
+
+The refresh itself was written on 2026-10-31 on a branch that was never merged; here it is brought in and widened from "after a refused claim" to every new attempt.
+
 ## Unreleased — the Notch folds back up
 
 - **The open Notch card has a button that rolls it back up.** A handle with an upward arrow sits in the middle of the card's lower edge, between Sound and Open Studio: one click folds the card back into the pill at the top of the screen. It is what `Esc` does, and what "Later" does on a request; a card that showed a notice, or nothing at all, had no button for it.

@@ -4,6 +4,8 @@ import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { FridayError } from '@friday/protocol';
+import { commitTree, isAncestor, mergeCommits, moveRef, resolveCommit } from './integrate.js';
+import { applyState, preserveCommit, preservedPrefix, resetWorktree, snapshotWorktree } from './recover.js';
 import { GitRoot } from './root.js';
 import { runGit } from './run.js';
 
@@ -77,6 +79,89 @@ export interface Allocation {
   /** True when the branch already existed (a previous attempt) and was checked out again. */
   reused_branch: boolean;
   warnings: string[];
+}
+
+export interface WorktreeRefresh {
+  from: string;
+  goal_head: string;
+  head: string;
+  commits: string[];
+  preserved_ref: string | null;
+  conflicts: { path: string; task: string; goal: string }[];
+}
+
+/** Merge a goal revision, then replay the recorded dirty delta without committing that delta. */
+export async function refreshWorktree(opts: {
+  dir: string;
+  goalHead: string;
+  taskId: string;
+}): Promise<WorktreeRefresh> {
+  const root = await GitRoot.open(opts.dir);
+  const refs = await root.refs();
+  if (!refs.linked || refs.branch !== taskBranch(opts.taskId) || !refs.head)
+    throw new FridayError('invalid_request', 'only a task worktree with a HEAD can be refreshed');
+  const from = refs.head;
+  const goal = await resolveCommit(root.root, opts.goalHead);
+  if (!goal) throw new FridayError('invalid_request', `the goal revision ${opts.goalHead} is missing`);
+  const result: WorktreeRefresh = {
+    from,
+    goal_head: goal,
+    head: from,
+    commits: [],
+    preserved_ref: null,
+    conflicts: [],
+  };
+  if (await isAncestor(root.root, goal, from)) return result;
+  result.commits = (await runGit(root.root, ['rev-list', '--reverse', `${from}..${goal}`])).stdout
+    .trim()
+    .split('\n')
+    .filter(Boolean);
+  const content = await root.contentTree();
+  const saved = await snapshotWorktree(root.root, `Friday: preserve edits before refreshing ${opts.taskId}`);
+  if (saved) result.preserved_ref = await preserveCommit(root.root, preservedPrefix(opts.taskId), 'refresh', saved);
+  const merged = await mergeCommits(root.root, from, goal);
+  const head = merged.conflicts.length
+    ? from
+    : (await isAncestor(root.root, from, goal))
+      ? goal
+      : await commitTree(root.root, merged.tree, [from, goal], `Friday: refresh ${opts.taskId} from goal ${goal}`);
+  const replayed = saved && !merged.conflicts.length ? await mergeCommits(root.root, head, saved) : null;
+  const conflicts = [...new Set([...merged.conflicts, ...(replayed?.conflicts ?? [])])];
+  if (conflicts.length) {
+    const base = (await runGit(root.root, ['merge-base', from, goal])).stdout.trim();
+    const changes = async (side: string, file: string) => {
+      const diff = await runGit(root.root, [
+        'diff',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--unified=1',
+        base,
+        side,
+        '--',
+        file,
+      ]);
+      return diff.stdout.length > 3000
+        ? `${diff.stdout.slice(0, 3000)}\n[diff truncated after 3000 characters]`
+        : diff.stdout;
+    };
+    for (const file of conflicts)
+      result.conflicts.push({ path: file, task: await changes(saved ?? from, file), goal: await changes(goal, file) });
+    return result; // Both preflights leave the original files, index and branch untouched.
+  }
+  const restored = replayed
+    ? await commitTree(root.root, replayed.tree, [head], `Friday: replay preserved edits of ${opts.taskId}`)
+    : null;
+  const current = await root.contentTree();
+  const savedTree = saved ? (await runGit(root.root, ['rev-parse', `${saved}^{tree}`])).stdout.trim() : content.tree;
+  if (current.head !== from || current.tree !== content.tree || savedTree !== content.tree)
+    throw new FridayError('git_conflict', 'the task worktree changed while its refresh was prepared; retry');
+  // Every dirty file is reachable through preserved_ref before Git clears it; ignored files stay.
+  if (saved) await resetWorktree(root.root);
+  await runGit(root.root, ['read-tree', '-m', '-u', from, head], { timeoutMs: 300_000 });
+  await moveRef(root.root, 'HEAD', head, from);
+  if (restored) await applyState(root.root, restored);
+  result.head = head;
+  return result;
 }
 
 /** Creates the task's worktree, or returns the one that already exists (ADR-0023 §2). */

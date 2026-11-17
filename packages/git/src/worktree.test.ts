@@ -6,7 +6,7 @@ import path from 'node:path';
 import { FridayError } from '@friday/protocol';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
-import { allocateWorktree, GitRoot, removeWorktree, rootKey, worktreesDir } from './index.js';
+import { allocateWorktree, GitRoot, refreshWorktree, removeWorktree, rootKey, worktreesDir } from './index.js';
 
 const ws = useTestWorkspace();
 
@@ -111,6 +111,82 @@ describe('allocation', () => {
     expect(readFileSync(path.join(a.path, '.claude', 'settings.local.json'), 'utf8')).toContain('friday');
     expect(a.warnings.join(' ')).toMatch(/uncommitted changes \(\.mcp\.json\)/);
     expect((await (await GitRoot.open(a.path)).status()).clean).toBe(true);
+  });
+});
+
+describe('refreshing a reused worktree', () => {
+  async function changedGoal() {
+    const p = await project();
+    const taskId = 'task_0000000000000000000refresh';
+    const alloc = await allocateWorktree({ mainRoot: p.dir, worktreesDir: p.wt, taskId });
+    writeFileSync(path.join(p.dir, 'checks.ts'), 'export const check = 2;\n');
+    await p.g.commitAll('correct the independent check');
+    return { ...p, alloc, taskId, goalHead: await p.g.headSha() };
+  }
+
+  it('brings new goal commits into a clean worktree and is idempotent', async () => {
+    const { dir, alloc, taskId, goalHead } = await changedGoal();
+    const refreshed = await refreshWorktree({ dir: alloc.path, goalHead, taskId });
+    expect(refreshed).toMatchObject({
+      from: alloc.base_commit,
+      head: goalHead,
+      goal_head: goalHead,
+      commits: [goalHead],
+      conflicts: [],
+    });
+    expect(readFileSync(path.join(alloc.path, 'checks.ts'), 'utf8').trim()).toBe('export const check = 2;');
+    expect((await (await GitRoot.open(alloc.path)).identity()).dirty).toBe(false);
+    expect((await refreshWorktree({ dir: alloc.path, goalHead, taskId })).commits).toEqual([]);
+    expect(await deterministicGit(dir).headSha()).toBe(goalHead);
+  });
+
+  it('keeps committed task work and restores staged, deleted and untracked edits as uncommitted', async () => {
+    const { alloc, taskId, goalHead } = await changedGoal();
+    const git = deterministicGit(alloc.path);
+    writeFileSync(path.join(alloc.path, 'committed.ts'), 'committed task work\n');
+    await git.commitAll('task progress');
+    writeFileSync(path.join(alloc.path, 'src', 'a.ts'), 'export const a = 9;\n');
+    await git.run(['add', 'src/a.ts']);
+    rmSync(path.join(alloc.path, '.mcp.json'));
+    writeFileSync(path.join(alloc.path, 'new.ts'), 'untracked work\n');
+    const refreshed = await refreshWorktree({ dir: alloc.path, goalHead, taskId });
+    expect(refreshed.conflicts).toEqual([]);
+    expect(refreshed.preserved_ref).toMatch(/^refs\/friday\/preserved\//);
+    expect(readFileSync(path.join(alloc.path, 'checks.ts'), 'utf8').trim()).toBe('export const check = 2;');
+    expect(readFileSync(path.join(alloc.path, 'committed.ts'), 'utf8').trim()).toBe('committed task work');
+    expect(readFileSync(path.join(alloc.path, 'src', 'a.ts'), 'utf8').trim()).toBe('export const a = 9;');
+    expect(readFileSync(path.join(alloc.path, 'new.ts'), 'utf8').trim()).toBe('untracked work');
+    expect(existsSync(path.join(alloc.path, '.mcp.json'))).toBe(false);
+    expect(await git.run(['diff', '--cached', '--name-only'])).toBe('');
+    expect(await git.run(['show', 'HEAD:src/a.ts'])).toContain('a = 1');
+    expect(await git.run(['status', '--porcelain'])).toContain('?? new.ts');
+    expect((await (await GitRoot.open(alloc.path)).changesSince(goalHead)).changes.map((c) => c.path)).not.toContain(
+      'checks.ts',
+    );
+  });
+
+  it.each([false, true])('reports both sides of a conflict without changing task work (dirty=%s)', async (dirty) => {
+    const { dir, g, wt } = await project();
+    const taskId = 'task_0000000000000000000conflict';
+    const alloc = await allocateWorktree({ mainRoot: dir, worktreesDir: wt, taskId });
+    const taskGit = deterministicGit(alloc.path);
+    writeFileSync(path.join(alloc.path, 'src', 'a.ts'), 'export const a = 3;\n');
+    if (!dirty) await taskGit.commitAll('task changes a');
+    const head = await taskGit.headSha();
+    const before = await taskGit.run(['status', '--porcelain']);
+    writeFileSync(path.join(dir, 'src', 'a.ts'), 'export const a = 2;\n');
+    await g.commitAll('goal changes a');
+    const refreshed = await refreshWorktree({ dir: alloc.path, goalHead: await g.headSha(), taskId });
+    expect(refreshed.conflicts).toEqual([
+      expect.objectContaining({
+        path: 'src/a.ts',
+        task: expect.stringContaining('+export const a = 3;'),
+        goal: expect.stringContaining('+export const a = 2;'),
+      }),
+    ]);
+    expect(await taskGit.headSha()).toBe(head);
+    expect(await taskGit.run(['status', '--porcelain'])).toBe(before);
+    expect(readFileSync(path.join(alloc.path, 'src', 'a.ts'), 'utf8').trim()).toBe('export const a = 3;');
   });
 });
 

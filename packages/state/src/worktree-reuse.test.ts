@@ -27,8 +27,10 @@ describe.each<DriverName>(['better-sqlite3', 'node:sqlite'])('worktree reactivat
     state.ensureProject({ project_id: PROJECT, name: 'reuse', root_path: ws().projectDir });
   });
 
-  it.each(['assignment', 'workspace ready'])(
-    'reactivates a preserved worktree during %s and keeps reservations until integration',
+  // A goal task's kept worktree takes in the goal's newer commits before the attempt starts
+  // (2026-11-17), so the daemon prepares it in both cases, and it is active again once it is ready.
+  it.each(['its folder still there', 'its folder gone'])(
+    'reactivates a preserved worktree with %s once it is ready, and keeps reservations until integration',
     (phase) => {
       const goal = state.createGoal(PROJECT, human, { request: 'Ship preserved work', plan: false });
       const plan = state.proposePlan(PROJECT, human, goal.goal_id, {
@@ -75,18 +77,17 @@ describe.each<DriverName>(['better-sqlite3', 'node:sqlite'])('worktree reactivat
         base_commit: 'a'.repeat(40),
         warnings: [],
       };
-      if (phase === 'assignment') mkdirSync(alloc.path, { recursive: true });
+      if (phase === 'its folder still there') mkdirSync(alloc.path, { recursive: true });
       const tree = state.recordWorktree(PROJECT, human, task.task_id, alloc);
       state.releaseWorktree(PROJECT, human, tree.worktree_id, 'preserved', 'keep the uncommitted work');
       expect(state.q.worktreeForTask(task.task_id)?.status).toBe('preserved');
       state.assignTask(PROJECT, human, task.task_id, 'backend-1');
       const runId = state.q.task(PROJECT, task.task_id).current_run_id;
       if (!runId) throw new Error('No run created');
-      if (phase === 'workspace ready') {
-        expect(state.q.run(runId).workspace).toBe('pending');
-        mkdirSync(alloc.path, { recursive: true });
-        state.workspaceReady(PROJECT, runId, { ...alloc, created: false });
-      }
+      expect(state.q.run(runId).workspace).toBe('pending');
+      expect(state.q.worktreeForTask(task.task_id)?.status).toBe('preserved');
+      mkdirSync(alloc.path, { recursive: true });
+      state.workspaceReady(PROJECT, runId, { ...alloc, created: false });
       expect(state.q.worktreeForTask(task.task_id)).toMatchObject({ worktree_id: tree.worktree_id, status: 'active' });
       expect(state.q.worktreeAt(PROJECT, alloc.path)?.worktree_id).toBe(tree.worktree_id);
       expect(state.q.run(runId)).toMatchObject({ workspace: 'ready', execution_root: alloc.path });

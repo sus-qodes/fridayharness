@@ -62,9 +62,11 @@ export {
   type AllocateOptions,
   type Allocation,
   allocateWorktree,
+  refreshWorktree,
   removeWorktree,
   rootKey,
   sameRepository,
   taskBranch,
+  type WorktreeRefresh,
   worktreesDir,
 } from './worktree.js';

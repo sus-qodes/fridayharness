@@ -159,6 +159,11 @@ export class StateProjector implements Projector {
             "UPDATE task_runs SET execution_root = ?, base_commit = ?, branch_ref = ?, workspace = 'ready' WHERE run_id = ?",
           )
           .run(str(p.execution_root), opt(p.base_commit), opt(p.branch_ref), str(p.run_id));
+        if (p.worktree_id) {
+          this.db
+            .prepare('UPDATE worktrees SET base_commit = ?, updated_at = ? WHERE worktree_id = ?')
+            .run(opt(p.base_commit), e.occurred_at, str(p.worktree_id));
+        }
         return;
       case 'run.rebound':
         // The run's work now lives in a worktree of this clone (review M7.1 R05).

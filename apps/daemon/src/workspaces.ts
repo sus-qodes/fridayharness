@@ -6,6 +6,7 @@ import {
   goalBranch,
   isAncestor,
   parentOf,
+  refreshWorktree,
   removeWorktree,
   resolveCommit,
   restoredRef,
@@ -147,7 +148,48 @@ export class WorkspaceManager {
       if (state.q.operationRuns(this.pid, { task_id: run.task_id, status: 'running', limit: 1 }).length) {
         await this.opts.quiesce?.(run.task_id);
       }
-      const alloc = await this.#allocate(run.task_id);
+      let alloc = await this.#allocate(run.task_id);
+      let refresh = null;
+      let note: string | null = null;
+      // A worktree that is reused takes in what the goal branch gained since it was cut, whatever
+      // the attempt (2026-11-17): the work of the tasks this one depends on is then in its folder,
+      // and the run's base moves to that point, so verification judges only this task's changes.
+      const goalHead = alloc.reused_branch ? await this.baseFor(run.task_id) : undefined;
+      if (goalHead) {
+        const prior = state.store.readByRef(this.pid, 'task', run.task_id, {
+          types: ['run.workspace_refresh_conflicted'],
+          desc: true,
+          limit: 1,
+        })[0]?.payload as { refresh?: { goal_head?: string }; reason?: string } | undefined;
+        if (prior?.refresh?.goal_head === goalHead) {
+          // The next attempt resolves the reported conflict; retrying the same preflight would loop.
+          note = prior.reason ?? null;
+        } else {
+          const result = await refreshWorktree({ dir: alloc.path, goalHead, taskId: run.task_id });
+          refresh = { ...result, conflicts: result.conflicts.map((c) => c.path).slice(0, 50) };
+          if (result.conflicts.length) {
+            const stored = state.artifacts?.storeText(this.pid, 'workspace', JSON.stringify(result, null, 2));
+            const artifact_ref = stored ? `artifact:${stored.artifact_id}` : null;
+            note = [
+              `Resolve the worktree refresh conflict with goal commit ${goalHead}. The worktree and its edits are preserved; merge that goal revision and resolve these files before claiming.`,
+              artifact_ref ? `Conflict report: ${artifact_ref}` : '',
+              `Conflicting files: ${result.conflicts
+                .map((c) => c.path)
+                .join(', ')
+                .slice(0, 1600)}`,
+              ...result.conflicts
+                .slice(0, 20)
+                .map((c) => `${c.path}\nTask side:\n${c.task.slice(0, 1200)}\nGoal side:\n${c.goal.slice(0, 1200)}`),
+              artifact_ref ? `Full conflict report (${result.conflicts.length} files): ${artifact_ref}` : '',
+            ]
+              .filter(Boolean)
+              .join('\n\n');
+            state.workspaceConflict(this.pid, runId, { ...refresh, artifact_ref }, note.slice(0, 24_000));
+            return;
+          }
+        }
+        alloc = { ...alloc, base_commit: goalHead };
+      }
       // Dependencies before the agent starts (plan Phase 7): no attempt waits for an install
       // approval mid-run, and what happened is on the run's record.
       const setup = this.opts.setup ? await this.opts.setup(alloc, { task_id: run.task_id, run_id: runId }) : null;
@@ -156,7 +198,12 @@ export class WorkspaceManager {
         this.#askHuman(run.task_id, reason, { worktree: alloc.path, setup });
         throw new FridayError('invalid_request', reason);
       }
-      state.workspaceReady(this.pid, runId, { ...alloc, setup });
+      state.workspaceReady(this.pid, runId, {
+        ...alloc,
+        setup,
+        refresh: refresh?.commits.length ? refresh : null,
+        note,
+      });
       logger.info('task worktree ready', {
         task_id: run.task_id,
         run_id: runId,

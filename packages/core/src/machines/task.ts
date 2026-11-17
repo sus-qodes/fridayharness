@@ -21,6 +21,7 @@ export type TaskTrigger =
   | 'verification.fail'
   | 'verification.interrupt'
   | 'task.rework'
+  | 'workspace.conflict'
   | 'harness.lost'
   | 'run.resumed'
   | 'task.cancel';
@@ -103,6 +104,8 @@ export const TASK_RULES: readonly TaskRule[] = [
     event: 'task.verification_interrupted',
   },
   { from: ['FAILED'], to: 'REWORK', trigger: 'task.rework', actors: PLANNERS, event: 'task.rework' },
+  // A task folder whose refresh from the goal's work collides goes back with the collision as its note.
+  { from: ['ASSIGNED'], to: 'REWORK', trigger: 'workspace.conflict', actors: ['system'], event: 'task.rework' },
   { from: ['REWORK'], to: 'READY', trigger: 'task.ready', actors: PLANNERS, event: 'task.ready' },
   // ADR-0003: harness loss and recovery.
   {
