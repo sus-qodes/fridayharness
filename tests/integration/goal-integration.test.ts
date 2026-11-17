@@ -82,7 +82,7 @@ interface GoalDetail {
 /** A goal with a human-written plan, approved: its tasks exist. */
 async function goalWith(
   td: TestDaemon,
-  tasks: { key: string; summary: string; write: string[]; depends_on?: string[] }[],
+  tasks: { key: string; summary: string; write: string[]; depends_on?: string[]; assign_to?: string }[],
 ) {
   const op = td.operator;
   const goal = await op.post<{ goal_id: string }>(op.projectPath('/goals'), { request: 'Tune a and b', plan: false });
@@ -96,6 +96,7 @@ async function goalWith(
         acceptance_criteria: ['tests pass'],
         scope: { write: t.write, read: ['**'] },
         depends_on: t.depends_on ?? [],
+        ...(t.assign_to ? { assign_to: t.assign_to } : {}),
       })),
     },
   });
@@ -962,6 +963,120 @@ describe('landing a completed goal', () => {
     expect(await land(td, goalId)).toMatchObject({ status: 'landed', fast_forward: true });
     expect((await runGit(ws().projectDir, ['status', '--porcelain'])).stdout).toBe('?? notes.txt\n');
     expect(text('src/a.mjs')).toBe('export const a = 2;\n');
+  });
+
+  /**
+   * The run of 2026-11-17, kept: two agents Friday starts and one a person runs in the project
+   * folder, on one plan. That day it needed three manual workarounds (a commit by hand, a merge
+   * into a task folder, a check passed by hand); every step below is one of the places it broke.
+   */
+  it('takes one plan through three agents, two Friday starts and one in the project folder, with no step by hand', async () => {
+    const td = await project(CHECKS, { 'src/c.mjs': 'export const c = 1;\n' }, L0);
+    const pid = td.project.project_id;
+    const claude = await FakeHarness.connect(td, { agentKey: 'claude-1' });
+    const codex = await FakeHarness.connect(td, { agentKey: 'codex-1' });
+    ws().track({ close: () => claude.close() });
+    ws().track({ close: () => codex.close() });
+    const editor = await folderSession(td);
+    const { goalId, ids } = await goalWith(td, [
+      { key: 'contract', summary: 'Raise a to 2', write: ['src/a.mjs'], assign_to: 'antigravity-1' },
+      { key: 'backend', summary: 'Say what b is for', write: ['src/b.mjs'], depends_on: ['contract'] },
+      { key: 'frontend', summary: 'Say what c is for', write: ['src/c.mjs'], depends_on: ['contract'] },
+      {
+        key: 'readme',
+        summary: 'Describe a, b and c',
+        write: ['README.md'],
+        depends_on: ['backend', 'frontend'],
+        assign_to: 'antigravity-1',
+      },
+    ]);
+    const id = (key: string) => ids[key] as string;
+    const verify = async (taskId: string) => {
+      const v = await td.operator.post<{ task: TaskView; verification: VerificationView }>(
+        td.operator.projectPath(`/tasks/${taskId}/verify`),
+        {},
+        { timeoutMs: 120_000 },
+      );
+      expect(v.task.status, JSON.stringify(v.verification.checks)).toBe('COMPLETED');
+      expect(await integrationOf(td, taskId)).toMatchObject({ status: 'integrated' });
+    };
+    const inFolder = async (taskId: string, files: Record<string, string>) => {
+      const claimed = (await editor.claim({ next: true })) as { run_id: string; task: TaskView; note: string | null };
+      expect(claimed.task.task_id).toBe(taskId);
+      for (const [rel, body] of Object.entries(files)) writeFileSync(file(rel), body);
+      await editor.reportResult({
+        task_id: taskId,
+        run_id: claimed.run_id,
+        status: 'completed_claim',
+        summary: `changed ${Object.keys(files).join(', ')}`,
+        changed_paths: Object.keys(files),
+        checks: [],
+      });
+      await verify(taskId);
+      return claimed;
+    };
+
+    // 1. The first task is the folder agent's. Its work reaches the goal without a commit by hand.
+    await runOnce(td);
+    await inFolder(id('contract'), { 'src/a.mjs': 'export const a = 2;\n' });
+
+    // 2. The two tasks that depend on it go to the agents that start by themselves, one each, though
+    // the folder agent is free and has the higher score; and each starts in a folder that has a = 2.
+    await runOnce(td);
+    const starts = await Promise.all(
+      [claude, codex].map(async (fake) => ({
+        fake,
+        start: (await fake.waitFor('task.start', 20_000)).params as TaskStartParams,
+      })),
+    );
+    expect(starts.map((x) => x.start.task_id).sort()).toEqual([id('backend'), id('frontend')].sort());
+    expect((await taskOf(td, id('readme'))).status).toBe('PROPOSED');
+    for (const x of starts) {
+      expect(readFileSync(path.join(x.start.working_directory, 'src/a.mjs'), 'utf8').trim()).toBe(
+        'export const a = 2;',
+      );
+      const rel = x.start.task_id === id('backend') ? 'src/b.mjs' : 'src/c.mjs';
+      const name = rel === 'src/b.mjs' ? 'b' : 'c';
+      await eventually(
+        () => taskOf(td, x.start.task_id),
+        (t) => t.status === 'RUNNING',
+        `${x.start.task_id} to run`,
+      );
+      await finish(
+        td,
+        { fake: x.fake, start: x.start, taskId: x.start.task_id },
+        {
+          [rel]: `// ${name} stays small\nexport const ${name} = 1;\n`,
+        },
+      );
+      expect(await integrationOf(td, x.start.task_id)).toMatchObject({ status: 'integrated' });
+    }
+
+    // 3. The last task is the folder agent's again: the others' finished work is in its folder
+    // before it starts, and it is told so.
+    await runOnce(td);
+    expect(text('src/b.mjs')).toBe('export const b = 1;\n');
+    const last = await inFolder(id('readme'), { 'README.md': '# a, b and c\n\na is 2; b and c stay small.\n' });
+    expect(last.note).toContain('put the finished work');
+    expect(text('src/b.mjs')).toBe('// b stays small\nexport const b = 1;\n');
+    expect(text('src/c.mjs')).toBe('// c stays small\nexport const c = 1;\n');
+
+    // 4. The goal completes and lands in one step over what the folder already holds.
+    await runOnce(td);
+    await eventually(
+      () => td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`)),
+      (g) => g.goal.status === 'COMPLETED',
+      'the goal to complete',
+    );
+    expect(await land(td, goalId)).toMatchObject({ status: 'landed', fast_forward: true });
+    expect((await runGit(ws().projectDir, ['status', '--porcelain'])).stdout).toBe('');
+    expect(await head()).toBe((await git(['rev-parse', `friday/goal-${goalId}`])).trim());
+    // No attempt was repeated: one run per task, none blocked, none passed by hand.
+    for (const key of ['contract', 'backend', 'frontend', 'readme']) {
+      expect(td.daemon.state.q.runs(id(key)), key).toHaveLength(1);
+      expect(td.daemon.state.q.latestVerification(id(key))?.checks.some((c) => c.kind === 'manual')).toBe(false);
+    }
+    expect(td.daemon.state.q.escalations(pid, 'pending')).toEqual([]);
   });
 
   it('never writes over a file the person changed in the folder, and says so to the agent', async () => {
