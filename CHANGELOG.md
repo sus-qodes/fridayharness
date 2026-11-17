@@ -2,6 +2,11 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — agents working together, part 6: your turn
+
+- **Friday says when it is your turn.** A task kept for an agent you run yourself (Antigravity, Claude Code in an editor) starts only when you prompt that agent, and the card only said "for antigravity-1". It is now listed with what waits for you: "Your turn in Antigravity", which agent takes the task, and what to type there (`/friday`). It shows in the Notch, in the Studio's waiting list and as one notification, and it counts in the status line.
+- **One click gives the task to someone else.** "Let another agent take it" on the Notch card frees the task, and an agent that starts by itself takes it when one is free.
+
 ## Unreleased — agents working together, part 5: who gets a task
 
 In the live run of 2026-11-17 Friday kept an open task fifteen minutes for an Antigravity nobody was looking at, while Codex was idle; and a task that came back after its agent was closed was taken by nobody.

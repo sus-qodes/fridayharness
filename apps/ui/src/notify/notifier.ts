@@ -19,7 +19,7 @@
 import type { SnapshotInboxItem, SnapshotTask, UiSnapshot } from '@friday/protocol';
 import { capabilityWords } from '../model/capability-words.js';
 import { visible } from '../model/text.js';
-import { nextExpiryIn, waitingItems } from '../notch/derive.js';
+import { nextExpiryIn, turnHost, turnPrompt, waitingItems } from '../notch/derive.js';
 import { realTimers, type TimerApi } from '../notch/island-fsm.js';
 import { type AppContext, type DrawerRequest, openDrawer } from '../shell/context.js';
 import type { Connection } from '../store/state.js';
@@ -167,6 +167,15 @@ export function diffNotices(memory: NoticeMemory, board: UiSnapshot, now: number
         key: item.key,
         title: 'Work is ready for you to verify',
         body: `${item.task.agent_key ? `${short(item.task.agent_key, 40)}: ` : ''}${short(item.task.summary)}`,
+        taskId: item.taskId,
+      });
+    } else if (item.kind === 'turn') {
+      if (memory.seen.has(item.key)) continue;
+      memory.seen.add(item.key);
+      notices.push({
+        key: item.key,
+        title: `Your turn in ${turnHost(item.host)}`,
+        body: `Type ${turnPrompt(item.host)} there: ${short(item.task.summary)}`,
         taskId: item.taskId,
       });
     } else if (item.kind === 'land') {

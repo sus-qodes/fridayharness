@@ -15,7 +15,7 @@ import type { AppContext, Component } from '../shell/context.js';
 import { button, h, replace, setText, setVar, toggleClass } from '../ui/dom.js';
 import { cleanText, plural, truncate } from '../ui/format.js';
 import { icon, s } from '../ui/svg.js';
-import { itemSignature, type NotchModel, statsText, type WaitingItem } from './derive.js';
+import { itemSignature, type NotchModel, statsText, turnHost, turnPrompt, type WaitingItem } from './derive.js';
 
 /** The cards the Notch shows, built by their own areas. */
 export interface NotchSlots {
@@ -45,6 +45,8 @@ export interface ViewHandlers {
   focusWaiting(): void;
   /** "Later" and `Esc`: fold the card. */
   later(): void;
+  /** "Let another agent take it": the task kept for an agent its person runs is free again. */
+  release(taskId: string): void;
   settings(): void;
   toggleMute(): void;
   /** The pager: the previous (−1) or next (+1) waiting item. */
@@ -227,6 +229,10 @@ function noticeItem(item: WaitingItem, handlers: ViewHandlers): HTMLElement | nu
     title = 'A goal is ready to land';
     line = truncate(cleanText(item.request), 120);
     door = 'Open the landing';
+  } else if (item.kind === 'turn') {
+    title = `Your turn in ${turnHost(item.host)}`;
+    line = `${visible(item.agentKey)} takes this task when you type ${turnPrompt(item.host)} there · ${truncate(cleanText(item.task.summary), 100)}`;
+    door = 'Open the task';
   } else if (item.kind === 'message') {
     const m = item.message;
     const from = m.from.kind === 'agent' ? (m.from.agent_key ?? m.from.id) : m.from.kind;
@@ -249,6 +255,12 @@ function noticeItem(item: WaitingItem, handlers: ViewHandlers): HTMLElement | nu
     h('p', { class: 'nt-notice-title' }, title),
     h('p', { class: 'nt-notice-line muted' }, line),
     button(door, () => handlers.openItem(item), { class: 'btn btn-ghost nt-notice-door' }),
+    item.kind === 'turn'
+      ? button('Let another agent take it', () => handlers.release(item.taskId), {
+          class: 'btn btn-ghost nt-notice-door nt-notice-release',
+          title: 'The task is free again for an agent that starts by itself',
+        })
+      : null,
   );
 }
 

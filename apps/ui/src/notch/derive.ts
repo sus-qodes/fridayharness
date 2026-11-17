@@ -45,6 +45,12 @@ export type WaitingItem =
    * setup stalled with "0 waiting for you" (2026-11-17).
    */
   | { kind: 'verify'; key: string; id: string; taskId: string; task: SnapshotTask }
+  /**
+   * A task kept for an agent its person runs themselves (Antigravity, Claude Code in an editor):
+   * it starts only when that person prompts the agent there, so it is their turn (2026-11-17).
+   * Before, the card said "for antigravity-1" and nothing told the person to go there.
+   */
+  | { kind: 'turn'; key: string; id: string; taskId: string; task: SnapshotTask; agentKey: string; host: string }
   /** A completed goal whose branch a person has not landed yet; `id` is the goal's. */
   | { kind: 'land'; key: string; id: string; taskId: null; goalId: string; request: string }
   /** An agent's message the human has not replied to (a request, or one the sender blocks on). */
@@ -113,6 +119,50 @@ function toVerify(board: UiSnapshot, now: number): WaitingItem[] {
     );
 }
 
+const TURN_HOSTS: Record<string, string> = {
+  antigravity: 'Antigravity',
+  'claude-code': 'Claude Code',
+  cursor: 'Cursor',
+  gemini: 'Gemini CLI',
+  opencode: 'OpenCode',
+};
+
+/** The app a person goes to for a `turn` item, by the name they know it by. */
+export function turnHost(host: string): string {
+  return TURN_HOSTS[host] ?? 'your editor';
+}
+
+/** What they type there for the agent to take its task. */
+export function turnPrompt(host: string): string {
+  return host === 'claude-code' ? '/friday start' : '/friday';
+}
+
+/** Tasks kept for an agent its person runs themselves, oldest first (see the `turn` kind). */
+function toTurn(board: UiSnapshot): WaitingItem[] {
+  const hosts = new Map(board.harnesses.map((x) => [x.harness_id, x]));
+  const out: WaitingItem[] = [];
+  const kept = board.tasks
+    .filter((t) => t.status === 'READY' && t.reserved_for_agent_key)
+    .sort((a, b) => time(a.updated_at) - time(b.updated_at));
+  for (const t of kept) {
+    const key = t.reserved_for_agent_key as string;
+    const agent = board.agents.find((a) => a.agent_key === key);
+    const host = agent?.harness_id ? hosts.get(agent.harness_id) : undefined;
+    // An agent Friday starts takes its task by itself: nothing for the person to do.
+    if (!host || host.attach_mode === 'spawn') continue;
+    out.push({
+      kind: 'turn',
+      key: `turn:${t.task_id}`,
+      id: t.task_id,
+      taskId: t.task_id,
+      task: t,
+      agentKey: key,
+      host: host.vendor,
+    });
+  }
+  return out;
+}
+
 /**
  * Completed goals whose branch waits to be landed, in the goals' order. Work made in the project
  * folder itself is not listed: it is already there, and nothing tells Friday when it was committed.
@@ -179,6 +229,7 @@ export function waitingItems(board: UiSnapshot | null, now: number): WaitingItem
     ...waiting.map(
       (t): WaitingItem => ({ kind: 'waiting', key: `waiting:${t.task_id}`, id: t.task_id, taskId: t.task_id, task: t }),
     ),
+    ...toTurn(board),
     ...proposedPlans(board),
     ...toVerify(board, now),
     ...toLand(board),
@@ -215,6 +266,7 @@ const WAITING_WORDS: Record<WaitingKind, [one: string, many: string]> = {
   approval: ['approval', 'approvals'],
   question: ['question', 'questions'],
   waiting: ['blocked agent', 'blocked agents'],
+  turn: ['task for an agent you run', 'tasks for an agent you run'],
   plan: ['proposed plan', 'proposed plans'],
   verify: ['task to verify', 'tasks to verify'],
   land: ['goal to land', 'goals to land'],
@@ -227,6 +279,7 @@ const WAITING_ORDER: readonly WaitingKind[] = [
   'approval',
   'question',
   'waiting',
+  'turn',
   'plan',
   'verify',
   'land',
@@ -308,6 +361,8 @@ export function itemSignature(item: WaitingItem): string {
       return [item.key, item.planId, String(item.version)].join('\u0000');
     case 'verify':
       return [item.key, item.task.status, item.task.current_run_id].join('\u0000');
+    case 'turn':
+      return [item.key, item.agentKey, item.host, item.task.summary].join('\u0000');
     case 'land':
       return item.key;
     case 'message': {
@@ -348,6 +403,8 @@ export function studioTarget(item: WaitingItem | null, activeTaskId: string | nu
   // The dialogs where each is done: the task's verification, the goal's landing.
   if (item?.kind === 'verify') return { task_id: item.taskId, panel: 'verify', id: item.taskId };
   if (item?.kind === 'land') return { panel: 'land', id: item.goalId };
+  // The task itself: its inspector is where it is given to another agent.
+  if (item?.kind === 'turn') return { task_id: item.taskId };
   // The delivery too: with two open messages the drawer opens on this one, as the rail's row does.
   if (item?.kind === 'message') return { panel: 'inbox', id: item.id };
   if (item?.kind === 'memory') return { panel: 'memory', tab: 'review' };

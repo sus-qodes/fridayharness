@@ -223,6 +223,11 @@ export function mountNotchWith(
     },
     focusWaiting,
     later: () => fsm.later(),
+    release: (taskId) => {
+      void ctx
+        .act('Free the task', () => ctx.api.taskAction(taskId, 'unreserve'), 'Free for another agent')
+        .then(() => ctx.refresh());
+    },
     settings: () => {
       // The notch window is too small for the settings drawer: the Studio shows it.
       if (inPage || !opts.onOpenStudio) openDrawer(ctx, { kind: 'settings' });

@@ -16,7 +16,7 @@ import type { SnapshotInboxItem, UiSnapshot } from '@friday/protocol';
 import { capabilityWords } from '../model/capability-words.js';
 import { classifyEscalation } from '../model/escalations.js';
 import { visible } from '../model/text.js';
-import { itemSignature, type WaitingItem, waitingItems } from '../notch/derive.js';
+import { itemSignature, turnHost, turnPrompt, type WaitingItem, waitingItems } from '../notch/derive.js';
 import { type AppContext, type Component, openDrawer, openModal } from '../shell/context.js';
 import { button, h, replace, setText } from '../ui/dom.js';
 import { cleanText, plural, truncate } from '../ui/format.js';
@@ -62,6 +62,7 @@ const ICONS: Record<TrayItem['kind'], IconName> = {
   approval: 'shield',
   question: 'question',
   waiting: 'hourglass',
+  turn: 'hourglass',
   plan: 'goal',
   verify: 'check',
   land: 'branch',
@@ -71,7 +72,7 @@ const ICONS: Record<TrayItem['kind'], IconName> = {
 };
 
 /** Rows that open another place instead of a card under themselves. */
-const OPENS_PLACE = new Set<TrayItem['kind']>(['plan', 'verify', 'land', 'message', 'memory', 'policy']);
+const OPENS_PLACE = new Set<TrayItem['kind']>(['turn', 'plan', 'verify', 'land', 'message', 'memory', 'policy']);
 
 function senderOf(m: SnapshotInboxItem): string {
   if (m.from.kind === 'agent') return m.from.agent_key ?? m.from.id;
@@ -140,6 +141,11 @@ export function mountDecisionsTray(
           label: `${visible(item.task.agent_key ?? 'An agent')} waits`,
           sub: truncate(cleanText(item.task.waiting_note ?? item.task.summary), 110),
         };
+      case 'turn':
+        return {
+          label: `Your turn in ${turnHost(item.host)}`,
+          sub: `${visible(item.agentKey)} takes it when you type ${turnPrompt(item.host)} there · ${truncate(cleanText(item.task.summary), 80)}`,
+        };
       case 'plan':
         return { label: `Proposed plan v${item.version}`, sub: truncate(cleanText(item.request), 110) };
       case 'verify':
@@ -197,7 +203,10 @@ export function mountDecisionsTray(
 
   /** Where a row without a card is decided. */
   const openPlace = (item: TrayItem): void => {
-    if (item.kind === 'plan') openModal(ctx, { kind: 'plan-review', id: item.goalId });
+    if (item.kind === 'turn') {
+      ctx.store.patch('ui', { selectedTaskId: item.taskId });
+      openDrawer(ctx, { kind: 'inspector', id: item.taskId });
+    } else if (item.kind === 'plan') openModal(ctx, { kind: 'plan-review', id: item.goalId });
     else if (item.kind === 'verify') openModal(ctx, { kind: 'verify', id: item.taskId });
     else if (item.kind === 'land') openModal(ctx, { kind: 'land', id: item.goalId });
     else if (item.kind === 'message') openDrawer(ctx, { kind: 'inbox', id: item.message.delivery_id });

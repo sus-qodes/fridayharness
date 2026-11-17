@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { createStore } from '../store/state.js';
 import {
+  makeAgent,
   makeApproval,
   makeEscalation,
   makeGoal,
+  makeHarness,
   makeInboxItem,
   makePlan,
   makeRun,
@@ -30,6 +32,8 @@ import {
   statusSentence,
   studioTarget,
   taskTag,
+  turnHost,
+  turnPrompt,
   waitingCount,
   waitingItems,
 } from './derive.js';
@@ -490,5 +494,37 @@ describe('the notch model', () => {
   it('has no active view without a board', () => {
     const m = buildModel(createStore().getState(), new IslandFsm({ timers: NO_TIMERS }).snapshot, NOW);
     expect(m).toMatchObject({ active: null, items: [], project: 'Friday', running: 0 });
+  });
+});
+
+describe('your turn: a task kept for an agent its person runs (2026-11-17)', () => {
+  const NOW = Date.parse('2026-10-17T10:00:00.000Z');
+  const board = (attach: 'attach' | 'spawn', status: 'READY' | 'RUNNING' = 'READY') =>
+    makeSnapshot({
+      harnesses: [makeHarness({ harness_id: 'h_ag', vendor: 'antigravity', attach_mode: attach })],
+      agents: [makeAgent({ agent_key: 'antigravity-1', harness_id: 'h_ag' })],
+      tasks: [
+        makeTask({ task_id: 't1', status, reserved_for_agent_key: 'antigravity-1', summary: 'Write the README' }),
+        makeTask({ task_id: 't2', status: 'READY', reserved_for_agent_key: null }),
+      ],
+    });
+
+  it('lists it as waiting for the person, with the app and the agent', () => {
+    const items = waitingItems(board('attach'), NOW);
+    expect(items.map((i) => i.key)).toEqual(['turn:t1']);
+    expect(items[0]).toMatchObject({ kind: 'turn', taskId: 't1', agentKey: 'antigravity-1', host: 'antigravity' });
+    expect(statusSentence(board('attach'), NOW)).toContain('1 task for an agent you run');
+    expect(studioTarget(items[0] ?? null, null)).toEqual({ task_id: 't1' });
+  });
+
+  it('lists nothing for an agent Friday starts, nor for a task that is not waiting to be taken', () => {
+    expect(waitingItems(board('spawn'), NOW)).toEqual([]);
+    expect(waitingItems(board('attach', 'RUNNING'), NOW)).toEqual([]);
+  });
+
+  it('names the app and what to type there', () => {
+    expect([turnHost('antigravity'), turnPrompt('antigravity')]).toEqual(['Antigravity', '/friday']);
+    expect([turnHost('claude-code'), turnPrompt('claude-code')]).toEqual(['Claude Code', '/friday start']);
+    expect(turnHost('something-new')).toBe('your editor');
   });
 });

@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppContext, Component } from '../shell/context.js';
 import { makeContext, type TestContext } from '../test/context.js';
 import {
+  makeAgent,
   makeApproval,
   makeEscalation,
   makeGoal,
+  makeHarness,
   makeInboxItem,
   makeRun,
   makeScenario,
@@ -871,6 +873,35 @@ describe('mounted Notch: the expanded card', () => {
     expect(handle.el.dataset.state).toBe('expanded');
     q<HTMLButtonElement>('.nt-fold').click();
     expect(handle.state()).toMatchObject({ state: 'compact', folded: false, pinned: false });
+  });
+
+  it('says it is your turn in Antigravity, and frees the task for another agent on one click (2026-11-17)', async () => {
+    const snapshot = makeSnapshot({
+      harnesses: [makeHarness({ harness_id: 'h_ag', vendor: 'antigravity', attach_mode: 'attach' })],
+      agents: [makeAgent({ agent_key: 'antigravity-1', harness_id: 'h_ag' })],
+      tasks: [
+        makeTask({
+          task_id: 'task_turn1',
+          status: 'READY',
+          reserved_for_agent_key: 'antigravity-1',
+          summary: 'Write the README',
+        }),
+      ],
+    });
+    const ctx = makeContext({ snapshot, answers: { 'POST /tasks/task_turn1/unreserve': { ok: true } } });
+    const { handle, q } = mount(ctx);
+    handle.open();
+    const notice = q('.nt-notice-turn');
+    expect(notice.querySelector('.nt-notice-title')?.textContent).toBe('Your turn in Antigravity');
+    expect(notice.querySelector('.nt-notice-line')?.textContent).toBe(
+      'antigravity-1 takes this task when you type /friday there · Write the README',
+    );
+    const buttons = [...notice.querySelectorAll<HTMLButtonElement>('button')];
+    expect(buttons.map((b) => b.textContent)).toEqual(['Open the task', 'Let another agent take it']);
+    buttons[1]?.click();
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    expect(ctx.transport.to('POST', '/tasks/task_turn1/unreserve')).toHaveLength(1);
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Free for another agent' });
   });
 
   it('in the notch window Settings names its drawer for the Studio (deep review R7)', () => {
