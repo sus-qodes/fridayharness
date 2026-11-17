@@ -2,6 +2,11 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — loose ends, part 3
+
+- **What you allowed for a task can be seen, and taken back.** "Allow for this task" lets an agent do the same thing again without asking; once given, such an allowance was nowhere in the app, and taking it back was a terminal command. The task inspector lists the ones that still hold under "Allowed for this task" (the act in words, exactly what, and how long it holds), each with **Take back** (`POST approvals/:aid/revoke`): the agent asks again the next time. The heading shows only while there is something under it. The list comes from a route of its own (`GET tasks/:tid/approvals`, the task's granted approvals): the desktop shell still never forwards the whole list of approvals.
+- **The Claude Code setup says that Claude Code keeps its own prompts**: it may still ask before an edit or a command, in its panel, whatever Friday allows.
+
 ## Unreleased — loose ends, part 2
 
 - **A refusal says what to do, not which command to type.** Friday's refusals name a terminal command in brackets for what they suggest ("Reject it ("friday plan reject") and ask for a new one ("friday goal replan")"), and the toast showed them, for example on approving a plan version that had gone out of date. The brackets are left out: the sentence stands without them, and the interface has a button for each.

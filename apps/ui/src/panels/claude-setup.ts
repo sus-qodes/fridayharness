@@ -191,6 +191,11 @@ export function claudeSetupModal(
         note(
           `Claude Code then works as ${visible(agentKey())}; it shows in the Agents list as “connected from VS Code”.`,
         ),
+        // Its own prompts stay its own (2026-11-17): a person who expected Friday's approvals alone
+        // met a second question before every edit, and nothing here had said so.
+        note(
+          'Claude Code keeps its own permission prompts: it may still ask you before an edit or a command, in its panel, until you allow that there. Friday checks what it does either way.',
+        ),
       ),
     );
     if (r.plan) renderPlan(r.plan);

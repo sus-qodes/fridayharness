@@ -111,6 +111,9 @@ pub static ROUTES: &[Route] = &[
     get("tasks/{tid}/events", &["order", "limit", "before"]),
     get("tasks/{tid}/diff", &["stat"]),
     get("tasks/{tid}/recovery", &[]),
+    // What was allowed for this task and still holds, for the inspector's "Take back". The whole
+    // list of approvals is never forwarded.
+    get("tasks/{tid}/approvals", &[]),
     get("tasks/{tid}/delivered-context", &[]),
     post("tasks"),
     post("tasks/{tid}/continue"),
@@ -594,6 +597,18 @@ mod tests {
         assert!(refused("GET", &p("agent-setup/antigravity?agent=dev-1&run=1")));
         assert!(refused("POST", &p("agent-setup/antigravity/start")));
         assert!(refused("POST", &p("agent-setup/gemini")));
+    }
+
+    #[test]
+    fn the_allowances_of_a_task_are_listed_and_taken_back() {
+        let c = req("GET", &p("tasks/task_ABC123/approvals")).unwrap();
+        assert_eq!(c.param("tid"), Some("task_ABC123"));
+        assert!(req("POST", &p("approvals/appr_1/revoke")).is_ok());
+        // One task's, with no filter to widen it; the whole list stays out of the page's reach.
+        assert!(refused("GET", &p("tasks/task_ABC123/approvals?status=pending")));
+        assert!(refused("POST", &p("tasks/task_ABC123/approvals")));
+        assert!(refused("GET", &p("approvals")));
+        assert!(refused("GET", &p("approvals?status=granted")));
     }
 
     #[test]

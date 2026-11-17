@@ -42,6 +42,7 @@ import {
   tabs,
 } from './common.js';
 import { describeEvent, HISTORY_PAGE, mayHaveOlder, mergeEvents, olderBefore } from './events.js';
+import { taskGrants } from './task-grants.js';
 
 export type InspectorTab = 'overview' | 'changes' | 'history' | 'context';
 export type InspectorAction = 'verify' | 'continue' | 'rework' | 'recover' | 'unstick' | 'cancel';
@@ -367,6 +368,30 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
     ];
   }
 
+  /**
+   * What was allowed for this task and still holds, each with "Take back". The heading shows only
+   * while there is something under it, which is seldom.
+   */
+  let grants: ReturnType<typeof taskGrants> | null = null;
+  function grantsSection(): HTMLElement {
+    grants?.destroy();
+    const box = section('Allowed for this task');
+    box.hidden = true;
+    const made = taskGrants(ctx, id, (count) => {
+      box.hidden = count === 0;
+    });
+    grants = made;
+    box.append(
+      h(
+        'p',
+        { class: 'dr-text muted' },
+        'You allowed these without asking again. Take one back and the agent asks the next time.',
+      ),
+      made.el,
+    );
+    return box;
+  }
+
   function renderOverview(v: View): void {
     const t = v.task;
     const board = ctx.store.select('board');
@@ -431,6 +456,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
           : empty('Nothing: it can start on its own.'),
       ),
       dependents.length ? section('Needed by', h('ul', { class: 'dr-deps' }, dependents.map(taskLink))) : null,
+      grantsSection(),
       section('Integration', renderIntegration(v.integration)),
       section(
         'Timing',
@@ -944,6 +970,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
     title,
     destroy() {
       destroyed = true;
+      grants?.destroy();
       for (const u of unsubscribe) u();
       el.remove();
     },

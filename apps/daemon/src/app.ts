@@ -865,6 +865,12 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.get(`${P}/approvals`, allow(...OPERATOR), (c) =>
     c.json({ approvals: state.q.approvals(pid, c.req.query('status')) }),
   );
+  // What was granted for one task (2026-11-17): the inspector shows the ones that still hold, to
+  // be taken back there. A route of its own, so the desktop shell forwards this and never the
+  // whole list.
+  app.get(`${P}/tasks/:tid/approvals`, allow(...OPERATOR), (c) =>
+    c.json({ approvals: state.q.approvals(pid, 'granted', { task_id: c.req.param('tid') }) }),
+  );
   for (const [verb, granted] of [
     ['approve', true],
     ['reject', false],

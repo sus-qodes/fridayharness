@@ -1156,3 +1156,35 @@
   font-family: var(--font-sans);
   font-size: var(--text-caption);
 }
+
+/* What was allowed for a task and still holds, with "Take back" (the task inspector). */
+.dr-grant-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.dr-grant {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+}
+
+.dr-grant-what {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+.dr-grant-act {
+  font-weight: 600;
+}
+
+.dr-grant-target {
+  overflow-wrap: anywhere;
+}

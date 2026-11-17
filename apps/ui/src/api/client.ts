@@ -12,6 +12,7 @@ import type {
   AgentView,
   AntigravitySetupPlan,
   AntigravitySetupResult,
+  ApprovalRow,
   BrainStatusView,
   ClaudeSetupPlan,
   ClaudeSetupResult,
@@ -374,6 +375,11 @@ export class FridayApi {
 
   reject(approvalId: string, note?: string): Promise<{ ok: boolean; status: string }> {
     return this.post(`/approvals/${encodeURIComponent(approvalId)}/reject`, { via: 'ui', ...(note ? { note } : {}) });
+  }
+
+  /** The approvals granted for a task, as recorded: the inspector keeps the ones still in force. */
+  taskGrants(taskId: string): Promise<{ approvals: ApprovalRow[] }> {
+    return this.get(`/tasks/${encodeURIComponent(taskId)}/approvals`);
   }
 
   revoke(approvalId: string, note?: string): Promise<{ ok: boolean }> {

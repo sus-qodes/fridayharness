@@ -304,6 +304,47 @@ describe('the task inspector: Overview', () => {
     ready.destroy();
   });
 
+  it('shows what was allowed for the task and still holds, and no heading when there is nothing (2026-11-17)', async () => {
+    const heading = (root: HTMLElement) =>
+      [...root.querySelectorAll<HTMLElement>('.dr-section')].find(
+        (x) => x.querySelector('.section-title')?.textContent === 'Allowed for this task',
+      );
+    const none = createTaskInspector(makeContext({ snapshot: boardWith('RUNNING') }), { kind: 'inspector', id: TID });
+    await settle();
+    expect(heading(none.el)?.hidden).toBe(true);
+    none.destroy();
+
+    const ctx = makeContext({
+      snapshot: boardWith('RUNNING'),
+      answers: {
+        [`GET /tasks/${TID}/approvals`]: {
+          approvals: [
+            {
+              approval_id: 'apr_1',
+              task_id: TID,
+              status: 'granted',
+              reuse: 'task',
+              capability: 'package.install',
+              target: 'npm install zod',
+              expires_at: null,
+            },
+          ],
+        },
+        'POST /approvals/apr_1/revoke': { ok: true },
+      },
+    });
+    const drawer = createTaskInspector(ctx, { kind: 'inspector', id: TID });
+    await settle();
+    const box = heading(drawer.el) as HTMLElement;
+    expect(box.hidden).toBe(false);
+    expect(box.textContent).toContain('Install packages');
+    expect(box.textContent).toContain('npm install zod');
+    buttonNamed(box, 'Take back')?.click();
+    await settle();
+    expect(ctx.transport.to('POST', '/approvals/apr_1/revoke')).toHaveLength(1);
+    drawer.destroy();
+  });
+
   it('offers Recover for a pending recovery question', () => {
     const board = boardWith('RUNNING');
     board.escalations = [makeEscalation({ task_id: TID, kind: 'recovery_needed' })];
