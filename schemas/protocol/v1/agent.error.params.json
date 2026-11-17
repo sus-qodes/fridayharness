@@ -56,6 +56,30 @@
       "required": [
         "kind"
       ]
+    },
+    "spending_cap": {
+      "type": "object",
+      "properties": {
+        "cap_usd": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "cost_usd": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "cap_usd"
+      ]
     }
   },
   "required": [

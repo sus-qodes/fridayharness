@@ -62,6 +62,9 @@ export function readJsonObject(text: string | null, file: string): Record<string
 // No byte-order mark, LF endings: Antigravity failed to load hook files with a byte-order mark before CLI 1.3.1.
 const stringify = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
 
+/** The name Antigravity works under on a machine where nobody chose one. */
+export const DEFAULT_AGENT_KEY = 'antigravity-1';
+
 /** Friday's `friday` group added (or replaced) or removed; the user's groups keep their order. */
 export function mergeHooks(existing: Record<string, unknown>, install: boolean): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -116,16 +119,24 @@ export function planAntigravity(opts: AntigravityConfigOptions): FileChange[] {
     });
   };
 
-  // The launcher reads this machine's agent key from the private folder, as for Claude Code: one
-  // key per machine and project, for every host attached from this machine.
+  // Antigravity's own name on this machine (2026-11-17), beside the one Claude Code works under
+  // (`agent_key`, kept as it is): the launcher and the MCP server read `hosts.antigravity` first.
+  // Before, both hosts read the one key, and the second to connect was a shadow of the first that
+  // could take no task.
   if (install) {
     const agentFile = path.join(privateDirFor(ref, opts.env), 'agent.json');
-    const current = readJsonObject(read(agentFile), agentFile).agent_key;
-    const agentKey = opts.agentKey ?? (typeof current === 'string' ? current : undefined) ?? 'dev-1';
+    const existing = readJsonObject(read(agentFile), agentFile);
+    const hosts =
+      existing.hosts && typeof existing.hosts === 'object' && !Array.isArray(existing.hosts)
+        ? (existing.hosts as Record<string, unknown>)
+        : {};
+    const current = hosts.antigravity;
+    const agentKey =
+      opts.agentKey ?? (typeof current === 'string' && current ? current : undefined) ?? DEFAULT_AGENT_KEY;
     if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(agentKey))
       throw new FridayError('invalid_request', `invalid agent key "${agentKey}"`);
     const before = read(agentFile);
-    const after = stringify({ agent_key: agentKey });
+    const after = stringify({ ...existing, hosts: { ...hosts, antigravity: agentKey } });
     if (before !== after)
       changes.push({
         path: agentFile,
@@ -133,7 +144,7 @@ export function planAntigravity(opts: AntigravityConfigOptions): FileChange[] {
         before,
         after,
         tracked: false,
-        note: `this machine's agent key: ${agentKey}`,
+        note: `Antigravity's agent key on this machine: ${agentKey}`,
         owned: true,
       });
   }

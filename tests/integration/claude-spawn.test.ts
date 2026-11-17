@@ -59,7 +59,14 @@ function claude(
   td: TestDaemon,
   agent: string,
   script: Script,
-  opts: { harnessKey?: string; dir?: string; bootstrap?: DaemonClient; stateDir?: string } = {},
+  opts: {
+    harnessKey?: string;
+    dir?: string;
+    bootstrap?: DaemonClient;
+    stateDir?: string;
+    /** The agent's own cap per attempt, asked at each attempt (the launcher's agents). */
+    maxBudgetUsd?: () => number | undefined;
+  } = {},
 ) {
   const sent: string[] = [];
   const dir = opts.dir ?? path.join(ws().root, `claude-${agent}`);
@@ -89,7 +96,7 @@ function claude(
     },
     hook: { command: process.execPath, args: [bundledHookPath()] },
     workDir: path.join(dir, 'attempts'),
-    maxBudgetUsd: 0.5,
+    maxBudgetUsd: opts.maxBudgetUsd ?? 0.5,
     ...(opts.harnessKey ? { harnessKey: opts.harnessKey } : {}),
     // FRIDAY_TEST_DEBUG=1 shows what the adapter saw.
     ...(process.env.FRIDAY_TEST_DEBUG ? { log: (m: string) => console.error(`[${agent}] ${m}`) } : {}),
@@ -374,6 +381,81 @@ describe('Claude Code in spawn mode', () => {
     expect(String((error?.payload as { message?: string } | undefined)?.message)).toMatch(
       /tools Friday did not give it \(WebFetch\), MCP servers \(someone\), plugins \(helper\) and skills \(deploy\), which Friday cannot judge/,
     );
+  });
+
+  it('stops at the agent’s own spending limit for a person to decide, and goes on once the limit is raised', async () => {
+    const td = await daemon();
+    const pid = td.project.project_id;
+    let limit: number | undefined = 0.5;
+    const c = claude(
+      td,
+      'cl-cap',
+      {
+        turns: [
+          [
+            { op: 'write', path: 'src/a.ts', text: 'a' },
+            { op: 'budget', cost: 0.52 },
+            { op: 'final', status: 'completed', summary: 'done', changed_paths: ['src/a.ts'] },
+          ],
+        ],
+      },
+      { maxBudgetUsd: () => limit },
+    );
+    await c.adapter.start();
+    const id = await assigned(td, 'cl-cap', ['src/**'], 'costs more than the limit');
+    await eventually(
+      () => status(td, id),
+      (t) => t.status === 'WAITING',
+      'the stop at the limit',
+    );
+    // Blocked, not an agent error: the recovery sweep must not run it again at the same limit.
+    expect(status(td, id).waiting_reason).toBe('blocked');
+    expect(await td.daemon.recovery.sweep()).toEqual([]);
+    expect(status(td, id)).toMatchObject({ status: 'WAITING', waiting_reason: 'blocked' });
+    const questions = td.daemon.state.q.escalations(pid, 'pending').filter((e) => e.task_id === id);
+    expect(questions).toHaveLength(1);
+    expect(questions[0]).toMatchObject({ kind: 'recovery_needed' });
+    expect(questions[0]?.question).toBe(
+      'cl-cap stopped at its spending limit: this attempt cost $0.52, and reached the limit of $0.5 per attempt. The work so far is kept. Raise the limit to let the task continue, or cancel it.',
+    );
+    expect(JSON.parse(String(questions[0]?.details_json))).toMatchObject({
+      reason: 'budget_exceeded',
+      scope: 'agent',
+      agent_key: 'cl-cap',
+      host: 'claude-code',
+      attach_mode: 'spawn',
+      attempt: 1,
+      cost_usd: 0.52,
+      cap_usd: 0.5,
+    });
+    // Nothing benched the host: it did not fail.
+    const errors = td.daemon.state.store
+      .readByRef(pid, 'task', id)
+      .filter((e) => e.type === 'agent.event' && (e.payload as { event_type: string }).event_type === 'error')
+      .map((e) => e.payload as { message: string; failure?: unknown; spending_cap?: unknown });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      message: 'the Claude Code turn ended: error_max_budget_usd',
+      spending_cap: { cap_usd: 0.5, cost_usd: 0.52 },
+    });
+    expect(errors[0]?.failure).toBeUndefined();
+
+    // The limit is raised (the agent itself keeps running), and the task continues: the next
+    // attempt's session gets the new limit and goes past where the first one stopped.
+    limit = 2;
+    await td.operator.post(td.operator.projectPath(`/tasks/${id}/recover`), { action: 'reassign', reason: 'raised' });
+    expect(td.daemon.state.q.escalations(pid, 'pending').filter((e) => e.task_id === id)).toEqual([]);
+    await td.operator.post(td.operator.projectPath(`/tasks/${id}/assign`), { agent_key: 'cl-cap' });
+    await eventually(
+      () => status(td, id),
+      (t) => t.status === 'READY_FOR_VERIFICATION' || t.status === 'COMPLETED',
+      'the claim of the second attempt',
+    );
+    const caps = c
+      .entries()
+      .filter((e) => e.flags)
+      .map((e) => (e.flags as Record<string, string>)['--max-budget-usd']);
+    expect(caps).toEqual(['0.5', '2']);
   });
 
   it('takes an answer with only its status as a claim of what the worktree changed (plan M13.4)', async () => {

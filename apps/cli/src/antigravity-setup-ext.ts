@@ -10,6 +10,9 @@ import { runSetupCli, type SetupOptions } from './claude-setup-ext.js';
  * personal account to the Antigravity the person runs themselves, so it attaches when they open it.
  */
 
+/** Antigravity's own name where the request gives none: never Claude Code's `dev-1` (2026-11-17). */
+const DEFAULT_KEY = 'antigravity-1';
+
 type App = Parameters<NonNullable<DaemonOptions['extensions']>[number]>[0];
 interface Ctx {
   get(k: 'auth'): { token_class: string } | undefined;
@@ -46,7 +49,7 @@ export function antigravitySetupExtension(opts: SetupOptions = {}) {
 
     app.get(`${P}/agent-setup/antigravity`, async (c) => {
       requireOperator(c as unknown as Ctx);
-      return c.json(await plan(keyOf(c.req.query('agent') ?? 'dev-1'), false));
+      return c.json(await plan(keyOf(c.req.query('agent') ?? DEFAULT_KEY), false));
     });
     app.post(`${P}/agent-setup/antigravity`, async (c) => {
       requireOperator(c as unknown as Ctx);
@@ -56,7 +59,7 @@ export function antigravitySetupExtension(opts: SetupOptions = {}) {
       } catch {
         throw new FridayError('invalid_request', 'the request body must be JSON');
       }
-      const applied = await plan(keyOf(body.agent_key ?? 'dev-1'), true);
+      const applied = await plan(keyOf(body.agent_key ?? DEFAULT_KEY), true);
       let doctor: AntigravitySetupResult['doctor'] = null;
       try {
         doctor = JSON.parse(

@@ -1,5 +1,5 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,8 @@ import {
   type AgentProfile,
   FridayError,
 } from '@friday/protocol';
-import { AGENT_KEY, AgentProfiles, optionFlags, ROLE, validateOptions } from './agent-profiles.js';
+import { AGENT_KEY, AgentProfiles, effectiveCap, optionFlags, ROLE, validateOptions } from './agent-profiles.js';
+import { claudeSignIn, codexSignIn } from './sign-in.js';
 
 /**
  * Starting agents from the interface (plan M9 §5.9, FD-10, FD-24): a daemon extension, mounted by
@@ -52,6 +53,12 @@ export interface LauncherOptions {
   child?: (req: LaunchRequest, ctx: DaemonContext, host: AgentHost | undefined) => ChildSpec;
   /** Installed hosts (default: `friday harness hosts --json` in a child process). */
   detectHosts?: () => Promise<AgentHost[]>;
+  /**
+   * How a host is signed in, read when an agent starts (default: the files and environment of
+   * this machine). Read then, not taken from the last host check, which may be hours old: a
+   * person who moved from a subscription to a key since must not run without a limit.
+   */
+  signIn?: (host: Host) => string | undefined;
   /** At most this many agent processes at once (default 8). */
   maxProcesses?: number;
   /** How long a stop waits for the child to exit after its input closed (default 10 s). */
@@ -206,6 +213,20 @@ export function createAgentLauncher(opts: LauncherOptions = {}) {
       if (running >= max) throw new FridayError('agent_unavailable', `at most ${max} agents run at once`);
     };
 
+    /**
+     * Never throws: a sign-in that cannot be read is one Friday cannot tell, which keeps the limit.
+     * A launcher whose host detection is faked (a test) reads nothing of this machine's own.
+     */
+    const signInNow = (host: Host): string | undefined => {
+      try {
+        if (opts.signIn) return opts.signIn(host);
+        if (opts.detectHosts) return undefined;
+        return host === 'claude-code' ? claudeSignIn() : host === 'codex' ? codexSignIn() : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+
     const defaultChild = (req: LaunchRequest, host: AgentHost | undefined): ChildSpec => ({
       command: process.execPath,
       args: [
@@ -218,6 +239,9 @@ export function createAgentLauncher(opts: LauncherOptions = {}) {
         `--agent=${req.agent_key}`,
         `--role=${req.role}`,
         ...optionFlags(req.host, req.options),
+        // Its limit per attempt is read again at each attempt, so one a person raises applies to
+        // the next attempt without the agent starting again.
+        ...(req.host === 'claude-code' ? ['--remembered-limit'] : []),
         ...(host?.path ? [`--host-bin=${host.path}`] : []),
         '--parent-stdin',
       ],
@@ -250,12 +274,31 @@ export function createAgentLauncher(opts: LauncherOptions = {}) {
       } finally {
         starting.delete(req.agent_key);
       }
+      // The host as it was last checked may be gone: an editor's extension is replaced by its next
+      // version in a new folder, and an install can be removed. A program that is no longer there
+      // is looked for again before the start is refused or tried (2026-11-17); before, the agent
+      // failed to start until someone pressed "Check again".
+      const stale = list.find((h) => h.host === req.host);
+      if (stale?.found && stale.path && path.isAbsolute(stale.path) && !existsSync(stale.path)) {
+        starting.add(req.agent_key);
+        try {
+          list = await detect(true);
+        } finally {
+          starting.delete(req.agent_key);
+        }
+      }
       assertFree(req);
       const host = list.find((h) => h.host === req.host);
       if (!opts.child && (!host?.found || !host.supported)) {
         throw new FridayError('invalid_request', `${req.host} cannot be started here: ${host?.reason ?? 'not found'}`);
       }
-      const spec = opts.child ? opts.child(req, ctx, host) : defaultChild(req, host);
+      // The options the agent runs with: a cap nobody set is decided now, from how the host is
+      // signed in at this moment (none for a subscription, which is not charged per attempt).
+      const run: LaunchRequest =
+        req.host === 'claude-code'
+          ? { ...req, options: { ...req.options, max_budget_usd: effectiveCap(req.options, signInNow(req.host)) } }
+          : req;
+      const spec = opts.child ? opts.child(run, ctx, host) : defaultChild(run, host);
       const proc: AgentProcess = {
         agent_key: req.agent_key,
         host: req.host,
@@ -265,7 +308,7 @@ export function createAgentLauncher(opts: LauncherOptions = {}) {
         started_at: new Date().toISOString(),
         ended_at: null,
         exit_code: null,
-        options: req.options,
+        options: run.options,
         log_tail: [],
         shadow: false,
       };
@@ -370,7 +413,14 @@ export function createAgentLauncher(opts: LauncherOptions = {}) {
     app.get(`${P}/agent-hosts`, async (c) => {
       requireOperator(c as unknown as Ctx);
       const list = await detect(c.req.query('refresh') === 'true');
-      return c.json({ hosts: list, checked_at: hosts?.at ?? null });
+      // Which hosts are installed is kept from the last check (it starts each one, which is slow);
+      // how each is signed in is read again every time, since it is cheap and it decides whether
+      // the Start dialog proposes a spending limit.
+      const fresh = list.map((h) => {
+        const signIn = signInNow(h.host) as AgentHost['sign_in'];
+        return signIn ? { ...h, sign_in: signIn } : h;
+      });
+      return c.json({ hosts: fresh, checked_at: hosts?.at ?? null });
     });
     app.get(`${P}/agent-processes`, (c) => {
       requireOperator(c as unknown as Ctx);
@@ -401,6 +451,47 @@ export function createAgentLauncher(opts: LauncherOptions = {}) {
       if (!profile) throw new FridayError('agent_not_found', `no remembered agent ${c.req.param('key')}`);
       const proc = await start(profile);
       return c.json({ process: proc }, 201);
+    });
+    // A remembered agent's role, options and whether it starts with Friday, changed in place
+    // (2026-11-17): before, raising a cap or changing a role meant forgetting the agent and
+    // starting a new one. What runs now keeps what it started with; the next start uses the new.
+    app.post(`${P}/agent-processes/:key/update`, async (c) => {
+      requireOperator(c as unknown as Ctx);
+      const key = c.req.param('key');
+      const profile = profiles.get(key);
+      if (!profile) throw new FridayError('agent_not_found', `no remembered agent ${key}`);
+      let body: Record<string, unknown>;
+      try {
+        body = (await c.req.json()) as Record<string, unknown>;
+      } catch {
+        throw new FridayError('invalid_request', 'the request body must be JSON');
+      }
+      if ('host' in body && body.host !== profile.host) {
+        throw new FridayError('invalid_request', 'an agent keeps its host; start a new agent for another one');
+      }
+      if ('agent_key' in body && body.agent_key !== key) {
+        throw new FridayError('invalid_request', 'an agent keeps its key; start a new agent for another one');
+      }
+      const role = body.role ?? profile.role;
+      if (typeof role !== 'string' || !ROLE.test(role)) throw new FridayError('invalid_request', 'role is not valid');
+      const next: AgentProfile = {
+        ...profile,
+        role,
+        options: 'options' in body ? validateOptions(profile.host, body.options) : profile.options,
+        autostart: typeof body.autostart === 'boolean' ? body.autostart : profile.autostart,
+        updated_at: new Date().toISOString(),
+      };
+      profiles.save(next);
+      const entry = entries.get(key);
+      const running = Boolean(entry && entry.proc.status !== 'exited');
+      // The one option a running agent takes at once: its spending limit, from its next attempt.
+      if (entry && running && profile.host === 'claude-code') {
+        entry.proc.options = {
+          ...entry.proc.options,
+          max_budget_usd: effectiveCap(next.options, signInNow(profile.host)),
+        };
+      }
+      return c.json({ profile: next, running });
     });
     app.post(`${P}/agent-processes/:key/forget`, async (c) => {
       requireOperator(c as unknown as Ctx);

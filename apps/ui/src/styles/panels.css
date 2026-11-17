@@ -791,3 +791,55 @@
 .pn-gs-done .pn-gs-item-title {
   color: var(--color-slate-400);
 }
+
+/* The spending limit per attempt: its choice, then the amount under it. */
+.pn-limit-amount {
+  margin-top: 6px;
+}
+
+.pn-limit-amount .input {
+  max-width: 160px;
+}
+
+/* How a host is signed in, under the Host field. */
+.pn-sign-in {
+  margin-top: 4px;
+  font-size: var(--text-sm);
+}
+
+/* A setup's health check in words: one sentence, what needs attention, the rest folded. */
+.pn-checks-summary {
+  margin: 4px 0 8px;
+  font-size: var(--text-sm);
+}
+
+.pn-checks-summary.pn-tone-good {
+  color: var(--color-emerald);
+}
+
+.pn-checks-summary.pn-tone-warn {
+  color: var(--color-amber);
+}
+
+.pn-checks-summary.pn-tone-danger {
+  color: var(--color-crimson);
+}
+
+.pn-check-fix {
+  flex-basis: 100%;
+}
+
+.pn-checks-passed {
+  margin-top: 6px;
+  font-size: var(--text-sm);
+}
+
+.pn-checks-passed > summary {
+  cursor: pointer;
+  color: var(--color-slate-400);
+}
+
+/* "Raise the limit and continue": what happened, above the new limit. */
+.pn-raise-what {
+  margin: 0 0 12px;
+}

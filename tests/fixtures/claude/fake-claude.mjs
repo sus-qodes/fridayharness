@@ -325,6 +325,14 @@ async function play(steps) {
     } else if (s.op === 'fail') {
       send({ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 1, total_cost_usd: 0, usage: {}, result: s.message ?? 'failed' });
       return;
+    } else if (s.op === 'budget') {
+      // The turn has cost `s.cost` by now: a session whose --max-budget-usd is at or below it ends
+      // there, as Claude Code ends one; with a higher cap, or none, the turn goes on.
+      const cap = flags['--max-budget-usd'] === undefined ? null : Number(flags['--max-budget-usd']);
+      if (cap !== null && cap <= s.cost) {
+        send({ type: 'result', subtype: 'error_max_budget_usd', is_error: true, num_turns: 2, total_cost_usd: s.cost, usage: {} });
+        return;
+      }
     } else if (s.op === 'exit') {
       process.exit(s.code ?? 3);
     }

@@ -428,6 +428,13 @@ export interface AgentHost {
   supported: boolean;
   path: string | null;
   reason: string | null;
+  /**
+   * How the host is signed in on this machine, read from its files and the environment, never by
+   * starting it (2026-11-17): `subscription` (nothing is charged per attempt), `api_key` (use is
+   * charged), `signed_in` (Friday cannot tell which), `none` (no sign-in found), `unknown` (kept
+   * where Friday does not look). Absent for a host Friday does not read it of, and from an older daemon.
+   */
+  sign_in?: 'subscription' | 'api_key' | 'signed_in' | 'none' | 'unknown';
 }
 
 /** Options per host; routing chooses the model, among `models` when they are given. */
@@ -438,8 +445,12 @@ export interface AgentOptions {
   cost_class?: 'free' | 'cheap' | 'standard';
   /** Claude Code and Codex: the only models routing may run for this agent (plan M13.3). */
   models?: string[];
-  /** Claude Code: a spending cap per attempt (default 1). */
-  max_budget_usd?: number;
+  /**
+   * Claude Code: a spending cap per attempt, in dollars; null for none. Left out, Friday decides
+   * when the agent starts (2026-11-17): none for a subscription's sign-in, which is not charged
+   * per attempt, else 5. (It was 1 for everyone, which stopped larger tasks half way.)
+   */
+  max_budget_usd?: number | null;
   /** Codex. */
   sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access';
   windows_sandbox?: string;
@@ -503,8 +514,13 @@ export interface ClaudeSetupPlan {
 
 export interface ClaudeSetupResult {
   plan: ClaudeSetupPlan;
-  /** `harness doctor claude-code --json`. */
-  doctor: { level?: string; checks?: { id: string; status: string; detail?: string }[]; [key: string]: unknown } | null;
+  /** `harness doctor claude-code --quick --json`, or `{ error }` when it gave no answer. */
+  doctor: {
+    achieved?: string;
+    checks?: { id: string; status: string; message?: string; fix?: string }[];
+    error?: string;
+    [key: string]: unknown;
+  } | null;
 }
 
 /**

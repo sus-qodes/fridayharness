@@ -1,7 +1,7 @@
 /**
  * Claude Code in VS Code (plan §5.10, §7.7): preview every file `harness config claude-code`
- * would write (and whether git tracks it), apply it on confirm, show the doctor's answer, then
- * the steps in VS Code: open the folder, accept the folder-trust and MCP prompts, type
+ * would write (and whether git tracks it), apply it on confirm, say whether it is connected and
+ * what needs attention (setup-checks.ts), then the steps in VS Code: open the folder, accept the folder-trust and MCP prompts, type
  * `/friday start`.
  */
 import type { ClaudeSetupChange, ClaudeSetupPlan, ClaudeSetupResult } from '@friday/protocol';
@@ -23,7 +23,10 @@ import {
   section,
   Teardown,
 } from './common.js';
+import { doctorTone, setupChecksView } from './setup-checks.js';
 import { AGENT_KEY_RE } from './start-agent.js';
+
+export { doctorTone };
 
 export const DEFAULT_SETUP_KEY = 'dev-1';
 
@@ -38,14 +41,6 @@ export function applyWarning(changes: readonly ClaudeSetupChange[], host = 'Clau
     for (const c of tracked) lines.push(`  ${visible(c.path)}`);
   } else lines.push('None of them is tracked by git.');
   return lines;
-}
-
-export function doctorTone(status: string): 'good' | 'warn' | 'danger' | 'muted' {
-  const s = status.toLowerCase();
-  if (s === 'ok' || s === 'pass' || s === 'passed' || s === 'good') return 'good';
-  if (s === 'warn' || s === 'warning') return 'warn';
-  if (s === 'fail' || s === 'failed' || s === 'error') return 'danger';
-  return 'muted';
 }
 
 /** One file of a setup plan: what happens to it, whether git tracks it, and its diff. */
@@ -176,41 +171,10 @@ export function claudeSetupModal(
   }
 
   function renderResult(r: ClaudeSetupResult) {
-    const doctor = r.doctor;
-    const checks = Array.isArray(doctor?.checks) ? doctor.checks : [];
     const root = ctx.store.select('board')?.project.root ?? '';
     replace(
       resultBox,
-      section(
-        'What the doctor says',
-        doctor
-          ? h(
-              'div',
-              null,
-              doctor.level
-                ? h(
-                    'div',
-                    { class: 'row' },
-                    h('span', { class: 'field-label' }, 'Level'),
-                    badge(plain(String(doctor.level), 20), 'info'),
-                  )
-                : null,
-              h(
-                'ul',
-                { class: 'pn-list' },
-                checks.map((c) =>
-                  h(
-                    'li',
-                    { class: 'pn-item' },
-                    badge(plain(c.status, 20), doctorTone(c.status)),
-                    h('span', { class: 'mono' }, plain(c.id, 120)),
-                    c.detail ? h('span', { class: 'muted pn-grow' }, plain(c.detail, 600)) : null,
-                  ),
-                ),
-              ),
-            )
-          : h('div', { class: 'muted' }, 'The doctor gave no answer.'),
-      ),
+      section('Is it connected?', setupChecksView(r.doctor, 'Claude Code')),
       section(
         'Then, in VS Code',
         h(
@@ -228,7 +192,7 @@ export function claudeSetupModal(
           h('li', null, 'Accept the folder-trust prompt, then the prompt that asks to use the MCP server "friday".'),
           h('li', null, 'In the Claude Code panel, type:', copyLine(ctx, '/friday start', 'start command')),
         ),
-        note(`Claude Code then works as ${visible(agentKey())}; it shows under "Connected now" in the agents drawer.`),
+        note(`Claude Code then works as ${visible(agentKey())}; it shows in the Agents list as “attached in VS Code”.`),
       ),
     );
     if (r.plan) renderPlan(r.plan);

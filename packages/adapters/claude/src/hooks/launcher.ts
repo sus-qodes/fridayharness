@@ -233,7 +233,12 @@ export async function main(argv: string[] = process.argv, env: NodeJS.ProcessEnv
     token = '';
   }
   if (!discovery?.url || !token) return ownAnswer('the daemon is not running');
-  const agent = readJson<{ agent_key?: string }>(path.join(priv, 'agent.json'));
+  // A host with a name of its own on this machine (`hosts.<vendor>`, 2026-11-17: Antigravity)
+  // works under it; the others share `agent_key`, as every host did before.
+  const agent = readJson<{ agent_key?: unknown; hosts?: unknown }>(path.join(priv, 'agent.json'));
+  const hosts = agent?.hosts && typeof agent.hosts === 'object' ? (agent.hosts as Record<string, unknown>) : {};
+  const ownKey = typeof hosts[vendor] === 'string' && hosts[vendor] ? (hosts[vendor] as string) : null;
+  const sharedKey = typeof agent?.agent_key === 'string' && agent.agent_key ? agent.agent_key : null;
   const body = {
     schema_version: 1,
     launcher_version: LAUNCHER_VERSION,
@@ -242,7 +247,7 @@ export async function main(argv: string[] = process.argv, env: NodeJS.ProcessEnv
     // reports that shell.
     ...(claude ? { claude_pid: process.ppid } : {}),
     host_pid: process.ppid,
-    agent_key: env.FRIDAY_AGENT || agent?.agent_key || null,
+    agent_key: env.FRIDAY_AGENT || ownKey || sharedKey || null,
     local_decision: localDeny ? 'deny' : null,
     // Claude Code's own input goes as it always has; another host's goes in Friday's vocabulary.
     hook: stripHookPayload(claude ? raw : wireHook(input)),

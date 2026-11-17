@@ -359,6 +359,29 @@ function waitingHint(kit: Kit): HTMLElement | null {
 function recoveryBody(kit: Kit): Built {
   const { spec, ctx } = kit;
   const d = (kit.e.details ?? {}) as Record<string, unknown>;
+  // The agent's host stopped the attempt at the agent's own spending limit (2026-11-17): one
+  // button raises the limit and lets the task continue; the other ways stay behind "Other options".
+  if (spec.taskId && d.reason === 'budget_exceeded' && d.scope === 'agent') {
+    const taskId = spec.taskId;
+    const raise = button(
+      [icon('rework', 14), 'Raise the limit and continue…'],
+      () => openModal(ctx, { kind: 'raise-limit', id: taskId }),
+      { class: 'btn btn-primary' },
+    );
+    const other = button('Other options…', () => openModal(ctx, { kind: 'recover', id: taskId }), { class: 'btn' });
+    return {
+      body: present([
+        ...context(spec),
+        h(
+          'p',
+          { class: 'field-hint' },
+          'Nothing runs again on its own here: another attempt at the same limit would stop at the same place.',
+        ),
+        h('div', { class: 'gv-actions' }, raise, other),
+      ]),
+      decisions: [],
+    };
+  }
   const recover = button(
     [icon('rework', 14), 'Recover…'],
     () => {

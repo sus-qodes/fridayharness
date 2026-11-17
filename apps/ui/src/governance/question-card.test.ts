@@ -228,6 +228,39 @@ describe('question cards by kind (plan FD-21)', () => {
     card.destroy();
   });
 
+  it('a stop at the agent’s spending limit offers to raise it and continue, with the other ways behind one button', () => {
+    const card = mount(
+      makeEscalation({
+        kind: 'recovery_needed',
+        requested_by_kind: 'system',
+        question:
+          'claude-1 stopped at its spending limit: this attempt cost $5.03, and reached the limit of $5 per attempt. The work so far is kept. Raise the limit to let the task continue, or cancel it.',
+        options: [`friday recover ${TASK} --action reassign`, `friday task cancel ${TASK}`],
+        details: { reason: 'budget_exceeded', scope: 'agent', agent_key: 'claude-1', cap_usd: 5, cost_usd: 5.03 },
+      }),
+    );
+    expect(card.el.textContent).toContain('claude-1 stopped at its spending limit');
+    // No terminal commands for a person who has a button, and no bare "Recover…".
+    expect(card.el.querySelector('.gv-cli')).toBeNull();
+    expect(card.el.textContent).not.toContain('friday recover');
+    expect(
+      Array.from(card.el.querySelectorAll('.gv-actions:not(.gv-actions-end) button')).map((b) => b.textContent),
+    ).toEqual(['Raise the limit and continue…', 'Other options…']);
+    buttonNamed(card.el, 'Raise the limit and continue').click();
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'raise-limit', id: TASK });
+    buttonNamed(card.el, 'Other options').click();
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'recover', id: TASK });
+    card.destroy();
+    // The task's own cap (routing.task_budget_usd) is not an agent's limit: the recovery dialog as before.
+    const taskCap = mount(
+      makeEscalation({ kind: 'recovery_needed', options: [], details: { reason: 'budget_exceeded', cap_usd: 1 } }),
+    );
+    expect(taskCap.el.textContent).not.toContain('Raise the limit');
+    buttonNamed(taskCap.el, 'Recover').click();
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'recover', id: TASK });
+    taskCap.destroy();
+  });
+
   describe('routing', () => {
     it('Why asks routing to explain the task', async () => {
       const card = mount(

@@ -2,6 +2,7 @@ import type { AgentProcess, AgentProfile } from '@friday/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { enforcementWords } from '../model/status.js';
 import { ApiError } from '../platform/transport.js';
+import { openDrawer } from '../shell/context.js';
 import { makeContext } from '../test/context.js';
 import { makeAgent, makeHarness, makeSnapshot } from '../test/fixtures.js';
 import {
@@ -297,8 +298,10 @@ describe('agents drawer', () => {
     expect(first.textContent).toContain('model claude-haiku-5-5');
     expect(first.textContent).toContain('pid 4242');
     expect(first.textContent).toContain('starts with Friday');
-    expect(first.textContent).toContain('max budget usd 1');
-    expect(shownButtons(first)).toEqual(['Stop', 'Forget']);
+    // The limit in words, and Edit beside the process controls for an agent Friday remembers.
+    expect(first.textContent).toContain('stops an attempt at $1');
+    expect(first.textContent).not.toContain('max budget usd');
+    expect(shownButtons(first)).toEqual(['Stop', 'Edit', 'Forget']);
     expect((first.querySelector('.pn-output') as HTMLElement).hidden).toBe(false);
     // The person attached claude-2 in VS Code: connected, enforcement and model shown, no process
     // state and none of Friday's process controls.
@@ -317,7 +320,7 @@ describe('agents drawer', () => {
     expect(third.textContent).toContain('started by Friday');
     expect(shownBadges(third)).toEqual(['not connected', 'not running']);
     expect(third.textContent).toContain('started by hand');
-    expect(shownButtons(third)).toEqual(['Start again', 'Forget']);
+    expect(shownButtons(third)).toEqual(['Start again', 'Edit', 'Forget']);
     // Start agent above the list, the Claude Code card below it.
     const order = Array.from(d.el.querySelectorAll('.section-title, .pn-actions .btn-primary')).map(
       (x) => x.textContent,
@@ -412,7 +415,9 @@ describe('agents drawer', () => {
     const [processRow, shadowRow] = rows(d.el) as [HTMLElement, HTMLElement];
     expect(shownBadges(shadowRow)).toContain('shadow');
     expect(shownBadges(processRow)).not.toContain('shadow');
-    expect(shadowRow.textContent).toContain('another session holds this key');
+    expect(shadowRow.textContent).toContain(
+      'another session is connected under this name, so this one cannot take tasks',
+    );
     // Log lines are shortened (cleanText + truncate), never cut mid-character.
     const log = d.el.querySelector('.pn-log')?.textContent ?? '';
     expect(log).toContain(`${'L'.repeat(1999)}…`);
@@ -453,6 +458,30 @@ describe('agents drawer', () => {
       /^Enforcement level L1 \(enforcing\)/,
     );
     expect(d.el.textContent).not.toContain('No agent yet');
+    d.destroy();
+  });
+
+  it('opens a remembered agent for editing, and says its limit in words', async () => {
+    const ctx = makeContext({
+      answers: {
+        ...quiet,
+        'GET /agent-processes': {
+          // What runs has its own options (decided at its start); the remembered ones are the profile's.
+          processes: [proc({ options: { max_budget_usd: null } })],
+          profiles: [profile()],
+        },
+      },
+    });
+    openDrawer(ctx, { kind: 'agents' });
+    const d = agentsDrawer(ctx, { kind: 'agents' });
+    await vi.advanceTimersByTimeAsync(0);
+    const row = rows(d.el)[0] as HTMLElement;
+    expect(row.textContent).toContain('no spending limit per attempt');
+    expect(row.textContent).not.toContain('null');
+    buttonBy(row, 'Edit').click();
+    // The drawer closes first: a dialog over a drawer leaves the drawer without input.
+    expect(ctx.store.select('ui').drawer).toBeNull();
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'edit-agent', id: 'claude-1' });
     d.destroy();
   });
 

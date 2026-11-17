@@ -19,7 +19,14 @@ import type {
 } from '@friday/protocol';
 import { enforcementWords } from '../model/status.js';
 import { visible } from '../model/text.js';
-import { type AppContext, type Component, type DrawerRequest, openDrawer, openModal } from '../shell/context.js';
+import {
+  type AppContext,
+  type Component,
+  closeDrawer,
+  type DrawerRequest,
+  openDrawer,
+  openModal,
+} from '../shell/context.js';
 import { button, h, replace } from '../ui/dom.js';
 import { humanize, timeAgo } from '../ui/format.js';
 import { icon } from '../ui/svg.js';
@@ -117,8 +124,15 @@ export function rowStatus(row: Pick<AgentRow, 'process'>): {
 function optionsText(o: Record<string, unknown> | undefined): string {
   if (!o) return '';
   const parts: string[] = [];
-  for (const [k, v] of Object.entries(o))
+  for (const [k, v] of Object.entries(o)) {
+    // The cap per attempt in words: an amount, or none by a person's choice or a subscription's sign-in.
+    if (k === 'max_budget_usd') {
+      if (v === null) parts.push('no spending limit per attempt');
+      else if (typeof v === 'number') parts.push(`stops an attempt at $${v}`);
+      continue;
+    }
     if (v !== undefined && v !== null && v !== '') parts.push(`${k.replaceAll('_', ' ')} ${String(v)}`);
+  }
   return parts.join(' · ');
 }
 
@@ -266,6 +280,16 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
     const output = h('details', { class: 'pn-output' }, h('summary', null, 'Output'), log);
     const stop = button([icon('stop', 14), 'Stop'], () => void act('stop'), { class: 'btn' });
     const again = button([icon('play', 14), 'Start again'], () => void act('start'), { class: 'btn' });
+    // A remembered agent's role, options and autostart are changed in place: closes this drawer
+    // first, since a dialog over a drawer leaves the drawer without input.
+    const editBtn = button(
+      [icon('file', 14), 'Edit'],
+      () => {
+        closeDrawer(ctx);
+        openModal(ctx, { kind: 'edit-agent', id: row.agent_key });
+      },
+      { class: 'btn btn-ghost', title: 'Change this agent’s role, options or whether it starts with Friday' },
+    );
     const forget = button([icon('close', 14), 'Forget'], () => void act('forget'), { class: 'btn btn-ghost' });
     const el = h(
       'li',
@@ -282,6 +306,7 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
         h('span', { class: 'spacer' }),
         stop,
         again,
+        editBtn,
         forget,
       ),
       meta,
@@ -382,7 +407,11 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
               : 'started by hand'
             : 'not remembered'
           : '',
-        p?.shadow || x?.shadow ? 'shadow: another session holds this key' : '',
+        p?.shadow || x?.shadow
+          ? row.host === 'antigravity'
+            ? 'another app is connected under this name, so this one cannot take tasks: connect Antigravity again (below) to give it its own name'
+            : 'another session is connected under this name, so this one cannot take tasks'
+          : '',
       ].filter(Boolean);
       meta.textContent = plain(parts.join(' · '), 600);
       opts.textContent = plain(
@@ -393,6 +422,8 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
       basis.textContent = x?.enforcement_basis ? plain(x.enforcement_basis, 300) : '';
       basis.hidden = !basis.textContent;
       const live = isLive(p);
+      // Only an agent Friday remembers has something to change.
+      editBtn.hidden = !row.profile;
       stop.hidden = !live;
       stop.disabled = p?.status === 'stopping';
       again.hidden = live || !row.profile;

@@ -16,7 +16,14 @@ import { newId } from '@friday/protocol';
 import { renderInitialConfig } from '@friday/sdk';
 import { useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
-import { applyAntigravityPlan, mergeAgentsMd, mergeHooks, mergeMcpConfig, planAntigravity } from './config.js';
+import {
+  applyAntigravityPlan,
+  DEFAULT_AGENT_KEY,
+  mergeAgentsMd,
+  mergeHooks,
+  mergeMcpConfig,
+  planAntigravity,
+} from './config.js';
 import {
   AGENTS_MD_BLOCK,
   fridayHookGroup,
@@ -348,9 +355,42 @@ describe('friday harness config antigravity', () => {
     const agentFile = (c: { display: string }) => c.display === '(private) agent.json';
     expect(planAntigravity({ projectDir: ws().projectDir, env: env() }).some(agentFile)).toBe(false);
     const changed = planAntigravity({ projectDir: ws().projectDir, env: env(), agentKey: 'ag-8' }).find(agentFile);
-    expect(changed?.note).toBe("this machine's agent key: ag-8");
+    expect(changed?.note).toBe("Antigravity's agent key on this machine: ag-8");
     expect(() => planAntigravity({ projectDir: ws().projectDir, env: env(), agentKey: 'no spaces' })).toThrow(
       /invalid agent key/,
     );
+  });
+
+  it('gives Antigravity a name of its own, beside the one Claude Code works under', () => {
+    initProject();
+    const agentFile = (c: { display: string }) => c.display === '(private) agent.json';
+    // Nobody chose a name: its own default, never the `dev-1` Claude Code in VS Code works under,
+    // or the second of the two to connect would be a shadow that can take no task.
+    const first = planAntigravity({ projectDir: ws().projectDir, env: env() }).find(agentFile);
+    expect(first?.note).toBe(`Antigravity's agent key on this machine: ${DEFAULT_AGENT_KEY}`);
+    expect(DEFAULT_AGENT_KEY).toBe('antigravity-1');
+    expect(JSON.parse(String(first?.after))).toEqual({ hosts: { antigravity: 'antigravity-1' } });
+
+    // Claude Code was set up first: its key stays where it is, and whatever else the file holds.
+    const file = String(first?.path);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({ agent_key: 'dev-7', hosts: { cursor: 'cur-1' }, other: true }));
+    const beside = planAntigravity({ projectDir: ws().projectDir, env: env() }).find(agentFile);
+    expect(JSON.parse(String(beside?.after))).toEqual({
+      agent_key: 'dev-7',
+      hosts: { cursor: 'cur-1', antigravity: 'antigravity-1' },
+      other: true,
+    });
+    // A machine set up before the names were apart (one shared key) gets Antigravity's own on the
+    // next setup: the shared key is Claude Code's and is not taken over.
+    writeFileSync(file, JSON.stringify({ agent_key: 'dev-1' }));
+    const moved = planAntigravity({ projectDir: ws().projectDir, env: env() }).find(agentFile);
+    expect(JSON.parse(String(moved?.after))).toEqual({ agent_key: 'dev-1', hosts: { antigravity: 'antigravity-1' } });
+    // Its own name, once written, is kept; a `hosts` that is not an object is replaced, not read.
+    writeFileSync(file, JSON.stringify({ agent_key: 'dev-1', hosts: { antigravity: 'ag-3' } }, null, 2).concat('\n'));
+    expect(planAntigravity({ projectDir: ws().projectDir, env: env() }).some(agentFile)).toBe(false);
+    writeFileSync(file, JSON.stringify({ hosts: ['x'] }));
+    const fixed = planAntigravity({ projectDir: ws().projectDir, env: env() }).find(agentFile);
+    expect(JSON.parse(String(fixed?.after))).toEqual({ hosts: { antigravity: 'antigravity-1' } });
   });
 });

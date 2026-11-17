@@ -1,14 +1,16 @@
 import type { AntigravitySetupPlan } from '@friday/protocol';
 import { describe, expect, it } from 'vitest';
 import { makeContext } from '../test/context.js';
+import { makeAgent, makeHarness, makeSnapshot } from '../test/fixtures.js';
 import {
   ANTIGRAVITY_ATTACH_NOTE,
   ANTIGRAVITY_FALLBACK_PROMPT,
   ANTIGRAVITY_FIRST_PROMPT,
+  ANTIGRAVITY_SETUP_KEY,
   antigravitySetupModal,
   foundText,
+  namesTakenByOthers,
 } from './antigravity-setup.js';
-import { DEFAULT_SETUP_KEY } from './claude-setup.js';
 import { BIDI, buttonBy, controlBy, flush, HOSTILE, type } from './test-support.js';
 
 function plan(over: Partial<AntigravitySetupPlan> = {}): AntigravitySetupPlan {
@@ -79,11 +81,13 @@ describe('antigravity setup', () => {
       return true;
     };
     const m = antigravitySetupModal(ctx, { kind: 'antigravity-setup' }, () => undefined);
-    expect(controlBy(m.el, 'Agent key').value).toBe(DEFAULT_SETUP_KEY);
+    // Its own name: with Claude Code's `dev-1` the second of the two to connect could take no task.
+    expect(controlBy(m.el, 'Agent key').value).toBe(ANTIGRAVITY_SETUP_KEY);
+    expect(ANTIGRAVITY_SETUP_KEY).toBe('antigravity-1');
     expect(buttonBy(m.el, 'Apply').disabled).toBe(true);
     buttonBy(m.el, 'Preview').click();
     await flush();
-    expect(ctx.transport.calls[0]?.path).toContain('/agent-setup/antigravity?agent=dev-1');
+    expect(ctx.transport.calls[0]?.path).toContain('/agent-setup/antigravity?agent=antigravity-1');
     expect(m.el.textContent).toContain('Antigravity CLI 1.4.4 found');
     expect(m.el.textContent).toContain('tracked by git');
     expect(m.el.textContent).toContain('not tracked');
@@ -101,11 +105,19 @@ describe('antigravity setup', () => {
       'Git tracks this one, so the change shows in your next commit:',
       '  .agents/mcp_config.json',
     ]);
-    expect(ctx.transport.to('POST', '/agent-setup/antigravity')[0]?.body).toEqual({ agent_key: 'dev-1' });
+    expect(ctx.transport.to('POST', '/agent-setup/antigravity')[0]?.body).toEqual({ agent_key: 'antigravity-1' });
     const text = m.el.textContent ?? '';
-    expect(text).toContain('L1 unverified');
-    expect(text).toContain('ag.trust');
-    expect(text).toContain('Fix: trust it');
+    // The level in a person's words; a note that is neither a failure nor a warning is folded away
+    // with what passed, and no check code shows.
+    expect(text).toContain(
+      'Connected. Friday’s checks are in place; Antigravity does not say what it does when a check cannot run',
+    );
+    expect(text).not.toContain('L1 unverified');
+    expect(text).not.toContain('ag.trust');
+    expect(text).toContain('Nothing needs attention.');
+    expect(m.el.querySelector('details.pn-checks-passed summary')?.textContent).toBe('2 checks with nothing to do');
+    expect(m.el.querySelector('details.pn-checks-passed')?.textContent).toContain('hooks run only in a trusted folder');
+    expect(text).toContain('close it and open it again so it takes the name');
     expect(text).toContain('Open this project folder in Antigravity yourself');
     expect(text).toContain('Trust the folder');
     expect(ANTIGRAVITY_FIRST_PROMPT).toBe('/friday');
@@ -131,8 +143,38 @@ describe('antigravity setup', () => {
     expect(m.el.textContent).toContain('Friday did not find Antigravity on this machine');
     buttonBy(m.el, 'Apply').click();
     await flush();
-    expect(m.el.textContent).toContain('The doctor gave no answer: timed out');
+    expect(m.el.textContent).toContain('Friday could not check the setup: timed out');
     expect(m.el.textContent).toContain('Nothing to change.');
+    m.destroy();
+  });
+
+  it('refuses the name another app works under, and takes Antigravity’s own', async () => {
+    // Claude Code in VS Code is dev-1; an Antigravity session already connected is antigravity-1.
+    const board = makeSnapshot({
+      agents: [
+        makeAgent({ agent_key: 'dev-1', harness_id: 'h-claude' }),
+        makeAgent({ agent_id: 'agent_2', agent_key: 'antigravity-1', harness_id: 'h-ag' }),
+        makeAgent({ agent_id: 'agent_3', agent_key: 'gone-1', harness_id: 'h-old', status: 'TERMINATED' }),
+      ],
+      harnesses: [
+        makeHarness({ harness_id: 'h-claude', vendor: 'claude-code' }),
+        makeHarness({ harness_id: 'h-ag', vendor: 'antigravity' }),
+      ],
+    });
+    expect([...namesTakenByOthers(board)]).toEqual(['dev-1']);
+    expect([...namesTakenByOthers(null)]).toEqual([]);
+    const ctx = makeContext({ snapshot: board, answers: { 'GET /agent-setup/antigravity': plan() } });
+    const m = antigravitySetupModal(ctx, { kind: 'antigravity-setup' }, () => undefined);
+    // Its own name is free to set up again, though a session holds it.
+    expect(buttonBy(m.el, 'Preview').disabled).toBe(false);
+    type(controlBy(m.el, 'Agent key'), 'dev-1');
+    expect(m.el.textContent).toContain(
+      'dev-1 is the name another agent works under; choose another, or the two cannot both take tasks',
+    );
+    expect(buttonBy(m.el, 'Preview').disabled).toBe(true);
+    expect(buttonBy(m.el, 'Apply').disabled).toBe(true);
+    type(controlBy(m.el, 'Agent key'), 'gone-1');
+    expect(buttonBy(m.el, 'Preview').disabled).toBe(false);
     m.destroy();
   });
 

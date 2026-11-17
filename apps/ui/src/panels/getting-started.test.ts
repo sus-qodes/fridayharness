@@ -123,9 +123,11 @@ describe('registerPanels', () => {
     expect([...registry.modals.keys()].sort()).toEqual([
       'antigravity-setup',
       'claude-setup',
+      'edit-agent',
       'land',
       'new-goal',
       'plan-editor',
+      'raise-limit',
       'start-agent',
       'verify',
     ]);

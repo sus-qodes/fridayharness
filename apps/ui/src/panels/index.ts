@@ -17,6 +17,7 @@ import { claudeSetupModal } from './claude-setup.js';
 import { landModal } from './land-panel.js';
 import { newGoalModal } from './new-goal.js';
 import { planEditorModal } from './plan-editor.js';
+import { raiseLimitModal } from './raise-limit.js';
 import { settingsDrawer } from './settings.js';
 import { startAgentModal } from './start-agent.js';
 import { verifyModal } from './verify-panel.js';
@@ -29,6 +30,8 @@ export function registerPanels(ctx: AppContext): void {
   r.modal('plan-editor', planEditorModal);
   r.modal('verify', verifyModal);
   r.modal('land', landModal);
+  r.modal('edit-agent', startAgentModal);
+  r.modal('raise-limit', raiseLimitModal);
   r.modal('claude-setup', claudeSetupModal);
   r.modal('antigravity-setup', antigravitySetupModal);
   r.modal('start-agent', startAgentModal);

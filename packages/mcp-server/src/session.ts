@@ -63,15 +63,23 @@ export interface MeView {
   capabilities?: { graph: boolean; artifacts: boolean };
 }
 
-/** Agent key: FRIDAY_AGENT, then the private agent.json written by `friday harness config`, then dev-1. */
-export function resolveAgentKey(ref: ProjectRef | undefined, explicit?: string): string {
+/**
+ * Agent key: FRIDAY_AGENT, then the private agent.json written by `friday harness config`, then
+ * dev-1. In that file a host may have a name of its own (`hosts.<vendor>`, 2026-11-17): Antigravity
+ * has, so that it and Claude Code in VS Code, connected on one machine, are two agents. Before, both
+ * read the one `agent_key`, and whichever connected second was a shadow that could take no task.
+ */
+export function resolveAgentKey(ref: ProjectRef | undefined, explicit?: string, vendor?: string): string {
   if (explicit) return explicit;
   if (ref) {
     const file = path.join(privateDirFor(ref), 'agent.json');
     if (existsSync(file)) {
       try {
-        const key = (JSON.parse(readFileSync(file, 'utf8')) as { agent_key?: string }).agent_key;
-        if (key) return key;
+        const data = JSON.parse(readFileSync(file, 'utf8')) as { agent_key?: unknown; hosts?: unknown };
+        const hosts = data.hosts && typeof data.hosts === 'object' ? (data.hosts as Record<string, unknown>) : {};
+        const own = vendor ? hosts[vendor] : undefined;
+        if (typeof own === 'string' && own) return own;
+        if (typeof data.agent_key === 'string' && data.agent_key) return data.agent_key;
       } catch {
         // fall through to the default
       }
@@ -132,7 +140,7 @@ export class FridaySession {
       this.problem = `no Friday project here (${(e as Error).message})`;
       return false;
     }
-    this.agentKey = resolveAgentKey(this.project, this.opts.agentKey);
+    this.agentKey = resolveAgentKey(this.project, this.opts.agentKey, this.vendor);
     let bootstrap: DaemonClient;
     try {
       bootstrap = DaemonClient.forProject(this.project, 'bootstrap', { clientName: 'friday-mcp' });

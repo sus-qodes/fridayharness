@@ -196,6 +196,15 @@ fn options_text(options: Option<&Value>) -> String {
         Some(m) if !m.is_empty() => m
             .iter()
             .map(|(k, v)| {
+                // The spending limit in words: an amount, or none. Anything else under that name is
+                // shown as it is, so nothing the daemon would read differently is dressed up.
+                if k == "max_budget_usd" {
+                    match v {
+                        Value::Null => return "no spending limit per attempt".to_string(),
+                        Value::Number(n) => return format!("spending limit per attempt: ${n}"),
+                        _ => {}
+                    }
+                }
                 let v = match v {
                     Value::String(s) => s.clone(),
                     other => other.to_string(),
@@ -475,6 +484,64 @@ pub fn prepare(
                 }),
             })
         }
+        Some(Confirm::UpdateAgent) => {
+            let key = checked.param("key").unwrap_or_default().to_string();
+            let view = get(&format!("{base}agent-processes"))?;
+            let profile = view
+                .get("profiles")
+                .and_then(Value::as_array)
+                .and_then(|a| a.iter().find(|p| field(p, "agent_key") == Some(key.as_str())))
+                .cloned()
+                .ok_or_else(|| CmdError::shell(404, NOT_PENDING, "agent_not_found", "Friday does not remember this agent"))?;
+            // Only what the route changes is sent: the role, the options and whether it starts with
+            // Friday. What the body leaves out stays as it is, and is shown as it is.
+            let mut sent = Map::new();
+            if let Some(r) = text_field(body, "role", 64)? {
+                sent.insert("role".into(), Value::String(r));
+            }
+            match body.and_then(|b| b.get("options")) {
+                None => {}
+                Some(o @ Value::Object(_)) => {
+                    sent.insert("options".into(), o.clone());
+                }
+                Some(_) => return Err(CmdError::bad_request("options must be an object")),
+            }
+            match body.and_then(|b| b.get("autostart")) {
+                None => {}
+                Some(Value::Bool(a)) => {
+                    sent.insert("autostart".into(), Value::Bool(*a));
+                }
+                Some(_) => return Err(CmdError::bad_request("autostart must be true or false")),
+            }
+            let role = sent.get("role").and_then(Value::as_str).or_else(|| field(&profile, "role"));
+            let options = sent.get("options").or_else(|| profile.get("options"));
+            let autostart = sent
+                .get("autostart")
+                .and_then(Value::as_bool)
+                .unwrap_or_else(|| profile.get("autostart") == Some(&Value::Bool(true)));
+            let opts = options_text(options);
+            let before = options_text(profile.get("options"));
+            too_long(&[&key, role.unwrap_or(""), &opts, &before])?;
+            let asks_danger = options.is_some_and(crate::routes::asks_for_danger);
+            Ok(Prepared {
+                body: Value::Object(sent.clone()),
+                dialog: Some(Dialog {
+                    title: "Friday: change this agent?".into(),
+                    text: format!(
+                        "Agent: {}\nHost: {}\nRole: {}\nOptions: {}\nStarts with Friday: {}\n\nIts options until now: {}{}\n\nA spending limit applies from the agent's next attempt; everything else the next time it starts. An agent may spend on its provider account.\n\nSave the change?",
+                        visible(&key),
+                        shown(field(&profile, "host")),
+                        shown(role),
+                        opts,
+                        if autostart { "yes" } else { "no" },
+                        before,
+                        if asks_danger || danger { DANGER_NOTE } else { "" }
+                    ),
+                    confirm: "Save the change".into(),
+                    danger: true,
+                }),
+            })
+        }
         None => {
             let b = body.cloned().unwrap_or(Value::Null);
             let shown_body = visible(&serde_json::to_string_pretty(&b).unwrap_or_default());
@@ -707,6 +774,45 @@ mod tests {
                     assert!(!d.text.contains("depend on it"), "{}", d.text);
                 }
             }
+        }
+        // Changing a remembered agent shows what it will run with beside what it had, sends only
+        // what the route changes, and says a spending limit in words.
+        let claude = |path: &str| -> Result<Value, CmdError> {
+            assert!(path.ends_with("/agent-processes"), "{path}");
+            Ok(json!({"profiles": [{"agent_key": "claude-1", "host": "claude-code", "role": "developer",
+                "autostart": true, "options": {"max_budget_usd": 5}}]}))
+        };
+        let change = json!({"options": {"max_budget_usd": null, "effort": "high"}, "junk": 1, "host": "codex"});
+        let (c, what) = checked("agent-processes/claude-1/update", Some(&change));
+        assert_eq!(what, Some(Confirm::UpdateAgent));
+        let p = prepare(what, &c, PID, Some(&change), &claude).unwrap();
+        assert_eq!(p.body, json!({"options": {"max_budget_usd": null, "effort": "high"}}));
+        let d = p.dialog.expect("a dialog");
+        assert_eq!(d.title, "Friday: change this agent?");
+        assert!(d.text.contains("Agent: claude-1\nHost: claude-code\nRole: developer\n"), "{}", d.text);
+        assert!(d.text.contains("no spending limit per attempt"), "{}", d.text);
+        assert!(d.text.contains("Its options until now: spending limit per attempt: $5"), "{}", d.text);
+        assert!(d.text.contains("Starts with Friday: yes"), "{}", d.text);
+        assert!(!d.text.contains("WARNING"), "{}", d.text);
+        // A part left out is kept and shown as it is; a changed one is shown as it will be.
+        let part = json!({"role": "back\u{202E}end", "autostart": false});
+        let (c, what) = checked("agent-processes/claude-1/update", Some(&part));
+        let p = prepare(what, &c, PID, Some(&part), &claude).unwrap();
+        assert_eq!(p.body, part);
+        let d = p.dialog.expect("a dialog");
+        assert!(d.text.contains("Role: back⟨U+202E⟩end"), "{}", d.text);
+        assert!(d.text.contains("Options: spending limit per attempt: $5\nStarts with Friday: no"), "{}", d.text);
+        // Full access asked for by a change is said as loudly as at a start.
+        let full = json!({"options": {"sandbox": "danger-full-access"}});
+        let (c, what) = checked("agent-processes/codex-1/update", Some(&full));
+        let p = prepare(what, &c, PID, Some(&full), &get).unwrap();
+        assert!(p.dialog.unwrap().text.contains("WARNING: danger-full-access"));
+        // An agent Friday does not remember, or a body of the wrong shape, is refused before any dialog.
+        let (c, what) = checked("agent-processes/nobody/update", Some(&change));
+        assert!(prepare(what, &c, PID, Some(&change), &claude).is_err());
+        for bad in [json!({"options": "none"}), json!({"autostart": "yes"}), json!({"role": 5})] {
+            let (c, what) = checked("agent-processes/claude-1/update", Some(&bad));
+            assert!(prepare(what, &c, PID, Some(&bad), &claude).is_err(), "{bad}");
         }
         let launch = json!({"host": "codex", "agent_key": "codex-2", "role": "implementer",
             "options": {"sandbox": "danger-full-access"}, "autostart": true});

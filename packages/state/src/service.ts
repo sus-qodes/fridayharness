@@ -2659,6 +2659,8 @@ export class FridayState {
       worker_stopped?: boolean | undefined;
       /** Why the host failed, when the adapter could tell (ADR-0035 §3); absent for a work failure. */
       failure?: HostFailure | undefined;
+      /** The host ended the attempt at its own session's spending cap (2026-11-17). */
+      spending_cap?: { cap_usd: number; cost_usd?: number | null | undefined } | undefined;
       idempotency_key?: string | undefined;
     },
   ): { task_status: TaskView['status'] } {
@@ -2678,6 +2680,7 @@ export class FridayState {
             fatal: p.fatal,
             ...(p.worker_stopped !== undefined ? { worker_stopped: p.worker_stopped } : {}),
             ...(p.failure ? { failure: p.failure } : {}),
+            ...(p.spending_cap ? { spending_cap: p.spending_cap } : {}),
           },
           refs: [
             { kind: 'task', id: task.task_id },
@@ -2710,6 +2713,11 @@ export class FridayState {
           // record, and the attempt ends at the cap now, for a human to decide, never for the
           // recovery sweep to retry.
           return { task_status: this.endAtCap(ctx, run, task, stop).status };
+        }
+        if (p.spending_cap && (task.status === 'RUNNING' || task.status === 'WAITING')) {
+          // The host stopped at its own session's cap: the same reasoning, with the agent's limit
+          // in place of the task's. Nobody is benched, since neither the host nor the work failed.
+          return { task_status: this.endAtAgentCap(ctx, run, task, p.spending_cap).status };
         }
         if (task.status === 'RUNNING') {
           task = this.moveTask(ctx, task, 'task.wait', {
@@ -2861,6 +2869,55 @@ export class FridayState {
         attempt: stop.attempt,
         cost_usd: stop.cost_usd,
         cap_usd: stop.cap_usd,
+      },
+    });
+    return waiting;
+  }
+
+  /**
+   * Ends an attempt its host stopped at the agent's own spending limit per attempt (Claude Code's
+   * `--max-budget-usd`, 2026-11-17). As at the task's cap, the task waits as `blocked`, never as
+   * `agent_error`: the recovery sweep would give it to an agent again, which would spend up to the
+   * same limit again and stop at the same place. A human raises the agent's limit and lets the
+   * task continue from the work the attempt left (its worktree is kept), or cancels it. The host's
+   * own error is on record already; the question says it in a person's words, with the figures.
+   */
+  private endAtAgentCap(
+    ctx: CommandContext,
+    run: RunView,
+    task: TaskView,
+    cap: { cap_usd: number; cost_usd?: number | null | undefined },
+  ): TaskView {
+    const agent = this.q.findAgent(run.agent_id);
+    const harness = this.q.findHarness(run.harness_id);
+    const who = agent?.agent_key ?? 'The agent';
+    const cost = typeof cap.cost_usd === 'number' && Number.isFinite(cap.cost_usd) ? cap.cost_usd : null;
+    const reason = `budget_exceeded: attempt ${run.attempt} reached the agent's spending limit of ${usd(cap.cap_usd)} per attempt`;
+    const waiting =
+      task.status === 'RUNNING'
+        ? this.moveTask(ctx, task, 'task.wait', { waiting_reason: 'blocked', reason: reason.slice(0, 200) })
+        : this.updateTaskFields(ctx, task.task_id, { waiting_reason: 'blocked' });
+    this.endRun(ctx, run, 'failed');
+    this.expireOutboxForRun(ctx, run.run_id);
+    this.releaseAgent(ctx, run.agent_id, task.task_id);
+    this.syncHarnessBusy(ctx, run.harness_id);
+    this.escalationWithin(ctx, {
+      kind: 'recovery_needed',
+      goal_id: task.goal_id ?? null,
+      task_id: task.task_id,
+      question: `${who} stopped at its spending limit: this attempt ${cost === null ? 'reached' : `cost ${usd(cost)}, and reached`} the limit of ${usd(cap.cap_usd)} per attempt. The work so far is kept. Raise the limit to let the task continue, or cancel it.`,
+      options: [`friday recover ${task.task_id} --action reassign`, `friday task cancel ${task.task_id}`],
+      details: {
+        reason: 'budget_exceeded',
+        // Whose limit it was: the agent's own (the task's, `routing.task_budget_usd`, has none).
+        scope: 'agent',
+        agent_key: agent?.agent_key ?? null,
+        host: harness?.vendor ?? null,
+        attach_mode: harness?.attach_mode ?? null,
+        run_id: run.run_id,
+        attempt: run.attempt,
+        cost_usd: cost,
+        cap_usd: cap.cap_usd,
       },
     });
     return waiting;

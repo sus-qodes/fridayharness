@@ -54,6 +54,9 @@ pub enum Confirm {
     StopDaemon,
     LaunchAgent,
     StartAgent,
+    /// `agent-processes/{key}/update`: a remembered agent's role, options and autostart. Its
+    /// spending limit is among them and applies from its next attempt, so the person sees it.
+    UpdateAgent,
 }
 
 /// Which command may send a route.
@@ -190,6 +193,9 @@ pub static ROUTES: &[Route] = &[
     confirm("agent-processes", Confirm::LaunchAgent),
     post("agent-processes/{key}/stop"),
     confirm("agent-processes/{key}/start", Confirm::StartAgent),
+    // A remembered agent changed in place: what it will run with, its spending limit included, is
+    // shown before it is saved, as it was when the agent was first started.
+    confirm("agent-processes/{key}/update", Confirm::UpdateAgent),
     post("agent-processes/{key}/forget"),
     get("agent-setup/claude-code", &["agent"]),
     post("agent-setup/claude-code"),
@@ -713,6 +719,7 @@ mod tests {
             p("daemon/stop"),
             p("agent-processes"),
             p("agent-processes/claude-1/start"),
+            p("agent-processes/claude-1/update"),
         ] {
             let e = req("POST", &raw).unwrap_err();
             assert_eq!(e.code, CONFIRMATION_REQUIRED, "{raw}");

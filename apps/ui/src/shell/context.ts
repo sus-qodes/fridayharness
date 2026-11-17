@@ -155,6 +155,10 @@ export type ModalKind =
   | 'claude-setup'
   | 'antigravity-setup'
   | 'start-agent'
+  /** A remembered agent's role, options and autostart, changed in the Start dialog; `id` is its key. */
+  | 'edit-agent'
+  /** A task stopped at its agent's spending limit: a higher limit, and the task continues; `id` is the task. */
+  | 'raise-limit'
   | 'plan-review'
   | 'feedback';
 

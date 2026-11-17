@@ -65,9 +65,9 @@ describe('connecting Antigravity from the interface', () => {
     expect(runs).toEqual([
       ['--project', ROOT, '--json', 'harness', 'config', 'antigravity', '--agent=ag-2', '--print'],
     ]);
-    // No key given: this machine's default.
+    // No key given: Antigravity's own name, never the `dev-1` Claude Code in VS Code works under.
     await call(`GET ${P}`);
-    expect(runs[1]).toContain('--agent=dev-1');
+    expect(runs[1]).toContain('--agent=antigravity-1');
   });
 
   it('applies, then asks the doctor, and runs only Friday’s own harness commands', async () => {
@@ -91,14 +91,19 @@ describe('connecting Antigravity from the interface', () => {
       args.includes('doctor') ? new Error('timed out') : JSON.stringify({ ...PLAN, applied: true }),
     );
     expect(await call(`POST ${P}`, { body: {} })).toMatchObject({
-      plan: { agent_key: 'dev-1', applied: true },
+      plan: { agent_key: 'antigravity-1', applied: true },
       doctor: { error: 'timed out' },
     });
   });
 
   it('fills what an older CLI leaves out', async () => {
     const { call } = mount(() => '{}');
-    expect(await call(`GET ${P}`)).toEqual({ agent_key: 'dev-1', applied: false, changes: [], antigravity: null });
+    expect(await call(`GET ${P}`)).toEqual({
+      agent_key: 'antigravity-1',
+      applied: false,
+      changes: [],
+      antigravity: null,
+    });
   });
 
   it('refuses another token class, a bad agent key and a body that is not JSON, before running anything', async () => {

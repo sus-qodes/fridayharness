@@ -49,7 +49,9 @@ describe('friday harness config antigravity', () => {
     const [{ value, text }] = printed as [{ value: Record<string, unknown>; text: string }];
     expect(value).toMatchObject({ host: 'antigravity', experimental: true, applied: true, removed: false });
     expect(value.antigravity).toEqual({ cli: null, app: null, hook_level: 'unverified' });
-    expect(text).toContain('Configured Antigravity for Friday project "shop" (this machine\'s agent key: ag-1):');
+    expect(text).toContain(
+      'Configured Antigravity for Friday project "shop" (Antigravity\'s agent key on this machine: ag-1):',
+    );
     expect(text).toContain('+ .agents/hooks.json');
     expect(text).toContain(
       "Antigravity was not found on this machine: experimental. L1 unverified once a session's hooks reach Friday: what Antigravity does with a call when its hook crashes or times out is not documented",

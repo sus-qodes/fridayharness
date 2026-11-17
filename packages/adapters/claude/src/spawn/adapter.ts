@@ -51,8 +51,12 @@ export interface ClaudeSpawnOptions {
   hook: { command: string; args: readonly string[] };
   /** Reasoning effort; the host's default otherwise. */
   effort?: string;
-  /** A spending cap for each attempt's session (`--max-budget-usd`); none otherwise. */
-  maxBudgetUsd?: number;
+  /**
+   * A spending cap for each attempt's session (`--max-budget-usd`); none otherwise. A function is
+   * asked at each attempt, so a limit a person raised applies to the next attempt without this
+   * adapter starting again.
+   */
+  maxBudgetUsd?: number | (() => number | undefined);
   /** Harness key; by default stable per project and agent, so a restart resumes its runs. */
   harnessKey?: string;
   /** Where each attempt's instructions and settings files go (default: the system temp folder). */
@@ -127,6 +131,8 @@ interface Attempt {
   started: boolean;
   stopping: boolean;
   done: boolean;
+  /** The spending cap this attempt's session runs with, and whether it is the agent's own. */
+  budget?: { cap_usd: number; own: boolean };
 }
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
@@ -375,7 +381,8 @@ export class ClaudeSpawnAdapter {
         },
       }),
     );
-    const budget = sessionBudgetUsd(this.opts.maxBudgetUsd, p.budget_usd);
+    const ownCap = this.#ownCap();
+    const budget = sessionBudgetUsd(ownCap, p.budget_usd);
     const args = (resumes: boolean) => [
       ...(this.opts.host.args ?? []),
       '-p',
@@ -440,6 +447,9 @@ export class ClaudeSpawnAdapter {
       started: false,
       stopping: false,
       done: false,
+      // The agent's own cap is the one that applies unless the task's is smaller: Friday ends an
+      // attempt at the task's cap itself, from the cost the host reports.
+      ...(budget === undefined ? {} : { budget: { cap_usd: budget, own: ownCap !== undefined && budget === ownCap } }),
     };
     const attempt = a;
     this.#attempts.set(p.run_id, attempt);
@@ -698,6 +708,19 @@ export class ClaudeSpawnAdapter {
     if (!a.verdict.valid) void this.#lost(a, a.verdict.why, 'turn');
   }
 
+  /** The agent's own cap for the attempt that starts now; none when it cannot be read. */
+  #ownCap(): number | undefined {
+    const own = this.opts.maxBudgetUsd;
+    if (typeof own !== 'function') return own;
+    try {
+      const now = own();
+      return typeof now === 'number' && Number.isFinite(now) && now > 0 ? now : undefined;
+    } catch (e) {
+      this.#log(`the spending cap could not be read: ${(e as Error).message}`);
+      return undefined;
+    }
+  }
+
   async #finish(a: Attempt, m: Record<string, unknown>): Promise<void> {
     if (a.done || a.stopping) return;
     if (a.verdict?.valid !== true) {
@@ -754,9 +777,12 @@ export class ClaudeSpawnAdapter {
       }
     } else {
       const message = `the Claude Code turn ended: ${String(m.subtype ?? 'error')}${str(m.result) ? `: ${m.result}` : ''}`;
+      // The host stopped at the spending cap of its session (`error_max_budget_usd`): said as that,
+      // with the figures, so Friday asks a human instead of running the task again at the same cap.
+      const capped = m.subtype === 'error_max_budget_usd' && a.budget?.own ? a.budget : undefined;
       // A turn the host ended because it could not serve it (not signed in, rate limited) is the
       // host's failure (ADR-0035 §3); any other error of the turn is the work's.
-      const failure = classifyHostFailure(message, 'turn');
+      const failure = capped ? null : classifyHostFailure(message, 'turn');
       void reports.report(
         'error',
         {
@@ -765,6 +791,7 @@ export class ClaudeSpawnAdapter {
           // The attempt is over (its session ends below): Friday's recovery decides what follows.
           fatal: true,
           ...(failure ? { failure } : {}),
+          ...(capped ? { spending_cap: { cap_usd: capped.cap_usd, cost_usd: num(m.total_cost_usd) } } : {}),
         },
         spent,
       );

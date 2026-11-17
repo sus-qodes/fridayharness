@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createAgentLauncher } from '@friday/cli';
-import type { AgentHost, AgentProcessesView } from '@friday/protocol';
+import type { AgentHost, AgentOptions, AgentProcessesView, AgentProfile } from '@friday/protocol';
 import { useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
 import { REPO_ROOT } from '../helpers/cli.js';
@@ -21,14 +21,18 @@ const HOSTS: AgentHost[] = [
   { host: 'claude-code', found: false, version: null, supported: false, path: null, reason: 'not installed (test)' },
 ];
 
-function launcher(opts: { detectMs?: number } = {}) {
+function launcher(opts: { detectMs?: number; hosts?: AgentHost[]; signIn?: () => string | undefined } = {}) {
   const started: string[][] = [];
+  /** The options each child was started with, as the launcher decided them. */
+  const ran: AgentOptions[] = [];
   const ext = createAgentLauncher({
     detectHosts: async () => {
       if (opts.detectMs) await new Promise((res) => setTimeout(res, opts.detectMs));
-      return HOSTS;
+      return opts.hosts ?? HOSTS;
     },
     stopGraceMs: 3000,
+    // Never this machine's own sign-in files: what a test gives, or none read.
+    signIn: opts.signIn ?? (() => undefined),
     child: (req, ctx) => {
       const args = [
         ADAPTER,
@@ -39,11 +43,12 @@ function launcher(opts: { detectMs?: number } = {}) {
         req.role,
       ];
       started.push(args);
+      ran.push(req.options);
       // No PATH and no host variables: nothing real could be found or started.
       return { command: process.execPath, args, env: { SystemRoot: process.env.SystemRoot ?? '' } };
     },
   });
-  return { ext, started };
+  return { ext, started, ran };
 }
 
 const op = (td: TestDaemon) => td.daemon.tokens.operator;
@@ -164,6 +169,137 @@ describe('the agent launcher', () => {
     expect(twice.status).toBe(409);
     expect(codeOf(twice)).toBe('COS-2002');
     expect(started).toHaveLength(1);
+  });
+
+  it('changes a remembered agent in place: the next start uses the new, what runs keeps the old', async () => {
+    const { ext, ran } = launcher();
+    const td = await startTestDaemon(ws(), { extensions: [ext] });
+    const post = (rel: string, body: unknown, token = op(td)) =>
+      raw(td, 'POST', td.operator.projectPath(rel), { token, body: JSON.stringify(body) });
+    expect(
+      (await post('/agent-processes', { host: 'codex', agent_key: 'codex-6', options: { sandbox: 'read-only' } }))
+        .status,
+    ).toBe(201);
+    const changed = await post('/agent-processes/codex-6/update', {
+      role: 'backend',
+      autostart: false,
+      options: { sandbox: 'workspace-write', effort: 'high' },
+    });
+    expect(changed.status, changed.text).toBe(200);
+    // It runs: said, so the interface can tell the person the change waits for the next start.
+    expect(changed.json?.running).toBe(true);
+    expect(changed.json?.profile).toMatchObject({
+      agent_key: 'codex-6',
+      host: 'codex',
+      role: 'backend',
+      autostart: false,
+      options: { sandbox: 'workspace-write', effort: 'high' },
+    });
+    const view = await processes(td);
+    expect(view.profiles[0]).toMatchObject({ role: 'backend', autostart: false });
+    expect(view.processes[0]).toMatchObject({ role: 'developer', options: { sandbox: 'read-only' } });
+
+    // A part left out is kept; options sent replace the options as a whole.
+    const partly = await post('/agent-processes/codex-6/update', { role: 'frontend' });
+    expect(partly.json?.profile as AgentProfile).toMatchObject({
+      role: 'frontend',
+      autostart: false,
+      options: { sandbox: 'workspace-write', effort: 'high' },
+    });
+
+    // The same rules as a start: nothing becomes another option of the host, host and key stay.
+    expect((await post('/agent-processes/codex-6/update', { options: { sandbox: '--yolo' } })).status).toBe(400);
+    expect((await post('/agent-processes/codex-6/update', { options: { max_budget_usd: 5 } })).status).toBe(400);
+    expect((await post('/agent-processes/codex-6/update', { role: 'Bad Role' })).status).toBe(400);
+    expect((await post('/agent-processes/codex-6/update', { host: 'claude-code' })).status).toBe(400);
+    expect((await post('/agent-processes/codex-6/update', { agent_key: 'codex-7' })).status).toBe(400);
+    expect((await post('/agent-processes/nobody/update', { role: 'backend' })).status).toBe(404);
+    expect((await post('/agent-processes/codex-6/update', { role: 'qa' }, td.daemon.tokens.bootstrap)).status).toBe(
+      403,
+    );
+    expect((await processes(td)).profiles[0]).toMatchObject({ role: 'frontend' });
+
+    // Stopped and started again, it runs with what was saved.
+    await post('/agent-processes/codex-6/stop', {});
+    expect((await post('/agent-processes/codex-6/start', {})).status).toBe(201);
+    expect(ran).toEqual([{ sandbox: 'read-only' }, { sandbox: 'workspace-write', effort: 'high' }]);
+    expect((await processes(td)).processes[0]).toMatchObject({ role: 'frontend' });
+  });
+
+  it('decides a limit nobody set from how the host is signed in, and keeps a person’s own', async () => {
+    // The host check says a subscription throughout, and is hours old for all the launcher knows:
+    // what counts is the sign-in read when the agent starts.
+    let now: string | undefined;
+    let n = 0;
+    const { ext, ran } = launcher({
+      hosts: [
+        {
+          host: 'claude-code',
+          found: true,
+          version: '9.9.9-test',
+          supported: true,
+          path: null,
+          reason: null,
+          sign_in: 'subscription',
+        },
+      ],
+      signIn: () => now,
+    });
+    const td = await startTestDaemon(ws(), { extensions: [ext] });
+    const start = async (signIn: string | undefined, options?: AgentOptions) => {
+      now = signIn;
+      n += 1;
+      const key = `claude-${n}`;
+      const r = await raw(td, 'POST', td.operator.projectPath('/agent-processes'), {
+        token: op(td),
+        body: JSON.stringify({
+          host: 'claude-code',
+          agent_key: key,
+          autostart: false,
+          ...(options ? { options } : {}),
+        }),
+      });
+      expect(r.status, r.text).toBe(201);
+      const view = await processes(td);
+      return {
+        ran: ran.at(-1),
+        shown: view.processes.find((p) => p.agent_key === key)?.options,
+        remembered: view.profiles.find((p) => p.agent_key === key)?.options,
+      };
+    };
+    // The Start dialog is told the sign-in of this moment too, not the one of the host check.
+    now = 'api_key';
+    const listed = await raw(td, 'GET', td.operator.projectPath('/agent-hosts'), { token: op(td) });
+    expect(((listed.json?.hosts ?? []) as AgentHost[])[0]?.sign_in).toBe('api_key');
+    // A subscription is not charged per attempt: no limit. What is remembered stays undecided, so
+    // a later change of sign-in is followed.
+    expect(await start('subscription')).toEqual({
+      ran: { max_budget_usd: null },
+      shown: { max_budget_usd: null },
+      remembered: {},
+    });
+    // Charged per use, or Friday cannot tell: the default limit.
+    // (Three of them here: the launcher runs at most eight agents at once.)
+    for (const signIn of ['api_key', 'none', undefined]) {
+      expect((await start(signIn)).ran, String(signIn)).toEqual({ max_budget_usd: 5 });
+    }
+    // A person's own choice stands either way.
+    expect((await start('subscription', { max_budget_usd: 2 })).ran).toEqual({ max_budget_usd: 2 });
+    expect(await start('api_key', { max_budget_usd: null })).toEqual({
+      ran: { max_budget_usd: null },
+      shown: { max_budget_usd: null },
+      remembered: { max_budget_usd: null },
+    });
+    // A limit raised on an agent that runs shows at once: it is read again at its next attempt,
+    // with no restart of the agent.
+    const raised = await raw(td, 'POST', td.operator.projectPath('/agent-processes/claude-1/update'), {
+      token: op(td),
+      body: JSON.stringify({ options: { max_budget_usd: 9 } }),
+    });
+    expect(raised.json?.running).toBe(true);
+    const after = await processes(td);
+    expect(after.processes.find((p) => p.agent_key === 'claude-1')?.options).toEqual({ max_budget_usd: 9 });
+    expect(after.profiles.find((p) => p.agent_key === 'claude-1')?.options).toEqual({ max_budget_usd: 9 });
   });
 
   it('stops its agents before the daemon drains, so they disconnect cleanly', async () => {

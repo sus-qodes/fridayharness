@@ -264,6 +264,15 @@ export const AgentErrorParams = z.object({
   worker_stopped: z.boolean().optional(),
   /** Why the host failed, when the adapter could tell (ADR-0035 §3); absent for a work failure. */
   failure: HostFailure.optional(),
+  /**
+   * The host ended the attempt at the spending cap of its own session (Claude Code's
+   * `--max-budget-usd`, 2026-11-17), with the cap and what the attempt had cost when the host said
+   * it. Neither the work nor the host is at fault, and another attempt would spend up to the cap
+   * again: the task waits for a human, who raises the agent's limit or cancels the task.
+   */
+  spending_cap: z
+    .object({ cap_usd: z.number().positive(), cost_usd: z.number().nonnegative().nullable().default(null) })
+    .optional(),
 });
 export const AgentErrorResult = z.object({ task_status: TaskStatus });
 

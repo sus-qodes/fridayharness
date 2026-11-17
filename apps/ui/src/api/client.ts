@@ -5,8 +5,10 @@
 import type {
   AgentHost,
   AgentLaunchRequest,
+  AgentOptions,
   AgentProcess,
   AgentProcessesView,
+  AgentProfile,
   AgentView,
   AntigravitySetupPlan,
   AntigravitySetupResult,
@@ -527,6 +529,17 @@ export class FridayApi {
   /** Starts a remembered agent again (plan FD-24). */
   startAgent(agentKey: string): Promise<{ process: AgentProcess }> {
     return this.post(`/agent-processes/${encodeURIComponent(agentKey)}/start`, {}, { timeoutMs: 60_000 });
+  }
+
+  /**
+   * Changes a remembered agent's role, options and whether it starts with Friday. What runs now
+   * keeps what it started with (`running`); the next start uses the new.
+   */
+  updateAgent(
+    agentKey: string,
+    body: { role?: string; options?: AgentOptions; autostart?: boolean },
+  ): Promise<{ profile: AgentProfile; running: boolean }> {
+    return this.post(`/agent-processes/${encodeURIComponent(agentKey)}/update`, body, { timeoutMs: 30_000 });
   }
 
   forgetAgent(agentKey: string): Promise<{ ok: boolean }> {
