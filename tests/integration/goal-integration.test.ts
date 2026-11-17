@@ -4,6 +4,7 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { GenericHarnessClient } from '@friday/adapter-generic';
 import { closeDatabase, openDatabase } from '@friday/db';
 import { commitContent, FRIDAY_IDENTITY, GitRoot, runGit } from '@friday/git';
 import type { GoalSummary, IntegrationView, TaskStartParams, TaskView, VerificationView } from '@friday/protocol';
@@ -782,6 +783,111 @@ describe('landing a completed goal', () => {
     expect((await runGit(ws().projectDir, ['status', '--porcelain'])).stdout).toBe('');
     expect((await merging()).code).toBe(1);
     expect(text('src/b.mjs')).toBe('export const b = 1;\n');
+  });
+
+  it('brings work made in the project folder to the goal, starts the next task with it, and lands over it (2026-11-17)', async () => {
+    // A session its person runs in the project folder (Antigravity, Claude Code in an editor); the
+    // level is not what this test is about.
+    const td = await project(CHECKS, {}, '\nsecurity:\n  enforcement_required: L0\n');
+    const pid = td.project.project_id;
+    const trust = await td.operator.get<{ policy: { loosening_hash: string } }>(td.operator.projectPath('/policy'));
+    await td.operator.post(td.operator.projectPath('/policy/trust'), {
+      loosening_hash: trust.policy.loosening_hash,
+    });
+    const mainHead = await head();
+    const { goalId, ids } = await goalWith(td, [
+      { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+      { key: 'note-b', summary: 'Say what b is for', write: ['src/b.mjs'], depends_on: ['raise-a'] },
+    ]);
+    const first = ids['raise-a'] as string;
+    const second = ids['note-b'] as string;
+    const editor = new GenericHarnessClient(td.bootstrap, {
+      harness_key: `antigravity:${pid}:pid:9911`,
+      vendor: 'antigravity',
+      name: 'Antigravity',
+      version: '1.5.9',
+      adapter_version: '0.1.0',
+      attach_mode: 'attach',
+      project_id: pid,
+      capabilities: {},
+      agent_key: 'antigravity-1',
+      role: 'developer',
+      host: { pid: 9911, cwd: ws().projectDir },
+    });
+    await editor.register();
+    ws().track({ close: () => void editor.disconnect().catch(() => undefined) });
+    await td.operator.post(td.operator.projectPath(`/tasks/${first}/assign`), { agent_key: 'antigravity-1' });
+    const claimed = await editor.claim({ task_id: first });
+
+    // Its work, in the folder itself, beside something of the person's own that is not the task's.
+    writeFileSync(file('src/a.mjs'), 'export const a = 2;\n');
+    writeFileSync(file('notes.txt'), 'my own notes\n');
+    await editor.reportResult({
+      task_id: first,
+      run_id: claimed.run_id,
+      status: 'completed_claim',
+      summary: 'raised a',
+      changed_paths: ['src/a.mjs'],
+      checks: [],
+    });
+    const verified = await td.operator.post<{ task: TaskView; verification: VerificationView }>(
+      td.operator.projectPath(`/tasks/${first}/verify`),
+      {},
+      { timeoutMs: 120_000 },
+    );
+    expect(verified.task.status, JSON.stringify(verified.verification.checks)).toBe('COMPLETED');
+
+    // The task's own file reached the goal branch, checked there in Friday's own checkout; the
+    // person's file did not, and the folder, its index and its branch are as they were.
+    const one = await integrationOf(td, first);
+    expect(one, one.summary ?? '').toMatchObject({ status: 'integrated', base_commit: mainHead });
+    expect(one.checks.length).toBeGreaterThan(0);
+    const branch = `friday/goal-${goalId}`;
+    expect((await git(['show', `${branch}:src/a.mjs`])).trim()).toBe('export const a = 2;');
+    expect(
+      (await runGit(ws().projectDir, ['cat-file', '-e', `${branch}:notes.txt`], { okCodes: [1, 128] })).code,
+    ).not.toBe(0);
+    expect((await git(['log', '-1', '--format=%an', branch])).trim()).toBe('antigravity-1 (via Friday)');
+    expect(await head()).toBe(mainHead);
+    expect((await runGit(ws().projectDir, ['status', '--porcelain'])).stdout).toBe(' M src/a.mjs\n?? notes.txt\n');
+
+    // The task that depends on it starts in a folder that has it.
+    const next = await begin(td, 'be-1', second);
+    expect(readFileSync(path.join(next.start.working_directory, 'src/a.mjs'), 'utf8').trim()).toBe(
+      'export const a = 2;',
+    );
+    await finish(td, next, { 'src/b.mjs': '// b stays small\nexport const b = 1;\n' });
+    expect(await integrationOf(td, second)).toMatchObject({ status: 'integrated' });
+    await runOnce(td);
+    await eventually(
+      () => td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`)),
+      (g) => g.goal.status === 'COMPLETED',
+      'the goal to complete',
+    );
+
+    // Landing: the folder already holds the goal's a.mjs, uncommitted. That is not in the way.
+    const p = await plan(td, goalId);
+    expect(p, p.reason ?? '').toMatchObject({ state: 'ready', work: 'branch' });
+    const landed = await land(td, goalId);
+    expect(landed).toMatchObject({ status: 'landed', fast_forward: true });
+    expect(await head()).toBe((await git(['rev-parse', branch])).trim());
+    expect(text('src/a.mjs')).toBe('export const a = 2;\n');
+    expect(text('src/b.mjs')).toBe('// b stays small\nexport const b = 1;\n');
+    expect(text('notes.txt')).toBe('my own notes\n');
+    expect((await runGit(ws().projectDir, ['status', '--porcelain'])).stdout).toBe('?? notes.txt\n');
+  });
+
+  it('keeps a folder file the person changed differently in the way of landing', async () => {
+    const td = await project();
+    const { goalId, ids } = await goalWith(td, [{ key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] }]);
+    await work(td, 'be-1', ids['raise-a'] as string, { 'src/a.mjs': 'export const a = 2;\n' });
+    await integrationOf(td, ids['raise-a'] as string);
+    await runOnce(td);
+    writeFileSync(file('src/a.mjs'), 'export const a = 3; // mine\n');
+    const p = await plan(td, goalId);
+    expect(p).toMatchObject({ state: 'blocked', files: ['src/a.mjs'] });
+    await expect(land(td, goalId)).rejects.toThrow(/not committed, and the goal changes them too/);
+    expect(text('src/a.mjs')).toBe('export const a = 3; // mine\n');
   });
 
   it('has nothing to land for work made in the project folder itself, and says to commit it', async () => {

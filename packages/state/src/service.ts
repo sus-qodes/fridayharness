@@ -1046,7 +1046,29 @@ export class FridayState {
    * work still has to reach the goal branch (ADR-0025 §2).
    */
   awaitsIntegration(task: TaskView): boolean {
-    return Boolean(task.goal_id && this.q.worktreeForTask(task.task_id));
+    return Boolean(
+      task.goal_id && (this.q.worktreeForTask(task.task_id) || this.workedInFolder(task.project_id, task.task_id)),
+    );
+  }
+
+  /**
+   * A task whose last attempt was made in the project folder itself by a session its person runs
+   * there (Antigravity, Claude Code in an editor). Since 2026-11-17 verification keeps such a
+   * task's own files as a commit, and integration brings it to the goal branch like any other
+   * task's work, so the tasks that depend on it wait for that. A run Friday started with worktrees
+   * off is not meant: nothing is kept apart for it.
+   */
+  workedInFolder(projectId: string, taskId: string): boolean {
+    const run = this.q.runs(taskId).at(-1);
+    if (!run?.execution_root || run.branch_ref) return false;
+    const root = this.q.project(projectId)?.root_path;
+    if (!root) return false;
+    const norm = (p: string) => {
+      const r = path.resolve(p);
+      return process.platform === 'win32' ? r.toLowerCase() : r;
+    };
+    if (norm(run.execution_root) !== norm(root)) return false;
+    return this.q.findHarness(run.harness_id)?.attach_mode !== 'spawn';
   }
 
   /** Ends every active file reservation a task holds, inside the caller's transaction. */
@@ -3924,7 +3946,7 @@ export class FridayState {
    */
   integratedWork(projectId: string, taskId: string): boolean {
     return (
-      !this.q.worktrees(projectId).some((w) => w.task_id === taskId) ||
+      (!this.q.worktrees(projectId).some((w) => w.task_id === taskId) && !this.workedInFolder(projectId, taskId)) ||
       ['integrated', 'not_needed'].includes(this.q.latestIntegration(projectId, taskId)?.status ?? '')
     );
   }

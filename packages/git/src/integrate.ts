@@ -102,6 +102,14 @@ export async function treeOf(root: string, rev: string): Promise<string | null> 
   return r.code === 0 ? r.stdout.trim() || null : null;
 }
 
+/**
+ * Where the commit of a task's verified work in the project folder is kept (2026-11-17): one per
+ * verification, so integration takes exactly what that verification judged.
+ */
+export function verifiedRef(taskId: string, verificationId: string): string {
+  return `refs/friday/verified/${taskId}/${verificationId}`;
+}
+
 /** The paths whose content differs between two trees. */
 export async function changedBetween(root: string, a: string, b: string): Promise<string[]> {
   const r = await runGit(root, ['diff-tree', '-r', '--name-only', '--no-renames', '-z', a, b]);

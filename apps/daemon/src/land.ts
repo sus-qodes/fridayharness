@@ -63,7 +63,9 @@ function said(text: string): string {
 /**
  * Where a goal's completed tasks worked. A run without a branch worked in the project folder
  * itself: a session attached from an editor (Antigravity, Claude Code in VS Code), or any run with
- * `worktrees.mode: off`. Its work never reaches `friday/goal-<id>`; it is already in the folder.
+ * `worktrees.mode: off`. Since 2026-11-17 the work of a session its person runs there is kept as a
+ * commit and integrated, so it counts as on the branch; only work that was never integrated
+ * (worktrees off, or verified before that) is in the folder alone.
  */
 export function goalWork(state: FridayState, projectId: string, goalId: string): GoalWork {
   let folder = 0;
@@ -72,7 +74,7 @@ export function goalWork(state: FridayState, projectId: string, goalId: string):
     if (t.status !== 'COMPLETED') continue;
     const run = state.q.runs(t.task_id).at(-1);
     if (!run) continue;
-    if (run.branch_ref) branch += 1;
+    if (run.branch_ref || state.q.latestIntegration(projectId, t.task_id)?.status === 'integrated') branch += 1;
     else folder += 1;
   }
   if (folder > 0 && branch > 0) return 'mixed';
@@ -136,6 +138,25 @@ interface Inspection {
   /** The files the merge would write, and the folder's status before it. */
   touched: string[];
   status: Entry[];
+  /**
+   * Files the goal changes that the folder already holds, uncommitted, with exactly the goal's
+   * content: the work a session did in this folder, which reached the goal branch from here.
+   */
+  already?: string[];
+}
+
+/**
+ * Whether the folder's `file` is, as git would store it, what `tip` has there (both absent counts).
+ * `git hash-object` applies the same filters as `git add`, so a line-ending difference the
+ * repository normalises is not a difference.
+ */
+async function sameAsTip(root: string, tip: string, file: string): Promise<boolean> {
+  const theirs = await runGit(root, ['rev-parse', '--verify', '--quiet', `${tip}:${file}`], { okCodes: [1, 128] });
+  const here = existsSync(path.resolve(root, file));
+  if (theirs.code !== 0) return !here;
+  if (!here) return false;
+  const mine = await runGit(root, ['hash-object', '--', file], { okCodes: [1, 128] });
+  return mine.code === 0 && mine.stdout.trim() === theirs.stdout.trim();
 }
 
 async function inspect(state: FridayState, project: ProjectRef, goalId: string): Promise<Inspection> {
@@ -215,14 +236,33 @@ async function inspect(state: FridayState, project: ProjectRef, goalId: string):
     okCodes: [128],
   });
   const touched = diff.code === 0 ? diff.stdout.split('\0').filter(Boolean) : [];
-  const inTheWay = status.filter((e) => touched.some((f) => covers(e, f))).map((e) => e.path);
+  // A file the goal changes that is changed here too is in the way, unless the folder already
+  // holds exactly what the goal has for it (2026-11-17): the work an agent did in this folder
+  // reached the goal branch from here, and landing must not trip over its own source.
+  const already: string[] = [];
+  const inTheWay: string[] = [];
+  for (const file of touched) {
+    if (!status.some((e) => covers(e, file))) continue;
+    if (await sameAsTip(root, tip, file)) already.push(file);
+    else inTheWay.push(file);
+  }
   if (inTheWay.length) {
     return blocked(
       'these files have changes that are not committed, and the goal changes them too: commit them or set them aside first',
       inTheWay,
     );
   }
-  return { plan: { ...base, commits }, tip, before, touched, status };
+  if (already.length) {
+    // Git takes such files over only when the branch just moves forward to the goal.
+    const forward = await runGit(root, ['merge-base', '--is-ancestor', before, tip], { okCodes: [1] });
+    if (forward.code !== 0) {
+      return blocked(
+        `these files already hold the goal's work without being committed, and ${into} has commits the goal does not have: commit them first, then land the goal`,
+        already,
+      );
+    }
+  }
+  return { plan: { ...base, commits }, tip, before, touched, status, already };
 }
 
 /** What Land would do for a goal now (`GET goals/:gid/land`); it changes nothing. */
@@ -368,6 +408,16 @@ export async function landGoal(
     const summary = (state.q.findGoal(pid, goalId)?.objective ?? state.q.findGoal(pid, goalId)?.request ?? '')
       .replace(/\s+/g, ' ')
       .slice(0, 72);
+    // Files the folder already holds with the goal's content are told to git as such (staged as
+    // they are), so the branch moves forward over them without rewriting or refusing them. If the
+    // merge does not happen they are unstaged again: the folder is as it was.
+    const already = i.already ?? [];
+    const stage = async (args: string[]) => {
+      for (let n = 0; n < already.length; n += 50) {
+        await runGit(root, [...args, '--', ...already.slice(n, n + 50)], { okCodes: [1, 128] });
+      }
+    };
+    await stage(['--literal-pathspecs', 'add', '-A']);
     let merge: { code: number; stdout: string; stderr: string };
     try {
       merge = await runGit(root, ['merge', '--no-edit', '-m', `Land goal ${goalId}: ${summary}`, plan.branch], {
@@ -376,6 +426,7 @@ export async function landGoal(
       });
     } catch (e) {
       // The time limit, or git itself could not run: whatever the attempt left is taken back.
+      await stage(['--literal-pathspecs', 'reset', '-q']);
       const left = await putBack(root, i);
       const why = e instanceof Error ? e.message : String(e);
       throw new FridayError(
@@ -388,6 +439,7 @@ export async function landGoal(
       const hooked =
         (await runGit(root, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'], { okCodes: [1, 128] })).code === 0;
       const text = `${merge.stdout}\n${merge.stderr}`;
+      await stage(['--literal-pathspecs', 'reset', '-q']);
       const left = await putBack(root, i);
       const { kind, message } = explain(text, plan.branch, into, hooked && !/CONFLICT/.test(text));
       throw new FridayError(

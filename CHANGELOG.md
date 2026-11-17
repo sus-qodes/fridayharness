@@ -2,6 +2,17 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — agents working together, part 2
+
+The other half of the hand-over: work an agent does in your own project folder (Antigravity, Claude Code in an editor) now reaches the agents Friday starts. In the live run of 2026-11-17 it stayed uncommitted in the folder, so the next task's folder was cut without it and its agent reported itself blocked.
+
+- **Work made in your project folder reaches the goal.** When such a task passes its check, Friday keeps a commit of that task's own files only (the ones its hooks saw it write, or its claim lists) and brings it to the goal's branch like any other task's work. Your folder, its staged changes and its branch are not touched, and nothing of yours or of another session is taken. The tasks that depend on it wait for that, and then start in a folder that has it.
+- **It is checked again away from your folder.** The revision it becomes on the goal's branch is run through the project's checks in Friday's own checkout before the branch moves, so what else lies in your folder cannot decide the result.
+- **Landing goes over files your folder already holds.** A file the goal changes that your folder already has, uncommitted, with exactly the goal's content is no longer "in the way": the branch moves forward over it and the file is not rewritten. A file you changed differently still stops the landing, by name, and nothing is touched. When your branch has commits the goal does not have, such files have to be committed first, and Friday says so.
+- The check's note on uncommitted changes says what happens to them in a project folder.
+
+Not yet: bringing the other agents' finished work into your folder before your own agent starts a task, and a "Mark passed" by hand keeps no copy of folder work.
+
 ## Unreleased — agents working together, part 1
 
 Found by running Claude Code, Codex and a stand-in for Antigravity on one plan (2026-11-17): a task that was restarted because an earlier task's work was missing started again without it, and bringing that work in by hand made its check fail.

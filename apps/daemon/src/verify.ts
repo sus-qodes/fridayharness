@@ -1,7 +1,17 @@
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { findCredentials } from '@friday/events';
-import { type ContentTree, changedBetween, GitRoot, sameRepository } from '@friday/git';
+import {
+  agentIdentity,
+  type ContentTree,
+  changedBetween,
+  commitTree,
+  GitRoot,
+  moveRef,
+  sameRepository,
+  treeOf,
+  verifiedRef,
+} from '@friday/git';
 import { aboveCeiling, matchesAny, patternsOverlap, sensitiveClassOf } from '@friday/policy';
 import { type Actor, FridayError, isFridayError, type RunView, type VerificationFinding } from '@friday/protocol';
 import {
@@ -234,7 +244,12 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       findings.push({
         rule: 'diff.uncommitted',
         severity: 'info',
-        message: `the verified code includes ${before.files} uncommitted change(s); integration needs them committed`,
+        // In the project folder Friday keeps this task's own files for the goal and leaves the
+        // folder as it is; in a task worktree it commits the verified work itself.
+        message:
+          shared && task.goal_id
+            ? `the project folder has ${before.files} uncommitted change(s); Friday keeps this task's own files for the goal and leaves the rest as it is`
+            : `the verified code includes ${before.files} uncommitted change(s); integration needs them committed`,
         paths: before.paths.slice(0, 20),
       });
     }
@@ -407,6 +422,29 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
         logger.warn('verification interrupted', { task_id: taskId, reason });
         const interrupted = state.interruptVerification(pid, actor, verification_id, reason);
         return { task: interrupted, verification: state.q.verification(verification_id) };
+      }
+    }
+    // 5a. Work made in the project folder itself is kept as a commit of its own (2026-11-17): this
+    // task's files only (those Friday's hooks saw it write, or its claim lists), on the commit the
+    // attempt began at, under a ref named after this verification. Integration brings that commit
+    // to the goal branch, so a task that depends on this one starts with its work. The folder, its
+    // index and its branch are not touched, and nobody else's edits are taken. Before, such work
+    // stayed uncommitted in the folder, and every task folder was cut without it.
+    if (shared && git && base && task.goal_id && requiredFailed === 0) {
+      const mine = [
+        ...new Set(changes.flatMap((c) => (c.origPath && c.origPath !== c.path ? [c.path, c.origPath] : [c.path]))),
+      ];
+      const kept = mine.length ? await git.pathsTree(base, mine) : null;
+      if (kept && kept !== (await treeOf(git.root, base))) {
+        const agentKey = (run && state.q.findAgent(run.agent_id)?.agent_key) || 'agent';
+        const commit = await commitTree(
+          git.root,
+          kept,
+          [base],
+          `${task.summary}\n\nFriday task ${taskId}, verified in the project folder.`,
+          agentIdentity(agentKey),
+        );
+        await moveRef(git.root, verifiedRef(taskId, verification_id), commit, null);
       }
     }
   } catch (e) {

@@ -34,6 +34,7 @@ export {
   moveRef,
   resolveCommit,
   treeOf,
+  verifiedRef,
 } from './integrate.js';
 export {
   applyState,

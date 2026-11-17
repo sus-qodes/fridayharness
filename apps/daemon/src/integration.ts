@@ -18,6 +18,7 @@ import {
   runGit,
   sameRepository,
   treeOf,
+  verifiedRef,
 } from '@friday/git';
 import type { Actor, IntegrationView, TaskView } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
@@ -197,7 +198,20 @@ export class IntegrationManager {
       return rec;
     };
     const tree = state.q.worktreeForTask(taskId);
-    if (!tree) return record({ ...base, status: 'not_needed', summary: 'the task did not work on a task branch' });
+    // Work made in the project folder (a session its person runs there): the commit verification
+    // kept of this task's own files (2026-11-17). Without one there is nothing to bring anywhere:
+    // the task changed no file, or was verified before Friday kept such commits.
+    let kept: string | null = null;
+    if (!tree) {
+      const passed = state.q.latestVerification(taskId);
+      kept =
+        passed?.status === 'PASSED'
+          ? await resolveCommit(project.root, verifiedRef(taskId, passed.verification_id)).catch(() => null)
+          : null;
+      if (!kept) {
+        return record({ ...base, status: 'not_needed', summary: 'the task did not work on a task branch' });
+      }
+    }
     // What came before: a repair follows a failed or conflicted attempt, and keeps the commit of the
     // verified work the last attempt that got that far made.
     const last = state.q.latestIntegration(this.pid, taskId);
@@ -212,85 +226,93 @@ export class IntegrationManager {
       if (verified?.status !== 'PASSED') {
         return record({ ...base, summary: 'the task has no passed verification to integrate' });
       }
-      // A worktree of another clone (a restored database) is never written from here (review F08).
-      if (!state.inThisClone(tree.path) || !(await sameRepository(tree.path, project.root))) {
-        return record({
-          ...base,
-          summary: `its worktree ${tree.path} belongs to another clone of the project, which this clone never writes; bring its work into this clone with "friday recover ${taskId} --action rebind" and integrate it again`,
-        });
-      }
-      const git = await GitRoot.open(tree.path);
-      const content = await git.contentTree();
-      const changedAfter = (detail: string) =>
-        record({
-          ...base,
-          summary: `the worktree changed after it was verified (${detail}); verify the work again before integrating it${unresolved ? `, or, if this is your repair of the failed integration, run "friday integrate ${taskId} --repaired"` : ''}`,
-        });
-
       // 1. The commit to integrate.
       let taskCommit: string | null;
       let candidate: string;
       let checked: boolean;
-      if (opts.repaired) {
-        // A human's repair on the task branch: its tip, committed, keeping the verified work. Its
-        // content is new, so it is integrated only after its checks pass (review M7.1 R04).
-        if (actor.kind !== 'human') {
-          return record({ ...base, summary: 'only a human says that a task branch holds a repair' });
+      if (!tree) {
+        // It was verified in a folder that holds other things too, so the revision it becomes on the
+        // goal branch is checked in Friday's own checkout before the branch moves (`checked: false`).
+        taskCommit = kept;
+        candidate = (kept && (await treeOf(project.root, kept))) || '';
+        checked = false;
+      } else {
+        // A worktree of another clone (a restored database) is never written from here (review F08).
+        if (!state.inThisClone(tree.path) || !(await sameRepository(tree.path, project.root))) {
+          return record({
+            ...base,
+            summary: `its worktree ${tree.path} belongs to another clone of the project, which this clone never writes; bring its work into this clone with "friday recover ${taskId} --action rebind" and integrate it again`,
+          });
         }
-        if (!unresolved || !verifiedCommit) {
+        const git = await GitRoot.open(tree.path);
+        const content = await git.contentTree();
+        const changedAfter = (detail: string) =>
+          record({
+            ...base,
+            summary: `the worktree changed after it was verified (${detail}); verify the work again before integrating it${unresolved ? `, or, if this is your repair of the failed integration, run "friday integrate ${taskId} --repaired"` : ''}`,
+          });
+
+        if (opts.repaired) {
+          // A human's repair on the task branch: its tip, committed, keeping the verified work. Its
+          // content is new, so it is integrated only after its checks pass (review M7.1 R04).
+          if (actor.kind !== 'human') {
+            return record({ ...base, summary: 'only a human says that a task branch holds a repair' });
+          }
+          if (!unresolved || !verifiedCommit) {
+            return record({
+              ...base,
+              summary:
+                'there is no failed or conflicted integration of this task to repair; integrate it without --repaired',
+            });
+          }
+          if (!content.head || content.tree !== (await treeOf(tree.path, content.head))) {
+            return record({ ...base, summary: 'the repair is not committed: commit it on the task branch first' });
+          }
+          if (!(await isAncestor(tree.path, verifiedCommit, content.head))) {
+            return record({
+              ...base,
+              summary: `the repair must keep the verified work, but ${verifiedCommit.slice(0, 12)} is not in the history of ${content.head.slice(0, 12)}`,
+            });
+          }
+          taskCommit = content.head;
+          candidate = content.tree;
+          checked = false;
+        } else if (verified.tree) {
+          // Exactly the verified tree, never what the worktree holds by the time it is committed
+          // (review F04): the verified commit itself with the verified content on it, or the commit
+          // Friday made of exactly that tree on top of it in an earlier attempt (review M7.1 R04).
+          if (content.tree !== verified.tree) {
+            const paths = await changedBetween(project.root, verified.tree, content.tree).catch(() => []);
+            return changedAfter(paths.length ? `${paths.slice(0, 5).join(', ')} changed` : 'its files changed');
+          }
+          if (content.head !== verified.commit_sha) {
+            const own =
+              content.head !== null &&
+              (await treeOf(tree.path, content.head)) === verified.tree &&
+              (await parentOf(tree.path, content.head)) === verified.commit_sha;
+            if (!own) return changedAfter('its HEAD moved');
+          }
+          candidate = verified.tree;
+          taskCommit = content.head;
+          checked = true;
+          if (!taskCommit || candidate !== (await treeOf(tree.path, taskCommit))) {
+            taskCommit = await this.#commitVerified(task, tree.path, candidate, content.head, verified.source_version);
+          }
+        } else if (verified.checks.some((c) => c.kind === 'manual')) {
+          // A human recorded the result: their word covers the work as it is now.
+          candidate = content.tree;
+          taskCommit = content.head;
+          checked = true;
+          if (!taskCommit || candidate !== (await treeOf(tree.path, taskCommit))) {
+            taskCommit = await this.#commitVerified(task, tree.path, candidate, content.head, null);
+          }
+        } else {
           return record({
             ...base,
             summary:
-              'there is no failed or conflicted integration of this task to repair; integrate it without --repaired',
+              'the verification recorded no exact tree to integrate (it predates Friday recording one); verify the work again',
           });
         }
-        if (!content.head || content.tree !== (await treeOf(tree.path, content.head))) {
-          return record({ ...base, summary: 'the repair is not committed: commit it on the task branch first' });
-        }
-        if (!(await isAncestor(tree.path, verifiedCommit, content.head))) {
-          return record({
-            ...base,
-            summary: `the repair must keep the verified work, but ${verifiedCommit.slice(0, 12)} is not in the history of ${content.head.slice(0, 12)}`,
-          });
-        }
-        taskCommit = content.head;
-        candidate = content.tree;
-        checked = false;
-      } else if (verified.tree) {
-        // Exactly the verified tree, never what the worktree holds by the time it is committed
-        // (review F04): the verified commit itself with the verified content on it, or the commit
-        // Friday made of exactly that tree on top of it in an earlier attempt (review M7.1 R04).
-        if (content.tree !== verified.tree) {
-          const paths = await changedBetween(project.root, verified.tree, content.tree).catch(() => []);
-          return changedAfter(paths.length ? `${paths.slice(0, 5).join(', ')} changed` : 'its files changed');
-        }
-        if (content.head !== verified.commit_sha) {
-          const own =
-            content.head !== null &&
-            (await treeOf(tree.path, content.head)) === verified.tree &&
-            (await parentOf(tree.path, content.head)) === verified.commit_sha;
-          if (!own) return changedAfter('its HEAD moved');
-        }
-        candidate = verified.tree;
-        taskCommit = content.head;
-        checked = true;
-        if (!taskCommit || candidate !== (await treeOf(tree.path, taskCommit))) {
-          taskCommit = await this.#commitVerified(task, tree.path, candidate, content.head, verified.source_version);
-        }
-      } else if (verified.checks.some((c) => c.kind === 'manual')) {
-        // A human recorded the result: their word covers the work as it is now.
-        candidate = content.tree;
-        taskCommit = content.head;
-        checked = true;
-        if (!taskCommit || candidate !== (await treeOf(tree.path, taskCommit))) {
-          taskCommit = await this.#commitVerified(task, tree.path, candidate, content.head, null);
-        }
-      } else {
-        return record({
-          ...base,
-          summary:
-            'the verification recorded no exact tree to integrate (it predates Friday recording one); verify the work again',
-        });
       }
       if (!taskCommit) return record({ ...base, summary: 'the task branch has no commit' });
       if ((await treeOf(project.root, taskCommit)) !== candidate) {
