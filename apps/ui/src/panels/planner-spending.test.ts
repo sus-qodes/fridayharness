@@ -90,7 +90,7 @@ describe('what planning may spend (2026-11-17)', () => {
   it('says the limit that holds, whose spending it is, and what was spent today', () => {
     const { el, td } = mount(brain());
     expect(el.querySelector('[data-role="limit"]')?.textContent).toBe(
-      'Up to $2.00 a day with your Anthropic key, on this computer.Spent today: $0.40.',
+      'Up to $2.00 a day with your Anthropic key, on this computer.',
     );
     expect((el.querySelector('input') as HTMLInputElement).value).toBe('2');
     td.run();

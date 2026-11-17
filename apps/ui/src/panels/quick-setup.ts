@@ -313,6 +313,32 @@ interface LooseningSwitch {
  * the settings that stay on, since they were trusted with it as one list. Before, a setting turned
  * on here could only be turned off by editing config.yaml.
  */
+/**
+ * An on/off switch: a track with a thumb and the word "On" or "Off" in it, so it reads as a state
+ * and not as an order. `label` is what pressing it does, for a screen reader.
+ */
+export function onOffSwitch(opts: {
+  on: boolean;
+  disabled?: boolean;
+  label: string;
+  onChange: () => void;
+}): HTMLButtonElement {
+  return button(
+    [
+      h('span', { class: 'pn-switch-track', aria: { hidden: 'true' } }, h('span', { class: 'pn-switch-thumb' })),
+      h('span', { class: 'pn-switch-word', aria: { hidden: 'true' } }, opts.on ? 'On' : 'Off'),
+    ],
+    () => opts.onChange(),
+    {
+      class: `pn-switch ${opts.on ? 'is-on' : ''}`.trim(),
+      role: 'switch',
+      aria: { checked: opts.on ? 'true' : 'false' },
+      ariaLabel: opts.label,
+      disabled: opts.disabled ?? false,
+    },
+  );
+}
+
 function looseningSwitch(ctx: AppContext, td: Teardown, spec: LooseningSwitch): HTMLElement {
   let busy = false;
   const body = h('div', { class: 'pn-qs-body' });
@@ -360,26 +386,33 @@ function looseningSwitch(ctx: AppContext, td: Teardown, spec: LooseningSwitch): 
     replace(
       body,
       spec.before?.(board) ?? null,
-      state === 'on'
-        ? h('div', { class: 'row' }, badge('on', 'good'), h('span', null, spec.on))
-        : h(
-            'div',
-            { class: 'pn-actions pn-actions-start' },
-            button([icon('check', 14), state === 'untrusted' ? 'Trust and turn on' : 'Turn on'], () => void turnOn(), {
-              class: 'btn btn-primary',
-              disabled: busy,
-            }),
-          ),
+      // One switch, which says where it stands (2026-11-18): a "Turn on" button with a tick read as
+      // already on, and once on the way back was a link of another kind.
+      h(
+        'div',
+        { class: 'row pn-switch-row' },
+        onOffSwitch({
+          on: state === 'on',
+          disabled: busy,
+          label: state === 'on' ? 'Turn off' : state === 'untrusted' ? 'Trust and turn on' : 'Turn on',
+          onChange: () => void (state === 'on' ? turnOff() : turnOn()),
+        }),
+        h(
+          'span',
+          { class: state === 'on' ? '' : 'muted' },
+          state === 'on' ? spec.on : state === 'untrusted' ? 'Off until you approve it on this computer.' : 'Off',
+        ),
+      ),
       state === 'untrusted'
         ? note('config.yaml already asks for it; it applies once you trust it on this computer.')
         : null,
-      state === 'off'
-        ? null
-        : h(
+      state === 'untrusted'
+        ? h(
             'div',
             { class: 'pn-actions pn-actions-start' },
-            linkButton(state === 'on' ? 'Turn off' : 'Take it out of config.yaml', () => void turnOff()),
-          ),
+            linkButton('Take it out of config.yaml', () => void turnOff()),
+          )
+        : null,
     );
   }
 

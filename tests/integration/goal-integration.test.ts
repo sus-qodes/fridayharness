@@ -1496,7 +1496,54 @@ describe('a project whose checks read a settings file kept out of version contro
     const tree = await git(['ls-tree', '-r', '--name-only', `friday/goal-${goalId}`]);
     expect(tree.split('\n')).not.toContain('.env');
     expect(readFileSync(path.join(dir, '.env'), 'utf8')).toContain('PAYMENT_KEY=the-real-one');
-    const events = JSON.stringify(td.daemon.state.store.readAll?.(td.project.project_id) ?? []);
+    const events = JSON.stringify(td.daemon.state.store.readSince(td.project.project_id, 0, { limit: 5000 }));
+    expect(events).toContain('run.workspace_ready');
     expect(events).not.toContain('the-real-one');
   }, 240_000);
+});
+
+describe('trying the checks on the untouched project (2026-11-18)', () => {
+  interface Trial {
+    status: string;
+    commit: string | null;
+    problem: string | null;
+    checks: { name: string; required: boolean; status: string; output_tail: string | null }[];
+  }
+
+  it('runs them on the commit the folder is on, in a copy of its own, and says which fail before any work', async () => {
+    const two = `${CHECKS}    - name: lint\n      command: node\n      args: ["-e", "console.log('style is off'); process.exit(1)"]\n      required: false\n`;
+    const td = await project(two);
+    const at = td.operator.projectPath('/config/checks/trial');
+    expect((await td.operator.get<Trial>(at)).status).toBe('idle');
+    const before = await git(['status', '--porcelain']);
+
+    expect((await td.operator.post<Trial>(at, {})).status).toBe('running');
+    // A second click while it runs starts nothing new.
+    expect((await td.operator.post<Trial>(at, {})).status).toBe('running');
+    const done = await eventually(
+      () => td.operator.get<Trial>(at),
+      (t) => t.status !== 'running',
+      'the trial to end',
+      90_000,
+    );
+    expect(done.status, done.problem ?? '').toBe('done');
+    expect(done.checks.map((c) => [c.name, c.required, c.status])).toEqual([
+      ['tests', true, 'passed'],
+      ['lint', false, 'failed'],
+    ]);
+    expect(done.checks[1]?.output_tail).toContain('style is off');
+    expect(done.commit).toBe((await git(['rev-parse', 'HEAD'])).trim().slice(0, 12));
+    // The project folder is as it was: the checks ran in Friday's own copy.
+    expect(await git(['status', '--porcelain'])).toBe(before);
+
+    // The advisory check is made required from the same page, and config.yaml says so.
+    const view = await td.operator.post<{ checks: { name: string; required: boolean }[] }>(
+      td.operator.projectPath('/config/checks'),
+      { add: [], remove: [], strength: { name: 'lint', required: true } },
+    );
+    expect(view.checks.map((c) => [c.name, c.required])).toEqual([
+      ['tests', true],
+      ['lint', true],
+    ]);
+  }, 180_000);
 });

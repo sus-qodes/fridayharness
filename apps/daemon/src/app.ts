@@ -29,6 +29,7 @@ import {
   type ProjectRef,
   packageManagerOf,
   parseConfig,
+  setCheckRequiredText,
   suggestChecks,
 } from '@friday/sdk';
 import {
@@ -554,7 +555,32 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.get(`${P}/config/checks`, allow(...OPERATOR), (c) => c.json(checksView()));
   app.post(`${P}/config/checks`, allow(...OPERATOR), async (c) => {
     const Names = z.array(z.string().min(1).max(60)).max(20).default([]);
-    const body = z.object({ add: Names, remove: Names }).parse(await json(c));
+    const body = z
+      .object({
+        add: Names,
+        remove: Names,
+        // One check made required (it must pass) or advisory (it is shown, and holds nothing back).
+        strength: z.object({ name: z.string().min(1).max(60), required: z.boolean() }).optional(),
+      })
+      .parse(await json(c));
+    if (body.strength) {
+      const set = setCheckRequiredText(
+        readFileSync(configFile, 'utf8'),
+        body.strength.name,
+        body.strength.required,
+        `${FRIDAY_DIR}/${CONFIG_FILE}`,
+      );
+      if (set.changed) {
+        await writeConfig(set.text);
+        state.recordObservation(
+          pid,
+          humanOf(c),
+          'config.edited',
+          { changed: ['verification.checks'], strength: body.strength },
+          [],
+        );
+      }
+    }
     const offered = suggestChecks(project.root);
     const add = body.add.map((name) => {
       const s = offered.find((o) => o.name === name);
@@ -582,6 +608,18 @@ export function buildApp(deps: AppDeps): Hono<Env> {
       );
     }
     return c.json({ added, removed, ...checksView() });
+  });
+  // The project's checks tried on the commit the project folder is on, before any agent's work
+  // (2026-11-18): started by a person, run in a checkout of Friday's own, read while it runs.
+  const trial = () => {
+    if (!deps.integration) throw new FridayError('capability_unsupported', 'this daemon runs no checks');
+    return deps.integration;
+  };
+  app.get(`${P}/config/checks/trial`, allow(...OPERATOR), (c) => c.json(trial().checkTrial()));
+  app.post(`${P}/config/checks/trial`, allow(...OPERATOR), (c) => {
+    const view = trial().startCheckTrial();
+    state.recordObservation(pid, humanOf(c), 'config.edited', { changed: [], tried: 'verification.checks' }, []);
+    return c.json(view);
   });
   // Files from outside version control that every copy of the project gets (2026-11-17): the list
   // config.yaml asks for, the one in force on this computer (it waits for trust), and the settings

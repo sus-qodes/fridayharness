@@ -2,6 +2,16 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — a real project, part 2: settings a person can read at a glance
+
+- **Run the checks now.** Settings → Checks has a button that runs your project's checks on the project as it is, before any agent changes anything, in a copy of Friday's own that is prepared the way an agent's work is checked. It shows each check as it runs, what a failing one printed, and one sentence on what the result means. A required check that already fails would send every task back whatever the work, and you now find that out first.
+- **Every check says whether it is required or advisory, and one click changes it.** A required check must pass; an advisory one is run and shown and holds nothing back. A required check showed no word at all, and changing it meant editing a file.
+- **Switches that say where they stand.** "Check the work automatically" and "Start plans without asking me" were a "Turn on" button with a tick, which read as already on, and became a link of another kind once on. They are now one switch that reads Off or On.
+- **The chosen option is marked.** The choice of when finished work is put into your project, and the ticked settings files, carry a filled mark and an outline; the chosen one was only a shade lighter.
+- **Planning through Claude Code shows an estimate, once.** The figure read "Spent today", twice on one page. It is what the planning would cost at list prices: with a Claude subscription nothing extra is billed for it. The page now says so.
+- **The version line says when this build was made.** "Friday 0.1.0" was the same on a copy installed days earlier, so nothing on screen told the two apart.
+- **A project with no settings file gets one line about it**, not a paragraph about a problem it does not have. "Add" carries a plus, not a tick.
+
 ## Unreleased — a real project, part 1: the settings file its tests read
 
 - **A project whose tests read a `.env` file can be checked.** Each agent Friday starts works in its own copy of the project, and Friday checks combined work in a copy of its own. A copy is made from version control, so a settings file the project keeps out of it was in none of them: every test that read it failed there, in the agent's hands and in Friday's, though the work was right. Settings → Checks now has "Settings files for agents' copies": Friday lists the settings files it found, and the copies get the ones you tick. In `config.yaml` this is `worktrees.files`.

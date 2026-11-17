@@ -72,9 +72,6 @@ export function copyFilesCard(ctx: AppContext, td: Teardown): HTMLElement {
     'div',
     { class: 'pn-quick-setup', dataset: { setup: 'copy-files' } },
     h('div', { class: 'pn-qs-title' }, 'Settings files for agents’ copies'),
-    note(
-      'Each agent Friday starts works in its own copy of your project, and Friday checks combined work in a copy of its own. A copy is made from version control, so a settings file such as .env is not in it, and tests that read it fail there. Tick the files the copies should get.',
-    ),
     body,
   );
 
@@ -158,17 +155,16 @@ export function copyFilesCard(ctx: AppContext, td: Teardown): HTMLElement {
     }
     const rows = copyRows(view);
     if (!rows.length) {
-      replace(
-        body,
-        note(
-          'Friday found no settings file in this project that is kept out of version control (.env, .env.local), so the copies lack nothing.',
-        ),
-      );
+      // Nothing to decide: one line, not a paragraph about a problem this project does not have.
+      replace(body, note('This project has no settings file such as .env that the agents’ copies would lack.'));
       return;
     }
     const waiting = rows.some((r) => r.state === 'waiting');
     replace(
       body,
+      note(
+        'Each agent Friday starts works in its own copy of your project, and Friday checks combined work in a copy of its own. A copy does not include a settings file such as .env, so tests that read it fail there. Tick the files the copies should get.',
+      ),
       h(
         'div',
         { class: 'pn-landing-choices', role: 'group', aria: { label: 'Files the copies of the project get' } },

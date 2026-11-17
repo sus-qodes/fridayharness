@@ -44,6 +44,48 @@ export interface IntegrateOptions {
   repaired?: boolean;
 }
 
+/** One check of a trial (`IntegrationManager.startCheckTrial`). */
+export interface CheckTrialRow {
+  name: string;
+  kind: string;
+  required: boolean;
+  status: 'waiting' | 'running' | 'passed' | 'failed';
+  summary: string | null;
+  duration_ms: number | null;
+  /** The end of what a failing check printed, credentials removed. */
+  output_tail: string | null;
+}
+
+/** The project's checks run on the commit the project folder is on, in a copy of Friday's own. */
+export interface CheckTrialView {
+  status: 'idle' | 'running' | 'done' | 'failed';
+  started_at: string | null;
+  finished_at: string | null;
+  /** The commit tried, short. */
+  commit: string | null;
+  /** The project folder has changes that are not in that commit, so they were not tried. */
+  uncommitted: boolean;
+  /** `preparing`, or the name of the check that runs now. */
+  running: string | null;
+  /** What Friday's copy lacks, or why the trial could not run. */
+  problem: string | null;
+  checks: CheckTrialRow[];
+}
+
+const idleTrial = (): CheckTrialView => ({
+  status: 'idle',
+  started_at: null,
+  finished_at: null,
+  commit: null,
+  uncommitted: false,
+  running: null,
+  problem: null,
+  checks: [],
+});
+
+/** How much of a failing check's output a trial keeps. */
+const TRIAL_TAIL = 3000;
+
 /**
  * Brings each verified task branch of a goal into the goal branch `friday/goal-<goal_id>`
  * (ADR-0025 §2–§5): exactly the tree the verification judged is committed on its task branch if it
@@ -92,7 +134,7 @@ export class IntegrationManager {
    * else git ignores when they are not, so a check never runs against another revision's packages.
    * Null when nothing was to do; a setup that did not pass is said beside a failing check.
    */
-  async #dependencies(dir: string, task: TaskView): Promise<SetupOutcome | null> {
+  async #dependencies(dir: string, ids: { task_id: string; run_id: string }): Promise<SetupOutcome | null> {
     const setup = this.opts.setup;
     if (!setup) return null;
     let stampFile: string | null = null;
@@ -122,7 +164,7 @@ export class IntegrationManager {
     if (stampFile) rmSync(stampFile, { force: true });
     // Ignored files only: the tree itself is the revision, checked before this and after the checks.
     await runGit(dir, ['clean', '-q', '-fdX'], { timeoutMs: 300_000 }).catch(() => undefined);
-    const outcome = await setup({ path: dir }, { task_id: task.task_id, run_id: task.current_run_id ?? 'integration' });
+    const outcome = await setup({ path: dir }, ids);
     if (outcome?.status === 'passed' && stampFile && stamp) {
       try {
         writeFileSync(stampFile, stamp);
@@ -135,6 +177,107 @@ export class IntegrationManager {
 
   private get pid() {
     return this.opts.project.project_id;
+  }
+
+  #trial: CheckTrialView = idleTrial();
+
+  /** Where the trial of the project's checks stands (`startCheckTrial`). */
+  checkTrial(): CheckTrialView {
+    return this.#trial;
+  }
+
+  /**
+   * Runs the project's checks on the commit the project folder is on, before any agent changed
+   * anything (2026-11-18): in a checkout of Friday's own, prepared as a merged revision's is
+   * (dependencies, the files the project lists for its copies), so what it finds is what an agent's
+   * work will be judged against. A check that fails here fails for every task, whatever the work:
+   * a database that is not running, a settings file the copy lacks, a test that was red already.
+   * One trial at a time; answers at once, and `checkTrial` says how far it is.
+   */
+  startCheckTrial(): CheckTrialView {
+    if (this.#trial.status === 'running') return this.#trial;
+    const { project, workspaces, logger, state } = this.opts;
+    const checks = project.config.verification.checks;
+    const view: CheckTrialView = {
+      ...idleTrial(),
+      status: 'running',
+      started_at: new Date().toISOString(),
+      running: 'preparing',
+      checks: checks.map((c) => ({
+        name: c.name,
+        kind: c.kind,
+        required: c.required,
+        status: 'waiting',
+        summary: null,
+        duration_ms: null,
+        output_tail: null,
+      })),
+    };
+    this.#trial = view;
+    const ids = { task_id: 'check-trial', run_id: 'check-trial' };
+    const work = (async () => {
+      try {
+        const main = await GitRoot.open(project.root);
+        const head = (await runGit(main.root, ['rev-parse', '--verify', 'HEAD'])).stdout.trim();
+        view.commit = head.slice(0, 12);
+        view.uncommitted = Boolean(
+          (await runGit(main.root, ['status', '--porcelain', '--untracked-files=no'])).stdout.trim(),
+        );
+        const dir = await checkoutForVerification(project.root, workspaces.dir, 'check-trial', head);
+        const dependencies = await this.#dependencies(dir, ids);
+        const lacking = await this.opts.files?.(dir, ids);
+        view.problem =
+          [
+            dependencies && (dependencies.status === 'failed' || dependencies.status === 'refused')
+              ? `The project's packages could not be installed in Friday's copy (${dependencies.reason}).`
+              : null,
+            lacking ? lacking.split(' A check or a program')[0] : null,
+          ]
+            .filter(Boolean)
+            .join(' ') || null;
+        for (const [i, check] of checks.entries()) {
+          const row = view.checks[i];
+          if (!row) continue;
+          view.running = check.name;
+          row.status = 'running';
+          const outcome = await runCheckInProfile(
+            this.opts.profile(),
+            {
+              name: check.name,
+              command: check.command,
+              args: check.args,
+              root: dir,
+              cwd: check.cwd ? path.resolve(dir, check.cwd) : dir,
+              env: check.env,
+              timeoutMs: check.timeout_ms,
+            },
+            this.opts.groups,
+          );
+          row.status = outcome.passed ? 'passed' : 'failed';
+          row.summary = summarizeOutcome(outcome);
+          row.duration_ms = outcome.duration_ms;
+          row.output_tail = outcome.passed
+            ? null
+            : state.redactor.redactString(outcome.output.slice(-TRIAL_TAIL)).value || null;
+        }
+        view.status = 'done';
+      } catch (e) {
+        view.status = 'failed';
+        view.problem = `The checks could not be tried: ${(e as Error).message}`;
+        logger.warn('trial of the project checks failed', { message: (e as Error).message });
+      } finally {
+        view.running = null;
+        view.finished_at = new Date().toISOString();
+        for (const row of view.checks) if (row.status === 'running') row.status = 'waiting';
+        logger.info('trial of the project checks ended', {
+          status: view.status,
+          commit: view.commit,
+          checks: view.checks.map((c) => `${c.name}:${c.status}`),
+        });
+      }
+    })();
+    void this.#inFlight.track(work);
+    return view;
   }
 
   /** A task completed: its work is integrated when it waits for that, else its worktree is released. */
@@ -488,7 +631,10 @@ export class IntegrationManager {
         },
       };
     }
-    const dependencies = await this.#dependencies(dir, task);
+    const dependencies = await this.#dependencies(dir, {
+      task_id: task.task_id,
+      run_id: task.current_run_id ?? 'integration',
+    });
     // Not installed (refused, or the install failed): the checks still run, since not every check
     // needs them, and a failure then says so instead of blaming the merged work alone.
     // After the dependencies: their clean-up removes what git ignores, these files included.

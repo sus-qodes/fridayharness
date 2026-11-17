@@ -18,6 +18,9 @@ const toDaemon = {
 
 export default defineConfig({
   root,
+  // When this bundle was built, shown beside the version: "0.1.0" alone was the same on a copy
+  // installed days earlier, so nothing on screen said which build was open (2026-11-18).
+  define: { __FRIDAY_BUILT__: JSON.stringify(new Date().toISOString()) },
   // Relative asset URLs work under the daemon's /ui/ and under the desktop shell's own origin (FD-03).
   base: './',
   build: {

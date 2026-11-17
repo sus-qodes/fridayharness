@@ -82,6 +82,7 @@ export {
   packageManagerOf,
   type SuggestedCheck,
   type SuggestedKind,
+  setCheckRequiredText,
   suggestChecks,
 } from './project-checks.js';
 export {

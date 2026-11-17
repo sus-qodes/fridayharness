@@ -189,6 +189,9 @@ pub static ROUTES: &[Route] = &[
     // The project's checks: read with what its package.json suggests, and changed by name only
     // (the daemon builds the command from that list; the page sends none).
     get("config/checks", &[]),
+    // The project's checks tried on the untouched project: started, then read while it runs.
+    get("config/checks/trial", &[]),
+    post("config/checks/trial"),
     // The settings files a copy of the project may be given (names only); set through config/settings.
     get("config/copy-files", &[]),
     post("config/checks"),
@@ -628,6 +631,8 @@ mod tests {
         assert!(req("POST", &p("config/checks")).is_ok());
         assert!(refused("GET", &p("config/checks?root=x")));
         assert!(refused("GET", &p("config/checks/tests")));
+        assert!(req("GET", &p("config/checks/trial")).is_ok());
+        assert!(req("POST", &p("config/checks/trial")).is_ok());
         assert!(req("POST", &p("brain/deny-remote")).is_ok());
         // No route gives the approval: that is the shell's own command, behind its own dialog.
         assert!(refused("POST", &p("brain/allow-remote")));

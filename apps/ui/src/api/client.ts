@@ -122,6 +122,29 @@ export interface ProjectCheck {
   required: boolean;
 }
 
+/** One check of a trial of the project's checks. */
+export interface CheckTrialRow {
+  name: string;
+  kind: string;
+  required: boolean;
+  status: 'waiting' | 'running' | 'passed' | 'failed';
+  summary: string | null;
+  duration_ms: number | null;
+  output_tail: string | null;
+}
+
+/** The project's checks run on the commit the project folder is on, before any agent's work. */
+export interface CheckTrialView {
+  status: 'idle' | 'running' | 'done' | 'failed';
+  started_at: string | null;
+  finished_at: string | null;
+  commit: string | null;
+  uncommitted: boolean;
+  running: string | null;
+  problem: string | null;
+  checks: CheckTrialRow[];
+}
+
 /** A check Friday found in package.json: the script it runs and what that script is. */
 export interface SuggestedProjectCheck {
   name: string;
@@ -543,8 +566,24 @@ export class FridayApi {
   changeProjectChecks(change: {
     add?: string[];
     remove?: string[];
+    /** One check made required (it must pass) or advisory (shown, and holds nothing back). */
+    strength?: { name: string; required: boolean };
   }): Promise<ProjectChecksView & { added: string[]; removed: string[] }> {
-    return this.post('/config/checks', { add: change.add ?? [], remove: change.remove ?? [] });
+    return this.post('/config/checks', {
+      add: change.add ?? [],
+      remove: change.remove ?? [],
+      ...(change.strength ? { strength: change.strength } : {}),
+    });
+  }
+
+  /** Where the trial of the project's checks stands (run on the untouched project, in Friday's own copy). */
+  checkTrial(): Promise<CheckTrialView> {
+    return this.get('/config/checks/trial');
+  }
+
+  /** Starts that trial; answers at once, and `checkTrial` follows it. */
+  startCheckTrial(): Promise<CheckTrialView> {
+    return this.post('/config/checks/trial', {});
   }
 
   /**

@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseConfig, renderInitialConfig } from './config.js';
-import { type CheckToAdd, editChecksText, packageManagerOf, suggestChecks } from './project-checks.js';
+import {
+  type CheckToAdd,
+  editChecksText,
+  packageManagerOf,
+  setCheckRequiredText,
+  suggestChecks,
+} from './project-checks.js';
 
 let dir: string;
 beforeEach(() => {
@@ -240,5 +246,30 @@ describe("config.yaml with the project's checks changed (2026-11-17)", () => {
     expect(() => editChecksText('verification: [1, 2]\n', { add: [TESTS] })).toThrow(/correct the file by hand/);
     expect(() => editChecksText('a: [1,\n', { add: [TESTS] })).toThrow(/not valid YAML/);
     expect(() => editChecksText('- a\n- b\n', { add: [TESTS] })).toThrow(/correct the file by hand/);
+  });
+});
+
+describe('a check made required or advisory (2026-11-18)', () => {
+  const withTwo = () =>
+    editChecksText(renderInitialConfig('proj_01hzzzzzzzzzzzzzzzzzzzzzzz', 'shop'), { add: [TESTS, LINT] }).text;
+
+  it('changes that one check, keeps the others and the comments, and is undone the same way', () => {
+    const before = withTwo();
+    const advisory = setCheckRequiredText(before, 'lint', false);
+    expect(advisory.changed).toBe(true);
+    const checks = parseConfig(advisory.text).verification.checks;
+    expect(checks.map((c) => [c.name, c.required])).toEqual([
+      ['tests', true],
+      ['lint', false],
+    ]);
+    expect(advisory.text).toContain('# Friday project configuration.');
+    // The same again changes nothing; back to required reads as it did before.
+    expect(setCheckRequiredText(advisory.text, 'lint', false)).toEqual({ text: advisory.text, changed: false });
+    const back = setCheckRequiredText(advisory.text, 'lint', true);
+    expect(parseConfig(back.text).verification.checks).toEqual(parseConfig(before).verification.checks);
+  });
+
+  it('refuses a check the file does not have', () => {
+    expect(() => setCheckRequiredText(withTwo(), 'nope', false)).toThrow(/no check named "nope"/);
   });
 });

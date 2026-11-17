@@ -185,8 +185,13 @@ export function plannerSpendingCard(
       'div',
       { class: 'row', dataset: { role: 'limit' } },
       h('span', null, `Up to ${usd(inForce)} a day ${whose(s)}, on this computer.`),
-      h('span', { class: 'muted' }, `Spent today: ${usd(brain.spent_today_usd)}.`),
     ),
+    // Said once, where the figure is (the status above), and as what it is.
+    provider === 'claude-code'
+      ? note(
+          'The amounts are an estimate: what the planning would cost at list prices. With a Claude subscription nothing extra is billed for it; it counts toward your plan’s usage. Only when Claude Code is signed in with an API key is it what you pay.',
+        )
+      : null,
     s.yours_usd !== null && s.yours_usd > s.project_usd
       ? note(`You allowed ${usd(s.yours_usd)}; the project’s own limit of ${usd(s.project_usd)} holds.`)
       : null,

@@ -19,7 +19,7 @@ import { keyWords, plannerWords } from '../model/planner-words.js';
 import { visible } from '../model/text.js';
 import { clearSession } from '../platform/session.js';
 import type { AppContext, Component, DesktopShortcut, NotificationAnswer } from '../shell/context.js';
-import { UI_API, UI_VERSION } from '../shell/version.js';
+import { builtWords, UI_API, UI_VERSION, versionWords } from '../shell/version.js';
 import type { Prefs } from '../store/state.js';
 import { button, h, replace, setText } from '../ui/dom.js';
 import { usd } from '../ui/format.js';
@@ -193,7 +193,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
   const statusDot = h('i', { class: 'dot' });
   const statusText = h('span', null, 'Connecting…');
   const statusLine = h('div', { class: 'hub-status' }, statusDot, statusText);
-  const versionLine = h('div', { class: 'hub-version', title: `Interface API ${UI_API}` }, `Friday ${UI_VERSION}`);
+  const versionLine = h('div', { class: 'hub-version', title: `Interface API ${UI_API}` }, versionWords());
 
   side.append(h('div', { class: 'spacer' }), statusLine, versionLine);
 
@@ -628,7 +628,8 @@ export function mountSettingsHub(ctx: AppContext): Component {
         h('dd', { title: `${plain(brain.provider, 40)} · ${plain(brain.model, 80)}` }, plannerWords(brain)),
         h('dt', null, 'API key'),
         h('dd', null, keyWords(brain.key)),
-        h('dt', null, 'Spent today'),
+        // Through Claude Code the figure is what the planning would cost at list prices, not a bill.
+        h('dt', null, brain.provider === 'claude-code' ? 'Used today (estimate)' : 'Spent today'),
         h(
           'dd',
           null,
@@ -1166,7 +1167,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
       h(
         'dd',
         null,
-        `${UI_VERSION} · API ${UI_API}${b && b.ui_api !== UI_API ? ` (Friday speaks ${String(b.ui_api)})` : ''}`,
+        `${UI_VERSION}${builtWords() ? ` · built ${builtWords()}` : ''} · API ${UI_API}${b && b.ui_api !== UI_API ? ` (Friday speaks ${String(b.ui_api)})` : ''}`,
       ),
       h('dt', null, 'Project'),
       h('dd', null, p ? visible(plain(p.name, 120)) : '—'),

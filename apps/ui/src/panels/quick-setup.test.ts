@@ -650,3 +650,24 @@ describe('putting finished work into the project (2026-11-17)', () => {
     td.run();
   });
 });
+
+describe('a switch that says where it stands (2026-11-18)', () => {
+  it('reads Off, then On with what that means, and no tick that could pass for "already on"', () => {
+    const ctx = makeContext({ snapshot: makeSnapshot({ verification: { checks: [], auto_on_completion: false } }) });
+    const td = new Teardown();
+    const el = autoVerifySwitch(ctx, td);
+    const off = el.querySelector<HTMLButtonElement>('.pn-switch');
+    expect(off?.getAttribute('role')).toBe('switch');
+    expect(off?.getAttribute('aria-checked')).toBe('false');
+    expect(off?.textContent).toBe('Off');
+    expect(off?.getAttribute('aria-label')).toBe('Turn on');
+    expect(el.querySelector('.pn-switch svg')).toBeNull();
+    ctx.board(makeSnapshot({ verification: { checks: [], auto_on_completion: true } }));
+    const on = el.querySelector<HTMLButtonElement>('.pn-switch');
+    expect(on?.getAttribute('aria-checked')).toBe('true');
+    expect(on?.textContent).toBe('On');
+    expect(on?.getAttribute('aria-label')).toBe('Turn off');
+    expect(el.textContent).toContain('Finished work is checked as soon as it is claimed.');
+    td.run();
+  });
+});

@@ -105,7 +105,8 @@ describe('settings files for the copies of a project (2026-11-17)', () => {
     const td2 = new Teardown();
     const empty = copyFilesCard(none, td2);
     await flush();
-    expect(empty.textContent).toContain('found no settings file');
+    expect(empty.textContent).toContain('has no settings file');
+    expect(empty.textContent).not.toContain('Tick the files');
     td2.run();
   });
 

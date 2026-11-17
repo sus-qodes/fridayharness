@@ -359,3 +359,53 @@ export function editChecksText(
   const result = crlf ? out.replace(/\n/g, '\r\n') : out;
   return { text: `${bom}${result}`, added: add.map((c) => c.name), removed: remove };
 }
+
+/**
+ * `text` (a config.yaml) with one check made required or advisory (2026-11-18): a required check
+ * must pass for work to count as checked; an advisory one runs and is shown, and a failure of it
+ * holds nothing back. Only that check's `required` changes: set where the check stands, by the
+ * YAML library, and read back, so every other value is what it was or nothing is written.
+ */
+export function setCheckRequiredText(
+  text: string,
+  name: string,
+  required: boolean,
+  source = 'config.yaml',
+): { text: string; changed: boolean } {
+  const bom = text.startsWith('﻿') ? '﻿' : '';
+  const raw = bom ? text.slice(1) : text;
+  const newlines = raw.match(/\r\n|\n/g) ?? [];
+  const crlf = newlines.length > 0 && newlines.filter((n) => n === '\r\n').length * 2 >= newlines.length;
+  const lf = raw.replace(/\r\n/g, '\n');
+  const doc = parseDocument(lf);
+  if (doc.errors.length) {
+    throw new FridayError('invalid_request', `${source} is not valid YAML: ${doc.errors[0]?.message ?? 'unreadable'}`);
+  }
+  const before = (parseYaml(lf) ?? {}) as Raw;
+  const have = rawChecks(before);
+  const at = have.findIndex((c) => nameOf(c) === name);
+  if (at < 0) throw new FridayError('invalid_request', `${source} has no check named "${name}"`);
+  const now = (have[at] as Raw).required !== false;
+  if (now === required) return { text, changed: false };
+  const item = doc.getIn(['verification', 'checks', at], true);
+  if (!isMap(item)) {
+    throw new FridayError(
+      'invalid_request',
+      `${source}: the check "${name}" is not written as settings; correct the file by hand`,
+    );
+  }
+  item.set('required', required);
+  const out = doc.toString({ lineWidth: 0 });
+  // The old values with exactly this one changed, or nothing is written.
+  const want = have.map((c, i) => (i === at ? { ...(c as Raw), required } : c));
+  const goal = canonical({ ...before, verification: { ...(before.verification as Raw), checks: want } });
+  const got = (parseYaml(out) ?? {}) as Raw;
+  if (canonical({ ...got, verification: { ...(got.verification as Raw), checks: rawChecks(got) } }) !== goal) {
+    throw new FridayError(
+      'invalid_request',
+      `${source} could not be changed without altering other settings; correct the file by hand`,
+    );
+  }
+  parseConfig(out, source);
+  return { text: `${bom}${crlf ? out.replace(/\n/g, '\r\n') : out}`, changed: true };
+}

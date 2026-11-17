@@ -1054,3 +1054,180 @@
   font-weight: var(--weight-regular, 400);
   white-space: normal;
 }
+
+/* ---- An on/off switch that says where it stands (2026-11-18) ----------------------------------- */
+
+.pn-switch-row {
+  align-items: center;
+  gap: 12px;
+}
+
+.pn-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.pn-switch-track {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  transition: background 120ms ease;
+}
+
+.pn-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #f5f6f8;
+  transition: transform 120ms ease;
+}
+
+.pn-switch.is-on .pn-switch-track {
+  background: #22c55e;
+}
+
+.pn-switch.is-on .pn-switch-thumb {
+  transform: translateX(14px);
+}
+
+.pn-switch-word {
+  min-width: 22px;
+  font-weight: 600;
+  font-size: var(--text-caption);
+}
+
+.pn-switch:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pn-switch-track,
+  .pn-switch-thumb {
+    transition: none;
+  }
+}
+
+/* ---- One of several, or any of several: the mark that says which is chosen (2026-11-18) -------- */
+
+.pn-landing-choice[role="radio"],
+.pn-landing-choice[role="checkbox"] {
+  position: relative;
+  padding-left: 40px;
+}
+
+.pn-landing-choice[role="radio"]::before,
+.pn-landing-choice[role="checkbox"]::before {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 11px;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  background: transparent;
+}
+
+.pn-landing-choice[role="radio"]::before {
+  border-radius: 50%;
+}
+
+.pn-landing-choice[role="checkbox"]::before {
+  border-radius: 4px;
+}
+
+.pn-landing-choice[aria-checked="true"] {
+  outline: 1px solid rgba(34, 211, 238, 0.55);
+}
+
+.pn-landing-choice[role="radio"][aria-checked="true"]::before {
+  border-color: #22d3ee;
+  background: radial-gradient(circle, #22d3ee 0 4px, transparent 5px);
+}
+
+.pn-landing-choice[role="checkbox"][aria-checked="true"]::before {
+  border-color: #22d3ee;
+  background: #22d3ee;
+  box-shadow: inset 0 0 0 2px #0b0d10;
+}
+
+/* ---- A check's strength, and a trial of the checks (2026-11-18) -------------------------------- */
+
+.pn-pc-strength {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: var(--text-caption);
+  border: 1px solid var(--border-strong);
+  background: transparent;
+}
+
+.pn-pc-strength.is-required {
+  color: #86efac;
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+.pn-pc-strength.is-advisory {
+  color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
+.pn-pc-trial {
+  margin: 12px 0 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-medium);
+}
+
+.pn-pc-trial-row {
+  flex-wrap: wrap;
+}
+
+.pn-pc-output {
+  flex-basis: 100%;
+}
+
+.pn-pc-output pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  font-size: var(--text-caption);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pn-pc-verdict {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+}
+
+.pn-pc-verdict.is-good {
+  border-color: rgba(34, 197, 94, 0.45);
+  color: #bbf7d0;
+}
+
+.pn-pc-verdict.is-warn {
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #fde68a;
+}
+
+.pn-pc-verdict.is-danger {
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fecaca;
+}
