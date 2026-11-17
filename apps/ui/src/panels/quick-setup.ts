@@ -397,11 +397,14 @@ function looseningSwitch(ctx: AppContext, td: Teardown, spec: LooseningSwitch): 
           label: state === 'on' ? 'Turn off' : state === 'untrusted' ? 'Trust and turn on' : 'Turn on',
           onChange: () => void (state === 'on' ? turnOff() : turnOn()),
         }),
-        h(
-          'span',
-          { class: state === 'on' ? '' : 'muted' },
-          state === 'on' ? spec.on : state === 'untrusted' ? 'Off until you approve it on this computer.' : 'Off',
-        ),
+        // The switch itself says "Off": beside it stands only what adds something.
+        state === 'off'
+          ? null
+          : h(
+              'span',
+              { class: state === 'on' ? '' : 'muted' },
+              state === 'on' ? spec.on : 'Off until you approve it on this computer.',
+            ),
       ),
       state === 'untrusted'
         ? note('config.yaml already asks for it; it applies once you trust it on this computer.')
