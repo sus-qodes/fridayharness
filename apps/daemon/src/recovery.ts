@@ -4,6 +4,7 @@ import {
   agentIdentity,
   changedBetween,
   commitsSince,
+  commitTree,
   GitRoot,
   listRefs,
   parentOf,
@@ -104,6 +105,45 @@ export class RecoveryManager {
 
   private get pid() {
     return this.opts.project.project_id;
+  }
+
+  /** The commit kept of what an attempt changed in the project folder, under the task's preserved refs; null: nothing. */
+  async #keepFolderWork(taskId: string, attempt: number, why: string, agentKey: string): Promise<string | null> {
+    const { state, project, logger } = this.opts;
+    const run = state.q.runs(taskId).at(-1);
+    if (!run?.execution_root || run.branch_ref || !run.base_commit || !sameDir(run.execution_root, project.root)) {
+      return null;
+    }
+    const root = run.execution_root;
+    const paths = [
+      ...new Set(
+        (run.observed_paths ?? [])
+          .map((p) => (path.isAbsolute(p) ? path.relative(root, p) : p))
+          .map((p) => p.split(path.sep).join('/').replaceAll('\\', '/').replace(/^\.\//, ''))
+          .filter((p) => p && !p.startsWith('..')),
+      ),
+    ];
+    if (!paths.length) return null;
+    try {
+      const git = await GitRoot.open(project.root);
+      const tree = await git.pathsTree(run.base_commit, paths);
+      const was = (await runGit(project.root, ['rev-parse', `${run.base_commit}^{tree}`])).stdout.trim();
+      if (tree === was) return null;
+      const commit = await commitTree(
+        project.root,
+        tree,
+        [run.base_commit],
+        `Preserved work of ${taskId} in the project folder, attempt ${attempt}\n\n${why}`,
+        agentIdentity(agentKey),
+      );
+      return await preserveCommit(project.root, preservedPrefix(taskId), `folder-attempt-${attempt}`, commit);
+    } catch (e) {
+      logger.warn('the work left in the project folder could not be kept', {
+        task_id: taskId,
+        message: (e as Error).message,
+      });
+      return null;
+    }
   }
 
   async assess(taskId: string): Promise<RecoveryAssessment> {
@@ -227,7 +267,7 @@ export class RecoveryManager {
               ? 'the next attempt continues in the same worktree and branch; uncommitted work is preserved first'
               : ranElsewhere
                 ? `the next attempt works in this clone as it is; changes that were only in ${ranElsewhere} are not included`
-                : 'the task goes back to READY for the next agent',
+                : 'the task goes back to READY for the next agent; what this attempt changed in the project folder is saved first, and the next attempt continues from it',
       },
       {
         action: 'restart',
@@ -386,6 +426,13 @@ export class RecoveryManager {
             commit,
           );
         }
+      }
+      // An attempt made in the project folder (a session its person runs there) that stopped
+      // part-way (2026-11-17): the files Friday's hooks saw it change are saved as a commit of
+      // their own, so the next attempt, in whatever folder, continues from them. The project
+      // folder is not touched. Before, the half-done work was known to nobody.
+      if (moving && !preserved && !a.worktree?.exists) {
+        preserved = await this.#keepFolderWork(taskId, a.run?.attempt ?? 0, why, a.harness?.agent_key ?? 'agent');
       }
       if (action === 'restart' && a.worktree?.exists && !a.worktree.elsewhere) await resetWorktree(a.worktree.path);
       const task = state.recoverTask(this.pid, actor, taskId, action, {

@@ -6,6 +6,7 @@ import {
   goalBranch,
   isAncestor,
   parentOf,
+  preservedPrefix,
   refreshWorktree,
   removeWorktree,
   resolveCommit,
@@ -94,6 +95,39 @@ export class WorkspaceManager {
 
   private get pid() {
     return this.opts.project.project_id;
+  }
+
+  /** Brings the saved folder work of an earlier attempt into a fresh worktree; the note for its agent, or null. */
+  async #continueFolderWork(taskId: string, dir: string): Promise<string | null> {
+    const { project, logger } = this.opts;
+    try {
+      const refs = await runGit(
+        project.root,
+        ['for-each-ref', '--sort=-creatordate', '--format=%(refname)', `${preservedPrefix(taskId)}folder-attempt-*`],
+        { okCodes: [1, 128] },
+      );
+      const ref = refs.stdout.split('\n').find((l) => l.trim());
+      if (!ref) return null;
+      const picked = await runGit(dir, ['cherry-pick', '--no-commit', '--allow-empty', ref.trim()], {
+        okCodes: [1, 128],
+      });
+      if (picked.code !== 0) {
+        await runGit(dir, ['cherry-pick', '--abort'], { okCodes: [1, 128] });
+        await runGit(dir, ['reset', '--hard', '-q', 'HEAD'], { okCodes: [1, 128] });
+        return null;
+      }
+      const files = (await runGit(dir, ['diff', '--cached', '--name-only', '-z'])).stdout.split('\0').filter(Boolean);
+      // Uncommitted edits, as the first agent left them: not staged.
+      await runGit(dir, ['reset', '-q'], { okCodes: [1, 128] });
+      if (!files.length) return null;
+      return `An earlier attempt at this task, made in the project folder, stopped part-way. What it had changed is in your folder as uncommitted edits (${files.length} file(s)): look at them first, keep what is right and finish the task.`;
+    } catch (e) {
+      logger.warn('saved folder work was not brought into the worktree', {
+        task_id: taskId,
+        message: (e as Error).message,
+      });
+      return null;
+    }
   }
 
   private baseFor(taskId: string): Promise<string | undefined> {
@@ -198,6 +232,10 @@ export class WorkspaceManager {
         this.#askHuman(run.task_id, reason, { worktree: alloc.path, setup });
         throw new FridayError('invalid_request', reason);
       }
+      // An earlier attempt made in the project folder left work that recovery saved (2026-11-17):
+      // a fresh worktree gets it as uncommitted edits, and its agent is told. Anything that does not
+      // apply cleanly is left out, and the worktree is as it was cut.
+      if (alloc.created && !note) note = await this.#continueFolderWork(run.task_id, alloc.path);
       state.workspaceReady(this.pid, runId, {
         ...alloc,
         setup,

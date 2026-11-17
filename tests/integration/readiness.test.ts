@@ -58,7 +58,7 @@ describe('runtime readiness', () => {
     // Nothing connected, nothing checked: no candidate can be shown able to take the work.
     const nothing = (await explain()).dry_run;
     expect(nothing).toMatchObject({ blocked: true, model: null });
-    expect(nothing.reason).toContain('not ready: claude-code/claude-sonnet-5-5 is not installed');
+    expect(nothing.reason).toContain('not ready: claude-code/claude-sonnet-5-5 has not been seen here yet');
     expect(nothing.readiness.map((r) => [r.host, r.model, r.dispatchable])).toEqual([
       ['claude-code', 'claude-sonnet-5-5', false],
       ['cursor', 'claude-opus-5-5', false],
@@ -121,7 +121,7 @@ describe('runtime readiness', () => {
     expect(explained.code, explained.stderr).toBe(0);
     expect(explained.stdout).toContain('readiness claude-code/claude-sonnet-5-5: ready');
     expect(explained.stdout).toContain(
-      'readiness cursor/claude-opus-5-5: not ready, cursor/claude-opus-5-5 is not installed',
+      'readiness cursor/claude-opus-5-5: not ready, cursor/claude-opus-5-5 has not been seen here yet',
     );
     const evidenceShown = await cli(['--project', dir, 'readiness', '--evidence', '--host', 'claude-code']);
     expect(evidenceShown.code, evidenceShown.stderr).toBe(0);

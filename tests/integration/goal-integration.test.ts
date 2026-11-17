@@ -1058,6 +1058,11 @@ describe('landing a completed goal', () => {
     expect(text('src/b.mjs')).toBe('export const b = 1;\n');
     const last = await inFolder(id('readme'), { 'README.md': '# a, b and c\n\na is 2; b and c stay small.\n' });
     expect(last.note).toContain('put the finished work');
+    // It is also told, in a line each, what the two tasks it depends on did (no model call).
+    const told = JSON.stringify(last);
+    expect(told).toContain('Done before you by claude-1');
+    expect(told).toContain('Done before you by codex-1');
+    expect(told).toContain('Its work is in your folder.');
     expect(text('src/b.mjs')).toBe('// b stays small\nexport const b = 1;\n');
     expect(text('src/c.mjs')).toBe('// c stays small\nexport const c = 1;\n');
 
@@ -1161,6 +1166,41 @@ describe('landing a completed goal', () => {
         }),
       ).rejects.toThrow(/not in the way/);
     });
+  });
+
+  it('saves what an agent left half-done in the project folder, and the next agent continues from it (2026-11-17)', async () => {
+    const td = await project(CHECKS, {}, L0);
+    const pid = td.project.project_id;
+    const { ids } = await goalWith(td, [
+      { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'], assign_to: 'antigravity-1' },
+    ]);
+    const taskId = ids['raise-a'] as string;
+    const editor = await folderSession(td);
+    const claimed = (await editor.claim({ next: true })) as { run_id: string };
+    const HALF = 'export const a = 2; // half done\n';
+    writeFileSync(file('src/a.mjs'), HALF);
+    // Its hooks saw the write; then its window is closed and a person gives the task to someone else.
+    const agent = td.daemon.state.q.agentByKey(pid, 'antigravity-1');
+    td.daemon.state.observePaths(pid, { kind: 'agent', id: String(agent?.agent_id) }, claimed.run_id, ['src/a.mjs']);
+    await editor.disconnect().catch(() => undefined);
+    const recovered = await td.operator.post<{ preserved_ref: string | null }>(
+      td.operator.projectPath(`/tasks/${taskId}/recover`),
+      { action: 'reassign', reason: 'its window was closed' },
+    );
+    expect(recovered.preserved_ref).toContain(`/${taskId}/folder-attempt-1`);
+    expect((await git(['show', `${recovered.preserved_ref}:src/a.mjs`])).trim()).toBe(HALF.trim());
+    // The folder is as the agent left it.
+    expect(text('src/a.mjs')).toBe(HALF);
+    expect((await runGit(ws().projectDir, ['status', '--porcelain'])).stdout).toBe(' M src/a.mjs\n');
+
+    // The next agent's own folder starts with that work, as edits not committed, and it is told.
+    const next = await begin(td, 'be-1', taskId);
+    expect(readFileSync(path.join(next.start.working_directory, 'src/a.mjs'), 'utf8').replace(/\r\n/g, '\n')).toBe(
+      HALF,
+    );
+    expect((await runGit(next.start.working_directory, ['status', '--porcelain'])).stdout).toBe(' M src/a.mjs\n');
+    expect(next.start.note).toContain('stopped part-way');
+    await next.fake.close();
   });
 
   it('keeps a folder file the person changed differently in the way of landing', async () => {

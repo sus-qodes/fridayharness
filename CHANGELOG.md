@@ -2,6 +2,13 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — agents working together, part 10: what one agent leaves for the next
+
+- **The next agent is told what the earlier tasks did.** A task that depends on others gets one line for each: who did it and what that agent reported, from Friday's own records, with no model call and no list of files to open. Before, it was told only that it was "plan task X".
+- **Work left half-done in your project folder is not lost.** When an agent you run there is closed in the middle of a task and the task goes to someone else, the files Friday's hooks saw it change are saved first. The next agent's own folder starts with them, as edits to look at and finish, and it is told so. Your folder is left exactly as it was.
+- **The sample shop installs.** Its three packages had no package files, so the install failed in every task folder and every task carried a warning.
+- **"Not installed" is no longer said of a tool that is installed.** Where Friday has only not seen a tool connected yet, it says that.
+
 ## Unreleased — agents working together, part 9: a file you changed too
 
 Friday never writes over a file you changed in your project folder. Until now it left the file as it was and told only the agent, which then built on your version without you knowing.

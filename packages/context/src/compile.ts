@@ -657,6 +657,39 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
         reason: 'the goal this task serves',
         rule: 'task state (priority 1)',
       });
+      // What the tasks this one depends on did, in their agents' own words (2026-11-17): one line
+      // each, from Friday's records, with no model call. The next agent starts knowing what is
+      // already there instead of finding out, or guessing. No file names: a named file gets opened
+      // whether it is needed or not (the measurements of 2026-10-20), and the work is in the folder.
+      for (const depId of state.q.dependencies(task.task_id).slice(0, DONE_BEFORE_MAX)) {
+        const dep = state.q.findTask(pid, depId);
+        if (dep?.status !== 'COMPLETED') continue;
+        const claim = state.store.readByRef(pid, 'task', depId, { types: ['task.completion_claimed'] }).at(-1);
+        const said = (claim?.payload as { transition?: { reason?: string } } | undefined)?.transition?.reason;
+        const run = state.q.runs(depId).at(-1);
+        const who = run ? state.q.findAgent(run.agent_id)?.agent_key : undefined;
+        const text = `Done before you${who ? ` by ${who}` : ''}: ${oneLine(dep.summary, 160)}${said ? `. It reported: ${oneLine(said, DONE_BEFORE_CHARS)}` : ''} Its work is in your folder.`;
+        add({
+          section: 'task.plan',
+          line: text,
+          source: src({
+            source_id: depId,
+            source_type: 'task_record',
+            authority: 'agent',
+            recency: dep.completed_at ?? dep.updated_at,
+            relevance: 0.95,
+            relationship_distance: 1,
+            verification_status: 'verified',
+            selection_reason: 'a task this one depends on, completed and verified',
+            content: text,
+          }),
+          priority: 1,
+          relevance: 0.95,
+          protected: false,
+          reason: 'what a task this one depends on did',
+          rule: 'task state (priority 1)',
+        });
+      }
       for (const d of state.q
         .escalations(pid, 'answered')
         .filter((r) => r.goal_id === task.goal_id)
@@ -1656,6 +1689,16 @@ function progressEvents(state: FridayState, pid: string, taskId: string) {
     .filter(
       (e) => (e.payload as { event_type?: string }).event_type === 'progress' && (e.payload as { note?: string }).note,
     );
+}
+
+/** At most this many "Done before you" lines, each with at most this much of what its agent reported. */
+const DONE_BEFORE_MAX = 6;
+const DONE_BEFORE_CHARS = 320;
+
+/** One line of at most `max` characters, without line breaks. */
+function oneLine(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}\u2026` : flat;
 }
 
 /** The handoff summary never exceeds this (plan M12.3); the oldest "Done so far" lines go first. */
