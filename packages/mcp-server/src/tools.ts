@@ -963,7 +963,7 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
           ...(me?.current_task ? { task_id: me.current_task.task_id } : {}),
         });
         return {
-          text: `Question ${res.escalation_id} is waiting for a human (they answer with "friday answer ${res.escalation_id} ...").`,
+          text: `Question ${res.escalation_id} is waiting for the person: they answer it in Friday, under "Waiting for you" (from a terminal: "friday answer ${res.escalation_id} ..."). Tell them, and do not go on until they have answered.`,
           structured: res,
         };
       },

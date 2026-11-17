@@ -60,7 +60,26 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
     ): HarnessRecord | undefined => {
       const sid = typeof hook.session_id === 'string' ? hook.session_id : undefined;
       const bySession = sid ? state.q.harnessBySession(pid, vendor, sid) : undefined;
-      if (bySession && bySession.status !== 'TERMINATED') return bySession;
+      if (bySession && bySession.status !== 'TERMINATED') {
+        // The conversation outlived the session its hooks were first linked to (2026-11-17): its
+        // MCP server started again (Friday restarted, the host reloaded its servers) and registered
+        // a new session that no hook has reached. Its hooks follow it there. Before, they kept
+        // counting for the dead session, and the live one stayed "no hook has reached the daemon":
+        // it could take no work until the person started a new conversation.
+        if (vendor !== 'claude-code' && sid && bySession.status === 'DISCONNECTED') {
+          const live = state.q.hooklessAttachHarness(
+            pid,
+            vendor,
+            body.agent_key || state.config.defaultAgentKey,
+            state.clock.now(),
+          );
+          if (live) {
+            state.bindSession(pid, vendor, sid, live.harness_id, null);
+            return state.q.harness(live.harness_id);
+          }
+        }
+        return bySession;
+      }
       const byKey = hostPid(body) ? state.q.harnessByKey(pid, keyFor(vendor, body)) : undefined;
       if (byKey || vendor === 'claude-code' || !sid) return byKey;
       // Cursor, Antigravity and Gemini CLI run hooks through a shell, so a hook's parent is never

@@ -4667,7 +4667,8 @@ export class FridayState {
         need === 'L2'
           ? 'No adapter in this version of Friday provides L2 (isolated execution); lower security.enforcement_required or wait for M6.'
           : hooked && h.attach_mode === 'attach'
-            ? `Run "friday harness config ${h.vendor}" in the project and start a new ${hooked} session, so its tool calls pass Friday's policy hook.`
+            ? // Said by the agent to its person, who may never open a terminal (2026-11-17): the app first.
+              `Tell the person: in Friday, open Agents, choose Connect ${hooked} and press Apply, trust this folder in ${hooked} if it asks, then start a new ${hooked} conversation, so that Friday's hooks check its tool calls. (From a terminal: "friday harness config ${h.vendor}".)`
             : 'Use a harness with Friday policy hooks, or lower security.enforcement_required in .friday/config.yaml.';
       return `this project requires ${need} enforcement (security.enforcement_required), but this session has ${level}: ${h.enforcement_basis ?? 'no evidence'}. ${hint}`;
     }
@@ -6129,7 +6130,7 @@ export class FridayState {
         return {
           approval_id,
           status: 'pending' as const,
-          reason: `waiting for a human: run "friday approve ${approval_id}" or "friday reject ${approval_id}"`,
+          reason: `waiting for the person to decide it in Friday, under "Waiting for you" (from a terminal: "friday approve ${approval_id}" or "friday reject ${approval_id}")`,
           expires_at,
           capability: verdict.capability,
           risk: verdict.risk,

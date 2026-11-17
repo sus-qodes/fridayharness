@@ -2,6 +2,11 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — agents working together, part 12: a session that reconnects, and words for a person
+
+- **An agent that reconnects in the same conversation can take work again.** When Friday was restarted, or the app reloaded its connection, in the middle of a conversation, the new session read "no Friday hook has reached the daemon" and could take no task until you started a new conversation: its hooks were still counted for the session that had ended. They now follow it to the session that is there.
+- **What an agent passes on to you leads with the app, not a command.** Three messages an agent relays (a session Friday cannot check yet, a question that waits for you, a step that waits for your decision) told you to run a terminal command. They now say where it is done in Friday, with the command after it for those who use one.
+
 ## Unreleased — agents working together, part 11: three things said in time
 
 - **An agent you run that has gone quiet is pointed out.** When Antigravity, or Claude Code in your editor, holds a task as running and nothing was reported on it for fifteen minutes, it is listed with what waits for you: its window may be closed, or it may be waiting on a prompt of its own. Friday does not take the task away by itself; the task's own page gives it to another agent.

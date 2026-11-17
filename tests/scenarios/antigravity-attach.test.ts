@@ -130,6 +130,7 @@ async function antigravitySession(root: string) {
   const client = new Client({ name: 'antigravity', version: '1.5.9' });
   await client.connect(transport);
   ws().track({ close: () => client.close() });
+  const close = () => client.close();
 
   let step = 0;
   /** A tool call as CLI 1.5 makes it: the PreToolUse hook decides; a call that goes ahead is done and reported. */
@@ -154,7 +155,7 @@ async function antigravitySession(root: string) {
     const said = (res.content ?? []).map((c) => c.text ?? '').join('\n');
     return { ok: !res.isError, text: said, structured: res.structuredContent ?? {} };
   };
-  return { hook, tool, friday };
+  return { hook, tool, friday, close };
 }
 
 describe('a plan with a task for Antigravity, beside an agent Friday runs', () => {
@@ -354,4 +355,45 @@ describe('an Antigravity session, rehearsed', () => {
     },
     180_000,
   );
+});
+
+describe('a conversation that outlives its session (2026-11-17)', () => {
+  it('lets the reconnected session take work: its hooks follow it to the new session', async () => {
+    const { root } = materializeFixtureShop(path.join(ws().root, 'shop'));
+    const configured = await cli(['--project', root, 'harness', 'config', 'antigravity', '--agent', 'antigravity-1']);
+    expect(configured.code, configured.stderr).toBe(0);
+    const daemon = await createDaemon({
+      projectRoot: root,
+      stateDir: ws().stateDir,
+      tickMs: 0,
+      pollIntervalMs: 25,
+      logToFile: true,
+      extensions: [claudeCodeHooks()],
+      brain: { autoStart: false },
+    });
+    ws().track({ close: () => daemon.close('test cleanup') });
+    const pid = daemon.project.project_id;
+    const live = () =>
+      daemon.state.q.harnesses(pid).filter((h) => h.vendor === 'antigravity' && h.status !== 'DISCONNECTED');
+
+    // The conversation starts: its server registers, its first hook reaches Friday.
+    const first = await antigravitySession(root);
+    await first.hook('SessionStart');
+    expect((await first.friday('friday_whoami')).text).toContain('Enforcement: L1');
+
+    // The server goes away and comes back (Friday was restarted, or the app reloaded its servers),
+    // in the same conversation.
+    await first.close();
+    for (let i = 0; i < 100 && live().length; i += 1) await new Promise((r) => setTimeout(r, 50));
+    expect(live()).toEqual([]);
+    const second = await antigravitySession(root);
+
+    // The conversation's next hook is counted for the session that is there now, so it may take
+    // work. Before, it counted for the dead one, and this session read "no Friday hook has reached
+    // the daemon" until the person started a new conversation.
+    const who = await second.friday('friday_whoami');
+    expect(who.text).toContain('Enforcement: L1');
+    expect(who.text).not.toContain('cannot take work');
+    expect(live()).toHaveLength(1);
+  }, 120_000);
 });
