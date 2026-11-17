@@ -877,6 +877,117 @@ describe('landing a completed goal', () => {
     expect((await runGit(ws().projectDir, ['status', '--porcelain'])).stdout).toBe('?? notes.txt\n');
   });
 
+  /** A session its person runs in the project folder, allowed to take work without hooks. */
+  async function folderSession(td: TestDaemon) {
+    const pid = td.project.project_id;
+    const trust = await td.operator.get<{ policy: { loosening_hash: string } }>(td.operator.projectPath('/policy'));
+    await td.operator.post(td.operator.projectPath('/policy/trust'), { loosening_hash: trust.policy.loosening_hash });
+    const editor = new GenericHarnessClient(td.bootstrap, {
+      harness_key: `antigravity:${pid}:pid:9922`,
+      vendor: 'antigravity',
+      name: 'Antigravity',
+      version: '1.5.9',
+      adapter_version: '0.1.0',
+      attach_mode: 'attach',
+      project_id: pid,
+      capabilities: {},
+      agent_key: 'antigravity-1',
+      role: 'developer',
+      host: { pid: 9922, cwd: ws().projectDir },
+    });
+    await editor.register();
+    ws().track({ close: () => void editor.disconnect().catch(() => undefined) });
+    return editor;
+  }
+  const L0 = '\nsecurity:\n  enforcement_required: L0\n';
+
+  it("puts the goal's finished work into the project folder before a session there takes a task (2026-11-17)", async () => {
+    const td = await project(CHECKS, {}, L0);
+    const mainHead = await head();
+    const { goalId, ids } = await goalWith(td, [
+      { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+      { key: 'note-b', summary: 'Say what b is for', write: ['src/b.mjs'], depends_on: ['raise-a'] },
+    ]);
+    const second = ids['note-b'] as string;
+    // An agent Friday starts does the first task in its own folder; the goal branch has it.
+    await work(td, 'be-1', ids['raise-a'] as string, { 'src/a.mjs': 'export const a = 2;\n' });
+    await integrationOf(td, ids['raise-a'] as string);
+    const branch = `friday/goal-${goalId}`;
+    const tip = (await git(['rev-parse', branch])).trim();
+    expect(text('src/a.mjs')).toBe('export const a = 1;\n');
+    writeFileSync(file('notes.txt'), 'my own notes\n');
+
+    const editor = await folderSession(td);
+    await td.operator.post(td.operator.projectPath(`/tasks/${second}/assign`), { agent_key: 'antigravity-1' });
+    const claimed = (await editor.claim({ next: true })) as { run_id: string; task: TaskView; note: string | null };
+    expect(claimed.task.task_id).toBe(second);
+    // The folder has the finished file now, as an uncommitted change; nothing else moved.
+    expect(text('src/a.mjs')).toBe('export const a = 2;\n');
+    expect(text('notes.txt')).toBe('my own notes\n');
+    expect(await head()).toBe(mainHead);
+    expect((await runGit(ws().projectDir, ['status', '--porcelain'])).stdout).toBe(' M src/a.mjs\n?? notes.txt\n');
+    expect(claimed.note).toContain('put the finished work');
+    expect(claimed.note).toContain('src/a.mjs');
+    // The attempt starts from the goal's revision: what came in is not judged as this task's change.
+    expect(td.daemon.state.q.run(claimed.run_id).base_commit).toBe(tip);
+    expect(
+      td.daemon.state.store.readByRef(td.project.project_id, 'task', second, { types: ['folder.synced'] })[0]?.payload,
+    ).toMatchObject({ goal_head: tip, brought: ['src/a.mjs'], in_the_way: [] });
+
+    writeFileSync(file('src/b.mjs'), '// b stays small\nexport const b = 1;\n');
+    await editor.reportResult({
+      task_id: second,
+      run_id: claimed.run_id,
+      status: 'completed_claim',
+      summary: 'noted b',
+      changed_paths: ['src/b.mjs'],
+      checks: [],
+    });
+    const verified = await td.operator.post<{ task: TaskView; verification: VerificationView }>(
+      td.operator.projectPath(`/tasks/${second}/verify`),
+      {},
+      { timeoutMs: 120_000 },
+    );
+    expect(verified.task.status, JSON.stringify(verified.verification.checks)).toBe('COMPLETED');
+    const two = await integrationOf(td, second);
+    expect(two, two.summary ?? '').toMatchObject({ status: 'integrated', base_commit: tip });
+    expect((await git(['show', `${branch}:src/b.mjs`])).trim()).toBe('// b stays small\nexport const b = 1;');
+    await runOnce(td);
+    await eventually(
+      () => td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`)),
+      (g) => g.goal.status === 'COMPLETED',
+      'the goal to complete',
+    );
+    // Both files are in the folder already; landing moves the branch over them.
+    expect(await land(td, goalId)).toMatchObject({ status: 'landed', fast_forward: true });
+    expect((await runGit(ws().projectDir, ['status', '--porcelain'])).stdout).toBe('?? notes.txt\n');
+    expect(text('src/a.mjs')).toBe('export const a = 2;\n');
+  });
+
+  it('never writes over a file the person changed in the folder, and says so to the agent', async () => {
+    const td = await project(CHECKS, {}, L0);
+    const mainHead = await head();
+    const { ids } = await goalWith(td, [
+      { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+      { key: 'note-b', summary: 'Say what b is for', write: ['src/b.mjs'], depends_on: ['raise-a'] },
+    ]);
+    const second = ids['note-b'] as string;
+    await work(td, 'be-1', ids['raise-a'] as string, { 'src/a.mjs': 'export const a = 2;\n' });
+    await integrationOf(td, ids['raise-a'] as string);
+    writeFileSync(file('src/a.mjs'), 'export const a = 1; // mine, not saved yet\n');
+    const editor = await folderSession(td);
+    await td.operator.post(td.operator.projectPath(`/tasks/${second}/assign`), { agent_key: 'antigravity-1' });
+    const claimed = (await editor.claim({ task_id: second })) as { run_id: string; note: string | null };
+    expect(text('src/a.mjs')).toBe('export const a = 1; // mine, not saved yet\n');
+    expect(claimed.note).toContain('did not replace them');
+    expect(claimed.note).toContain('src/a.mjs');
+    // With something in the way the attempt starts from the folder's own commit, as before.
+    expect(td.daemon.state.q.run(claimed.run_id).base_commit).toBe(mainHead);
+    expect(
+      td.daemon.state.store.readByRef(td.project.project_id, 'task', second, { types: ['folder.synced'] })[0]?.payload,
+    ).toMatchObject({ brought: [], in_the_way: ['src/a.mjs'] });
+  });
+
   it('keeps a folder file the person changed differently in the way of landing', async () => {
     const td = await project();
     const { goalId, ids } = await goalWith(td, [{ key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] }]);

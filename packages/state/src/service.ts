@@ -727,6 +727,8 @@ const OBSERVATION_TYPES = new Set([
   'setup.failed',
   // A person landed a completed goal's branch into their own branch, from the interface (2026-11-16).
   'goal.landed',
+  // The goal's finished work was written into the project folder before a session there took a task.
+  'folder.synced',
   // A person changed one of the settings the interface may change in config.yaml (2026-11-16).
   'config.edited',
   // A person chose how they plan on this machine (their own planner, kept outside config.yaml).
@@ -2604,6 +2606,12 @@ export class FridayState {
       return pr !== 0 ? pr : a.created_at.localeCompare(b.created_at);
     });
     return ready[0];
+  }
+
+  /** The task a claim with `next` would take for this agent now, without taking it. */
+  nextTaskFor(projectId: string, agentId: string): TaskView | undefined {
+    const agent = this.q.findAgent(agentId);
+    return agent ? this.pickNext(projectId, agent) : undefined;
   }
 
   /** Tasks this agent could claim right now, assigned ones first. */

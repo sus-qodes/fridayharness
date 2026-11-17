@@ -2,6 +2,17 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — agents working together, part 4: finished work comes to your folder
+
+The hand-over in the other direction. An agent you run in your own project folder (Antigravity, Claude Code in an editor) works on what that folder holds, while the agents Friday starts hand their checked work to the goal's branch. In the live run of 2026-11-17 such an agent was asked to describe code that was not in its folder.
+
+- **Before your own agent takes a task of a goal, Friday writes that goal's finished work into your folder.** Only files the goal changed, and only work that passed its check. They show as uncommitted changes; your branch and your staged changes are not touched. The agent is told what was put there, and that those files are not its own to claim.
+- **A file you changed is never written over.** One you edited, staged, left untracked or committed yourself stays exactly as it is; the agent is told which files those are and to tell you. The old version of every file Friday does replace is the committed one, so `git restore` brings it back.
+- **The check then judges only what the task changes.** With nothing in the way, the attempt starts from the goal's revision, so what Friday brought in is not counted as the task's change, and its own work lands on the goal's branch without a merge.
+- An agent's claim shows a note that comes with its context, before the context.
+
+Not yet: the three-button notice for a file that is in the way (keep mine, take theirs, show both); for now the agent tells you.
+
 ## Unreleased — agents working together, part 3: one copy of Friday
 
 Found in the same live run: the coding tools a person opens themselves were starting a copy of Friday installed on 2026-10-31, while the desktop app ran the current one. An Antigravity session then registered under the wrong name, showed as two agents and was refused work, and the setup check said "ok".

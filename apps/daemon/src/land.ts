@@ -81,14 +81,14 @@ export function goalWork(state: FridayState, projectId: string, goalId: string):
   return folder > 0 ? 'folder' : 'branch';
 }
 
-interface Entry {
+export interface Entry {
   path: string;
   staged: boolean;
   untracked: boolean;
 }
 
 /** `git status --porcelain -z`, one entry per path (a rename's old path is dropped). */
-async function folderStatus(root: string): Promise<Entry[]> {
+export async function folderStatus(root: string): Promise<Entry[]> {
   const out = await runGit(root, ['status', '--porcelain=v1', '-z', '--untracked-files=normal'], {
     okCodes: [128],
   });
@@ -126,7 +126,7 @@ async function inProgress(root: string): Promise<string | null> {
 }
 
 /** True when `file` is an entry of the folder's status, or lies under an untracked folder of it. */
-function covers(entry: Entry, file: string): boolean {
+export function covers(entry: Entry, file: string): boolean {
   return entry.path === file || (entry.path.endsWith('/') && file.startsWith(entry.path));
 }
 
@@ -150,7 +150,7 @@ interface Inspection {
  * `git hash-object` applies the same filters as `git add`, so a line-ending difference the
  * repository normalises is not a difference.
  */
-async function sameAsTip(root: string, tip: string, file: string): Promise<boolean> {
+export async function sameAsTip(root: string, tip: string, file: string): Promise<boolean> {
   const theirs = await runGit(root, ['rev-parse', '--verify', '--quiet', `${tip}:${file}`], { okCodes: [1, 128] });
   const here = existsSync(path.resolve(root, file));
   if (theirs.code !== 0) return !here;

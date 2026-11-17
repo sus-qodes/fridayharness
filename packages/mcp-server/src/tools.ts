@@ -363,7 +363,12 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
         })) as ResultOf<'task.claim'>;
         // The claim stands even when its context could not be delivered: the note says why and
         // how to ask again, so the agent never holds a task it was told nothing about.
-        const ctx = res.context ? renderContextMarkdown(res.context as ContextPacket, 8000) : (res.note ?? '');
+        // A note that comes with the context (what Friday put into the folder before the task) is
+        // said first, where the agent reads it before it opens a file.
+        const said = res.note ? `${res.note}\n\n` : '';
+        const ctx = res.context
+          ? `${said}${renderContextMarkdown(res.context as ContextPacket, 8000)}`
+          : (res.note ?? '');
         // Friday's model suggestion (ADR-0031 §6): this session's host chooses its own model.
         const model = res.routing?.model
           ? `\nModel: Friday suggests ${res.routing.model} for this task (${res.routing.reason}).`

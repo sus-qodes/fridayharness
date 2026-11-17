@@ -32,9 +32,11 @@ import {
 import { type ProjectRef, policyVersion } from '@friday/sdk';
 import type { Caller, FridayState } from '@friday/state';
 import type { CompileInput, RecipientReadFilter } from './context.js';
+import { type FolderSync, syncFolder, syncNote } from './folder-sync.js';
 import { type GraphService, query as graphQuery } from './graph-service.js';
 import type { OperationManager } from './operations.js';
 import type { ToolJudge } from './tool-policy.js';
+import { taskBase } from './workspaces.js';
 
 /** The commit a checkout is at, or null where git cannot read one (a folder outside git). */
 async function checkoutHead(cwd: string | null): Promise<string | null> {
@@ -627,7 +629,29 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
       const c = caller();
       // Where an attached session's work starts: the commit its checkout is at now (LESSONS D-41).
       const harness = state.q.harness(harnessId);
-      const head = harness.attach_mode === 'spawn' ? null : await checkoutHead(harness.host_cwd);
+      let head = harness.attach_mode === 'spawn' ? null : await checkoutHead(harness.host_cwd);
+      // A session in the project folder builds on the goal's finished work (2026-11-17): what the
+      // goal branch gained is written into the folder before it takes a task of that goal, never
+      // over a file its person changed. With nothing in the way the attempt starts from the goal's
+      // revision, so verification judges only what this task changes.
+      let synced: FolderSync | null = null;
+      const inFolder =
+        harness.attach_mode !== 'spawn' &&
+        harness.host_cwd !== null &&
+        path.resolve(harness.host_cwd).toLowerCase() === path.resolve(project.root).toLowerCase();
+      if (inFolder && head) {
+        const wanted = p.task_id ?? state.nextTaskFor(pid, c.agent_id)?.task_id;
+        const tip = wanted ? await taskBase(state, project, wanted).catch(() => undefined) : undefined;
+        if (tip && tip !== head) {
+          try {
+            synced = await syncFolder(project.root, tip);
+            if (!synced.in_the_way.length) head = tip;
+          } catch {
+            // A folder git cannot write to now is taken as it is: the claim goes on.
+            synced = null;
+          }
+        }
+      }
       const out = state.claimTask(
         pid,
         c,
@@ -639,7 +663,22 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
       // was too large) must not turn the claim into an error that leaves the agent holding a task
       // it was told nothing about; it gets the claim, the reason, and the way to ask again.
       let context: ContextPacket | null = null;
-      let note: string | null = null;
+      let note: string | null = synced ? syncNote(synced) : null;
+      if (synced && (synced.brought.length || synced.in_the_way.length)) {
+        state.recordObservation(
+          pid,
+          { kind: 'agent', id: c.agent_id },
+          'folder.synced',
+          {
+            task_id: out.task.task_id,
+            run_id: out.run_id,
+            goal_head: synced.goal_head,
+            brought: synced.brought.slice(0, 200),
+            in_the_way: synced.in_the_way.slice(0, 200),
+          },
+          [{ kind: 'task', id: out.task.task_id }],
+        );
+      }
       try {
         context = await deps.compile(
           {
@@ -650,7 +689,8 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
           { kind: 'agent', id: c.agent_id },
         );
       } catch (e) {
-        note = `the task is yours, but its context could not be delivered: ${(e as Error).message}. Ask for it with friday_request_context.`;
+        const undelivered = `the task is yours, but its context could not be delivered: ${(e as Error).message}. Ask for it with friday_request_context.`;
+        note = note ? `${note} ${undelivered}` : undelivered;
       }
       // Friday's model suggestion for this run (ADR-0031 §6): advisory unless the harness applies it.
       const run = state.q.findRun(out.run_id);
