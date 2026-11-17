@@ -21,7 +21,9 @@ afterEach(() => {
 
 async function project() {
   const clock = new FakeClock(new Date().toISOString());
-  const td = await startTestDaemon(ws(), { git: true, clock });
+  // The delegation that hands a returned task to the next free agent is left out: these tests
+  // decide by hand who takes it.
+  const td = await startTestDaemon(ws(), { git: true, clock, brain: { autoStart: false } });
   return { td, clock };
 }
 

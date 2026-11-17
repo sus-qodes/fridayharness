@@ -138,6 +138,9 @@ export interface WorkspaceRefreshRecord {
   artifact_ref?: string | null;
 }
 
+/** How long delegation keeps a task for a session that waits for its person to prompt it. */
+export const TURN_RESERVATION_MS = 2 * 60 * 1000;
+
 /** What a `routing_blocked` error carries (review F01). */
 interface RoutingBlock {
   task_id: string;
@@ -2383,13 +2386,20 @@ export class FridayState {
         this.enforcementGap(harness) === null;
       if (!canPush || !agent || !harness) {
         // A human's choice stays until a human changes it; the Master Brain's expires (review F08).
+        // One kept for a live session that waits for its person expires sooner (2026-11-17): if
+        // nobody prompts that session within two minutes, the task is free for whoever is free.
         const byHuman = ctx.actor.kind === 'human';
+        const waitsForPerson =
+          harness !== undefined && harness.attach_mode !== 'spawn' && this.q.isHarnessLive(harness.harness_id, ctx.now);
+        const ttl = waitsForPerson
+          ? Math.min(this.config.reservationTtlMs, TURN_RESERVATION_MS)
+          : this.config.reservationTtlMs;
         return {
           mode: 'reserved' as const,
           task: this.updateTaskFields(ctx, taskId, {
             reserved_for_agent_key: agentKey,
             reserved_by: byHuman ? 'human' : 'master_brain',
-            reserved_until: byHuman ? null : addMs(ctx.now, this.config.reservationTtlMs),
+            reserved_until: byHuman ? null : addMs(ctx.now, ttl),
           }),
         };
       }

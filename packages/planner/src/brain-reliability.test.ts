@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { sequentialIds } from '@friday/core';
 import { openDatabase, type SqlDatabase } from '@friday/db';
 import { type Actor, AgentResultParams, FridayError, HarnessRegisterParams, type TaskView } from '@friday/protocol';
-import { FridayState } from '@friday/state';
+import { FridayState, TURN_RESERVATION_MS } from '@friday/state';
 import { FakeClock } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type BrainDeps, type BrainSettings, MasterBrain } from './brain.js';
@@ -477,6 +477,63 @@ describe('reservations end (review F08)', () => {
       reserved_for_agent_key: 'dev-1',
     });
     expect(state.q.task(PROJECT, unreserved.task_id)).toMatchObject({ status: 'READY', reserved_for_agent_key: null });
+  });
+
+  /** A loose task an attached session took and gave back: READY again, kept for nobody. */
+  function cameBack(summary: string) {
+    const editor = register('antigravity-1', 'developer', 'attach');
+    const task = state.createTask(PROJECT, human, { summary, assign_agent_key: 'antigravity-1' });
+    const caller = { harness_id: editor.harness_id, agent_id: state.q.agentByKey(PROJECT, 'antigravity-1')?.agent_id };
+    state.claimTask(PROJECT, caller as never, { task_id: task.task_id }, { idempotency_key: `claim-${summary}` });
+    state.releaseTask(PROJECT, human, task.task_id, 'not now');
+    expect(state.q.task(PROJECT, task.task_id)).toMatchObject({ status: 'READY', reserved_for_agent_key: null });
+    return task;
+  }
+
+  it('gives a task that came back to an agent that starts by itself, before one that waits for its person (2026-11-17)', async () => {
+    const b = brain(new FakePlannerModel([]));
+    const open = cameBack('tidy the docs');
+    const sp = register('codex-1', 'developer', 'spawn');
+    await b.runOnce();
+    // Both are free and score alike; the name alone would have chosen antigravity-1.
+    expect(state.q.task(PROJECT, open.task_id).status).toBe('ASSIGNED');
+    expect(state.pollOutbox(PROJECT, sp.harness_id, 10).map((m) => m.method)).toEqual(['task.start']);
+    const decided = state.store.readByRef(PROJECT, 'task', open.task_id, { types: ['assignment.decided'] }).at(-1)
+      ?.payload as { assignment: { agent_key: string } };
+    expect(decided.assignment.agent_key).toBe('codex-1');
+  });
+
+  it('keeps a task two minutes for a session that waits for its person, when nobody else is free', async () => {
+    const b = brain(new FakePlannerModel([]));
+    const open = cameBack('tidy the docs');
+    const before = clock.now();
+    await b.runOnce();
+    const kept = state.q.task(PROJECT, open.task_id);
+    expect(kept).toMatchObject({
+      status: 'READY',
+      reserved_for_agent_key: 'antigravity-1',
+      reserved_by: 'master_brain',
+    });
+    expect(Date.parse(kept.reserved_until as string) - Date.parse(before)).toBe(TURN_RESERVATION_MS);
+    const decided = state.store.readByRef(PROJECT, 'task', open.task_id, { types: ['assignment.decided'] }).at(-1)
+      ?.payload as { assignment: { reason: string } };
+    expect(decided.assignment.reason).toContain('no agent that starts by itself is free');
+    // Nobody prompts it: the task is free again, and an agent that has started meanwhile takes it.
+    const sp = register('codex-1', 'developer', 'spawn');
+    clock.advance(TURN_RESERVATION_MS + 1);
+    state.heartbeat(PROJECT, sp.harness_id);
+    expect(state.tick(PROJECT).unreserved).toContain(open.task_id);
+    await b.runOnce();
+    expect(state.q.task(PROJECT, open.task_id).status).toBe('ASSIGNED');
+    expect(state.pollOutbox(PROJECT, sp.harness_id, 10).map((m) => m.method)).toEqual(['task.start']);
+  });
+
+  it('leaves a loose task a person made ready and gave to nobody for them to give', async () => {
+    const b = brain(new FakePlannerModel([]));
+    register('codex-1', 'developer', 'spawn');
+    const fresh = state.createTask(PROJECT, human, { summary: 'tidy the docs', ready: true });
+    await b.runOnce();
+    expect(state.q.task(PROJECT, fresh.task_id)).toMatchObject({ status: 'READY', reserved_for_agent_key: null });
   });
 
   it("keeps a human's reservation, and lets a human release it", () => {

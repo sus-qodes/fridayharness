@@ -1521,6 +1521,7 @@ export class MasterBrain {
             recent_paths: stats.recent_paths,
             goals_done: stats.goals_done,
             cost: 0,
+            waits_for_person: Boolean(h) && h?.attach_mode !== 'spawn',
           },
           spawn: h?.attach_mode === 'spawn',
           free: live && !a.shadow && a.status === 'AVAILABLE' && !a.current_task_id,
@@ -1544,13 +1545,18 @@ export class MasterBrain {
         .filter((e) => e.kind === 'recovery_needed' || e.kind === 'routing_violated')
         .map((e) => String(e.task_id)),
     );
-    // Plan tasks of active goals, and loose tasks a human reserved for an agent: a spawned agent
-    // cannot claim a reservation, so it is pushed (below); other loose tasks stay a human's.
+    // Plan tasks of active goals; loose tasks a human reserved for an agent (a spawned agent cannot
+    // claim a reservation, so it is pushed below); and loose tasks that came back (2026-11-17): one
+    // that an agent already held and that is READY again, after its agent was lost or it was
+    // released, gets the next free agent. Before, such a task was taken by nobody while two agents
+    // were idle. A loose task a person made ready and gave to nobody yet stays theirs to give.
     const ready = state.q
       .tasks(projectId, { statuses: ['READY'] })
       .filter(
         (t) =>
-          ((t.goal_id && active.has(t.goal_id)) || (!t.goal_id && t.reserved_for_agent_key)) && !asked.has(t.task_id),
+          (t.goal_id
+            ? active.has(t.goal_id)
+            : Boolean(t.reserved_for_agent_key) || state.q.runs(t.task_id).length > 0) && !asked.has(t.task_id),
       )
       .sort(
         (a, b) => (PRIORITY[a.priority] ?? 9) - (PRIORITY[b.priority] ?? 9) || a.created_at.localeCompare(b.created_at),

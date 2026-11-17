@@ -2,6 +2,14 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — agents working together, part 5: who gets a task
+
+In the live run of 2026-11-17 Friday kept an open task fifteen minutes for an Antigravity nobody was looking at, while Codex was idle; and a task that came back after its agent was closed was taken by nobody.
+
+- **An agent that starts by itself goes first.** Claude Code and Codex, started by Friday, begin a task the moment they get it; an agent you run yourself (Antigravity, Claude Code in an editor) waits until you prompt it. Friday now gives a task to the second kind only when no free agent of the first kind can take it, whatever their scores. The decision says so.
+- **A task kept for an agent that waits for you is kept two minutes, not fifteen.** If nobody prompts that agent, the task is free again for whoever is free. A task you gave to an agent yourself still stays until you change it.
+- **A task that comes back gets the next free agent**, also one that is not part of a goal: after its agent was lost or closed, or after it was released. A task you made ready yourself without choosing an agent still waits for you to choose.
+
 ## Unreleased — agents working together, part 4: finished work comes to your folder
 
 The hand-over in the other direction. An agent you run in your own project folder (Antigravity, Claude Code in an editor) works on what that folder holds, while the agents Friday starts hand their checked work to the goal's branch. In the live run of 2026-11-17 such an agent was asked to describe code that was not in its folder.

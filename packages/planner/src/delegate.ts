@@ -42,6 +42,11 @@ export interface DelegationCandidate {
   model_fit?: number;
   /** What the agent's work costs (plan M13.3); `standard` when unknown. */
   cost_class?: CostClass;
+  /**
+   * The agent's session is one its person runs (Antigravity, Claude Code in an editor): a task
+   * given to it is only kept for it until that person prompts it there (2026-11-17).
+   */
+  waits_for_person?: boolean;
 }
 
 /** The kinds of task a cheaper agent may take when small and low-risk. */
@@ -182,11 +187,18 @@ export function delegate(
     const fit = s.parts.model_fit;
     return fit > 0 && fit < CAPABLE_FIT ? COST_ORDER.length : COST_ORDER.indexOf(classOf.get(s.agent_id) ?? 'standard');
   };
+  // An agent that starts by itself goes before one that waits for its person (2026-11-17): the
+  // second is given a task only when no free agent of the first kind can take it. In the live run
+  // of that day an open task was kept fifteen minutes for an Antigravity nobody was looking at,
+  // its higher score in hand, while Codex was idle.
+  const waits = new Map(candidates.map((c) => [c.agent_id, c.waits_for_person === true]));
+  const selfStarting = (s: CandidateScore) => (waits.get(s.agent_id) ? 0 : 1);
   const scores = candidates
     .map((c) => scoreCandidate(task, c))
     .sort(
       (a, b) =>
         Number(b.eligible) - Number(a.eligible) ||
+        selfStarting(b) - selfStarting(a) ||
         ofRole(b) - ofRole(a) ||
         cheapness(a) - cheapness(b) ||
         b.total - a.total ||
@@ -197,6 +209,15 @@ export function delegate(
     return { task_id: task.task_id, agent_key: null, reason: 'no available agent; the task stays claimable', scores };
   const top = Math.max(...scores.filter((s) => s.eligible).map((s) => s.total));
   const cls = classOf.get(best.agent_id) ?? 'standard';
+  if (waits.get(best.agent_id)) {
+    return {
+      task_id: task.task_id,
+      agent_key: best.agent_key,
+      reason: `no agent that starts by itself is free: kept for ${best.agent_key}, which takes it when its person prompts it (score ${best.total})`,
+      scores,
+    };
+  }
+  const passedOver = scores.some((s) => s.eligible && waits.get(s.agent_id) && s.total > best.total);
   const cheaper =
     small && scores.some((s) => s.eligible && ofRole(s) === ofRole(best) && cheapness(s) > cheapness(best));
   return {
@@ -204,9 +225,11 @@ export function delegate(
     agent_key: best.agent_key,
     reason: cheaper
       ? `a small, low-risk task: the cheapest capable agent (${cls}), ${best.agent_key}, score ${best.total}`
-      : best.total < top
-        ? `the role it names (${task.role}): the highest score among its agents ${best.total} (${best.agent_key})`
-        : `highest score ${best.total} (${best.agent_key})`,
+      : passedOver
+        ? `${best.agent_key} starts by itself (score ${best.total}); an agent that waits for its person is asked only when none does`
+        : best.total < top
+          ? `the role it names (${task.role}): the highest score among its agents ${best.total} (${best.agent_key})`
+          : `highest score ${best.total} (${best.agent_key})`,
     scores,
   };
 }
