@@ -74,6 +74,12 @@ export interface DesktopCommands {
   /** Stops Friday and starts it again (the shell asks natively first); false when the human cancelled. */
   restart(): Promise<boolean>;
   /**
+   * "Open another project…" (2026-11-17): the shell shows its folder picker and, when a project is
+   * chosen, makes it the app's project; both windows then load again (`project-changed`). Resolves
+   * as soon as the picker is asked for, not when a project was chosen.
+   */
+  openProject(): Promise<void>;
+  /**
    * Asks for the provider's key in Windows' own password prompt and stores it (FD-26): only the
    * provider's name passes through the page. True once stored, false when the human cancelled.
    */

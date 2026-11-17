@@ -69,6 +69,29 @@ describe('header', () => {
     expect(name.title).not.toContain(BIDI);
   });
 
+  it('in the desktop app the project’s name opens another project; in a browser it is only a name', async () => {
+    const browser = mountHeader(makeContext());
+    mounted.push(browser);
+    const plain = browser.el.querySelector('.sh-project-name') as HTMLElement;
+    expect(plain.tagName).toBe('SPAN');
+    expect(plain.title).toBe('C:/demo/shop');
+
+    const ctx = makeContext();
+    const openProject = vi.fn(async () => undefined);
+    (ctx as { platform: unknown }).platform = { ...ctx.platform, kind: 'tauri', desktop: { openProject } };
+    const header = mountHeader(ctx);
+    mounted.push(header);
+    const name = header.el.querySelector('.sh-project-name') as HTMLButtonElement;
+    expect(name.tagName).toBe('BUTTON');
+    expect(name.textContent).toBe('shop');
+    // The folder stays in the tooltip, with what a click does.
+    expect(name.title).toBe('C:/demo/shop. Click to open another project.');
+    expect(name.getAttribute('aria-label')).toBe('shop: open another project');
+    name.click();
+    await Promise.resolve();
+    expect(openProject).toHaveBeenCalledOnce();
+  });
+
   it('keeps the address in the state dot’s tooltip, not on the screen', () => {
     const ctx = makeContext();
     const header = mountHeader(ctx);

@@ -176,6 +176,39 @@ describe('the desktop Studio', () => {
   });
 });
 
+describe('the app opened another project (2026-11-17)', () => {
+  it('loads the Studio again, so it finds the new project through the waiting screen', async () => {
+    const shell = fakeShell([{ state: 'ready' }]);
+    let reloads = 0;
+    shell.env.reload = () => {
+      reloads += 1;
+    };
+    const root = document.createElement('div');
+    document.body.append(root);
+    await bootDesktopStudio(root, shell.env);
+    await settle();
+    // Other words from the shell load nothing again.
+    shell.emit('daemon-status', { state: 'ready' });
+    expect(reloads).toBe(0);
+    shell.emit('project-changed', {});
+    expect(reloads).toBe(1);
+  });
+
+  it('loads the Notch window again too', async () => {
+    const shell = fakeShell([{ state: 'ready' }]);
+    let reloads = 0;
+    shell.env.reload = () => {
+      reloads += 1;
+    };
+    const root = document.createElement('div');
+    document.body.append(root);
+    await bootDesktopNotch(root, shell.env);
+    await settle();
+    shell.emit('project-changed', {});
+    expect(reloads).toBe(1);
+  });
+});
+
 describe('a Friday that stopped while the Studio is open', () => {
   it('says so at once on the strip, and Start Friday starts it through the shell', async () => {
     const shell = fakeShell([{ state: 'ready' }, { state: 'stopped' }, { state: 'ready' }]);

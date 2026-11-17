@@ -123,6 +123,20 @@ describe('desktopPlatform', () => {
     expect(calls.map((c) => c.cmd)).toEqual(['restart_daemon', 'restart_daemon', 'restart_daemon']);
   });
 
+  it('asks the shell to open another project, and passes its refusal on', async () => {
+    let refuse: unknown = null;
+    const { desktop, calls } = shell({
+      open_another_project: () => {
+        if (refuse) throw refuse;
+        return null;
+      },
+    });
+    await expect(desktop.openProject()).resolves.toBeUndefined();
+    expect(calls).toEqual([{ cmd: 'open_another_project' }]);
+    refuse = { status: 500, body: { error: { code: 'DESKTOP-2006', name: 'cli_failed', message: 'no picker' } } };
+    await expect(desktop.openProject()).rejects.toThrow('no picker');
+  });
+
   it('sends a test notification and answers whether Windows took it', async () => {
     let taken = true;
     const { desktop, calls } = shell({ notify: () => taken });

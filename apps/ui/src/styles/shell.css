@@ -1150,3 +1150,27 @@
     animation: none;
   }
 }
+
+/* The project's name as the way to another project (the desktop app): a button that reads as the
+   name it was, with a hand and a mark that it opens something. */
+.sh-project-switch {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sh-project-switch::after {
+  content: " ▾";
+  color: var(--color-slate-400);
+}
+
+.sh-project-switch:hover,
+.sh-project-switch:focus-visible {
+  color: var(--color-white);
+}

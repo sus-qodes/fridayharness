@@ -138,6 +138,8 @@ A folder picker that was cancelled leaves `no_project`: the Studio then offers *
 
 The daemon is not tied to the app: it keeps running when the app quits (Quit asks whether to keep Friday running). Closing the Studio hides it; the tray's Quit ends the app. A second launch shows the Studio of the first.
 
+**Another project** is opened without leaving the app: the tray's **Open another project…**, the project's name in the Studio's header, the palette's command of that name, or a second launch with `--project` for another folder. Each shows the folder picker (a second launch names the folder), offers **Set up Friday here** for a folder that is not a project yet, and then asks what the project that was open should do, as Quit does: **Keep it running** (agents there keep working) or **Stop it there**. Cancel at any point leaves the app as it was, the remembered project included. The streams of the old project end, both windows load again (`project-changed`), and the new project's Friday is started as at launch. The folder that is already open only shows the Studio.
+
 **Tray:** status icon (idle, working, waiting for you, error) and, as its first menu item and its tooltip, the page's status sentence (what runs, what waits for you and why, what is ready, to verify or failed, how many agents are connected), then the version, Show Notch, Open Studio, Settings…, Pause/Resume, Mute sounds, Open in browser, Halt…, Stop Friday (confirmed), Restart Friday, Quit. A left click opens the Studio.
 
 **Shortcuts** (plan FD-16): `Ctrl+Alt+Shift+F` Studio, `Ctrl+Alt+Shift+N` Notch with the keyboard, `Ctrl+Alt+Shift+H` halt dialog; changeable with `set_shortcut`. A shortcut another program holds is `in_use`; one that types a character on an installed keyboard layout is `skipped`. On this machine the English (India) layout (`00004009`) types `Ṇ` and `Ḥ` with Ctrl+Alt+Shift+N and H, so those two defaults are skipped; Ctrl+Alt+Shift with B, C, F, J, K, P, V, W or Z types nothing on its layouts.
@@ -159,6 +161,7 @@ The page imports `@tauri-apps/api/core` only in `apps/ui/src/platform/tauri-tran
 | `stop_daemon` | — | — | native confirmation, then `POST /admin/shutdown` with the operator token; waits for the process to exit (2 min) |
 | `restart_daemon` | — | — | native confirmation, then stop and start as at launch; a cancel answers 400 `DESKTOP-1003`, which the page takes as "cancelled", not as an error |
 | `choose_project_folder` | — | — | the folder picker again, while no project is open (400 otherwise); the project it opens is started as at launch |
+| `open_another_project` | — | — | "Open another project…": the folder picker, then the chosen project takes the place of the open one (below); answers at once, and both windows get `project-changed` when it happened. With no project open it is `choose_project_folder` |
 | `open_project_file` | `kind`: `config` or `log` | — | opens `.friday\config.yaml` or the daemon's console log in VS Code, or in Notepad without it; failure `DESKTOP-2004` |
 | `notch_rect` | `x, y, w, h` (CSS pixels of the Notch window) | — | Notch window only; a rectangle at most 4.5 px high is the wake strip |
 | `notch_keyboard` | `take: boolean` | — | Notch window only; `true` makes the window focusable and focuses it, `false` restores and gives the keyboard back to the window that had it |
@@ -216,6 +219,7 @@ A failed command rejects with `{status, body}`: `status` is the daemon's HTTP st
 | `open-halt` | Studio | none (the tray's Halt…, the halt shortcut) |
 | `toggle-mute` | all | `{muted}` (the tray's Mute sounds) |
 | `daemon-status` | all | `{state, message?}` |
+| `project-changed` | all | none: the app opened another project. Each window loads again and finds the new one through the waiting screen |
 
 ## Security
 

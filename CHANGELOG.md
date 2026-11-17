@@ -2,6 +2,14 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — ease of use, part 6: another project without a terminal
+
+- **"Open another project…"** in the desktop app: in the tray's menu, on the project's name in the Studio's header (a button there, with the folder in its tooltip), and in the command palette. The app held one project for as long as it ran; another one meant Quit and a start from a terminal with `--project`, and a second launch for another folder only said so. Each of these now shows the folder picker, offers "Set up Friday here" for a folder that is not a project yet, and asks what the project that was open should do, as Quit does: keep its Friday running (agents there keep working) or stop it. Cancelling at any point leaves everything as it was, the remembered project included.
+- A second launch with `--project` for another folder opens that project in the running app, after the same question, in place of a dialog that said to quit first.
+- Both windows load again when the project changes (`project-changed`), so the board, the stream and the preferences are the new project's; the tray's Pause reads "Pause" again.
+
+In a browser nothing changes: a page belongs to the Friday it was opened from, so the name stays a name and the palette has no such command.
+
 ## Unreleased — ease of use, part 5: Settings
 
 Findings of the 2026-11-17 review of Settings: what a person could set only in a terminal or by editing config.yaml, and what Settings still built that nobody saw.

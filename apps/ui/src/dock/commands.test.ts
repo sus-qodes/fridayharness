@@ -53,6 +53,31 @@ describe('core commands', () => {
     for (const c of coreCommands()) expect(c.show === undefined || c.show === 'typed').toBe(true);
   });
 
+  it('offers "Open another project…" in the desktop app only, and asks the shell for its folder picker', async () => {
+    const ctx = setup();
+    // A browser's page belongs to the Friday it was opened from.
+    expect(available(ctx)).not.toContain('open-project');
+    let asked = 0;
+    (ctx as { platform: unknown }).platform = {
+      ...ctx.platform,
+      kind: 'tauri',
+      desktop: {
+        openProject: async () => {
+          asked += 1;
+        },
+      },
+    };
+    expect(available(ctx)).toContain('open-project');
+    await run(ctx, 'open-project');
+    expect(asked).toBe(1);
+    // A shell that refuses says so, as any act does.
+    (ctx.platform.desktop as { openProject: () => Promise<void> }).openProject = async () => {
+      throw new Error('the folder picker could not be opened');
+    };
+    await run(ctx, 'open-project');
+    expect(ctx.toasts.at(-1)).toMatchObject({ kind: 'error', detail: 'the folder picker could not be opened' });
+  });
+
   it('offers pause while running and resume only while paused', () => {
     const ctx = setup();
     expect(available(ctx)).toContain('pause');

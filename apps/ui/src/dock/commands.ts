@@ -19,6 +19,7 @@ export const CORE_COMMAND_IDS = [
   'graph',
   'reindex-graph',
   'prune-worktrees',
+  'open-project',
   'settings',
   'mute',
   'unmute',
@@ -153,6 +154,17 @@ export function coreCommands(): Command[] {
       available: (c) => isConnected(c),
       show: 'typed',
       run: (c) => pruneWorktrees(c),
+    },
+    {
+      id: 'open-project',
+      label: 'Open another project…',
+      keywords: ['switch project', 'change project', 'folder', 'repository'],
+      // The desktop app only: a browser's page belongs to the Friday it was opened from.
+      available: (c) => !!c.platform.desktop,
+      run: async (c) => {
+        const shell = c.platform.desktop;
+        if (shell) await c.act('Open another project', () => shell.openProject());
+      },
     },
     {
       id: 'settings',

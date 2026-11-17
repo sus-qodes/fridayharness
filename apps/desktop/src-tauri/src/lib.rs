@@ -273,6 +273,15 @@ fn choose_project_folder(app: AppHandle) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// "Open another project…" (2026-11-17), from the project's name in the Studio: the folder picker,
+/// then the project it names takes the place of the one that is open (`switch_project`). The
+/// answer comes at once; the windows are told with `project-changed` when it happened.
+#[tauri::command]
+fn open_another_project(app: AppHandle) -> Result<(), CmdError> {
+    std::thread::spawn(move || switch_project(&app, None));
+    Ok(())
+}
+
 /// Opens the project's config.yaml or the daemon's console log, for the screen shown when Friday
 /// did not start: in VS Code, or without it in Notepad, which every Windows has.
 #[tauri::command]
@@ -392,14 +401,9 @@ fn second_launch(app: &AppHandle, argv: Vec<String>) {
                 let wanted = std::fs::canonicalize(&dir).unwrap_or(dir);
                 let inside = wanted.to_string_lossy().to_lowercase().starts_with(&p.root.to_string_lossy().to_lowercase());
                 if !inside {
-                    let text = format!(
-                        "The desktop app is open for {}.\n\nTo open {}, close the app (tray: Quit) and start it again from that project.",
-                        visible(&p.root.to_string_lossy()),
-                        visible(&wanted.to_string_lossy())
-                    );
-                    std::thread::spawn(move || {
-                        app2.dialog().message(text).title("Friday: another project").kind(MessageDialogKind::Info).blocking_show();
-                    });
+                    // Another project: opened here, after the same question as the tray's item.
+                    std::thread::spawn(move || switch_project(&app2, Some(wanted)));
+                    return;
                 }
             }
         }
@@ -975,6 +979,87 @@ fn boot(app: AppHandle, initial: Option<PathBuf>, show: bool, use_last: bool) {
     ensure_daemon(&app);
 }
 
+/// Whether two folders are the same project root (Windows paths compare without case).
+fn same_root(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let norm = |p: &std::path::Path| {
+        let real = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        real.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase()
+    };
+    norm(a) == norm(b)
+}
+
+/// Opens another project in the app (2026-11-17). The app held one project for as long as it
+/// ran: another one meant Quit, and a start from a terminal with `--project`. Now the tray's
+/// "Open another project…", the project's name in the Studio and a second launch for another
+/// folder all come here: the folder picker (unless the folder is given), with "Set up Friday here"
+/// for a folder that is not a project yet, as at a first launch.
+///
+/// The project that was open keeps its Friday running or stops it, asked as on Quit: agents may
+/// be working there. Cancelling at any point leaves everything as it was, the remembered project
+/// included. Then the streams of the old project end, the new one is the app's project, both
+/// windows are told to load again (`project-changed`), and its Friday is started.
+fn switch_project(app: &AppHandle, initial: Option<PathBuf>) {
+    let st = state(app);
+    let Some(old) = st.project.read().unwrap().clone() else {
+        // No project is open: this is the first choice, as the Studio's own button makes it.
+        boot(app.clone(), initial, true, false);
+        return;
+    };
+    if st.choosing.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let remembered = st.settings.lock().unwrap().last_project.clone();
+    let chosen = choose_project(app, initial, false);
+    st.choosing.store(false, Ordering::SeqCst);
+    // `choose_project` remembers what it opened; a choice that is not taken is forgotten again.
+    let keep_old = || {
+        let mut s = st.settings.lock().unwrap();
+        s.last_project = remembered.clone();
+        let _ = s.save(&st.config_dir);
+    };
+    let Some(new) = chosen else {
+        keep_old();
+        return;
+    };
+    if same_root(&new.root, &old.root) {
+        show_studio_window(app, None);
+        return;
+    }
+    if daemon::running(&old).is_some() {
+        let text = format!(
+            "Keep Friday running in {} while you work in {}?\n\nAgents there keep working, and opening that project again brings you back to them. Stopping it keeps the work in its worktrees.",
+            visible(&old.name),
+            visible(&new.name)
+        );
+        match ask3(app, "Friday: open another project?", &text, "Keep it running", "Stop it there", MessageDialogKind::Info) {
+            Choice::First => {}
+            Choice::Second => {
+                let _ = stop_friday(app);
+            }
+            Choice::Cancel => {
+                keep_old();
+                return;
+            }
+        }
+    }
+    {
+        // One change, under the lock every start and stop takes: nothing starts the old project
+        // again between its streams ending and the new one taking its place.
+        let _one = st.lifecycle.lock().unwrap();
+        st.streams.close_all();
+        *st.project.write().unwrap() = Some(new);
+        st.paused.store(false, Ordering::SeqCst);
+        if let Some(items) = st.tray.lock().unwrap().as_ref() {
+            let _ = items.pause.set_text("Pause");
+        }
+    }
+    set_status(app, "starting", None);
+    // Both windows hold the old project's board: they load again, and find the new one.
+    let _ = app.emit("project-changed", json!({}));
+    show_studio_window(app, None);
+    ensure_daemon(app);
+}
+
 // ---- tray and shortcuts --------------------------------------------------------------------------
 
 fn send_control(app: &AppHandle, verb: &str) -> Result<Value, CmdError> {
@@ -1045,6 +1130,7 @@ pub(crate) fn on_tray_menu(app: &AppHandle, id: &str) {
                         tell(&app, "Friday", &visible(&e.message()), MessageDialogKind::Error);
                     }
                 }
+                "open_project" => switch_project(&app, None),
                 "quit" => quit(&app),
                 _ => {}
             });
@@ -1179,6 +1265,7 @@ pub fn run() {
             stop_daemon,
             restart_daemon,
             choose_project_folder,
+            open_another_project,
             open_project_file,
             notch_rect,
             notch_keyboard,
@@ -1362,6 +1449,20 @@ mod tests {
         let args: Vec<String> = ["friday-desktop", "--project", r"C:\work\shop"].iter().map(|s| s.to_string()).collect();
         assert_eq!(project_arg(&args), Some(PathBuf::from(r"C:\work\shop")));
         assert_eq!(project_arg(&args[..1]), None);
+    }
+
+    #[test]
+    fn the_same_folder_is_one_project_however_it_is_written() {
+        use std::path::Path;
+        // Folders that do not exist are compared as written: without case, and without a last separator.
+        assert!(same_root(Path::new(r"Z:\Work\Shop"), Path::new(r"z:\work\shop")));
+        assert!(same_root(Path::new(r"Z:\work\shop\"), Path::new(r"Z:\work\shop")));
+        assert!(same_root(Path::new("Z:/work/shop/"), Path::new("Z:/work/shop")));
+        assert!(!same_root(Path::new(r"Z:\work\shop"), Path::new(r"Z:\work\shop2")));
+        assert!(!same_root(Path::new(r"Z:\work\shop"), Path::new(r"Z:\work")));
+        // A folder that exists is the same through its real path.
+        let here = std::env::temp_dir();
+        assert!(same_root(&here, &here.join(".")));
     }
 
     #[test]

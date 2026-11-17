@@ -61,6 +61,9 @@ export function desktopPlatform(
       setShortcut: (id, accel) => call<DesktopShortcut[]>('set_shortcut', { id, accel }),
       // The shell asks natively before it stops a running Friday; a cancel answers false.
       restart: () => dialog('restart_daemon'),
+      openProject: async () => {
+        await call<unknown>('open_another_project');
+      },
       storeKey: (name) => dialog('store_key', { name }),
       allowSpending: (budget, provider) =>
         dialog('allow_spending', provider && provider !== 'anthropic' ? { budget, provider } : { budget }),

@@ -56,6 +56,8 @@ export interface DesktopEnv {
   listen<T>(event: string, handler: (payload: T) => void): Promise<() => void>;
   /** How often the page asks for the daemon's state while it waits (ms). */
   pollMs?: number;
+  /** Loads this window again (a test replaces it: a reload would end the test page). */
+  reload?: () => void;
 }
 
 /** Where a deep link from the Notch or the tray points (`show_studio`'s target, lib.rs `DeepLink`). */
@@ -321,6 +323,15 @@ async function followDaemon(env: DesktopEnv, run: Running): Promise<() => void> 
   });
 }
 
+/**
+ * The app opened another project (2026-11-17, `project-changed`): this window holds the board, the
+ * stream and the preferences of the one before, so it loads again and finds the new one, through
+ * the same waiting screen as at a launch.
+ */
+async function followProject(env: DesktopEnv): Promise<() => void> {
+  return env.listen('project-changed', () => (env.reload ?? (() => location.reload()))());
+}
+
 // ---------------------------------------------------------------------------------------------
 // The Studio window
 
@@ -371,6 +382,7 @@ export async function bootDesktopStudio(root: HTMLElement, injected?: DesktopEnv
     reload: () => location.reload(),
   });
   await followDaemon(env, run);
+  await followProject(env);
   await env.listen<StudioTarget>('studio-deeplink', (t) => applyDeepLink(run.ctx, t));
   await env.listen('open-halt', () => openModal(run.ctx, { kind: 'halt' }));
   await env.listen<{ muted: boolean }>('toggle-mute', (p) => run.store.patch('prefs', { muted: !!p?.muted }));
@@ -512,6 +524,7 @@ export async function bootDesktopNotch(root: HTMLElement, injected?: DesktopEnv)
   const trayTimer = setInterval(tray, 15_000);
 
   await followDaemon(env, run);
+  await followProject(env);
   await env.listen<{ x: number; y: number }>('cursor', (p) => setCursor(p?.x ?? null, p?.y));
   await env.listen<{ focus?: boolean }>('notch-open', (p) => handle.open(p?.focus !== false));
   await env.listen<{ muted: boolean }>('toggle-mute', (p) => store.patch('prefs', { muted: !!p?.muted }));

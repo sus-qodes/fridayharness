@@ -54,7 +54,15 @@ export interface HeaderOptions {
 }
 
 export function mountHeader(ctx: AppContext, opts: HeaderOptions = {}): Component {
-  const name = h('span', { class: 'sh-project-name' });
+  // In the desktop app the project's name is the way to another project (2026-11-17): the app held
+  // one project for as long as it ran, and another meant Quit and a start from a terminal. A
+  // browser's page belongs to the Friday it was opened from, so there the name is only a name.
+  const shell = ctx.platform.desktop ?? null;
+  const name = shell
+    ? button('', () => void ctx.act('Open another project', () => shell.openProject()), {
+        class: 'sh-project-name sh-project-switch',
+      })
+    : h('span', { class: 'sh-project-name' });
   const dot = h('span', { class: 'sh-dot', aria: { hidden: true } });
   const stateLabel = h('span', { class: 'sh-daemon-label' });
   const daemon = h('div', { class: 'sh-daemon', role: 'status', aria: { live: 'polite' } }, dot, stateLabel);
@@ -220,7 +228,12 @@ export function mountHeader(ctx: AppContext, opts: HeaderOptions = {}): Componen
     setText(name, projectName);
     // The folder path is read once in a while, never typed: the tooltip is its place.
     const rootText = board?.project.root ?? '';
-    name.title = rootText ? visible(rootText) : '';
+    name.title = shell
+      ? `${rootText ? `${visible(rootText)}. ` : ''}Click to open another project.`
+      : rootText
+        ? visible(rootText)
+        : '';
+    if (shell) name.setAttribute('aria-label', `${projectName}: open another project`);
     renderDaemonTitle();
 
     const counts = headerCounts(board, now);
