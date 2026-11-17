@@ -115,6 +115,8 @@ interface Entry {
   child: ChildProcess | null;
   exited: Promise<void>;
   kill?: NodeJS.Timeout;
+  /** A person (or Friday closing) asked it to stop: its end is then no surprise. */
+  stopping?: boolean;
 }
 
 export function createAgentLauncher(opts: LauncherOptions = {}) {
@@ -352,7 +354,15 @@ export function createAgentLauncher(opts: LauncherOptions = {}) {
             pid,
             SYSTEM,
             'agent.process_exited',
-            { agent_key: proc.agent_key, host: proc.host, exit_code: proc.exit_code, signal: signal ?? null },
+            {
+              agent_key: proc.agent_key,
+              host: proc.host,
+              exit_code: proc.exit_code,
+              signal: signal ?? null,
+              // Whether it was asked to stop (2026-11-17): an agent that ended on its own (a crash, a
+              // sign-out) did so silently, and the interface now says so.
+              requested: Boolean(entry.stopping) || closing,
+            },
             [],
           );
         } catch (e) {
@@ -376,6 +386,7 @@ export function createAgentLauncher(opts: LauncherOptions = {}) {
       const entry = entries.get(agentKey);
       if (!entry) throw new FridayError('agent_not_found', `no agent ${agentKey} was started from here`);
       if (entry.proc.status === 'exited') return entry.proc;
+      entry.stopping = true;
       entry.proc.status = 'stopping';
       entry.child?.stdin?.end();
       entry.kill = setTimeout(() => entry.child?.kill(), grace);
@@ -508,9 +519,23 @@ export function createAgentLauncher(opts: LauncherOptions = {}) {
       if (!ctx.port()) return;
       clearInterval(autostart);
       for (const p of profiles.list().filter((x) => x.autostart)) {
-        start(p).catch((e) =>
-          logger.warn('starting a remembered agent failed', { agent_key: p.agent_key, message: (e as Error).message }),
-        );
+        start(p).catch((e) => {
+          const message = (e as Error).message;
+          logger.warn('starting a remembered agent failed', { agent_key: p.agent_key, message });
+          // Said to the person too (2026-11-17): it was a line in the log, and the agent was simply
+          // not there.
+          try {
+            state.recordObservation(
+              pid,
+              SYSTEM,
+              'agent.autostart_failed',
+              { agent_key: p.agent_key, host: p.host, message: message.slice(0, 500) },
+              [],
+            );
+          } catch (err) {
+            logger.warn('recording a failed start failed', { message: (err as Error).message });
+          }
+        });
       }
     }, 200);
     autostart.unref();

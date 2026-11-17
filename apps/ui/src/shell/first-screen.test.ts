@@ -219,6 +219,32 @@ describe('every door that left the first screen still opens (review §6)', () =>
     expect(listed()).not.toContain('cmd:zoom-out');
   });
 
+  it('shows the board again for anything opened from Settings that belongs to it (2026-11-17)', () => {
+    const { ctx, root } = mount();
+    const settings = () => ctx.store.select('ui').activeView === 'settings';
+    // A drawer: the header's Messages, a search result.
+    openDrawer(ctx, { kind: 'settings' });
+    expect(settings()).toBe(true);
+    openDrawer(ctx, { kind: 'inbox' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'canvas', drawer: { kind: 'inbox' } });
+    expect(root.querySelector('.sh-drawer')).not.toBeNull();
+    // A task or a goal picked from the palette.
+    openDrawer(ctx, { kind: 'settings' });
+    ctx.store.patch('ui', { selectedTaskId: 'task_0000000000000000000000aa01' });
+    expect(settings()).toBe(false);
+    // Settings opened with something selected stays open: only a new pick counts.
+    openDrawer(ctx, { kind: 'settings', tab: 'planner' });
+    expect(settings()).toBe(true);
+    ctx.store.patch('ui', { settingsTab: 'sound' });
+    expect(settings()).toBe(true);
+    // "Waiting for you" in the header: the list is beside the board.
+    const waiting = [...root.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+      b.textContent?.includes('Waiting for you'),
+    );
+    waiting?.click();
+    expect(settings()).toBe(false);
+  });
+
   it('opens Settings as a view with no drawer behind it, and a key leaves it for the canvas', () => {
     const { ctx } = mount();
     for (const leave of [

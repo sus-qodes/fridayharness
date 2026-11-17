@@ -199,6 +199,75 @@ describe('verification panel', () => {
     m.destroy();
   });
 
+  it('says when the task’s folder is gone, and makes it again from the task’s branch (2026-11-17)', async () => {
+    let gone = true;
+    const ctx = makeContext({
+      snapshot: scenario(),
+      answers: {
+        'GET /tasks/task_0000000000000000000000aa01/diff': {
+          task_id: TID,
+          source: 'worktree',
+          root: 'C:/wt',
+          base: 'b',
+          files: [],
+          truncated: false,
+          notes: [],
+        },
+        'POST /tasks/task_0000000000000000000000aa01/verify': () => {
+          if (gone) {
+            throw new Error(
+              `the checkout ${TID} worked in is gone (C:/wt/x); restore it from its branch with "friday task worktree ${TID}", or record a result with --result passed|failed`,
+            );
+          }
+          return { task: makeTask(), verification: makeVerification({ status: 'PASSED' }) };
+        },
+        'POST /tasks/task_0000000000000000000000aa01/worktree': () => {
+          gone = false;
+          return { worktree: {}, warnings: [], created: true };
+        },
+      },
+    });
+    const m = verifyModal(ctx, { kind: 'verify', id: TID }, () => undefined);
+    await flush();
+    buttonBy(m.el, 'Run checks').click();
+    await flush();
+    // Said in the dialog, in words, with the way out: no toast naming a terminal command.
+    expect(ctx.toasts).toEqual([]);
+    const notice = m.el.querySelector('.pn-folder-gone') as HTMLElement;
+    expect(notice.textContent).toContain('The task’s folder is gone, so there is nothing to check.');
+    expect(m.el.textContent).not.toContain('friday task worktree');
+    buttonBy(notice, 'Create the folder again').click();
+    await flush();
+    expect(ctx.transport.to('POST', `/tasks/${TID}/worktree`)).toHaveLength(1);
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'The task folder is back: run the checks again' });
+    expect(m.el.querySelector('.pn-folder-gone')).toBeNull();
+    buttonBy(m.el, 'Run checks').click();
+    await flush();
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Verification Passed' });
+    m.destroy();
+  });
+
+  it('shows any other refusal as it did', async () => {
+    const ctx = makeContext({
+      snapshot: scenario(),
+      answers: {
+        'POST /tasks/task_0000000000000000000000aa01/verify': () => {
+          throw new Error('a verification of this task is already running');
+        },
+      },
+    });
+    const m = verifyModal(ctx, { kind: 'verify', id: TID }, () => undefined);
+    await flush();
+    buttonBy(m.el, 'Run checks').click();
+    await flush();
+    expect(ctx.toasts.at(-1)).toMatchObject({
+      kind: 'error',
+      detail: 'a verification of this task is already running',
+    });
+    expect(m.el.querySelector('.pn-folder-gone')).toBeNull();
+    m.destroy();
+  });
+
   it('follows the task on the board: once it is verified the status says so and Close appears', async () => {
     const ctx = makeContext({ snapshot: scenario([]) });
     let closed = 0;

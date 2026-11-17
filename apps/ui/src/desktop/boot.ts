@@ -369,6 +369,8 @@ export async function bootDesktopStudio(root: HTMLElement, injected?: DesktopEnv
   const env = injected ?? (await loadEnv());
   const info = await untilReady(env, root);
   const run = makeContext(env, info, root);
+  // What happens without anyone asking (an agent that ended on its own) is said in this window.
+  run.dispatcher.notice = (t) => run.services.toasts.show(t);
   mountShell(run.ctx, run.services, root, studioAreas({ notch: false, sounds: false }), {
     // "Start Friday" on the strip: a Friday that stopped is started by the shell (its `ready` then
     // reads the board again, `followDaemon`); one that runs is only read again.

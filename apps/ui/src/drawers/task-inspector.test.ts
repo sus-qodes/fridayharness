@@ -107,6 +107,9 @@ describe('inspectorActions', () => {
     ['FAILED', null, false, ['rework', 'cancel']],
     ['HARNESS_LOST', null, false, ['recover', 'cancel']],
     ['RUNNING', null, true, ['recover', 'cancel']],
+    // An agent holds it: besides Cancel, the quiet way to hand it over or start it again.
+    ['RUNNING', null, false, ['unstick', 'cancel']],
+    ['ASSIGNED', null, false, ['unstick', 'cancel']],
     ['COMPLETED', null, false, []],
     ['CANCELLED', null, false, []],
   ])('%s (%s, recovery question %s) → %j', (status, reason, recoveryQuestion, actions) => {
@@ -282,6 +285,23 @@ describe('the task inspector: Overview', () => {
     buttonNamed(drawer.el, 'Recover')?.click();
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'recover', id: TID });
     drawer.destroy();
+  });
+
+  it('offers a quiet way out of a task that is not moving, which opens the recovery dialog (2026-11-17)', () => {
+    const ctx = makeContext({ snapshot: boardWith('RUNNING') });
+    const drawer = createTaskInspector(ctx, { kind: 'inspector', id: TID });
+    // Not "Recover…": nothing went wrong that Friday knows of.
+    expect(buttonNamed(drawer.el, 'Recover')).toBeUndefined();
+    const quiet = buttonNamed(drawer.el, 'Not moving?') as HTMLButtonElement;
+    expect(quiet.classList.contains('btn-ghost')).toBe(true);
+    expect(quiet.title).toContain('The work so far is kept');
+    quiet.click();
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'recover', id: TID });
+    drawer.destroy();
+    // A task nobody holds has no such button.
+    const ready = createTaskInspector(makeContext({ snapshot: boardWith('READY') }), { kind: 'inspector', id: TID });
+    expect(buttonNamed(ready.el, 'Not moving?')).toBeUndefined();
+    ready.destroy();
   });
 
   it('offers Recover for a pending recovery question', () => {

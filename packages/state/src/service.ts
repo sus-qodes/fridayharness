@@ -697,6 +697,8 @@ const OBSERVATION_TYPES = new Set([
   'ui.session_ended',
   'agent.process_started',
   'agent.process_exited',
+  // A remembered agent that did not start with Friday (2026-11-17).
+  'agent.autostart_failed',
   'control.task_stopped',
   // The Master Brain began a model call, so a client can show it thinking (plan M9 §5.11).
   'brain.call_started',

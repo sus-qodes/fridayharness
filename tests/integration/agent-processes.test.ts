@@ -322,3 +322,81 @@ describe('the agent launcher', () => {
     expect(log).not.toContain('disconnect failed');
   });
 });
+
+describe('an agent that ends, or does not start, without anyone asking (2026-11-17)', () => {
+  type Ended = { agent_key: string; exit_code: number | null; requested?: boolean };
+  const exits = (td: TestDaemon) =>
+    td.daemon.state.store
+      .readSince(td.project.project_id, 0, { types: ['agent.process_exited'], limit: 20 })
+      .map((e) => e.payload as Ended);
+
+  it('records whether its end was asked for: a stop is, an agent that ends on its own is not', async () => {
+    const asked = launcher();
+    const td = await startTestDaemon(ws(), { extensions: [asked.ext] });
+    await raw(td, 'POST', td.operator.projectPath('/agent-processes'), {
+      token: op(td),
+      body: JSON.stringify({ host: 'codex', agent_key: 'codex-1', autostart: false }),
+    });
+    await until(async () => (await processes(td)).processes[0]?.status === 'running');
+    await raw(td, 'POST', td.operator.projectPath('/agent-processes/codex-1/stop'), { token: op(td), body: '{}' });
+    expect(exits(td)).toEqual([expect.objectContaining({ agent_key: 'codex-1', requested: true })]);
+    await td.daemon.close('test');
+
+    // A child that ends by itself with an error: nobody asked.
+    const crashing = createAgentLauncher({
+      detectHosts: async () => HOSTS,
+      stopGraceMs: 3000,
+      signIn: () => undefined,
+      child: () => ({
+        command: process.execPath,
+        args: ['-e', "console.error('boom');process.exit(3)"],
+        env: { SystemRoot: process.env.SystemRoot ?? '' },
+      }),
+    });
+    const again = await startTestDaemon(ws(), { initialized: true, extensions: [crashing] });
+    const before = exits(again).length;
+    await raw(again, 'POST', again.operator.projectPath('/agent-processes'), {
+      token: op(again),
+      body: JSON.stringify({ host: 'codex', agent_key: 'codex-9', autostart: false }),
+    });
+    await until(async () => exits(again).length > before);
+    expect(exits(again).at(-1)).toMatchObject({ agent_key: 'codex-9', exit_code: 3, requested: false });
+    const row = (await processes(again)).processes.find((p) => p.agent_key === 'codex-9');
+    expect(row).toMatchObject({ status: 'exited', exit_code: 3 });
+    expect(row?.log_tail.join('\n')).toContain('boom');
+  }, 60_000);
+
+  it('says so when a remembered agent does not start with Friday', async () => {
+    const first = launcher();
+    const td = await startTestDaemon(ws(), { extensions: [first.ext] });
+    // Remembered, to start with Friday.
+    await raw(td, 'POST', td.operator.projectPath('/agent-processes'), {
+      token: op(td),
+      body: JSON.stringify({ host: 'codex', agent_key: 'codex-7' }),
+    });
+    await until(async () => (await processes(td)).processes[0]?.status === 'running');
+    await td.daemon.close('test');
+
+    // Friday starts again on a computer where the host is no longer there. No scripted child here:
+    // the launcher's own check of the host decides, and nothing real can start.
+    const gone = createAgentLauncher({
+      detectHosts: async () => [
+        { host: 'codex', found: false, version: null, supported: false, path: null, reason: 'not installed (test)' },
+      ],
+      stopGraceMs: 3000,
+      signIn: () => undefined,
+    });
+    const again = await startTestDaemon(ws(), { initialized: true, extensions: [gone] });
+    const failed = () =>
+      again.daemon.state.store
+        .readSince(again.project.project_id, 0, { types: ['agent.autostart_failed'], limit: 5 })
+        .map((e) => e.payload as { agent_key: string; host: string; message: string });
+    await until(async () => failed().length > 0);
+    expect(failed()).toHaveLength(1);
+    expect(failed()[0]).toMatchObject({ agent_key: 'codex-7', host: 'codex' });
+    expect(failed()[0]?.message.length).toBeGreaterThan(5);
+    expect(failed()[0]?.message).toContain('not installed (test)');
+    // Nothing was started for it.
+    expect((await processes(again)).processes.filter((p) => p.status !== 'exited')).toEqual([]);
+  }, 60_000);
+});

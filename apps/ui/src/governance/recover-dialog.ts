@@ -6,10 +6,11 @@
  */
 import type { RecoveryAssessment } from '@friday/protocol';
 import type { RecoveryActionName } from '../api/client.js';
+import { statusLook, WAITING_REASON } from '../model/status.js';
 import { visible } from '../model/text.js';
 import type { AppContext, Component, ModalRequest } from '../shell/context.js';
 import { button, h, replace, setText } from '../ui/dom.js';
-import { cleanText, plural } from '../ui/format.js';
+import { cleanText, humanize, plural } from '../ui/format.js';
 import { ARMING_TEXT, armDecisions, type Clock } from './arming.js';
 import { errorText, nextId, taskLine } from './common.js';
 
@@ -104,7 +105,12 @@ export function recoverDialog(
         'div',
         { class: 'gv-meta-row' },
         h('dt', null, 'Status'),
-        h('dd', null, `${a.task_status}${a.waiting_reason ? ` (${a.waiting_reason})` : ''}`),
+        // As the board says it, not as the daemon's constants.
+        h(
+          'dd',
+          { title: `${a.task_status}${a.waiting_reason ? ` (${a.waiting_reason})` : ''}` },
+          `${statusLook(a.task_status).label}${a.waiting_reason ? ` (${WAITING_REASON[a.waiting_reason] ?? humanize(a.waiting_reason)})` : ''}`,
+        ),
       ),
       h('div', { class: 'gv-meta-row' }, h('dt', null, 'Attempts'), h('dd', null, String(a.attempts))),
       a.harness
@@ -115,7 +121,7 @@ export function recoverDialog(
             h(
               'dd',
               null,
-              `${visible(a.harness.agent_key ?? a.harness.harness_id)} · ${a.harness.status}`,
+              `${visible(a.harness.agent_key ?? a.harness.harness_id)} · ${humanize(a.harness.status).toLowerCase()}`,
               a.harness.process_alive === false ? ' · its process has ended' : '',
             ),
           )
@@ -176,6 +182,7 @@ export function recoverDialog(
       content,
       facts,
       a.missing_code ? h('p', { class: 'hidden-warning' }, cleanText(a.missing_code)) : null,
+      folderGone(a),
       a.preserved.length
         ? h(
             'p',
@@ -188,6 +195,43 @@ export function recoverDialog(
       options,
     );
     arming.check();
+  };
+
+  /**
+   * The task's folder was deleted (by hand, by a clean-up tool): its committed work is still on the
+   * task's branch, and the folder is made again from it (2026-11-17). That was a terminal command,
+   * and until it ran the task could be neither verified nor finished.
+   */
+  const folderGone = (a: RecoveryAssessment): HTMLElement | null => {
+    if (!a.worktree || a.worktree.exists || a.worktree.elsewhere) return null;
+    const again = button(
+      'Create the folder again',
+      () => {
+        again.disabled = true;
+        void ctx
+          .act(
+            'Create the task folder again',
+            () => ctx.api.createWorktree(taskId),
+            'The task folder is back, from the task’s branch',
+          )
+          .then((r) => {
+            if (disposed) return;
+            again.disabled = false;
+            if (r) load();
+          });
+      },
+      { class: 'btn btn-primary' },
+    );
+    return h(
+      'div',
+      { class: 'gv-folder-gone', role: 'status' },
+      h(
+        'p',
+        { class: 'hidden-warning' },
+        'The task’s folder is gone. What the agent committed is still on the task’s branch; changes it had not committed are lost.',
+      ),
+      h('div', { class: 'gv-actions' }, again),
+    );
   };
 
   const load = (): void => {

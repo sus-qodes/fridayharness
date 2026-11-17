@@ -12,6 +12,7 @@
  * an editor), where there is nothing to land and the person reviews and commits it.
  */
 import type { GoalDiff, GoalSummary, LandPlanView } from '@friday/protocol';
+import { pruneWorktrees } from '../dock/commands.js';
 import { hasHidden, visible } from '../model/text.js';
 import { goalSummaryRows } from '../nodes/goal-node.js';
 import { type AppContext, type Component, type ModalRequest, openDrawer } from '../shell/context.js';
@@ -193,6 +194,20 @@ export function landModal(
               { class: 'pn-actions pn-actions-start' },
               button('Mark as landed', () => void landNow(), { class: 'btn', disabled: landing }),
             ),
+        // What is left once the work is on your branch (2026-11-17): the folders of the finished
+        // tasks. Nothing offered to remove them here; it was a command in the palette.
+        h(
+          'div',
+          { class: 'pn-land-cleanup' },
+          note(
+            'The folders the tasks worked in are no longer needed. Friday removes the ones of finished tasks that hold no uncommitted work, in this goal and any other.',
+          ),
+          h(
+            'div',
+            { class: 'pn-actions pn-actions-start' },
+            button('Clean up finished task folders', () => void pruneWorktrees(ctx), { class: 'btn' }),
+          ),
+        ),
       ];
     } else if (plan.state === 'in_folder') {
       const root = ctx.store.select('board')?.project.root ?? '';

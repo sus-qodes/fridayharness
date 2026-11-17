@@ -244,7 +244,10 @@ export function openDrawer(ctx: Pick<AppContext, 'store'>, request: DrawerReques
     });
     return;
   }
-  ctx.store.patch('ui', { drawer: request });
+  // A drawer belongs to the board: opened while Settings is showing (the header's Messages, a
+  // search result, a notice), it was built behind the Settings view, where nobody saw it
+  // (2026-11-17). Opening one shows the board again.
+  ctx.store.patch('ui', { drawer: request, activeView: 'canvas' });
 }
 
 export function closeDrawer(ctx: Pick<AppContext, 'store'>): void {

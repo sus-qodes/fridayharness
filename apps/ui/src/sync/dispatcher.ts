@@ -13,6 +13,7 @@
  * adds one to the card itself, and `reconcile` keeps the larger of a snapshot's count and the card's.
  */
 import type { ApprovalRow, DomainEvent, EscalationView, UiSnapshot } from '@friday/protocol';
+import type { Toast } from '../shell/context.js';
 import type { ActivityState, AgentActivity, FridayStore, LogLine, ReactionKind, ToolKind } from '../store/state.js';
 import { cleanText, truncate } from '../ui/format.js';
 import { approvalFromEvent, escalationFromEvent, record, str, strings } from './rows.js';
@@ -87,6 +88,12 @@ export class Dispatcher {
   readonly #toolDuration = new Map<string, number>();
   readonly #local = new Map<string, LocalEdit<ApprovalRow>>();
   readonly #questions = new Map<string, LocalEdit<EscalationView>>();
+
+  /**
+   * Where a notice for the person goes (the window's toasts); unset in a window that shows none.
+   * For what happens without anyone asking: an agent that ended on its own, one that did not start.
+   */
+  notice: ((t: Toast) => void) | null = null;
 
   constructor(private readonly store: FridayStore) {}
 
@@ -174,6 +181,40 @@ export class Dispatcher {
       case 'task.harness_lost':
         this.#react('lost', now);
         break;
+      case 'agent.process_exited': {
+        // An agent Friday started ended without being asked to (a crash, a sign-out, a closed
+        // window). It did so silently (2026-11-17): its row said "exited" to whoever opened Agents.
+        const key = str(p.agent_key);
+        if (!key || p.requested !== false || typeof p.exit_code !== 'number' || p.exit_code === 0) break;
+        this.#log(key, {
+          at: now,
+          sequence: event.sequence,
+          stream: 'error',
+          text: `the agent stopped on its own (exit code ${p.exit_code})`,
+        });
+        this.#react('lost', now);
+        this.notice?.({
+          kind: 'warn',
+          text: `${truncate(clean(key), 64)} stopped on its own`,
+          detail: 'Nobody asked it to stop. Open Agents to see what it printed and to start it again.',
+          timeoutMs: 0,
+          key: `agent-exit:${key}`,
+        });
+        break;
+      }
+      case 'agent.autostart_failed': {
+        const key = str(p.agent_key);
+        if (!key) break;
+        const why = str(p.message);
+        this.notice?.({
+          kind: 'warn',
+          text: `${truncate(clean(key), 64)} did not start with Friday`,
+          detail: `${why ? `${truncate(cleanText(why), 300)} ` : ''}Open Agents to start it.`,
+          timeoutMs: 0,
+          key: `agent-start:${key}`,
+        });
+        break;
+      }
       case 'task.created':
       case 'goal.created':
         this.#react('node', now);

@@ -2,6 +2,19 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — loose ends, part 1
+
+The remaining medium and low findings of the 2026-11-17 review, the ones a person meets first.
+
+- **Something opened from Settings is shown.** With Settings open, the header's Messages, "Waiting for you", a result of the palette or a notice opened a drawer behind the Settings view, where nobody saw it. Opening any of them shows the board again.
+- **A task that is not moving has a way out besides Cancel.** A task an agent holds and does nothing with (connected, and idle) offered Cancel alone. "Not moving?…" opens the recovery dialog, which gives the task to another agent or starts it again, with the work so far kept. It is a quiet button: a task that runs well needs none of it.
+- **A deleted task folder is made again from the app.** When a task's folder is gone (deleted by hand, by a clean-up tool), Verify refused with a terminal command, and the task could be neither checked nor finished. The Verify dialog now says the folder is gone and offers **Create the folder again** (from the task's branch: committed work is kept, uncommitted work is lost); the recovery dialog offers the same, and says the task's and the agent's state in words.
+- **After a landing, the finished task folders can go.** The landing dialog of a landed goal offers "Clean up finished task folders" (the folders with no uncommitted work), which was a command in the palette.
+- **An agent that stops on its own says so.** An agent Friday started that crashed, or was signed out, ended silently: its row read "exited" to whoever opened Agents. Friday records whether an end was asked for (`requested` on `agent.process_exited`), and the Studio says "claude-1 stopped on its own", until it is read. A remembered agent that does not start with Friday (`agent.autostart_failed`) says so too, with why.
+- **The tour's Notch step** says where the Notch is in the desktop app, where the Studio has none to point at.
+
+Already in place and checked off: the plan editor keeps a draft that was closed by accident; landing says a commit hook or a missing git name in words and takes back a half-done merge; turning automatic checks on checks the work that already waits.
+
 ## Unreleased — plain words, part 3
 
 - **An error says what went wrong first.** A refusal read "COS-2002: approval is already granted", the code before the words. It reads "approval is already granted (COS-2002)": the code stays, last, for whoever reports the error. The same on the connection strip.

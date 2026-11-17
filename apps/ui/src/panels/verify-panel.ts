@@ -27,6 +27,9 @@ import {
   textarea,
 } from './common.js';
 
+/** The daemon's refusal when the folder a task worked in no longer exists (apps/daemon verify.ts). */
+const FOLDER_GONE = /worked in is gone/;
+
 export interface ClaimCheck {
   name: string;
   kind: string;
@@ -408,19 +411,66 @@ export function verifyModal(
     replace(resultBox, v ? verificationView(ctx, v) : null);
   }
 
+  /**
+   * The task's folder was deleted: there is nothing to check, and the refusal named a terminal
+   * command. The dialog says so and makes the folder again from the task's branch (2026-11-17).
+   */
+  function showFolderGone() {
+    const again = button(
+      'Create the folder again',
+      () => {
+        again.disabled = true;
+        void ctx
+          .act(
+            'Create the task folder again',
+            () => ctx.api.createWorktree(taskId),
+            'The task folder is back: run the checks again',
+          )
+          .then((r) => {
+            if (td.done) return;
+            again.disabled = false;
+            if (r) replace(resultBox);
+          });
+      },
+      { class: 'btn btn-primary' },
+    );
+    replace(
+      resultBox,
+      h(
+        'div',
+        { class: 'pn-folder-gone', role: 'status' },
+        note(
+          'The task’s folder is gone, so there is nothing to check. What the agent committed is still on the task’s branch; changes it had not committed are lost.',
+        ),
+        h('div', { class: 'pn-actions pn-actions-start' }, again),
+      ),
+    );
+  }
+
   async function runChecks() {
     if (running) return;
     running = true;
     updateButtons();
+    let gone = false;
     const r = await ctx.act(
       'Verify the task',
-      () => ctx.api.verify(taskId),
-      (x) => `Verification ${humanize(x?.verification?.status ?? 'recorded')}`,
+      async () => {
+        try {
+          return await ctx.api.verify(taskId);
+        } catch (e) {
+          // Said in the dialog, with the way out, in place of a toast that names a command.
+          if (!FOLDER_GONE.test(errorOf(e).message)) throw e;
+          gone = true;
+          return null;
+        }
+      },
+      (x) => (x ? `Verification ${humanize(x.verification?.status ?? 'recorded')}` : ''),
     );
     running = false;
     if (td.done) return;
     updateButtons();
-    if (r) {
+    if (gone) showFolderGone();
+    else if (r) {
       showResult(r.verification);
       ctx.refresh();
     }

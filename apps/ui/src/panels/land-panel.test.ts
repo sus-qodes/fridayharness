@@ -233,6 +233,34 @@ describe('landing', () => {
     fast_forward: true,
   };
 
+  it('offers to clean up the finished task folders once the goal has landed, and only then', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ goals: [makeGoal({ status: 'COMPLETED' })] }),
+      answers: {
+        [`GET /goals/${GID}/diff`]: diff(),
+        [`GET /goals/${GID}/land`]: planOf({ state: 'landed', commits: 0 }),
+        'POST /worktrees/prune': { removed: ['C:/wt/a'], kept: [] },
+      },
+    });
+    const m = landModal(ctx, { kind: 'land', id: GID }, () => undefined);
+    await flush();
+    expect(m.el.textContent).toContain('The folders the tasks worked in are no longer needed.');
+    buttonBy(m.el, 'Clean up finished task folders').click();
+    await flush();
+    expect(ctx.transport.to('POST', '/worktrees/prune')).toHaveLength(1);
+    expect(ctx.toasts.at(-1)?.text).toBe('Removed 1 finished task folder; kept 0');
+    m.destroy();
+    // A goal still to land has nothing to clean up yet.
+    const before = makeContext({
+      snapshot: makeSnapshot({ goals: [makeGoal({ status: 'COMPLETED' })] }),
+      answers: { [`GET /goals/${GID}/diff`]: diff(), [`GET /goals/${GID}/land`]: planOf({ state: 'ready' }) },
+    });
+    const m2 = landModal(before, { kind: 'land', id: GID }, () => undefined);
+    await flush();
+    expect(() => buttonBy(m2.el, 'Clean up finished task folders')).toThrow();
+    m2.destroy();
+  });
+
   it('names the branch it lands into, asks in a browser, lands, and then says landed', async () => {
     let state: LandPlanView['state'] = 'ready';
     const ctx = makeContext({
@@ -266,6 +294,8 @@ describe('landing', () => {
     expect(m.el.textContent).toContain("The goal's work is on main.");
     expect(m.el.textContent).toContain(`Landed: ${goalBranch(GID)}`);
     expect(() => buttonBy(m.el, 'Land into main')).toThrow();
+    // Once landed, the folders of the finished tasks can go, from here (2026-11-17).
+    expect(() => buttonBy(m.el, 'Clean up finished task folders')).not.toThrow();
     expect(ctx.refreshes).toBe(1);
     m.destroy();
   });

@@ -44,7 +44,7 @@ import {
 import { describeEvent, HISTORY_PAGE, mayHaveOlder, mergeEvents, olderBefore } from './events.js';
 
 export type InspectorTab = 'overview' | 'changes' | 'history' | 'context';
-export type InspectorAction = 'verify' | 'continue' | 'rework' | 'recover' | 'cancel';
+export type InspectorAction = 'verify' | 'continue' | 'rework' | 'recover' | 'unstick' | 'cancel';
 
 /** The tabs in their order on the screen. */
 export const INSPECTOR_TABS: readonly InspectorTab[] = ['overview', 'changes', 'history', 'context'];
@@ -68,6 +68,10 @@ export function inspectorActions(
   if (task.status === 'FAILED') out.push('rework');
   if (task.status === 'HARNESS_LOST' || task.waiting_reason === 'agent_error' || opts.recoveryQuestion)
     out.push('recover');
+  // A task an agent holds and does nothing with (connected, and idle) had Cancel alone
+  // (2026-11-17). The same dialog gives it to another agent or starts it again, with the work kept;
+  // it is offered quietly, since a task that is running well needs none of it.
+  else if (task.status === 'RUNNING' || task.status === 'ASSIGNED') out.push('unstick');
   if (!TERMINAL.has(task.status)) out.push('cancel');
   return out;
 }
@@ -245,6 +249,14 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
         case 'recover':
           buttons.push(
             button([icon('shield', 14), 'Recover…'], () => openModal(ctx, { kind: 'recover', id }), { class: 'btn' }),
+          );
+          break;
+        case 'unstick':
+          buttons.push(
+            button('Not moving?…', () => openModal(ctx, { kind: 'recover', id }), {
+              class: 'btn btn-ghost',
+              title: 'Give the task to another agent, or start it again. The work so far is kept.',
+            }),
           );
           break;
         case 'cancel':

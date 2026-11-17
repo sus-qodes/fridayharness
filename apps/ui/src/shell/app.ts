@@ -266,6 +266,8 @@ export function mountShell(
   // A collapsed rail is opened first.
   const hooks: ShellHooks = {
     onShowWaiting: () => {
+      // "Waiting for you" is beside the board: from Settings, the board is shown first.
+      if (ctx.store.select('ui').activeView === 'settings') ctx.store.patch('ui', { activeView: 'canvas' });
       if (railCollapsed) {
         setRailCollapsed(false);
       }
@@ -357,6 +359,18 @@ export function mountShell(
     ],
   });
   stops.push(popGlobalKeys);
+
+  // A task or a goal picked while Settings is showing (the palette's result, a notice) is shown
+  // where it is: on the board. The selection at the time Settings opened does not count.
+  let selectionSeen = ctx.store.select('ui').selectedTaskId ?? null;
+  stops.push(
+    ctx.store.subscribe('ui', (ui) => {
+      const selected = ui.selectedTaskId ?? null;
+      if (selected === selectionSeen) return;
+      selectionSeen = selected;
+      if (selected && ui.activeView === 'settings') ctx.store.patch('ui', { activeView: 'canvas' });
+    }),
+  );
 
   function renderView(): void {
     const isSettings = ctx.store.select('ui').activeView === 'settings';
@@ -562,6 +576,8 @@ export async function bootBrowserWith(root: HTMLElement, areas: AreaSet, env: Bo
         void engine.refresh();
       },
     });
+    // What happens without anyone asking (an agent that ended on its own) is said here.
+    dispatcher.notice = (t) => services.toasts.show(t);
     root.replaceChildren();
     const shell = mountShell(ctx, services, root, areas, {
       onRetry: () => {
