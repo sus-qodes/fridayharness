@@ -51,6 +51,7 @@ import { escalationView, mountBrainRoutes } from './brain-routes.js';
 import type { CompileInput, ContextService } from './context.js';
 import type { ControlManager } from './control.js';
 import { countMatches, listFiles } from './files.js';
+import { bothVersions, FOLDER_CONFLICT, keptFiles, putBack, syncFolder, takeTheirs, tipBlob } from './folder-sync.js';
 import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
 import type { IntegrationManager } from './integration.js';
 import { landGoal, landPlan } from './land.js';
@@ -68,7 +69,7 @@ import type { UiAuth } from './ui-auth.js';
 import { UI_PREFS_MAX_BYTES, UiPrefs } from './ui-prefs.js';
 import { buildUiSnapshot, toolCallTally, type UiSnapshotInfo } from './ui-snapshot.js';
 import { mountUiStatic, type UiBundle, uiPath } from './ui-static.js';
-import type { WorkspaceManager } from './workspaces.js';
+import { taskBase, type WorkspaceManager } from './workspaces.js';
 
 export interface AppDeps {
   state: FridayState;
@@ -407,6 +408,76 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.post(`${P}/goals/:gid/land`, allow(...OPERATOR), async (c) =>
     c.json(await landGoal(state, project, c.req.param('gid'), humanOf(c))),
   );
+  // A file the person changed in the project folder that the goal's finished work changes too
+  // (2026-11-17): what is in the way for a task now, with both versions; the person's choice for one
+  // file; and their own version put back after it was replaced.
+  const folderConflict = async (taskId: string) => {
+    const task = state.q.task(pid, taskId);
+    const tip = task.goal_id ? await taskBase(state, project, taskId) : undefined;
+    if (!task.goal_id || !tip) return { task, tip: null, files: [] as string[] };
+    const kept = await keptFiles(state, pid, task.goal_id, project.root, tip);
+    // Nothing is written here: only what a sync would leave in the way is read.
+    const s = await syncFolder(project.root, tip, kept, { dryRun: true });
+    return { task, tip, files: s.in_the_way };
+  };
+  const settleIfClear = (taskId: string, actor: Actor, remaining: number) => {
+    if (remaining > 0) return;
+    for (const e of state.q.escalations(pid, 'pending', { task_id: taskId })) {
+      if (e.kind === FOLDER_CONFLICT) {
+        state.answerEscalation(
+          pid,
+          actor,
+          String(e.escalation_id),
+          'every file is decided; the agent in the folder can take the task now',
+        );
+      }
+    }
+  };
+  app.get(`${P}/tasks/:tid/folder-conflict`, allow(...OPERATOR), async (c) => {
+    const f = await folderConflict(c.req.param('tid'));
+    const files = f.tip
+      ? await Promise.all(f.files.map((file) => bothVersions(project.root, f.tip as string, file)))
+      : [];
+    return c.json({ goal_head: f.tip, files });
+  });
+  app.post(`${P}/tasks/:tid/folder-conflict`, allow(...OPERATOR), async (c) => {
+    const body = z.object({ path: z.string().min(1).max(1000), take: z.enum(['mine', 'theirs']) }).parse(await json(c));
+    const taskId = c.req.param('tid');
+    const f = await folderConflict(taskId);
+    if (!f.tip || !f.files.includes(body.path)) {
+      throw new FridayError('invalid_request', `${body.path} is not in the way of this task now`);
+    }
+    const base = { task_id: taskId, goal_id: f.task.goal_id, path: body.path };
+    if (body.take === 'mine') {
+      const theirs = await tipBlob(project.root, f.tip, body.path);
+      state.recordObservation(pid, humanOf(c), 'folder.file_kept', { ...base, theirs }, [{ kind: 'task', id: taskId }]);
+    } else {
+      const backup = await takeTheirs(project.root, f.tip, body.path);
+      state.recordObservation(pid, humanOf(c), 'folder.file_replaced', { ...base, backup }, [
+        { kind: 'task', id: taskId },
+      ]);
+    }
+    const remaining = (await folderConflict(taskId)).files.length;
+    settleIfClear(taskId, humanOf(c), remaining);
+    return c.json({ path: body.path, take: body.take, remaining });
+  });
+  app.post(`${P}/tasks/:tid/folder-conflict/undo`, allow(...OPERATOR), async (c) => {
+    const body = z.object({ path: z.string().min(1).max(1000) }).parse(await json(c));
+    const taskId = c.req.param('tid');
+    const last = state.store
+      .readByRef(pid, 'task', taskId, { types: ['folder.file_replaced', 'folder.file_restored'] })
+      .filter((e) => (e.payload as { path?: unknown }).path === body.path)
+      .at(-1);
+    if (last?.type !== 'folder.file_replaced') {
+      throw new FridayError('invalid_request', `Friday has no version of ${body.path} to put back`);
+    }
+    const backup = (last.payload as { backup?: string | null }).backup ?? null;
+    await putBack(project.root, body.path, backup);
+    state.recordObservation(pid, humanOf(c), 'folder.file_restored', { task_id: taskId, path: body.path }, [
+      { kind: 'task', id: taskId },
+    ]);
+    return c.json({ path: body.path, restored: true });
+  });
   // When this goal's work lands, chosen by a person for this goal alone (the tick on Approve): it
   // overrides the project's `landing.mode` for it. A person's own act, so it needs no trust.
   app.post(`${P}/goals/:gid/landing`, allow(...OPERATOR), async (c) => {

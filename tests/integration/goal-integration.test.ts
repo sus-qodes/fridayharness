@@ -1079,28 +1079,88 @@ describe('landing a completed goal', () => {
     expect(td.daemon.state.q.escalations(pid, 'pending')).toEqual([]);
   });
 
-  it('never writes over a file the person changed in the folder, and says so to the agent', async () => {
-    const td = await project(CHECKS, {}, L0);
-    const mainHead = await head();
-    const { ids } = await goalWith(td, [
-      { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
-      { key: 'note-b', summary: 'Say what b is for', write: ['src/b.mjs'], depends_on: ['raise-a'] },
-    ]);
-    const second = ids['note-b'] as string;
-    await work(td, 'be-1', ids['raise-a'] as string, { 'src/a.mjs': 'export const a = 2;\n' });
-    await integrationOf(td, ids['raise-a'] as string);
-    writeFileSync(file('src/a.mjs'), 'export const a = 1; // mine, not saved yet\n');
-    const editor = await folderSession(td);
-    await td.operator.post(td.operator.projectPath(`/tasks/${second}/assign`), { agent_key: 'antigravity-1' });
-    const claimed = (await editor.claim({ task_id: second })) as { run_id: string; note: string | null };
-    expect(text('src/a.mjs')).toBe('export const a = 1; // mine, not saved yet\n');
-    expect(claimed.note).toContain('did not replace them');
-    expect(claimed.note).toContain('src/a.mjs');
-    // With something in the way the attempt starts from the folder's own commit, as before.
-    expect(td.daemon.state.q.run(claimed.run_id).base_commit).toBe(mainHead);
-    expect(
-      td.daemon.state.store.readByRef(td.project.project_id, 'task', second, { types: ['folder.synced'] })[0]?.payload,
-    ).toMatchObject({ brought: [], in_the_way: ['src/a.mjs'] });
+  describe('a file the person changed that the goal changed too (2026-11-17)', () => {
+    const MINE = 'export const a = 1; // mine, not saved yet\n';
+    /** The first task done by an agent Friday starts; the person then edits the same file. */
+    async function inTheWay() {
+      const td = await project(CHECKS, {}, L0);
+      const mainHead = await head();
+      const { ids } = await goalWith(td, [
+        { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+        { key: 'note-b', summary: 'Say what b is for', write: ['src/b.mjs'], depends_on: ['raise-a'] },
+      ]);
+      const second = ids['note-b'] as string;
+      await work(td, 'be-1', ids['raise-a'] as string, { 'src/a.mjs': 'export const a = 2;\n' });
+      await integrationOf(td, ids['raise-a'] as string);
+      writeFileSync(file('src/a.mjs'), MINE);
+      const editor = await folderSession(td);
+      await td.operator.post(td.operator.projectPath(`/tasks/${second}/assign`), { agent_key: 'antigravity-1' });
+      const conflict = () =>
+        td.operator.get<{
+          goal_head: string | null;
+          files: { path: string; mine: string | null; theirs: string | null }[];
+        }>(td.operator.projectPath(`/tasks/${second}/folder-conflict`));
+      const choose = (take: 'mine' | 'theirs') =>
+        td.operator.post<{ remaining: number }>(td.operator.projectPath(`/tasks/${second}/folder-conflict`), {
+          path: 'src/a.mjs',
+          take,
+        });
+      const asked = () =>
+        td.daemon.state.q
+          .escalations(td.project.project_id, 'pending', { task_id: second })
+          .filter((e) => e.kind === 'folder_conflict');
+      return { td, editor, second, mainHead, conflict, choose, asked };
+    }
+
+    it('makes the task wait and asks the person, touching nothing', async () => {
+      const x = await inTheWay();
+      await expect(x.editor.claim({ task_id: x.second })).rejects.toThrow(/cannot start yet.*src\/a\.mjs/s);
+      expect(text('src/a.mjs')).toBe(MINE);
+      expect((await taskOf(x.td, x.second)).status).toBe('READY');
+      const q = x.asked();
+      expect(q).toHaveLength(1);
+      expect(q[0]?.question).toContain('src/a.mjs');
+      // Asked once, however often the agent tries.
+      await expect(x.editor.claim({ task_id: x.second })).rejects.toThrow(/cannot start yet/);
+      expect(x.asked()).toHaveLength(1);
+      // Both versions, for the person to compare.
+      expect((await x.conflict()).files).toEqual([{ path: 'src/a.mjs', mine: MINE, theirs: 'export const a = 2;\n' }]);
+    });
+
+    it('"keep mine": the file stays, the question closes and the agent takes the task', async () => {
+      const x = await inTheWay();
+      await expect(x.editor.claim({ task_id: x.second })).rejects.toThrow();
+      expect(await x.choose('mine')).toMatchObject({ remaining: 0 });
+      expect(x.asked()).toEqual([]);
+      const claimed = (await x.editor.claim({ task_id: x.second })) as { run_id: string };
+      expect(text('src/a.mjs')).toBe(MINE);
+      // The folder differs from the goal there, so the attempt starts from the folder's own commit.
+      expect(x.td.daemon.state.q.run(claimed.run_id).base_commit).toBe(x.mainHead);
+      // The same choice is not asked again.
+      expect((await x.conflict()).files).toEqual([]);
+    });
+
+    it('"take the finished one": the file is replaced, and "put mine back" restores it byte for byte', async () => {
+      const x = await inTheWay();
+      await expect(x.editor.claim({ task_id: x.second })).rejects.toThrow();
+      expect(await x.choose('theirs')).toMatchObject({ remaining: 0 });
+      expect(text('src/a.mjs')).toBe('export const a = 2;\n');
+      expect(x.asked()).toEqual([]);
+      await x.td.operator.post(x.td.operator.projectPath(`/tasks/${x.second}/folder-conflict/undo`), {
+        path: 'src/a.mjs',
+      });
+      expect(readFileSync(file('src/a.mjs'), 'utf8')).toBe(MINE);
+      // Nothing to put back twice, and a file that is not in the way is not a choice.
+      await expect(
+        x.td.operator.post(x.td.operator.projectPath(`/tasks/${x.second}/folder-conflict/undo`), { path: 'src/a.mjs' }),
+      ).rejects.toThrow(/no version/);
+      await expect(
+        x.td.operator.post(x.td.operator.projectPath(`/tasks/${x.second}/folder-conflict`), {
+          path: 'src/b.mjs',
+          take: 'theirs',
+        }),
+      ).rejects.toThrow(/not in the way/);
+    });
   });
 
   it('keeps a folder file the person changed differently in the way of landing', async () => {

@@ -735,6 +735,11 @@ const OBSERVATION_TYPES = new Set([
   'goal.landing_held',
   // The goal's finished work was written into the project folder before a session there took a task.
   'folder.synced',
+  // A person's choice for a file they and the goal both changed: kept, replaced (with the backup's
+  // name), and put back.
+  'folder.file_kept',
+  'folder.file_replaced',
+  'folder.file_restored',
   // A person changed one of the settings the interface may change in config.yaml (2026-11-16).
   'config.edited',
   // A person chose how they plan on this machine (their own planner, kept outside config.yaml).

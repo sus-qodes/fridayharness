@@ -32,6 +32,7 @@ describe('escalation kinds → cards (plan FD-21)', () => {
     ['action_failed', 'brain'],
     ['setup_failed', 'setup'],
     ['check_not_run', 'checks'],
+    ['folder_conflict', 'folder'],
     ['something_new', 'brain'],
   ];
   it.each(table)('%s → %s', (kind, card) => {

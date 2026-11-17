@@ -676,6 +676,74 @@ describe('question cards by kind (plan FD-21)', () => {
     card.destroy();
   });
 
+  describe('a file the person and the goal both changed (2026-11-17)', () => {
+    const FILES = `GET /tasks/${TASK}/folder-conflict`;
+    const CHOOSE = `POST /tasks/${TASK}/folder-conflict`;
+    const UNDO = `POST /tasks/${TASK}/folder-conflict/undo`;
+    const asked = () =>
+      makeEscalation({
+        kind: 'folder_conflict',
+        goal_id: GOAL,
+        question: "You changed a file in the project folder that this goal's finished work also changes: src/a.ts.",
+        details: { files: ['src/a.ts'], goal_head: 'abc' },
+      });
+    const files = { goal_head: 'abc', files: [{ path: 'src/a.ts', mine: `mine ${HOSTILE}`, theirs: 'finished' }] };
+
+    it('lists each file with Keep mine, Take the finished one and Show both, as text', async () => {
+      const card = mount(asked(), {}, { [FILES]: files });
+      await flush();
+      expect(card.el.querySelector('.gv-card-title')?.textContent).toBe('You and an agent changed the same file');
+      expect(card.el.textContent).toContain('Friday did not touch yours');
+      const row = card.el.querySelector('.gv-folder-file') as HTMLElement;
+      expect(row.querySelector('.gv-folder-path')?.textContent).toBe('src/a.ts');
+      expect([...row.querySelectorAll('button')].filter((b) => !b.hidden).map((b) => b.textContent)).toEqual([
+        'Keep mine',
+        'Take the finished one',
+        'Show both',
+      ]);
+      // Both versions only when asked for, and never as markup.
+      expect(row.querySelector<HTMLElement>('.gv-folder-both')?.hidden).toBe(true);
+      buttonNamed(row, 'Show both').click();
+      expect(row.querySelector<HTMLElement>('.gv-folder-both')?.hidden).toBe(false);
+      expect(row.textContent).toContain(`mine ${HOSTILE}`);
+      expect(row.textContent).toContain('finished');
+      expect(card.el.querySelector('img')).toBeNull();
+      card.destroy();
+    });
+
+    it('Keep mine sends the choice, and the card is done when no file is left', async () => {
+      const card = mount(asked(), {}, { [FILES]: files, [CHOOSE]: { remaining: 0 } });
+      await flush();
+      buttonNamed(card.el, 'Keep mine').click();
+      await flush();
+      expect(ctx.transport.to('POST', `/tasks/${TASK}/folder-conflict`).map((c) => c.body)).toEqual([
+        { path: 'src/a.ts', take: 'mine' },
+      ]);
+      expect(card.el.textContent).toContain('Yours is kept.');
+      card.destroy();
+    });
+
+    it('Take the finished one offers to put mine back, which restores it', async () => {
+      const card = mount(asked(), {}, { [FILES]: files, [CHOOSE]: { remaining: 0 }, [UNDO]: { restored: true } });
+      await flush();
+      expect(buttonNamed(card.el, 'Put mine back').hidden).toBe(true);
+      buttonNamed(card.el, 'Take the finished one').click();
+      await flush();
+      expect(ctx.transport.to('POST', `/tasks/${TASK}/folder-conflict`).map((c) => c.body)).toEqual([
+        { path: 'src/a.ts', take: 'theirs' },
+      ]);
+      const back = buttonNamed(card.el, 'Put mine back');
+      expect(back.hidden).toBe(false);
+      back.click();
+      await flush();
+      expect(ctx.transport.to('POST', `/tasks/${TASK}/folder-conflict/undo`).map((c) => c.body)).toEqual([
+        { path: 'src/a.ts' },
+      ]);
+      expect(card.el.textContent).toContain('Yours is back in place.');
+      card.destroy();
+    });
+  });
+
   describe('a check that failed where the install failed (2026-11-17)', () => {
     const SETUP = `POST /tasks/${TASK}/setup`;
     const failedSetup = (over: Partial<EscalationView> = {}) =>

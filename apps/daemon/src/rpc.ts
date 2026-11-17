@@ -32,7 +32,7 @@ import {
 import { type ProjectRef, policyVersion } from '@friday/sdk';
 import type { Caller, FridayState } from '@friday/state';
 import type { CompileInput, RecipientReadFilter } from './context.js';
-import { type FolderSync, syncFolder, syncNote } from './folder-sync.js';
+import { askAboutFiles, type FolderSync, keptFiles, syncFolder, syncNote, waitingNote } from './folder-sync.js';
 import { type GraphService, query as graphQuery } from './graph-service.js';
 import type { OperationManager } from './operations.js';
 import type { ToolJudge } from './tool-policy.js';
@@ -642,13 +642,20 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
       if (inFolder && head) {
         const wanted = p.task_id ?? state.nextTaskFor(pid, c.agent_id)?.task_id;
         const tip = wanted ? await taskBase(state, project, wanted).catch(() => undefined) : undefined;
-        if (tip && tip !== head) {
+        const goalId = wanted ? (state.q.findTask(pid, wanted)?.goal_id ?? null) : null;
+        if (wanted && goalId && tip && tip !== head) {
           try {
-            synced = await syncFolder(project.root, tip);
-            if (!synced.in_the_way.length) head = tip;
+            synced = await syncFolder(project.root, tip, await keptFiles(state, pid, goalId, project.root, tip));
+            if (!synced.in_the_way.length && !synced.kept.length) head = tip;
           } catch {
             // A folder git cannot write to now is taken as it is: the claim goes on.
             synced = null;
+          }
+          // A file the person changed that the goal changed too: they choose which version stays,
+          // and the task waits for that (2026-11-17). What could be brought in already is.
+          if (synced?.in_the_way.length) {
+            askAboutFiles(state, pid, { kind: 'agent', id: c.agent_id }, { task_id: wanted, goal_id: goalId }, synced);
+            throw new FridayError('invalid_request', waitingNote(synced));
           }
         }
       }

@@ -1021,3 +1021,29 @@
 .gv-land-row[hidden] {
   display: none;
 }
+
+/* A file the person and the goal both changed: one row per file, with both versions on request. */
+.gv-folder-files {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gv-folder-file {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.gv-folder-both[hidden] {
+  display: none;
+}
+
+.gv-folder-both {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}

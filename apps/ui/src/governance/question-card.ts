@@ -176,6 +176,8 @@ function buildBody(kit: Kit): Built {
       return setupBody(kit);
     case 'checks':
       return checksBody(kit);
+    case 'folder':
+      return folderBody(kit);
     case 'brain':
       return brainBody(kit);
   }
@@ -797,6 +799,133 @@ function cancelTaskButton(kit: Kit): HTMLButtonElement {
     },
     'btn btn-danger',
   );
+}
+
+// ---- folder_conflict: the person and the goal changed the same file (2026-11-17)
+
+/**
+ * A file in the project folder that the person changed themselves and that the goal's finished
+ * work changes too. Friday never writes over it, and the agent that works in that folder does not
+ * start its task until the person has chosen, per file: **Keep mine**, **Take the finished one**
+ * (their own version is saved first, and **Put mine back** restores it), or **Show both** to
+ * compare before choosing. When every file is decided the question closes by itself.
+ */
+function folderBody(kit: Kit): Built {
+  const { spec, ctx } = kit;
+  const taskId = spec.taskId ?? '';
+  const list = h('div', { class: 'gv-folder-files' }, h('p', { class: 'muted' }, 'Reading the files…'));
+  const row = (f: { path: string; mine: string | null; theirs: string | null }): HTMLElement => {
+    const state = h('span', { class: 'gv-folder-state muted', role: 'status' });
+    const both = h('div', { class: 'gv-folder-both', hidden: true });
+    const act = async (label: string, work: () => Promise<{ remaining: number }>, said: string) => {
+      for (const b of buttons) b.disabled = true;
+      const r = await ctx.act(label, work);
+      if (!r) {
+        for (const b of buttons) b.disabled = false;
+        return;
+      }
+      setText(state, said);
+      if (r.remaining === 0) kit.done('Every file is decided: the agent in your folder can take its task now');
+    };
+    const mine = button(
+      'Keep mine',
+      () => void act('Keep my version', () => ctx.api.settleFolderFile(taskId, f.path, 'mine'), 'Yours is kept.'),
+      {
+        class: 'btn',
+      },
+    );
+    const theirs = button(
+      'Take the finished one',
+      () =>
+        void act(
+          'Take the finished version',
+          () => ctx.api.settleFolderFile(taskId, f.path, 'theirs'),
+          'Replaced with the finished version. Yours is saved.',
+        ).then(() => {
+          back.hidden = false;
+        }),
+      { class: 'btn' },
+    );
+    const show = button(
+      'Show both',
+      () => {
+        both.hidden = !both.hidden;
+        setText(show, both.hidden ? 'Show both' : 'Hide');
+        if (!both.hidden && !both.childElementCount) {
+          both.append(
+            agentText('Yours', f.mine ?? '(you deleted this file)'),
+            agentText('The finished version', f.theirs ?? '(the finished work has no such file)'),
+          );
+        }
+      },
+      { class: 'btn btn-ghost' },
+    );
+    const back = button(
+      'Put mine back',
+      () => {
+        back.disabled = true;
+        void ctx
+          .act('Put my version back', () => ctx.api.restoreFolderFile(taskId, f.path), 'Your version is back')
+          .then((r) => {
+            back.disabled = false;
+            if (r) {
+              back.hidden = true;
+              setText(state, 'Yours is back in place.');
+            }
+          });
+      },
+      { class: 'btn btn-ghost', hidden: true },
+    );
+    const buttons = [mine, theirs];
+    return h(
+      'div',
+      { class: 'gv-folder-file' },
+      h('div', { class: 'gv-folder-path mono' }, truncate(cleanText(f.path), 200)),
+      h('div', { class: 'gv-actions' }, mine, theirs, show, back),
+      state,
+      both,
+    );
+  };
+
+  if (taskId) {
+    void ctx.api.folderConflict(taskId).then(
+      (r) => {
+        replace(
+          list,
+          ...(r.files.length
+            ? r.files.map(row)
+            : [
+                h(
+                  'p',
+                  { class: 'muted' },
+                  'No file is in the way any more: the agent in your folder can take its task.',
+                ),
+              ]),
+        );
+      },
+      () => {
+        replace(list, h('p', { class: 'field-error' }, 'The files could not be read. Close this and open it again.'));
+      },
+    );
+  }
+  const cancel = cancelTaskButton(kit);
+  return {
+    body: present([
+      h(
+        'p',
+        { class: 'gv-question-text' },
+        'You changed a file in your project folder that this goal’s finished work also changes. Friday did not touch yours, and the agent in your folder waits until you choose which version it works with.',
+      ),
+      list,
+      h(
+        'p',
+        { class: 'field-hint' },
+        'Taking the finished one saves yours first, so you can put it back. After you have chosen for every file, prompt the agent in your editor again.',
+      ),
+      taskId ? h('div', { class: 'gv-actions' }, cancel) : null,
+    ]),
+    decisions: [cancel],
+  };
 }
 
 // ---- check_not_run: the project's checks could not be started here (2026-11-17)

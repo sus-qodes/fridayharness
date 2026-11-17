@@ -2,6 +2,14 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — agents working together, part 9: a file you changed too
+
+Friday never writes over a file you changed in your project folder. Until now it left the file as it was and told only the agent, which then built on your version without you knowing.
+
+- **The agent in your folder waits, and Friday asks you.** When the goal's finished work changes a file you changed yourself, the task does not start. A question appears with each such file and three buttons: **Keep mine**, **Take the finished one**, and **Show both** to compare them first.
+- **Taking the finished one saves yours first.** **Put mine back** restores it exactly as it was.
+- **A choice is remembered** for the finished version it was made against, and asked again only if the goal changes that file once more. When every file is decided the question closes by itself, and you prompt the agent in your editor again.
+
 ## Unreleased — agents working together, part 8: landing without a click
 
 A finished goal always waited for a click on Land. That stays the default, and it is now a choice.

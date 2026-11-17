@@ -561,6 +561,24 @@ export class FridayApi {
     return this.post('/readiness/clear', { host, model });
   }
 
+  /** The files a person and the goal both changed in the project folder, each with both versions. */
+  folderConflict(taskId: string): Promise<{
+    goal_head: string | null;
+    files: { path: string; mine: string | null; theirs: string | null }[];
+  }> {
+    return this.get(`/tasks/${encodeURIComponent(taskId)}/folder-conflict`);
+  }
+
+  /** The person's choice for one such file: keep their own version, or take the goal's finished one. */
+  settleFolderFile(taskId: string, path: string, take: 'mine' | 'theirs'): Promise<{ remaining: number }> {
+    return this.post(`/tasks/${encodeURIComponent(taskId)}/folder-conflict`, { path, take });
+  }
+
+  /** Puts the person's own version of a file back after it was replaced. */
+  restoreFolderFile(taskId: string, path: string): Promise<{ restored: boolean }> {
+    return this.post(`/tasks/${encodeURIComponent(taskId)}/folder-conflict/undo`, { path });
+  }
+
   /** A person's choice for one goal: when its finished work is put into the project. */
   goalLanding(goalId: string, mode: 'ask' | 'goal' | 'task'): Promise<{ goal_id: string; mode: string }> {
     return this.post(`/goals/${encodeURIComponent(goalId)}/landing`, { mode });

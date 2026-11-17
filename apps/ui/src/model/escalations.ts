@@ -16,6 +16,7 @@ export type QuestionCardKind =
   | 'unanswered'
   | 'setup'
   | 'checks'
+  | 'folder'
   | 'brain';
 
 /** A button a question card offers. */
@@ -101,6 +102,7 @@ const TITLES: Record<string, string> = {
   unanswered_request: 'An agent waits for an answer',
   setup_failed: "A task's dependencies were not installed",
   check_not_run: 'A check could not be run on this computer',
+  folder_conflict: 'You and an agent changed the same file',
   repeated_verification_failures: 'A task keeps failing verification',
   repeated_failures: 'A task keeps failing',
   replan_limit: 'The plan reached its revision limit',
@@ -149,6 +151,7 @@ export function cardKindOf(kind: string | null): QuestionCardKind {
   // The Master Brain's too, but it is not answered by revising the plan: the install is run again.
   if (kind === 'setup_failed') return 'setup';
   if (kind === 'check_not_run') return 'checks';
+  if (kind === 'folder_conflict') return 'folder';
   // Every other kind is the Master Brain's, or one this interface does not know yet: it is
   // answered by revising the plan (or, without a goal, by a recorded reply).
   return 'brain';

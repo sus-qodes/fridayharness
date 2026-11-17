@@ -114,6 +114,11 @@ pub static ROUTES: &[Route] = &[
     // What was allowed for this task and still holds, for the inspector's "Take back". The whole
     // list of approvals is never forwarded.
     get("tasks/{tid}/approvals", &[]),
+    // A file the person and the goal both changed in the project folder: both versions, the
+    // person's choice for one file, and their own version put back.
+    get("tasks/{tid}/folder-conflict", &[]),
+    post("tasks/{tid}/folder-conflict"),
+    post("tasks/{tid}/folder-conflict/undo"),
     get("tasks/{tid}/delivered-context", &[]),
     post("tasks"),
     post("tasks/{tid}/continue"),
