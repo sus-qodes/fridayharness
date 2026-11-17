@@ -28,7 +28,7 @@ export function pauseText(result: ControlResult): string {
   const sent = (result?.tasks ?? []).filter((t) => t.stop === 'sent').length;
   const base = "Friday is paused: nothing new starts and agents' changes are refused until you resume.";
   if (sent === 0) return base;
-  return `${base} Stop sent to ${plural(sent, 'attempt')} that cannot be held at the tool boundary; their work is preserved.`;
+  return `${base} Friday asked ${plural(sent, 'agent')} it cannot hold in place to stop; their work is kept.`;
 }
 
 /** What a resume did, in one sentence. */

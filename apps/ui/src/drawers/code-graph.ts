@@ -72,7 +72,7 @@ export function createCodeGraph(ctx: AppContext, request: DrawerRequest): Compon
   });
   const reindexButton = button([icon('rework', 14), 'Reindex'], () => void reindex(), {
     class: 'btn',
-    title: 'Rebuild the code graph of the main checkout',
+    title: 'Rebuild the code graph of your project folder',
   });
   const form = h(
     'form',
@@ -368,7 +368,7 @@ export function createCodeGraph(ctx: AppContext, request: DrawerRequest): Compon
     input.value = p;
     selected = p;
     const mine = ++token;
-    replace(status, 'Reading the code graph… (it is rebuilt when the main checkout changed)');
+    replace(status, 'Reading the code graph… (it is rebuilt when your project folder changed)');
     replace(canvas, loading('Reading the code graph…'));
     try {
       const answer = graphOf(await ctx.api.graphQuery(p, 2));

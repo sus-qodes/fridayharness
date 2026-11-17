@@ -516,7 +516,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
                 );
               }),
             )
-          : empty('No files: the packet holds the task, its state and its history only.'),
+          : empty('No files: the agent was given the task, its state and its history only.'),
       ),
     );
     if (others.length) {
@@ -634,7 +634,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
       const d = await ctx.api.deliveredContext(id);
       if (destroyed) return;
       if (!d.context_id) {
-        replace(delivered, empty('No context packet was delivered to an agent for this task yet.'));
+        replace(delivered, empty('No agent was given anything for this task yet.'));
         return;
       }
       const r = await explainOf(d.context_id);

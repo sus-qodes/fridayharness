@@ -4,6 +4,7 @@
  * string from an event passes `cleanText` and is cut short: payloads are written by agents too.
  */
 import type { DomainEvent } from '@friday/protocol';
+import { capabilityWords } from '../model/capability-words.js';
 import { WAITING_REASON } from '../model/status.js';
 import { cleanText, humanize, shortId, truncate } from '../ui/format.js';
 
@@ -160,7 +161,7 @@ function details(type: string, p: Payload): string[] {
       const a = obj(p.approval);
       const cap = str(a.capability);
       const target = str(a.target);
-      if (cap) out.push(clip(cap, 60));
+      if (cap) out.push(clip(capabilityWords(cap), 60));
       if (target) out.push(clip(target, 120));
       break;
     }

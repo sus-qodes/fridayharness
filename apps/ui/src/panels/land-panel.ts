@@ -306,7 +306,7 @@ export function landModal(
       h(
         'div',
         { class: 'field-label' },
-        `${commits.length} ${commits.length === 1 ? 'commit' : 'commits'} ahead of the main checkout's HEAD`,
+        `${commits.length} ${commits.length === 1 ? 'commit' : 'commits'} ahead of your own branch`,
       ),
       commits.length
         ? h(

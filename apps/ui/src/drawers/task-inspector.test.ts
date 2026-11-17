@@ -553,7 +553,7 @@ describe('the task inspector: What the agent was given', () => {
     });
     const drawer = createTaskInspector(ctx, { kind: 'inspector', id: TID, tab: 'context' });
     await settle();
-    expect(drawer.el.textContent).toContain('No context packet was delivered');
+    expect(drawer.el.textContent).toContain('No agent was given anything for this task yet.');
     buttonNamed(drawer.el, 'Compile a fresh preview')?.click();
     await settle();
     expect(ctx.transport.to('POST', '/context/compile')[0]?.body).toEqual({ task_id: TID, purpose: 'explain' });

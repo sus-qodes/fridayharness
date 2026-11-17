@@ -486,7 +486,7 @@ export function createDiffViewer(ctx: AppContext, request: DrawerRequest): Compo
         sourceLine,
         'Goal branch ',
         mono(g.branch),
-        ` · ${plural(g.commits_ahead.length, 'commit')} ahead of the main checkout · merge base ${shortSha(g.merge_base)}`,
+        ` · ${plural(g.commits_ahead.length, 'commit')} ahead of your own branch · merge base ${shortSha(g.merge_base)}`,
       );
       replace(
         extra,

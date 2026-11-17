@@ -373,7 +373,7 @@ export function startAgentModal(
               title: 'Give Codex full access?',
               body: [
                 'With full access Codex runs its commands with no sandbox: they can change any file and reach the network.',
-                'Friday cannot hold Codex at the tool boundary; only its sandbox limits it.',
+                'Friday cannot check each thing Codex does before it does it; only Codex’s own sandbox limits it.',
               ],
               confirmLabel: 'Allow full access',
               danger: true,

@@ -43,7 +43,7 @@ describe('getting started', () => {
     expect(items[3]?.detail).toMatch(/Verification runs only Friday's own checks/);
     // The way to fix it is the page that suggests them, not a file to write by hand (2026-11-17).
     expect(items[3]?.fix).toEqual({ label: 'Settings → Checks', action: 'checks' });
-    expect(items[4]?.detail).toMatch(/every agent works in the main checkout until you commit once/i);
+    expect(items[4]?.detail).toMatch(/every agent works in your own project folder instead of a folder of its task/i);
   });
 
   it('counts only harnesses that are not terminated', () => {

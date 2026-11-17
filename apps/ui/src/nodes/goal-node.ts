@@ -13,7 +13,7 @@ import type { GoalSummary, UiSnapshot } from '@friday/protocol';
 import type { GoalGroup } from '../model/board.js';
 import { type AppContext, openModal } from '../shell/context.js';
 import { button, h, replace, setVar, toggleClass } from '../ui/dom.js';
-import { cleanText, compact, plural, truncate, usd } from '../ui/format.js';
+import { cleanText, compact, humanize, plural, truncate, usd } from '../ui/format.js';
 import { actionButton, badge, fingerprint, type NodeView, nodeIcon, pill, type Tone } from './common.js';
 
 export interface GoalCardModel {
@@ -324,7 +324,7 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
         nodeIcon('target', 14),
         h('span', { class: 'nd-id', title: `Goal ${goal.goal_id}` }, 'Goal'),
         h('span', { class: 'spacer' }),
-        badge(goal.status, GOAL_TONE[goal.status] ?? 'muted'),
+        badge(humanize(goal.status), GOAL_TONE[goal.status] ?? 'muted'),
       ),
       h(
         'p',

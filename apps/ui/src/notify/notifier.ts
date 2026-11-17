@@ -17,6 +17,7 @@
  * module against the shell's `notify`, so the same rules hold there.
  */
 import type { SnapshotInboxItem, SnapshotTask, UiSnapshot } from '@friday/protocol';
+import { capabilityWords } from '../model/capability-words.js';
 import { visible } from '../model/text.js';
 import { nextExpiryIn, waitingItems } from '../notch/derive.js';
 import { realTimers, type TimerApi } from '../notch/island-fsm.js';
@@ -139,7 +140,7 @@ export function diffNotices(memory: NoticeMemory, board: UiSnapshot, now: number
       notices.push({
         key: item.key,
         title: a.risk === 'high' ? 'High-risk approval needed' : 'Approval needed',
-        body: `${truncate(visible(a.capability), 60)}${target}`,
+        body: `${capabilityWords(a.capability)}${target}`,
         taskId: a.task_id,
       });
     } else if (item.kind === 'question') {

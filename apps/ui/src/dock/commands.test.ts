@@ -118,7 +118,9 @@ describe('core commands', () => {
     });
     await run(ctx, 'pause');
     expect(ctx.transport.to('POST', '/control/pause')).toHaveLength(1);
-    expect(ctx.toasts.at(-1)?.text).toMatch(/Friday is paused.*Stop sent to 1 attempt.*preserved/);
+    expect(ctx.toasts.at(-1)?.text).toMatch(
+      /Friday is paused.*Friday asked 1 agent it cannot hold in place to stop.*kept/,
+    );
     expect(ctx.refreshes).toBe(1);
     ctx.board(makeSnapshot({ control: PAUSED, harnesses: [makeHarness({ attach_mode: 'attach' })] }));
     await run(ctx, 'resume');

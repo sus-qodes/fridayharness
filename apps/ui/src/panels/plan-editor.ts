@@ -1203,7 +1203,7 @@ function revisionEditor(
     h('h3', { class: 'section-title' }, 'Tasks of the active plan'),
     existing.length ? existingList : h('div', { class: 'empty' }, 'The active plan has no tasks.'),
     note(
-      'Only FAILED tasks can be reworked, and only tasks that have not started (proposed or ready) can be dropped. Tasks you do not change are kept.',
+      'Only failed tasks can be reworked, and only tasks that have not started (proposed or ready) can be dropped. Tasks you do not change are kept.',
     ),
     h('h3', { class: 'section-title' }, 'New tasks'),
     newList,

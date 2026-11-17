@@ -13,6 +13,7 @@
  * The one difference is an approval whose decision is in flight, which leaves the rail at once.
  */
 import type { SnapshotInboxItem, UiSnapshot } from '@friday/protocol';
+import { capabilityWords } from '../model/capability-words.js';
 import { classifyEscalation } from '../model/escalations.js';
 import { visible } from '../model/text.js';
 import { itemSignature, type WaitingItem, waitingItems } from '../notch/derive.js';
@@ -126,7 +127,7 @@ export function mountDecisionsTray(
         const a = item.approval;
         const who = agentKeyOf(board, a.requested_by_id) ?? a.requested_by_kind;
         return {
-          label: `Approval: ${visible(a.capability)}`,
+          label: `Approval: ${capabilityWords(a.capability)}`,
           sub: `${visible(who)} · ${truncate(visible(a.target ?? 'no target'), 90)}`,
         };
       }

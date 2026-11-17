@@ -109,11 +109,7 @@ export function claudeSetupModal(
     replace(
       planBox,
       p.claude_code
-        ? h(
-            'div',
-            { class: 'muted' },
-            `Claude Code ${plain(p.claude_code.version, 40)} found (${plain(p.claude_code.source, 60)}; hooks ${plain(p.claude_code.hook_level, 20)}).`,
-          )
+        ? h('div', { class: 'muted' }, `Claude Code ${plain(p.claude_code.version, 40)} found.`)
         : h(
             'div',
             { class: 'hidden-warning' },
@@ -203,7 +199,7 @@ export function claudeSetupModal(
   const el = panel(
     'pn-claude-setup',
     note(
-      'Friday writes Claude Code’s project settings (its MCP server and hooks) so a session in VS Code works through Friday. Preview first: nothing changes until you apply.',
+      'Friday writes Claude Code’s project settings so that a session you open in VS Code works through Friday: it takes its tasks from Friday, and Friday sees and checks what it does. Preview first: nothing changes until you apply.',
     ),
     keyField.el,
     h('div', { class: 'pn-actions pn-actions-start' }, previewBtn, applyBtn),

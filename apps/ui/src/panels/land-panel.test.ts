@@ -92,7 +92,7 @@ describe('landing', () => {
     expect(ctx.transport.calls[0]?.path).toContain(`/goals/${GID}/diff?stat=1`);
     const text = m.el.textContent ?? '';
     expect(text).toContain(`Ready to land: friday/goal-${GID}`);
-    expect(text).toContain("2 commits ahead of the main checkout's HEAD");
+    expect(text).toContain('2 commits ahead of your own branch');
     expect(text).toContain('abcdef0123');
     expect(text).toContain('+42');
     expect(text).toContain('−3');

@@ -6,6 +6,7 @@
  * field has focus; `Enter` only activates the focused button; `Esc` never denies (FD-28).
  */
 import type { ApprovalRow } from '@friday/protocol';
+import { capabilityWords, knownCapability } from '../model/capability-words.js';
 import { hasHidden, visible } from '../model/text.js';
 import { type AppContext, type Component, openModal } from '../shell/context.js';
 import { button, h, replace, setText } from '../ui/dom.js';
@@ -249,18 +250,23 @@ export function approvalCard(ctx: AppContext, approval: ApprovalRow, opts: Appro
         h('dt', null, 'Task'),
         h('dd', null, taskLine(ctx.store.select('board'), a.task_id)),
       ),
+      // What it asks, as the act it is; the policy's own name for it in the tooltip.
       h(
         'div',
         { class: 'gv-meta-row' },
-        h('dt', null, 'Capability'),
-        h('dd', { class: 'mono' }, visible(a.capability)),
+        h('dt', null, 'Asks to'),
+        h(
+          'dd',
+          { class: knownCapability(a.capability) ? 'gv-asks' : 'mono', title: visible(a.capability) },
+          capabilityWords(a.capability),
+        ),
       ),
     );
     replace(
       body,
-      agentText('Target', a.target, 'gv-target'),
-      agentText('Purpose', a.purpose, 'gv-purpose'),
-      hasHidden(a.capability) ? h('div', { class: 'hidden-warning' }, `Capability: ${HIDDEN_WARNING}`) : null,
+      agentText('Exactly this', a.target, 'gv-target'),
+      agentText('The agent’s reason', a.purpose, 'gv-purpose'),
+      hasHidden(a.capability) ? h('div', { class: 'hidden-warning' }, `What it asks: ${HIDDEN_WARNING}`) : null,
     );
     const why = modalReason(a, 'once');
     pathNote.hidden = why === null;

@@ -120,11 +120,7 @@ export function antigravitySetupModal(
     replace(
       planBox,
       found
-        ? h(
-            'div',
-            { class: 'muted' },
-            `${found} found (hooks ${plain(p.antigravity?.hook_level ?? 'unknown', 20)}; experimental).`,
-          )
+        ? h('div', { class: 'muted' }, `${found} found (experimental).`)
         : h(
             'div',
             { class: 'hidden-warning' },

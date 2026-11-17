@@ -93,6 +93,30 @@ describe('approval card', () => {
     card.destroy();
   });
 
+  it('says what the agent asks as the act it is, and keeps the policy’s name for it one hover away (2026-11-17)', () => {
+    const card = approvalCard(ctx, makeApproval({ capability: 'package.install', target: 'npm install zod' }));
+    document.body.appendChild(card.el);
+    const rows = [...card.el.querySelectorAll('.gv-meta-row')].map((r) => [
+      r.querySelector('dt')?.textContent,
+      r.querySelector('dd')?.textContent,
+    ]);
+    expect(rows.at(-1)).toEqual(['Asks to', 'Install packages']);
+    const asks = card.el.querySelector('.gv-meta-row:last-child dd') as HTMLElement;
+    expect(asks.title).toBe('package.install');
+    expect(asks.classList.contains('mono')).toBe(false);
+    // Exactly what would run is shown in full under it, as before.
+    expect(card.el.querySelector('.gv-target')?.textContent).toContain('Exactly this');
+    expect(card.el.querySelector('.gv-target')?.textContent).toContain('npm install zod');
+    expect(card.el.querySelector('.gv-purpose')?.textContent).toContain('The agent’s reason');
+    card.destroy();
+    // One Friday has no words for is shown as the policy names it.
+    const other = approvalCard(ctx, makeApproval({ capability: 'future.thing' }));
+    const dd = other.el.querySelector('.gv-meta-row:last-child dd') as HTMLElement;
+    expect(dd.textContent).toBe('future.thing');
+    expect(dd.classList.contains('mono')).toBe(true);
+    other.destroy();
+  });
+
   it('an expired request offers no decision', () => {
     const card = mount(makeApproval({ expired: true }));
     expect(card.el.querySelector('.gv-actions')?.hasAttribute('hidden')).toBe(true);

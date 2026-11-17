@@ -10,6 +10,8 @@
  * if the setting brings it back).
  */
 import type { ConfigChanges, UiSnapshot } from '@friday/protocol';
+import { settingNames } from '../model/setting-words.js';
+import { visible } from '../model/text.js';
 import { STALE_PAGE_MESSAGE } from '../sync/sync-engine.js';
 import { button, h } from '../ui/dom.js';
 import { icon } from '../ui/svg.js';
@@ -22,7 +24,8 @@ export const RESTART_HINT_DESKTOP = 'Restart Friday here, or from the tray.';
 export const RESTART_HINT_BROWSER =
   'From a browser: stop Friday in Settings → Friday, then open it again from its shortcut or the desktop app.';
 /** The file as it stands could not be read; what follows is the daemon's reason. */
-export const CONFIG_ERROR_MESSAGE = 'config.yaml could not be read, so Friday keeps the settings it had:';
+export const CONFIG_ERROR_MESSAGE =
+  'The project’s settings file (.friday/config.yaml) could not be read, so Friday keeps the settings it had:';
 
 /** The changed keys of config.yaml that keep their start values until Friday restarts. */
 export function configRestartKeys(board: UiSnapshot | null): string[] {
@@ -46,15 +49,23 @@ function listKeys(keys: string[]): string {
 }
 
 /**
- * The banner's sentence for what changed: the keys applied, when any, then the keys that need a
- * restart; or why the file could not be read.
+ * The banner's sentence for what changed: the settings applied, when any, then the ones that need
+ * a restart; or why the file could not be read. Each setting by what it is (2026-11-17): the
+ * banner named the keys of config.yaml, which Settings now changes from buttons.
  */
 export function configBannerText(changes: ConfigChanges): string {
   if (changes.error !== null) return `${CONFIG_ERROR_MESSAGE} ${changes.error}`;
-  const restart = changes.restart_needed;
+  const restart = settingNames(changes.restart_needed);
   if (!restart.length) return '';
-  const applied = changes.applied.length ? `${listKeys(changes.applied)} applied; ` : '';
-  return `config.yaml changed: ${applied}${listKeys(restart)} ${restart.length === 1 ? 'needs' : 'need'} a restart to apply.`;
+  const done = settingNames(changes.applied);
+  const applied = done.length ? `${listKeys(done)} applied; ` : '';
+  return `The project’s settings changed: ${applied}${listKeys(restart)} ${restart.length === 1 ? 'needs' : 'need'} a restart to apply.`;
+}
+
+/** The keys behind the banner's sentence, as config.yaml writes them: for whoever looks for them. */
+export function configBannerKeys(changes: ConfigChanges): string {
+  const keys = [...changes.applied, ...changes.restart_needed];
+  return keys.length ? `In .friday/config.yaml: ${keys.map((k) => visible(k)).join(', ')}` : '';
 }
 
 /** The daemon speaks another interface API than this page. */
@@ -138,6 +149,7 @@ export function mountBanners(ctx: AppContext, opts: BannerOptions = {}): Compone
     const changes = board?.config?.changes;
     config.hidden = !configChanged(board);
     configText.textContent = changes ? configBannerText(changes) : '';
+    configText.title = changes ? configBannerKeys(changes) : '';
     // A file that could not be read is fixed in the editor; a restart would change nothing.
     const needsRestart = configRestartKeys(board).length > 0 && configError(board) === null;
     restartHint.textContent = needsRestart ? hint : '';

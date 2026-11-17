@@ -186,7 +186,8 @@ describe('notifications (plan FD-25)', () => {
     expect(f.shown).toHaveLength(1);
     expect(f.shown[0]?.title).toBe('Approval needed — Friday — shop');
     expect(f.shown[0]?.options).toMatchObject({
-      body: 'shell.git.commit: git commit -m "pricing"',
+      // What the agent asks, as the act it is, then exactly what.
+      body: 'Commit or change branches: git commit -m "pricing"',
       tag: 'approval:apr_2',
     });
   });

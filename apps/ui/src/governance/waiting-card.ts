@@ -173,7 +173,7 @@ export function waitingCard(ctx: AppContext, task: SnapshotTask, opts: WaitingCa
         void confirmed(releaseBtn, 'release', {
           title: 'Release this task?',
           body: [
-            'The agent’s attempt ends and the task goes back to READY for any agent.',
+            'The agent’s attempt ends, and the task is ready again for any agent.',
             'Its folder and commits are kept for the next attempt.',
           ],
           confirmLabel: 'Release',

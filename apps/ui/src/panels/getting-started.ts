@@ -91,7 +91,8 @@ export function checklist(board: UiSnapshot | null, context: Partial<ChecklistCo
       id: 'commit',
       done: commit,
       title: commit ? 'The repository has a commit' : 'The repository has no commit yet',
-      detail: 'Every agent works in the main checkout until you commit once (VS Code: Source Control → Commit).',
+      detail:
+        'Until the project has a first commit, every agent works in your own project folder instead of a folder of its task. Commit once (VS Code: Source Control → Commit).',
       fix: { label: 'Open the folder in VS Code', action: 'folder' },
     },
     {

@@ -15,6 +15,7 @@ import {
 import { h } from '../ui/dom.js';
 import {
   CONFIG_ERROR_MESSAGE,
+  configBannerKeys,
   configBannerText,
   configChanged,
   mountBanners,
@@ -338,8 +339,9 @@ describe('banners', () => {
     expect(configChanged(makeSnapshot({ config: { loaded_hash: 'a', current_hash: 'b' } }))).toBe(false);
     expect(configChanged(makeSnapshot())).toBe(false);
     expect(configChanged(null)).toBe(false);
+    // Each setting by what it is, not by its key in config.yaml (2026-11-17).
     expect(configBannerText({ applied: [], restart_needed: ['daemon.port'], error: null })).toBe(
-      'config.yaml changed: daemon.port needs a restart to apply.',
+      'The project’s settings changed: the port Friday answers on needs a restart to apply.',
     );
     expect(
       configBannerText({
@@ -347,7 +349,22 @@ describe('banners', () => {
         restart_needed: ['daemon.port', 'leases.lease_ttl_ms'],
         error: null,
       }),
-    ).toBe('config.yaml changed: scopes.api applied; daemon.port and leases.lease_ttl_ms need a restart to apply.');
+    ).toBe(
+      'The project’s settings changed: the named scopes applied; the port Friday answers on and how long Friday waits for an agent that went quiet need a restart to apply.',
+    );
+    // Two keys of one setting are said once; a key Friday has no name for is shown as written.
+    expect(
+      configBannerText({
+        applied: [],
+        restart_needed: ['providers.anthropic.allow_remote', 'providers.anthropic.daily_budget_usd', 'future.key'],
+        error: null,
+      }),
+    ).toBe(
+      'The project’s settings changed: planning with an Anthropic key, the project’s spending limit for planning with a key and future.key need a restart to apply.',
+    );
+    expect(configBannerKeys({ applied: ['scopes.api'], restart_needed: ['daemon.port'], error: null })).toBe(
+      'In .friday/config.yaml: scopes.api, daemon.port',
+    );
     const ctx = makeContext({ snapshot: portChanged() });
     const open = vi.spyOn(ctx.platform, 'openInEditor');
     const banners = mountBanners(ctx);
@@ -355,7 +372,11 @@ describe('banners', () => {
     const banner = banners.el.querySelector('.sh-banner-warn') as HTMLElement;
     expect(banner.hidden).toBe(false);
     expect(banner.textContent).toContain(
-      'config.yaml changed: scopes.frontend.write applied; daemon.port needs a restart to apply.',
+      'The project’s settings changed: the named scopes applied; the port Friday answers on needs a restart to apply.',
+    );
+    // The keys themselves are one hover away.
+    expect((banner.querySelector('.sh-banner-config-text') as HTMLElement).title).toBe(
+      'In .friday/config.yaml: scopes.frontend.write, daemon.port',
     );
     expect(banner.textContent).toContain(RESTART_HINT_BROWSER);
     expect(banner.querySelector('.sh-banner-restart')).toBeNull();

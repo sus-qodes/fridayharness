@@ -2,6 +2,12 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — plain words, part 2
+
+- **An approval says what the agent asks as the act it is.** The card and the full view named it as the policy does, in a monospaced line ("shell.git.commit", "package.install"). They read "Asks to: Commit or change branches", "Install packages"; the policy's name is in the tooltip, and what exactly would run is shown in full under "Exactly this", with the agent's own reason under "The agent’s reason". The tray's row, the notification and the history use the same words. A capability Friday has no words for is shown as written.
+- **The "settings changed" banner names settings, not keys.** It listed the keys of config.yaml ("providers.anthropic.allow_remote needs a restart to apply"), which Settings now changes from buttons. It says "The project’s settings changed: planning with an Anthropic key needs a restart to apply", each setting once, with the keys in the tooltip; a key Friday has no name for is shown as written.
+- **A goal's state is a word** ("Active", "Completed"), not the daemon's constant. "The main checkout" is "your project folder" or "your own branch"; "held at the tool boundary" is said as what it means; the Agents panel's "MCP connected", "Hooks seen" and "Enforcement" are "Connected to Friday", "Friday sees what it does" and "What Friday can stop"; "context packet" is what the agent was given.
+
 ## Unreleased — plain words, part 1
 
 The 2026-11-17 review of what the app says to someone who never opened a terminal. Nothing behaves differently; the words, and what is shown, changed.

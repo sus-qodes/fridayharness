@@ -504,11 +504,15 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
         { class: 'pn-kv' },
         h('dt', null, 'Configured'),
         h('dd', null, st.harness ? 'yes: it connected' : 'not seen yet (Set up previews it)'),
-        h('dt', null, 'MCP connected'),
+        h('dt', { title: 'Its MCP server reached Friday' }, 'Connected to Friday'),
         h('dd', null, st.connected ? 'yes' : 'no'),
-        h('dt', null, 'Hooks seen'),
-        h('dd', null, st.hooksSeen ? 'yes' : st.harness ? 'not yet: they show with its first tool call' : 'no'),
-        h('dt', null, 'Enforcement'),
+        h('dt', { title: 'Its hooks report each tool call to Friday' }, 'Friday sees what it does'),
+        h(
+          'dd',
+          null,
+          st.hooksSeen ? 'yes' : st.harness ? 'not yet: it shows with the first thing the agent does' : 'no',
+        ),
+        h('dt', null, 'What Friday can stop'),
         h('dd', null, b ? badge(b.label, b.tone, b.title) : '—'),
       ),
       h(
@@ -536,11 +540,15 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
         { class: 'pn-kv' },
         h('dt', null, 'Configured'),
         h('dd', null, st.harness ? 'yes: it connected' : 'not seen yet (Connect previews it)'),
-        h('dt', null, 'MCP connected'),
+        h('dt', { title: 'Its MCP server reached Friday' }, 'Connected to Friday'),
         h('dd', null, st.connected ? 'yes' : 'no'),
-        h('dt', null, 'Hooks seen'),
-        h('dd', null, st.hooksSeen ? 'yes' : st.harness ? 'not yet: they show with its first tool call' : 'no'),
-        h('dt', null, 'Enforcement'),
+        h('dt', { title: 'Its hooks report each tool call to Friday' }, 'Friday sees what it does'),
+        h(
+          'dd',
+          null,
+          st.hooksSeen ? 'yes' : st.harness ? 'not yet: it shows with the first thing the agent does' : 'no',
+        ),
+        h('dt', null, 'What Friday can stop'),
         h('dd', null, b ? badge(b.label, b.tone, b.title) : '—'),
       ),
       h(
@@ -558,14 +566,16 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
     'section',
     { class: 'pn-section pn-card' },
     h('h3', { class: 'section-title' }, 'Claude Code in VS Code'),
-    note('Claude Code running in your editor joins Friday through its MCP server and hooks.'),
+    note(
+      'Claude Code running in your editor works through Friday once it is connected: it takes its tasks from Friday, and Friday sees and checks what it does.',
+    ),
     claudeBox,
   );
   const antigravitySection = h(
     'section',
     { class: 'pn-section pn-card' },
     h('h3', { class: 'section-title' }, 'Antigravity'),
-    note(`Antigravity joins Friday through its MCP server and hooks (experimental). ${ANTIGRAVITY_ATTACH_NOTE}`),
+    note(`Antigravity works through Friday once it is connected (experimental). ${ANTIGRAVITY_ATTACH_NOTE}`),
     antigravityBox,
   );
 

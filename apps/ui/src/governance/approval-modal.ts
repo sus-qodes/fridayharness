@@ -9,6 +9,7 @@
  */
 import type { ApprovalRow, TaskDiff } from '@friday/protocol';
 import type { GraphQuery, Reach } from '../api/client.js';
+import { capabilityWords, knownCapability } from '../model/capability-words.js';
 import { visible } from '../model/text.js';
 import { type AppContext, type Component, type ModalRequest, openDrawer } from '../shell/context.js';
 import { append, button, h, replace, setText } from '../ui/dom.js';
@@ -103,7 +104,12 @@ export function approvalModal(
     'header',
     { class: 'gv-card-head' },
     h('span', { class: 'gv-card-icon gv-tone-approval' }, icon('shield', 18)),
-    h('span', { class: 'gv-card-title mono' }, visible(a.capability)),
+    // What it asks, as the act it is; the policy's own name for it in the tooltip.
+    h(
+      'span',
+      { class: ['gv-card-title', !knownCapability(a.capability) && 'mono'], title: visible(a.capability) },
+      capabilityWords(a.capability),
+    ),
     h('span', { class: 'spacer' }),
     riskBadge(a),
     h('span', { class: 'gv-expiry' }, a.expires_at ? `expires ${timeUntil(a.expires_at, ctx.now())}` : 'no expiry'),
@@ -209,8 +215,8 @@ export function approvalModal(
     el,
     head,
     meta,
-    agentText('Target', a.target, 'gv-target'),
-    agentText('Purpose', a.purpose, 'gv-purpose'),
+    agentText('Exactly this', a.target, 'gv-target'),
+    agentText('The agent’s reason', a.purpose, 'gv-purpose'),
     bound,
     fileSection,
     h(
