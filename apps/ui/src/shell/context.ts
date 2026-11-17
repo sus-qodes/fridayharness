@@ -159,6 +159,8 @@ export type ModalKind =
   | 'edit-agent'
   /** A task stopped at its agent's spending limit: a higher limit, and the task continues; `id` is the task. */
   | 'raise-limit'
+  /** A goal whose plan runs: what should be different, for the planner or the editor; `id` is the goal. */
+  | 'change-goal'
   | 'plan-review'
   | 'feedback';
 
@@ -169,6 +171,11 @@ export interface ModalRequest {
   id?: string;
   /** Plan editor: a first plan or a revision. */
   mode?: 'first' | 'revision';
+  /**
+   * Plan editor: `proposed` opens it on the plan that waits for a decision, to change it before
+   * approving ("Edit before approving", 2026-11-17).
+   */
+  seed?: 'proposed';
 }
 
 export type DrawerFactory = (ctx: AppContext, request: DrawerRequest) => Component & { title: string };

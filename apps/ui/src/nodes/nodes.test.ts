@@ -458,6 +458,26 @@ describe('goal card', () => {
     }
   });
 
+  it('offers to change a goal whose plan runs, and nothing to change before a plan or after the end', () => {
+    const ctx = makeContext();
+    const running = makeGoal({ status: 'ACTIVE' });
+    const node = createGoalNode(ctx, { group: group({ goal: running, active: makePlan() }) });
+    const change = node.el.querySelector('[data-action="change-goal"]') as HTMLButtonElement;
+    expect(change.textContent).toBe('Change this goal…');
+    click(change);
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'change-goal', id: running.goal_id });
+    // No plan yet (it is written or asked for from the card), a finished goal, a cancelled one.
+    for (const g of [
+      group({ goal: makeGoal({ status: 'OPEN' }), active: null }),
+      group({ goal: makeGoal({ status: 'ACTIVE' }), active: null }),
+      group({ goal: makeGoal({ status: 'COMPLETED' }), active: makePlan() }),
+      group({ goal: makeGoal({ status: 'CANCELLED' }), active: makePlan() }),
+    ]) {
+      const other = createGoalNode(makeContext(), { group: g });
+      expect(other.el.querySelector('[data-action="change-goal"]'), g.goal.status).toBeNull();
+    }
+  });
+
   it('says where a completed goal landed, or that its work is already in the folder', () => {
     const done = makeGoal({ status: 'COMPLETED' });
     const label = (landing: NonNullable<UiSnapshot['goal_landing']>[string] | undefined) => {

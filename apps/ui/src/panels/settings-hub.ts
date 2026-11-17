@@ -38,6 +38,7 @@ import {
   select,
   Teardown,
 } from './common.js';
+import { plannerModelRow } from './planner-model.js';
 import { autoVerifySwitch, plannerQuickSetup } from './quick-setup.js';
 import { routingPins } from './routing-pins.js';
 import {
@@ -603,6 +604,8 @@ export function mountSettingsHub(ctx: AppContext): Component {
         ),
       );
       cardStatus.append(h('div', { class: 'hub-divider' }), kv);
+      const modelRow = plannerModelRow(ctx, brain);
+      if (modelRow) cardStatus.append(h('div', { class: 'hub-divider' }), modelRow);
     }
 
     const cardActions = h('div', { class: 'hub-card' });

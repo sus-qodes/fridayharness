@@ -73,10 +73,12 @@ export {
 export {
   approveProvider,
   choosePlanner,
+  choosePlannerModel,
   PLANNER_CHOICES,
   type PlannerChoice,
   type ProviderApproval,
   plannerChoice,
+  plannerModelChoice,
   providerApproval,
   providerEndpoint,
   revokeProvider,

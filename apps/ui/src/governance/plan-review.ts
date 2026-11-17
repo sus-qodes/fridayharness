@@ -2,10 +2,17 @@
  * Plan review (plan §7.5, §7.3): the proposed version of a goal's plan, task by task with its
  * change (new, keep, rework, drop) and note, and its diff against the active version
  * (`plans/:id/diff`); Approve, or Reject with a note.
+ *
+ * 2026-11-17: a proposed plan was approve or reject, nothing between, and a note sent with a
+ * rejection of a first plan went nowhere. Now:
+ * - **Edit before approving…** opens the plan in the editor as it was proposed; proposing the
+ *   edited plan replaces it.
+ * - **Reject and ask again** rejects it and asks the planner for a new one from the note (shown
+ *   while a planner is ready).
  */
 import type { LivePlanTask, LivePlanVersion } from '@friday/protocol';
 import { hasHidden, visible } from '../model/text.js';
-import type { AppContext, Component, ModalRequest } from '../shell/context.js';
+import { type AppContext, type Component, type ModalRequest, openModal } from '../shell/context.js';
 import { button, h, replace, setText } from '../ui/dom.js';
 import { cleanText, plural, stripEscapes, truncate } from '../ui/format.js';
 import { ARMING_TEXT, armDecisions, type Clock } from './arming.js';
@@ -211,10 +218,19 @@ export function planReview(
     id: noteId,
     rows: 2,
     maxLength: 2000,
-    placeholder: 'Why it is rejected (the planner reads it when it revises)',
+    placeholder: 'What should be different (the planner reads it when it plans again)',
   });
   const approve = button('Approve plan', () => undefined, { class: 'btn btn-primary gv-decide' });
   const reject = button('Reject with note', () => undefined, { class: 'btn btn-danger gv-decide' });
+  // The plan as it was proposed, in the editor: what a person changes there replaces this version.
+  const editFirst = button(
+    'Edit before approving…',
+    () => openModal(ctx, { kind: 'plan-editor', id: goalId, mode: active ? 'revision' : 'first', seed: 'proposed' }),
+    { class: 'btn' },
+  );
+  const plannerReady = () => ctx.store.select('board')?.brain?.planner_available === true;
+  const again = button('Reject and ask again', () => undefined, { class: 'btn gv-decide' });
+  again.hidden = !plannerReady();
   const tasks = [...p.tasks].sort((x, y) => x.position - y.position);
 
   replace(
@@ -255,7 +271,7 @@ export function planReview(
       h('label', { class: 'field-label', for: noteId }, 'Note (sent with a rejection)'),
       note,
     ),
-    h('div', { class: 'gv-actions' }, approve, reject),
+    h('div', { class: 'gv-actions' }, approve, editFirst, again, reject),
     gone,
     hint,
     status,
@@ -282,6 +298,46 @@ export function planReview(
   });
   arming.register(approve);
   arming.register(reject);
+  arming.register(again);
+
+  again.addEventListener(
+    'click',
+    arming.guard(async () => {
+      if (busy || !gone.hidden) return;
+      const text = note.value.trim();
+      if (!text) {
+        setText(status, 'Say in the note what should be different: the planner plans again from it.');
+        note.focus();
+        return;
+      }
+      busy = true;
+      again.disabled = true;
+      setText(status, 'Rejecting…');
+      const rejected = await ctx.act('Reject the plan', () => ctx.api.rejectPlan(p.plan_id, p.version, text));
+      if (!rejected) {
+        busy = false;
+        again.disabled = false;
+        setText(status, '');
+        return;
+      }
+      // The rejection stands whatever follows; the new plan is a model call and can take a minute.
+      if (!disposed) setText(status, 'Rejected. Asking the planner for a new plan… (this can take a minute)');
+      const asked = await ctx.act(
+        'Ask for a new plan',
+        () => ctx.api.replan(goalId, text),
+        'The planner was asked for a new plan from your note',
+      );
+      busy = false;
+      ctx.refresh();
+      if (disposed) return;
+      if (asked) close();
+      else
+        setText(
+          status,
+          'The plan is rejected, but the planner could not be asked. Ask again from the goal, or write the plan yourself.',
+        );
+    }),
+  );
 
   approve.addEventListener(
     'click',
@@ -328,7 +384,10 @@ export function planReview(
       gone.hidden = false;
       approve.disabled = true;
       reject.disabled = true;
+      again.disabled = true;
+      editFirst.disabled = true;
     }
+    again.hidden = !plannerReady();
   });
 
   return {

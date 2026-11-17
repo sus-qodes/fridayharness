@@ -164,6 +164,105 @@ describe('plan review', () => {
     m.destroy();
   });
 
+  it('opens the proposed plan in the editor to change it before approving', () => {
+    const revision = open();
+    buttonNamed(revision.el, 'Edit before approving…').click();
+    expect(ctx.store.select('ui').modal).toEqual({
+      kind: 'plan-editor',
+      id: GOAL,
+      mode: 'revision',
+      seed: 'proposed',
+    });
+    revision.destroy();
+    const first = open(false);
+    buttonNamed(first.el, 'Edit before approving…').click();
+    expect(ctx.store.select('ui').modal).toMatchObject({ mode: 'first', seed: 'proposed' });
+    // Nothing was decided by opening the editor.
+    expect(ctx.transport.calls.filter((c) => c.method === 'POST')).toHaveLength(0);
+    first.destroy();
+  });
+
+  describe('reject and ask again', () => {
+    const ready = () =>
+      ctx.board(
+        makeSnapshot({
+          goals: [makeGoal()],
+          plans: { [GOAL]: { active: makePlan(), proposed } },
+          brain: { planner_available: true, reason: null } as never,
+        }),
+      );
+
+    it('is offered only while a planner is ready', () => {
+      const m = open();
+      expect(buttonNamed(m.el, 'Reject and ask again').hidden).toBe(true);
+      ready();
+      expect(buttonNamed(m.el, 'Reject and ask again').hidden).toBe(false);
+      m.destroy();
+    });
+
+    it('wants the note first, then rejects the plan and asks the planner for a new one from it', async () => {
+      const m = open(true, { [`POST /goals/${GOAL}/replan`]: { result: 'proposed' } });
+      ready();
+      arm(m.el);
+      buttonNamed(m.el, 'Reject and ask again').click();
+      await flush();
+      // Without a note there is nothing for the planner to plan again from: nothing is sent.
+      expect(m.el.querySelector('.gv-status')?.textContent).toContain('Say in the note what should be different');
+      expect(ctx.transport.calls.filter((c) => c.method === 'POST')).toHaveLength(0);
+      (m.el.querySelector('textarea') as HTMLTextAreaElement).value = '  keep the docs task  ';
+      buttonNamed(m.el, 'Reject and ask again').click();
+      await flush();
+      const posts = ctx.transport.calls
+        .filter((c) => c.method === 'POST')
+        .map((c) => [c.path.split('/').at(-1), c.body]);
+      expect(posts).toEqual([
+        ['reject', { note: 'keep the docs task' }],
+        ['replan', { note: 'keep the docs task' }],
+      ]);
+      expect(ctx.toasts.at(-1)).toEqual({
+        kind: 'success',
+        text: 'The planner was asked for a new plan from your note',
+      });
+      expect(closed).toBe(1);
+      m.destroy();
+    });
+
+    it('says the plan is rejected when the planner could not be asked, and stays open', async () => {
+      const m = open(true, {
+        [`POST /goals/${GOAL}/replan`]: () => {
+          throw new Error('offline');
+        },
+      });
+      ready();
+      arm(m.el);
+      (m.el.querySelector('textarea') as HTMLTextAreaElement).value = 'split it';
+      buttonNamed(m.el, 'Reject and ask again').click();
+      await flush();
+      expect(ctx.transport.to('POST', `/plans/${PLAN}/versions/2/reject`)).toHaveLength(1);
+      expect(m.el.querySelector('.gv-status')?.textContent).toContain(
+        'The plan is rejected, but the planner could not be asked.',
+      );
+      expect(closed).toBe(0);
+      m.destroy();
+    });
+
+    it('asks nothing when the rejection itself failed', async () => {
+      const m = open(true, {
+        [`POST /plans/${PLAN}/versions/2/reject`]: () => {
+          throw new Error('stale');
+        },
+      });
+      ready();
+      arm(m.el);
+      (m.el.querySelector('textarea') as HTMLTextAreaElement).value = 'split it';
+      buttonNamed(m.el, 'Reject and ask again').click();
+      await flush();
+      expect(ctx.transport.to('POST', `/goals/${GOAL}/replan`)).toHaveLength(0);
+      expect(buttonNamed(m.el, 'Reject and ask again').disabled).toBe(false);
+      m.destroy();
+    });
+  });
+
   it('says when the proposal was decided elsewhere', () => {
     const m = open();
     ctx.board(makeSnapshot({ goals: [makeGoal()], plans: { [GOAL]: { active: makePlan(), proposed: null } } }));

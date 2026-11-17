@@ -13,6 +13,7 @@
 import type { AppContext } from '../shell/context.js';
 import { agentsDrawer } from './agents-panel.js';
 import { antigravitySetupModal } from './antigravity-setup.js';
+import { changeGoalModal } from './change-goal.js';
 import { claudeSetupModal } from './claude-setup.js';
 import { landModal } from './land-panel.js';
 import { newGoalModal } from './new-goal.js';
@@ -30,6 +31,7 @@ export function registerPanels(ctx: AppContext): void {
   r.modal('plan-editor', planEditorModal);
   r.modal('verify', verifyModal);
   r.modal('land', landModal);
+  r.modal('change-goal', changeGoalModal);
   r.modal('edit-agent', startAgentModal);
   r.modal('raise-limit', raiseLimitModal);
   r.modal('claude-setup', claudeSetupModal);

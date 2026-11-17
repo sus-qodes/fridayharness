@@ -2,6 +2,20 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — ease of use, part 3: planning
+
+Findings of the 2026-11-17 review of goals and planning.
+
+- **The plan editor says what a plan is, and opens on one that can be sent.** It opened blank, and a one-task plan still wanted a key, a kind, a role, criteria and a write scope before Friday would take it. A first plan now opens on one task filled in from the goal (what it delivers, when it is done, free to change the whole project) under two lines on what a plan is; it can be proposed as it stands. A task added to it follows the one before and may change the whole project, so a list reads "first this, then that"; tasks that should run side by side are a choice (clear "Depends on", give each its folders). A folder added to "the whole project" narrows the task to that folder.
+- **"Advanced" holds what a person seldom changes** (key, kind, role, priority, risk, read scope) and opens by itself when one of those is wrong. The first task is no longer asked what it depends on.
+- **"Edit before approving…"** on a proposed plan opens it in the editor as it was proposed, a first plan as its tasks and a revision as the changes it makes; proposing the edited plan replaces the proposal. Before, a proposed plan was approve or reject, and the editor started from nothing.
+- **"Reject and ask again"** rejects a proposal and asks the planner for a new one from the note (shown while a planner is ready). A note sent with the rejection of a first plan used to go nowhere.
+- **"Change this goal…"** on the card of a goal whose plan runs: what should be different, in the person's words, for the planner (`POST goals/:gid/replan`), or the editor to write the change. Either way the result is a version reviewed before anything starts. Nothing on the card led to changing a running goal before.
+- **A planner that could not plan says why, with the buttons that fit.** The card showed the daemon's sentence with the goal's id and the provider's message, and the same two buttons whatever had happened. It now says "Friday could not plan this goal" and, from what the provider said, that the planner is signed out, reached a usage limit, is not set up, has used today's spending limit, or answered with nothing Friday could use; then **Try again** (with an optional note) while a planner is ready, **Write the plan myself**, and **Planner settings** where the cause is fixed there. The daemon's own words are under "Details".
+- **The planner's model can be chosen** in Settings → Planner: Friday's default (Claude Opus 5.5), Claude Sonnet 5.5 at about half the cost, or Claude Fable 5.2. Like how a person plans, it is kept on their computer (`planner.json`, beside the planner; `POST brain/planner-choice` takes `model`), is used from the next plan with no restart, and a model Friday has no price for is refused, since a plan it could not count against the spending limit is one it does not make.
+
+Changed on purpose: `choosePlanner(ref, null)` removes this machine's planner and keeps its model; the planner's status has `model_choice`; a modal request may carry `seed: 'proposed'`.
+
 ## Unreleased — ease of use, part 2: who does the work, and on which model
 
 Findings of the 2026-11-17 review of model choice and of which agent takes a task, with the owner's decisions.

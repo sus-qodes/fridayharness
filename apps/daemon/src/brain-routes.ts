@@ -327,16 +327,39 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
   // How this person plans here, kept on this machine and not in the tracked config.yaml
   // (2026-11-17): null hands the choice back to the project's `master_brain.provider`. The planner
   // is built when Friday starts, so the answer's `choice.wanted` differs from `provider` until then.
+  // The same route takes the planner's model (2026-11-17), kept on this machine too: `model` names
+  // it, null hands it back to `master_brain.model`. It is read at each planning call, so it needs
+  // no restart. A body names the planner, the model, or both.
   app.post(`${P}/brain/planner-choice`, op, async (c) => {
-    const raw = (await json(c)).provider;
-    if (raw !== null && !(PLANNER_CHOICES as readonly unknown[]).includes(raw)) {
-      throw new FridayError('invalid_request', `provider is one of ${PLANNER_CHOICES.join(', ')}, or null`);
+    const body = await json(c);
+    const hasProvider = 'provider' in body;
+    const hasModel = 'model' in body;
+    if (!hasProvider && !hasModel) {
+      throw new FridayError('invalid_request', 'send {"provider": …}, {"model": …} or both');
     }
-    const provider = raw as PlannerChoice | null;
-    const before = brain().status().choice.here;
-    brain().choosePlanner(provider);
-    if (before !== provider) {
-      state.recordObservation(pid, human, 'planner.chosen', { provider, was: before }, []);
+    if (hasProvider) {
+      const raw = body.provider;
+      if (raw !== null && !(PLANNER_CHOICES as readonly unknown[]).includes(raw)) {
+        throw new FridayError('invalid_request', `provider is one of ${PLANNER_CHOICES.join(', ')}, or null`);
+      }
+    }
+    if (hasModel && body.model !== null && (typeof body.model !== 'string' || !body.model.trim())) {
+      throw new FridayError('invalid_request', 'model is a model name, or null');
+    }
+    // The model first: a model Friday cannot price is refused before anything is written.
+    if (hasModel) {
+      const model = body.model === null ? null : (body.model as string).trim();
+      const was = brain().status().model_choice.here;
+      brain().choosePlannerModel(model);
+      if (was !== model) state.recordObservation(pid, human, 'planner.chosen', { model, was_model: was }, []);
+    }
+    if (hasProvider) {
+      const provider = body.provider as PlannerChoice | null;
+      const before = brain().status().choice.here;
+      brain().choosePlanner(provider);
+      if (before !== provider) {
+        state.recordObservation(pid, human, 'planner.chosen', { provider, was: before }, []);
+      }
     }
     return c.json(brain().status());
   });

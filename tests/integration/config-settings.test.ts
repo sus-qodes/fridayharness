@@ -119,6 +119,64 @@ describe('how a person plans, kept on their machine (2026-11-17)', () => {
     const back = await again.operator.post<Status>(A('/brain/planner-choice'), { provider: null });
     expect(back.choice).toEqual({ here: null, project: 'anthropic', wanted: 'anthropic' });
   });
+
+  it('keeps the planner’s model on the machine too, and uses it from the next plan without a restart', async () => {
+    type WithModel = Status & {
+      model: string;
+      model_choice: { here: string | null; project: string; applies: boolean };
+    };
+    const td = await startTestDaemon(ws());
+    const P = (p: string) => td.operator.projectPath(p);
+    const file = path.join(ws().projectDir, '.friday', 'config.yaml');
+    const before = readFileSync(file, 'utf8');
+    const chosen = () =>
+      td.daemon.state.store
+        .readSince(td.project.project_id, 0, { types: ['planner.chosen'], limit: 10 })
+        .map((e) => e.payload);
+    const first = await td.operator.get<WithModel>(P('/brain'));
+    // The project names no model (`auto`): Friday's default, and a choice made here would count.
+    expect(first.model).toBe('claude-opus-5-5');
+    expect(first.model_choice).toEqual({ here: null, project: 'auto', applies: true });
+
+    const sonnet = await td.operator.post<WithModel>(P('/brain/planner-choice'), { model: 'claude-sonnet-5-5' });
+    // At once: the model is read at each planning call, so nothing restarts.
+    expect(sonnet.model).toBe('claude-sonnet-5-5');
+    expect(sonnet.model_choice).toEqual({ here: 'claude-sonnet-5-5', project: 'auto', applies: true });
+    // How the person plans was not touched by choosing a model, and the tracked file not at all.
+    expect(sonnet.choice).toEqual({ here: null, project: 'anthropic', wanted: 'anthropic' });
+    expect(readFileSync(file, 'utf8')).toBe(before);
+    expect(chosen()).toEqual([{ model: 'claude-sonnet-5-5', was_model: null }]);
+
+    // A model Friday has no price for is refused: it could not count a plan against the limit.
+    await expect(td.operator.post(P('/brain/planner-choice'), { model: 'some-unknown-model' })).rejects.toThrow(
+      /Friday has no price for some-unknown-model/,
+    );
+    await expect(td.operator.post(P('/brain/planner-choice'), { model: '--help' })).rejects.toThrow();
+    await expect(td.operator.post(P('/brain/planner-choice'), { model: 5 })).rejects.toThrow(/model is a model name/);
+    await expect(td.operator.post(P('/brain/planner-choice'), {})).rejects.toThrow(/send/);
+    expect((await td.operator.get<WithModel>(P('/brain'))).model).toBe('claude-sonnet-5-5');
+
+    // The planner and its model in one request; each is kept when the other changes.
+    const both = await td.operator.post<WithModel>(P('/brain/planner-choice'), {
+      provider: 'claude-code',
+      model: 'claude-fable-5-2',
+    });
+    expect(both.choice.here).toBe('claude-code');
+    expect(both.model_choice.here).toBe('claude-fable-5-2');
+    const provider = await td.operator.post<WithModel>(P('/brain/planner-choice'), { provider: null });
+    expect(provider.choice.here).toBeNull();
+    expect(provider.model_choice.here).toBe('claude-fable-5-2');
+
+    // It is there after a restart, and handing it back returns to Friday's default.
+    await td.daemon.close('restart');
+    const again = await startTestDaemon(ws(), { initialized: true });
+    const A = (p: string) => again.operator.projectPath(p);
+    expect((await again.operator.get<WithModel>(A('/brain'))).model).toBe('claude-fable-5-2');
+    const back = await again.operator.post<WithModel>(A('/brain/planner-choice'), { model: null });
+    expect(back.model).toBe('claude-opus-5-5');
+    expect(back.model_choice).toEqual({ here: null, project: 'auto', applies: true });
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
 });
 
 describe('editing config.yaml from the interface, as a careful person would', () => {

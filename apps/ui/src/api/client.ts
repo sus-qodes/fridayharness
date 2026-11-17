@@ -457,6 +457,14 @@ export class FridayApi {
   }
 
   /**
+   * The model this person's planner uses on this machine, or with null Friday's default (the
+   * project's `master_brain.model`). It applies from the next plan; no restart.
+   */
+  choosePlannerModel(model: string | null): Promise<BrainStatusView> {
+    return this.post('/brain/planner-choice', { model });
+  }
+
+  /**
    * Lifts what keeps a host (or one of its models) out of work: a failed sign-in, a bench. The next
    * task tries it again; a host still signed out is kept out again.
    */

@@ -549,6 +549,54 @@ export function changeLines(c: RevisionChanges): string[] {
 
 // ---- JSON ----------------------------------------------------------------------------------------
 
+/**
+ * A proposed plan as the editor's draft, to change it before approving (2026-11-17). A first plan is
+ * its tasks as they stand. A revision is what it changes: the tasks it adds, the ones it reworks and
+ * the ones it drops, with a dependency on a task of the active plan named by that task's id, as the
+ * revision editor names it. What the proposal keeps as it is, is not part of a revision.
+ */
+export function draftFromProposal(
+  proposed: Pick<LivePlanVersion, 'summary' | 'tasks'>,
+  o: { revision: boolean; objective?: string | null },
+): FirstPlanDraft | RevisionDraft {
+  const tasks = [...proposed.tasks].sort((a, b) => a.position - b.position);
+  const idByKey = new Map(tasks.filter((t) => t.task_id).map((t) => [t.key, t.task_id as string]));
+  const added = new Set(tasks.filter((t) => t.change === 'new').map((t) => t.key));
+  const asDraft = (t: (typeof tasks)[number], dep: (key: string) => string): DraftTask => ({
+    key: t.key,
+    summary: t.summary,
+    kind: (TASK_KINDS as readonly string[]).includes(t.kind) ? (t.kind as DraftKind) : 'implementation',
+    role: t.role,
+    ...(t.description ? { description: t.description } : {}),
+    acceptance_criteria: t.acceptance_criteria.length ? [...t.acceptance_criteria] : [''],
+    depends_on: t.depends_on.map(dep),
+    scope: { write: [...(t.scope?.write ?? [])], read: [...(t.scope?.read ?? [])] },
+    priority: (PRIORITIES as readonly string[]).includes(t.priority) ? (t.priority as DraftPriority) : 'normal',
+    risk_level: (RISKS as readonly string[]).includes(t.risk_level) ? (t.risk_level as DraftRisk) : 'low',
+    ...(t.assign_to ? { assign_to: t.assign_to } : {}),
+  });
+  if (!o.revision) {
+    const objective = (o.objective ?? '').trim();
+    return {
+      ...(objective ? { objective } : {}),
+      summary: proposed.summary,
+      tasks: tasks.filter((t) => t.change !== 'drop').map((t) => asDraft(t, (k) => k)),
+    };
+  }
+  return {
+    summary: proposed.summary,
+    rework: tasks
+      .filter((t) => t.change === 'rework' && t.task_id)
+      .map((t) => ({ task_id: t.task_id as string, note: t.note ?? '' })),
+    drop: tasks
+      .filter((t) => t.change === 'drop' && t.task_id)
+      .map((t) => ({ task_id: t.task_id as string, reason: t.note ?? '' })),
+    new_tasks: tasks
+      .filter((t) => t.change === 'new')
+      .map((t) => asDraft(t, (k) => (added.has(k) ? k : (idByKey.get(k) ?? k)))),
+  };
+}
+
 export function exportJson(draft: FirstPlanDraft | RevisionDraft): string {
   return JSON.stringify(draft, null, 2);
 }

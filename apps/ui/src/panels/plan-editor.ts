@@ -5,6 +5,17 @@
  * an ACTIVE plan) adds tasks, drops tasks that have not started and reworks FAILED tasks with a
  * note, and shows what changes before it is sent. The page's checks run before sending; the
  * daemon's `details.errors` are the final word and are shown beside the form.
+ *
+ * Reviewed 2026-11-17 for a person who has never written a plan:
+ * - The editor says what a plan is, and a first plan opens on one task already filled in from the
+ *   goal (what it delivers, when it is done, where it may change files): it can be proposed as it
+ *   stands. Before, the editor opened blank, and a one-task plan still wanted a key, a kind, a role,
+ *   criteria and a write scope before Friday would take it.
+ * - A task added after it follows the one before and may change the whole project, so a list of
+ *   tasks reads as "first this, then that". Tasks that should run side by side are a choice: clear
+ *   "Depends on" and give each its own folders.
+ * - The fields a person seldom changes (key, kind, role, priority, risk, read scope) are under
+ *   "Advanced", which opens by itself when one of them is wrong.
  */
 import type { GoalView, LivePlanVersion } from '@friday/protocol';
 import { agentChoices } from '../model/board.js';
@@ -14,6 +25,7 @@ import {
   changeLines,
   type DraftIssue,
   type DraftTask,
+  draftFromProposal,
   type ExistingTask,
   existingFromPlan,
   exportJson,
@@ -75,6 +87,33 @@ interface TaskEditor {
   destroy(): void;
 }
 
+/** The write scope of a task nobody narrowed: the whole project. */
+export const WHOLE_PROJECT = '**';
+
+/** A goal's request on one line, as the starter task's summary. */
+function oneLine(text: string, max: number): string {
+  return truncate(text.replace(/\s+/g, ' ').trim(), max);
+}
+
+/**
+ * The task a first plan opens on: the goal itself as one piece of work, complete enough to be
+ * proposed as it stands.
+ */
+export function starterTask(goal: Pick<GoalView, 'request'>): DraftTask {
+  return {
+    ...newTask('task-1'),
+    summary: oneLine(goal.request, 200),
+    acceptance_criteria: ['It does what the goal asks'],
+    scope: { write: [WHOLE_PROJECT], read: [] },
+  };
+}
+
+/** A task added to a list: after the one before it, free to change the whole project. */
+export function followingTask(key: string, before: DraftTask | undefined): DraftTask {
+  const prior = before?.key.trim();
+  return { ...newTask(key), depends_on: prior ? [prior] : [], scope: { write: [WHOLE_PROJECT], read: [] } };
+}
+
 interface TaskEditorOptions {
   task: DraftTask;
   index: number;
@@ -95,13 +134,14 @@ function taskEditor(ctx: AppContext, o: TaskEditorOptions): TaskEditor {
   const pickers: ScopePicker[] = [];
 
   const key = input({ class: 'input mono', value: t.key, maxLength: 48, aria: { label: `Task ${o.index + 1} key` } });
-  const keyField = field('Key', key, { hint: 'lowercase letters, digits and dashes' });
+  const keyField = field('Key', key, {
+    hint: 'a short name other tasks refer to it by: lowercase letters, digits and dashes',
+  });
   let lastKey = t.key;
   key.addEventListener('input', () => {
     t.key = key.value;
     const before = lastKey;
     lastKey = key.value;
-    title.textContent = `Task ${o.index + 1} · ${visible(key.value || '…')}`;
     o.onKeyChange(before.trim(), key.value.trim());
     o.onInput();
   });
@@ -186,7 +226,9 @@ function taskEditor(ctx: AppContext, o: TaskEditorOptions): TaskEditor {
   });
 
   const criteria = textarea({ rows: 3, value: t.acceptance_criteria.join('\n'), placeholder: 'node --test passes' });
-  const criteriaField = field('Acceptance criteria', criteria, { hint: 'one per line; at least one' });
+  const criteriaField = field('Acceptance criteria', criteria, {
+    hint: 'how you and Friday can tell the task is done; one per line, at least one',
+  });
   criteria.addEventListener('input', () => {
     t.acceptance_criteria = criteria.value.split('\n');
     o.onInput();
@@ -201,7 +243,18 @@ function taskEditor(ctx: AppContext, o: TaskEditorOptions): TaskEditor {
     value: t.scope.write,
     emptyText: 'No write scope: only review and research tasks may be read-only.',
     onChange: (globs) => {
-      t.scope.write = globs;
+      // "The whole project" and a folder together would still be the whole project: a folder
+      // added to it narrows the task to that folder, and the whole project added to folders
+      // replaces them.
+      const had = t.scope.write.includes(WHOLE_PROJECT);
+      const next =
+        globs.length > 1 && globs.includes(WHOLE_PROJECT)
+          ? had
+            ? globs.filter((g) => g !== WHOLE_PROJECT)
+            : [WHOLE_PROJECT]
+          : globs;
+      t.scope.write = next;
+      if (next.length !== globs.length) write.set(next);
       o.onInput();
     },
   });
@@ -216,7 +269,7 @@ function taskEditor(ctx: AppContext, o: TaskEditorOptions): TaskEditor {
   });
   pickers.push(write, read);
 
-  const title = h('h4', { class: 'pn-task-title' }, `Task ${o.index + 1} · ${visible(t.key || '…')}`);
+  const title = h('h4', { class: 'pn-task-title' }, `Task ${o.index + 1}`);
   const up = button(icon('chevronDown', 14), () => o.onMove(-1), {
     class: 'btn btn-ghost btn-icon pn-flip',
     ariaLabel: `Move task ${o.index + 1} up`,
@@ -259,14 +312,25 @@ function taskEditor(ctx: AppContext, o: TaskEditorOptions): TaskEditor {
   }
   renderDeps();
 
-  const reg = (name: string, f: { setError(m: string | null): void }, focus: HTMLElement) =>
-    o.register(`${p}.${name}`, { setError: (m) => f.setError(m), focus: () => focus.focus() });
-  reg('key', keyField, key);
+  // What a person seldom changes; a field of it that is wrong opens the fold, so the error is seen.
+  const advanced = fold('Advanced', { class: 'pn-task-advanced' });
+  const reg = (name: string, f: { setError(m: string | null): void }, focus: HTMLElement, folded = false) =>
+    o.register(`${p}.${name}`, {
+      setError: (m) => {
+        f.setError(m);
+        if (m && folded) advanced.open = true;
+      },
+      focus: () => {
+        if (folded) advanced.open = true;
+        focus.focus();
+      },
+    });
+  reg('key', keyField, key, true);
   reg('summary', summaryField, summary);
-  reg('kind', kindField, kind);
-  reg('role', roleField, role);
-  reg('priority', priorityField, priority);
-  reg('risk_level', riskField, risk);
+  reg('kind', kindField, kind, true);
+  reg('role', roleField, role, true);
+  reg('priority', priorityField, priority, true);
+  reg('risk_level', riskField, risk, true);
   reg('assign_to', assignField, assign);
   reg('description', descriptionField, description);
   reg('acceptance_criteria', criteriaField, criteria);
@@ -278,24 +342,50 @@ function taskEditor(ctx: AppContext, o: TaskEditorOptions): TaskEditor {
     focus: () => (depsBox.querySelector('input') as HTMLInputElement | null)?.focus(),
   });
   o.register(`${p}.scope.write`, { setError: (m) => write.setError(m), focus: () => write.input.focus() });
-  o.register(`${p}.scope.read`, { setError: (m) => read.setError(m), focus: () => read.input.focus() });
+  o.register(`${p}.scope.read`, {
+    setError: (m) => {
+      read.setError(m);
+      if (m) advanced.open = true;
+    },
+    focus: () => {
+      advanced.open = true;
+      read.input.focus();
+    },
+  });
 
+  advanced.append(
+    h('div', { class: 'pn-grid2' }, keyField.el, kindField.el),
+    h('div', { class: 'pn-grid3' }, roleField.el, priorityField.el, riskField.el),
+    h(
+      'div',
+      null,
+      h('div', { class: 'field-label' }, 'Read scope'),
+      h('div', { class: 'field-hint' }, 'What the agent is pointed at to read; empty leaves it to its context.'),
+      read.el,
+    ),
+  );
   const el = h(
     'li',
     { class: 'pn-task' },
     h('div', { class: 'pn-task-head' }, title, h('span', { class: 'spacer' }), up, down, remove),
-    h('div', { class: 'pn-grid2' }, keyField.el, summaryField.el),
-    h('div', { class: 'pn-grid4' }, kindField.el, roleField.el, priorityField.el, riskField.el),
-    h('div', { class: 'pn-assign' }, assignField.el, assignNote),
+    summaryField.el,
     descriptionField.el,
     criteriaField.el,
-    deps,
+    h('div', { class: 'pn-assign' }, assignField.el, assignNote),
+    // The first task follows nothing: its "Depends on" would only say so.
+    o.index > 0 || o.prefix !== 'tasks' ? deps : null,
     h(
       'div',
-      { class: 'pn-grid2' },
-      h('div', null, h('div', { class: 'field-label' }, 'Write scope'), write.el),
-      h('div', null, h('div', { class: 'field-label' }, 'Read scope'), read.el),
+      null,
+      h('div', { class: 'field-label' }, 'Write scope'),
+      h(
+        'div',
+        { class: 'field-hint' },
+        `The files this task may change. ${WHOLE_PROJECT} is the whole project; add a folder to keep it to that.`,
+      ),
+      write.el,
     ),
+    advanced,
   );
 
   return {
@@ -365,20 +455,34 @@ export function planEditorModal(
     editor?.destroy();
     body.replaceChildren();
     const revision = data.active?.status === 'ACTIVE';
+    // "Edit before approving": the editor opens on the plan that waits for a decision.
+    const seed = request.seed === 'proposed' ? data.proposed : null;
     const notes: string[] = [];
     if (request.mode === 'revision' && !revision)
       notes.push('This goal has no active plan yet, so this is its first plan.');
-    if (request.mode !== 'revision' && revision)
+    if (request.mode !== 'revision' && revision && !seed)
       notes.push('This goal already has an active plan, so this is a revision of it.');
-    if (data.proposed)
+    if (seed)
+      notes.push(
+        `This is version ${seed.version} as it was proposed. Change what you like: proposing it replaces that version, which then no longer waits for a decision.`,
+      );
+    else if (data.proposed)
       notes.push(
         `Version ${data.proposed.version} is proposed and waits for a decision; approve or reject it on the board.`,
       );
     editor = revision
       ? revisionEditor(ctx, data, body, notes, close, done)
       : firstPlanEditor(ctx, data, body, notes, close, done);
+    if (seed) {
+      editor.load(
+        exportJson(draftFromProposal(seed, { revision, objective: data.goal.objective ?? data.goal.request })),
+      );
+    }
+    // What the editor opens on is what "nothing typed" means: the starter, or the proposal itself.
     pristine = editor.json();
-    key = `${goalId}:${revision ? `revision:${data.active?.version ?? 0}` : 'first'}`;
+    key = seed
+      ? `${goalId}:proposed:${seed.version}`
+      : `${goalId}:${revision ? `revision:${data.active?.version ?? 0}` : 'first'}`;
     const kept = DRAFTS.get(key);
     if (kept && kept !== pristine) {
       const current = editor;
@@ -431,7 +535,12 @@ export function planEditorModal(
   else void load();
 
   return {
-    title: fromBoard?.active?.status === 'ACTIVE' ? 'Revise the plan' : 'Write the plan',
+    title:
+      request.seed === 'proposed' && fromBoard?.proposed
+        ? 'Edit the proposed plan'
+        : fromBoard?.active?.status === 'ACTIVE'
+          ? 'Revise the plan'
+          : 'Write the plan',
     size: 'lg',
     el,
     /** Asked for Esc, the close button and Cancel: a draft is not closed by a slip of the hand. */
@@ -622,8 +731,8 @@ function firstPlanEditor(
 ): DraftEditor {
   const draft: FirstPlanDraft = {
     objective: truncate(data.goal.objective ?? data.goal.request, 500),
-    summary: '',
-    tasks: [newTask('task-1')],
+    summary: 'One task that does what the goal asks.',
+    tasks: [starterTask(data.goal)],
   };
   let editors: TaskEditor[] = [];
   let attempted = false;
@@ -639,8 +748,13 @@ function firstPlanEditor(
     draft.objective = objective.value;
     changed();
   });
-  const summary = textarea({ rows: 2, maxLength: 1000, placeholder: 'How the work is split, in a sentence or two' });
-  const summaryField = field('Summary', summary);
+  const summary = textarea({
+    rows: 2,
+    maxLength: 1000,
+    value: draft.summary,
+    placeholder: 'How the work is split, in a sentence or two',
+  });
+  const summaryField = field('Summary', summary, { hint: 'how the work is split, in a sentence or two' });
   summary.addEventListener('input', () => {
     draft.summary = summary.value;
     changed();
@@ -650,7 +764,7 @@ function firstPlanEditor(
   const addBtn = button(
     [icon('plus', 14), 'Add a task'],
     () => {
-      draft.tasks.push(newTask(nextKey(draft.tasks.map((t) => t.key))));
+      draft.tasks.push(followingTask(nextKey(draft.tasks.map((t) => t.key)), draft.tasks.at(-1)));
       rebuild();
       changed();
       (list.lastElementChild?.querySelector('input') as HTMLInputElement | null)?.focus();
@@ -763,6 +877,16 @@ function firstPlanEditor(
 
   append(
     main,
+    h(
+      'div',
+      { class: 'pn-plan-intro' },
+      note(
+        'A plan is the list of tasks that gets the goal done. Friday gives each task to an agent, checks the result, and puts the work together.',
+      ),
+      note(
+        'For a small goal one task is enough: the one below is filled in from your goal. Change what you like, add tasks if the work has steps, then propose the plan.',
+      ),
+    ),
     notes.length ? note(notes.join(' ')) : null,
     h('div', { class: 'pn-goal-line' }, h('span', { class: 'muted' }, 'Goal: '), plain(data.goal.request, 300)),
     objectiveField.el,

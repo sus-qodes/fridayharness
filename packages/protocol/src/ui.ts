@@ -175,6 +175,13 @@ export interface BrainStatusView {
    */
   choice?: { here: string | null; project: string; wanted: string };
   /**
+   * The planner's model (2026-11-17); absent from an older daemon. `here`: the model this machine
+   * chose, or null; `project`: `master_brain.model` as config.yaml has it (`auto` is Friday's
+   * default); `applies`: the planner is one a person pays for from their own account (through
+   * Claude Code or an Anthropic key), so a choice made here is the one used. `model` is what runs.
+   */
+  model_choice?: { here: string | null; project: string; applies: boolean };
+  /**
    * What planning through Claude Code needs, read now; absent from an older daemon. `found`:
    * Friday knows where Claude Code is (looked for when Friday started); `allowed`: the project
    * allows it (`providers.claude-code.allow_remote`); `approved`: this machine approved its

@@ -700,11 +700,101 @@ describe('question cards by kind (plan FD-21)', () => {
     });
 
     it('without a planner: Write a revision opens the plan editor in revision mode', () => {
-      const card = mount(makeEscalation({ kind: 'invalid_plan', goal_id: GOAL, task_id: null }), {}, {}, false);
+      const card = mount(makeEscalation({ kind: 'replan_limit', goal_id: GOAL, task_id: null }), {}, {}, false);
       expect(card.el.textContent).toContain('no key is stored');
       buttonNamed(card.el, 'Write a revision').click();
       expect(ctx.store.select('ui').modal).toEqual({ kind: 'plan-editor', id: GOAL, mode: 'revision' });
       card.destroy();
+    });
+
+    describe('planning itself failed', () => {
+      const failed = (kind: string, why: string) =>
+        makeEscalation({
+          kind,
+          goal_id: GOAL,
+          task_id: null,
+          requested_by_kind: 'master_brain',
+          question: `Friday cannot plan goal ${GOAL} (Add Stripe…): ${why}. How should it continue?`,
+          options: ['enable the provider, then run "friday goal replan"', 'write the plan with "friday plan propose"'],
+          details: { why, proposed_action: 'wait for a planner or a human-written plan', evidence: [] },
+        });
+      const buttons = (el: Element) =>
+        [...el.querySelectorAll('.gv-actions:not(.gv-actions-end) button')].map((b) => b.textContent);
+
+      it('says what happened in words, and asks the planner again from the card', async () => {
+        const card = mount(failed('planner_unavailable', 'Claude Code said: Not logged in · Please run /login'));
+        expect(card.el.querySelector('.gv-question-text')?.textContent).toBe('Friday could not plan this goal.');
+        expect(card.el.querySelector('.gv-why')?.textContent).toBe(
+          'The planner is not signed in. Sign in to it (for Claude Code: open Claude Code once and sign in), then try again.',
+        );
+        // The daemon's own sentence, with its ids and terminal commands, is one step away.
+        const details = card.el.querySelector('details.gv-details') as HTMLDetailsElement;
+        expect(details.open).toBe(false);
+        expect(details.textContent).toContain(`Friday cannot plan goal ${GOAL}`);
+        expect(card.el.querySelector('.gv-cli')).toBeNull();
+        expect(card.el.textContent).not.toContain('friday goal replan');
+        expect(buttons(card.el)).toEqual(['Try again', 'Write the plan myself', 'Planner settings']);
+        arm(card.el);
+        buttonNamed(card.el, 'Try again').click();
+        await flush();
+        // Answering is what makes the daemon plan again; a separate request would leave the question open.
+        expect(answers(ctx)).toEqual(['Try again.']);
+        expect(ctx.transport.calls.filter((c) => c.path.endsWith('/replan'))).toHaveLength(0);
+        expect(card.el.querySelector('.gv-status')?.textContent).toContain('The planner was asked again');
+        card.destroy();
+      });
+
+      it('sends what the person adds for the planner, and names each kind of trouble', async () => {
+        const noted = mount(failed('invalid_plan', 'the output did not match the schema'));
+        expect(noted.el.querySelector('.gv-why')?.textContent).toContain(
+          'The planner answered, but not with a plan Friday could use.',
+        );
+        expect(buttons(noted.el)).toEqual(['Try again', 'Write the plan myself']);
+        (noted.el.querySelector('textarea') as HTMLTextAreaElement).value = '  two tasks at most  ';
+        arm(noted.el);
+        buttonNamed(noted.el, 'Try again').click();
+        await flush();
+        expect(answers(ctx)).toEqual(['two tasks at most']);
+        noted.destroy();
+        for (const [kind, why, said, settings] of [
+          ['planner_unavailable', 'Claude AI usage limit reached|1731855600', 'reached a usage limit', false],
+          ['budget_exceeded', '$5.00 of $5.00 spent', 'spending limit for planning is used up', true],
+          [
+            'action_failed',
+            `plan kept failing (4 attempts): boom ${HOSTILE}`,
+            `The planner could not finish: plan kept failing (4 attempts): boom ${HOSTILE}`,
+            false,
+          ],
+        ] as const) {
+          const card = mount(failed(kind, why));
+          expect(card.el.querySelector('.gv-why')?.textContent, kind).toContain(said);
+          expect(buttons(card.el).includes('Planner settings'), kind).toBe(settings);
+          expect(card.el.querySelector('img')).toBeNull();
+          card.destroy();
+        }
+      });
+
+      it('without a planner leads with writing the plan, and with Planner settings', () => {
+        const card = mount(failed('planner_unavailable', 'no planner is configured'), {}, {}, false);
+        expect(card.el.querySelector('.gv-why')?.textContent).toContain('No planner is ready on this computer.');
+        expect(buttons(card.el)).toEqual(['Write the plan myself', 'Planner settings']);
+        expect(buttonNamed(card.el, 'Write the plan myself').classList.contains('btn-primary')).toBe(true);
+        buttonNamed(card.el, 'Write the plan myself').click();
+        // A goal without a plan gets its first plan, not a "revision" of nothing.
+        expect(ctx.store.select('ui').modal).toEqual({ kind: 'plan-editor', id: GOAL, mode: 'first' });
+        buttonNamed(card.el, 'Planner settings').click();
+        expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'planner' });
+        card.destroy();
+      });
+
+      it('keeps the task’s own buttons when the failure is about a task', () => {
+        const card = mount(
+          makeEscalation({ kind: 'planner_unavailable', goal_id: GOAL, details: { why: 'no planner is configured' } }),
+        );
+        expect(buttonNamed(card.el, 'Rework the task')).toBeTruthy();
+        expect(card.el.textContent).not.toContain('Friday could not plan this goal.');
+        card.destroy();
+      });
     });
 
     it('Rework sends the task back; Planner settings opens the settings', async () => {

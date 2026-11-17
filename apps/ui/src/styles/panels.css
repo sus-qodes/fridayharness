@@ -852,3 +852,36 @@
 .pn-pins-more .pn-pin-form {
   margin-top: 8px;
 }
+
+/* The plan editor: what a plan is, above the form, and each task's seldom-changed fields folded. */
+.pn-plan-intro {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-elevated);
+}
+
+.pn-plan-intro .pn-note {
+  margin: 2px 0;
+}
+
+.pn-task-advanced {
+  margin-top: 8px;
+}
+
+.pn-task-advanced > .pn-grid2,
+.pn-task-advanced > .pn-grid3 {
+  margin-top: 8px;
+}
+
+/* "Change this goal": the status of the planner call under the note. */
+.pn-change-status {
+  min-height: 1.2em;
+  font-size: var(--text-sm);
+}
+
+/* Settings → Planner: the model picker keeps to its side of the row. */
+.pn-planner-model select {
+  max-width: 320px;
+}

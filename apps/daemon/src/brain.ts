@@ -12,15 +12,18 @@ import {
   type ModelResponse,
   OpenAICompatiblePlannerModel,
   type PlannerModel,
+  priceEntry,
 } from '@friday/planner';
-import type { CostClass, TaskView } from '@friday/protocol';
+import { type CostClass, FridayError, type TaskView } from '@friday/protocol';
 import {
   choosePlanner,
+  choosePlannerModel,
   hasSecret,
   type MasterBrainConfig,
   type PlannerChoice,
   type ProjectRef,
   plannerChoice,
+  plannerModelChoice,
   providerApproval,
   providerEndpoint,
   resolveSecret,
@@ -143,6 +146,8 @@ export interface BrainStatus {
   head: number;
   /** This machine's choice of planner, the project's, and the one that counts (see `BrainStatusView`). */
   choice: { here: string | null; project: string; wanted: string };
+  /** This machine's choice of the planner's model, the project's, and whether a choice here applies. */
+  model_choice: { here: string | null; project: string; applies: boolean };
   /** What planning through Claude Code needs, read now. */
   claude_code: { found: boolean; allowed: boolean; approved: boolean; project_budget_usd: number };
 }
@@ -152,6 +157,12 @@ export interface BrainHandle {
   status(): BrainStatus;
   /** Sets this machine's own choice of planner, or with null hands it back to the project's. */
   choosePlanner(provider: PlannerChoice | null): void;
+  /**
+   * Sets the model this machine's planner uses, or with null hands it back to the project's
+   * `master_brain.model`. Refused for a model Friday has no price for: a call it cannot count
+   * against the spending limit is one it does not make. Applies from the next planning call.
+   */
+  choosePlannerModel(model: string | null): void;
 }
 
 /**
@@ -265,7 +276,12 @@ export function createMasterBrain(input: {
       onKey: (key) => state.redactor.addSecret(key),
     });
   }
+  // The model this machine chose for its planner (2026-11-17), where the planner is one a person
+  // pays for from their own account: through Claude Code or an Anthropic key. Read at each call.
+  const ownModelApplies = started.provider === 'anthropic' || started.provider === 'claude-code';
+  let modelHere = input.model === undefined ? plannerModelChoice(project, env) : null;
   const modelId = () => {
+    if (modelHere && ownModelApplies) return modelHere;
     const m = current().model;
     // A local server has no default model: `auto` stays as written, and the status says what to set.
     return m !== 'auto' || local ? m : started.provider === 'fake' ? 'fake-planner' : DEFAULT_PLANNER_MODEL;
@@ -352,6 +368,16 @@ export function createMasterBrain(input: {
   return {
     brain,
     choosePlanner: (provider) => choosePlanner(project, provider, env),
+    choosePlannerModel: (chosen) => {
+      if (chosen !== null && !priceEntry(chosen, provider.prices)) {
+        throw new FridayError(
+          'invalid_request',
+          `Friday has no price for ${chosen}, so it could not count a plan against the spending limit; choose a model it knows, or add its price under providers.${providerName}.prices`,
+        );
+      }
+      choosePlannerModel(project, chosen, env);
+      modelHere = chosen;
+    },
     status: () => {
       const pid = project.project_id;
       const remote = model?.remote ?? false;
@@ -362,6 +388,7 @@ export function createMasterBrain(input: {
       return {
         provider: model?.provider ?? started.provider,
         model: modelId(),
+        model_choice: { here: modelHere, project: current().model, applies: ownModelApplies },
         remote,
         allow_remote: provider.allow_remote,
         approved_here: Boolean(providerApproval(project, providerName === 'none' ? 'anthropic' : providerName, env)),

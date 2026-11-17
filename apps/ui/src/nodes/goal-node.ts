@@ -390,6 +390,15 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
           )
         : null,
       h('span', { class: 'spacer' }),
+      // A goal whose plan runs can be changed (2026-11-17): the planner is asked from a note, or
+      // the change is written in the editor; before, nothing on the card led to either.
+      goal.status === 'ACTIVE' && g.active
+        ? button('Change this goal…', () => openModal(ctx, { kind: 'change-goal', id: goal.goal_id }), {
+            class: 'btn btn-ghost nd-change-goal',
+            title: 'Add, drop or redo tasks: a new version of the plan, reviewed before anything starts',
+            dataset: { action: 'change-goal' },
+          })
+        : null,
       goal.status === 'OPEN' || goal.status === 'ACTIVE'
         ? button('Cancel goal…', () => void cancelGoal(), {
             class: 'btn btn-ghost nd-cancel-goal',

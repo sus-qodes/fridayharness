@@ -13,6 +13,7 @@ import type { EscalationView, RoutingOfferView } from '@friday/protocol';
 import { classifyEscalation, composeAnswer, LET_AGENT_DECIDE, type QuestionSpec } from '../model/escalations.js';
 import { blockSentence, hostBlocks, hostName, liftLabel } from '../model/host-blocks.js';
 import { defaultModel, hostLabel, modelLabel, modelName, usableModels } from '../model/models.js';
+import { fixedInSettings, PLANNER_FAILURES, plannerTrouble, plannerTroubleWords } from '../model/planner-words.js';
 import { kindWord, routingBlockWords } from '../model/routing-words.js';
 import { hasHidden, visible } from '../model/text.js';
 import { cancelTask } from '../shell/cancel-task.js';
@@ -974,10 +975,104 @@ function unansweredBody(kit: Kit): Built {
   };
 }
 
+// ---- planning itself failed (2026-11-17)
+
+/**
+ * The planner could not plan a goal: what happened in a person's words, then the buttons that fit.
+ * "Try again" (with an optional note) while a planner is ready, which answers the question so the
+ * daemon plans from the answer; "Write the plan myself" always; "Planner settings" where the cause
+ * is fixed there. The daemon's own sentence, with its ids, is under "Details".
+ */
+function plannerFailureBody(kit: Kit, goalId: string): Built {
+  const { spec, ctx } = kit;
+  const board = ctx.store.select('board');
+  const goal = board?.goals.find((g) => g.goal_id === goalId) ?? null;
+  const revising = !!board?.plans[goalId]?.active;
+  const ready = board?.brain?.planner_available === true;
+  const trouble = plannerTrouble(spec.kind, spec.why);
+  const decisions: HTMLButtonElement[] = [];
+  const row = h('div', { class: 'gv-actions' });
+  const body: (HTMLElement | null)[] = [
+    h(
+      'p',
+      { class: 'gv-question-text' },
+      revising ? 'Friday could not change the plan of this goal.' : 'Friday could not plan this goal.',
+    ),
+    goal ? h('p', { class: 'gv-from' }, 'Goal: ', truncate(cleanText(goal.request), 300)) : null,
+    h('p', { class: 'gv-why' }, plannerTroubleWords(trouble, spec.why)),
+  ];
+  if (ready) {
+    const noteId = nextId('plan-again-note');
+    const note = h('textarea', {
+      class: 'textarea',
+      id: noteId,
+      rows: 2,
+      maxLength: 2000,
+      placeholder: 'For example: keep it to two tasks',
+    });
+    const again = decisionButton(
+      'Try again',
+      kit,
+      async (b) => {
+        b.disabled = true;
+        setText(kit.status, 'Asking the planner again… (a model call can take a minute)');
+        // Answering settles the question, and the daemon plans from the answer (ADR-0015).
+        const r = await ctx.act('Ask the planner again', () =>
+          ctx.api.answer(kit.e.escalation_id, note.value.trim() || 'Try again.'),
+        );
+        b.disabled = false;
+        if (r) kit.done('The planner was asked again: its plan appears on the board for you to review.');
+        else setText(kit.status, '');
+      },
+      'btn btn-primary',
+    );
+    body.push(
+      h(
+        'div',
+        { class: 'field' },
+        h('label', { class: 'field-label', for: noteId }, 'Anything the planner should know (optional)'),
+        note,
+      ),
+    );
+    row.append(again);
+    decisions.push(again);
+  }
+  row.append(
+    button(
+      revising ? 'Write the change myself' : 'Write the plan myself',
+      () => openModal(ctx, { kind: 'plan-editor', id: goalId, mode: revising ? 'revision' : 'first' }),
+      { class: ready ? 'btn' : 'btn btn-primary' },
+    ),
+  );
+  if (!ready || fixedInSettings(trouble)) {
+    row.append(
+      button('Planner settings', () => openDrawer(ctx, { kind: 'settings', tab: 'planner' }), {
+        class: 'btn btn-ghost',
+      }),
+    );
+  }
+  body.push(
+    row,
+    h(
+      'details',
+      { class: 'gv-details' },
+      h('summary', null, 'Details'),
+      h('p', { class: 'muted' }, decisionText(spec.question)),
+      spec.why ? h('p', { class: 'muted' }, decisionText(spec.why)) : null,
+    ),
+  );
+  return { body: present(body), decisions };
+}
+
 // ---- the Master Brain's other kinds
 
 function brainBody(kit: Kit): Built {
   const { spec, ctx } = kit;
+  // Planning itself failed for a goal: its own card. With a task in it (a failed check nobody could
+  // re-plan), the buttons below (rework, cancel) are what applies.
+  if (spec.kind && PLANNER_FAILURES.includes(spec.kind) && spec.goalId && !spec.taskId) {
+    return plannerFailureBody(kit, spec.goalId);
+  }
   const body: (HTMLElement | null)[] = [...context(spec)];
   const decisions: HTMLButtonElement[] = [];
   const row = h('div', { class: 'gv-actions' });

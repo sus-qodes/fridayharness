@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { draftFromProposal } from '../model/plan-draft.js';
 import { ApiError } from '../platform/transport.js';
 import { makeContext } from '../test/context.js';
 import { makeAgent, makeGoal, makeHarness, makePlan, makePlanTask, makeSnapshot, makeTask } from '../test/fixtures.js';
-import { forgetPlanDrafts, planEditorModal } from './plan-editor.js';
+import { followingTask, forgetPlanDrafts, planEditorModal, starterTask, WHOLE_PROJECT } from './plan-editor.js';
 import { buttonBy, check, choose, controlBy, flush, HOSTILE, type, ZW } from './test-support.js';
 
 const GID = 'goal_0000000000000000000000gg01';
@@ -155,9 +156,136 @@ describe('plan editor, first plan', () => {
     m.destroy();
   });
 
+  it('opens on one task filled in from the goal, which can be proposed as it stands', async () => {
+    const ctx = firstPlanContext({ [`POST ${PLANS}`]: makePlan({ status: 'PROPOSED' }) });
+    const m = planEditorModal(ctx, { kind: 'plan-editor', id: GID, mode: 'first' }, () => undefined);
+    // What a plan is, for someone who has never written one.
+    expect(m.el.querySelector('.pn-plan-intro')?.textContent).toContain(
+      'A plan is the list of tasks that gets the goal done.',
+    );
+    expect(m.el.querySelector('.pn-plan-intro')?.textContent).toContain('For a small goal one task is enough');
+    const [only] = tasksOf(m.el);
+    expect(tasksOf(m.el)).toHaveLength(1);
+    expect(only?.querySelector('.pn-task-title')?.textContent).toBe('Task 1');
+    expect(controlBy(only as HTMLElement, 'Summary').value).toBe(
+      'Add Stripe subscriptions and keep one-time checkout working',
+    );
+    expect(controlBy<HTMLTextAreaElement>(only as HTMLElement, 'Acceptance criteria').value).toBe(
+      'It does what the goal asks',
+    );
+    expect(only?.querySelector('.pn-scope')?.textContent).toContain('**');
+    // The first task follows nothing, so it is not asked what it depends on.
+    expect(only?.querySelector('.pn-deps')).toBeNull();
+    buttonBy(m.el, 'Propose the plan').click();
+    await flush();
+    expect(m.el.querySelector('.pn-errors-page')?.hasAttribute('hidden')).toBe(true);
+    expect(ctx.transport.to('POST', PLANS)[0]?.body).toEqual({
+      draft: {
+        objective: 'Add Stripe subscriptions and keep one-time checkout working',
+        summary: 'One task that does what the goal asks.',
+        tasks: [
+          {
+            key: 'task-1',
+            summary: 'Add Stripe subscriptions and keep one-time checkout working',
+            kind: 'implementation',
+            role: 'developer',
+            acceptance_criteria: ['It does what the goal asks'],
+            depends_on: [],
+            scope: { write: ['**'], read: [] },
+            priority: 'normal',
+            risk_level: 'low',
+          },
+        ],
+      },
+      trigger: 'written in the interface',
+    });
+    m.destroy();
+  });
+
+  it('shortens a long goal to one line for the starter task', () => {
+    const long = `Rework   the checkout\n\n${'and more '.repeat(60)}`;
+    const starter = starterTask({ request: long });
+    expect(starter.summary.length).toBeLessThanOrEqual(200);
+    expect(starter.summary.startsWith('Rework the checkout and more')).toBe(true);
+    expect(starter.summary).not.toContain('\n');
+    expect(starter).toMatchObject({ key: 'task-1', scope: { write: [WHOLE_PROJECT], read: [] } });
+  });
+
+  it('adds a task after the one before it, free to change the whole project', () => {
+    const ctx = firstPlanContext();
+    const m = planEditorModal(ctx, { kind: 'plan-editor', id: GID }, () => undefined);
+    buttonBy(m.el, 'Add a task').click();
+    const second = tasksOf(m.el)[1] as HTMLElement;
+    // "First this, then that": it follows the first, so the two may touch the same files.
+    const dep = second.querySelector('.pn-deps input') as HTMLInputElement;
+    expect(dep.checked).toBe(true);
+    expect(second.querySelector('.pn-scope')?.textContent).toContain('**');
+    expect(followingTask('task-2', undefined).depends_on).toEqual([]);
+    expect(followingTask('task-2', { ...starterTask({ request: 'x' }), key: ' api ' }).depends_on).toEqual(['api']);
+    m.destroy();
+  });
+
+  it('narrows "the whole project" to the first folder named, and widens folders back to it', () => {
+    const ctx = firstPlanContext();
+    const m = planEditorModal(ctx, { kind: 'plan-editor', id: GID }, () => undefined);
+    const task = tasksOf(m.el)[0] as HTMLElement;
+    const globs = () =>
+      Array.from(task.querySelectorAll('.pn-scope')[0]?.querySelectorAll('.pn-globs li') ?? []).length;
+    const add = (glob: string) => {
+      const input = task.querySelectorAll('.pn-scope')[0]?.querySelector('.pn-scope-add input') as HTMLInputElement;
+      input.value = glob;
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    };
+    const exported = () => {
+      more(m.el);
+      buttonBy(m.el, 'Export JSON').click();
+      return JSON.parse((m.el.querySelector('.pn-json') as HTMLTextAreaElement).value).tasks[0].scope.write;
+    };
+    expect(exported()).toEqual(['**']);
+    // A folder added to the whole project is the person keeping the task to that folder.
+    add('backend/**');
+    expect(exported()).toEqual(['backend/**']);
+    add('docs/**');
+    expect(exported()).toEqual(['backend/**', 'docs/**']);
+    expect(globs()).toBe(2);
+    // The whole project added to folders replaces them: together they would mean the same.
+    add('**');
+    expect(exported()).toEqual(['**']);
+    expect(globs()).toBe(1);
+    m.destroy();
+  });
+
+  it('keeps what is seldom changed under Advanced, which opens when one of its fields is wrong', async () => {
+    const ctx = firstPlanContext();
+    const m = planEditorModal(ctx, { kind: 'plan-editor', id: GID }, () => undefined);
+    const task = tasksOf(m.el)[0] as HTMLElement;
+    const advanced = task.querySelector('details.pn-task-advanced') as HTMLDetailsElement;
+    expect(advanced.open).toBe(false);
+    expect(advanced.querySelector('summary')?.textContent).toBe('Advanced');
+    for (const label of ['Key', 'Kind', 'Role', 'Priority', 'Risk']) {
+      expect(advanced.contains(controlBy(task, label)), label).toBe(true);
+    }
+    expect(advanced.textContent).toContain('Read scope');
+    // What a person fills in stays in view.
+    for (const label of ['Summary', 'Description', 'Acceptance criteria', 'Assign to']) {
+      expect(advanced.contains(controlBy(task, label)), label).toBe(false);
+    }
+    expect(advanced.contains(task.querySelectorAll('.pn-scope')[0] as Node)).toBe(false);
+    type(controlBy(task, 'Role'), 'Not A Role');
+    buttonBy(m.el, 'Propose the plan').click();
+    await flush();
+    expect(ctx.transport.to('POST', PLANS)).toHaveLength(0);
+    expect(advanced.open).toBe(true);
+    expect(controlBy(task, 'Role').getAttribute('aria-invalid')).toBe('true');
+    m.destroy();
+  });
+
   it('runs the page checks first and shows them beside the fields', async () => {
     const ctx = firstPlanContext();
     const m = planEditorModal(ctx, { kind: 'plan-editor', id: GID, mode: 'first' }, () => undefined);
+    // The editor opens on a plan that could be sent: what the checks catch is what is taken out of it.
+    type(controlBy<HTMLTextAreaElement>(m.el, 'Summary'), '');
+    buttonBy(tasksOf(m.el)[0] as HTMLElement, 'Remove **').click();
     buttonBy(m.el, 'Propose the plan').click();
     await flush();
     expect(ctx.transport.to('POST', PLANS)).toHaveLength(0);
@@ -179,7 +307,10 @@ describe('plan editor, first plan', () => {
     type(controlBy<HTMLTextAreaElement>(m.el, 'Summary'), 'Two tasks');
     fillTask(tasksOf(m.el)[0] as HTMLElement, { summary: 'Backend', criteria: 'ok', write: 'backend/**' });
     buttonBy(m.el, 'Add a task').click();
-    fillTask(tasksOf(m.el)[1] as HTMLElement, { summary: 'Backend db', criteria: 'ok', write: 'backend/db/**' });
+    const second = tasksOf(m.el)[1] as HTMLElement;
+    fillTask(second, { summary: 'Backend db', criteria: 'ok', write: 'backend/db/**' });
+    // An added task follows the one before it; taken out of that order, the two run side by side.
+    check(second.querySelector('.pn-deps input') as HTMLInputElement, false);
     buttonBy(m.el, 'Propose the plan').click();
     await flush();
     expect(ctx.transport.to('POST', PLANS)).toHaveLength(0);
@@ -449,8 +580,11 @@ describe('a draft that is not proposed yet (review of 2026-11-16)', () => {
     expect(other.el.textContent).not.toContain('Your draft for this goal was kept');
     other.destroy();
 
+    // Starting over is the editor as it opens: the task filled in from the goal.
     buttonBy(again.el, 'Start over').click();
-    expect((controlBy(tasksOf(again.el)[0] as HTMLElement, 'Summary') as HTMLInputElement).value).toBe('');
+    expect((controlBy(tasksOf(again.el)[0] as HTMLElement, 'Summary') as HTMLInputElement).value).toBe(
+      'Add Stripe subscriptions and keep one-time checkout working',
+    );
     expect(again.el.textContent).not.toContain('Your draft for this goal was kept');
     again.destroy();
     // Started over and closed: nothing is kept.
@@ -478,5 +612,215 @@ describe('a draft that is not proposed yet (review of 2026-11-16)', () => {
     const again = open(ctx).m;
     expect(again.el.textContent).not.toContain('Your draft for this goal was kept');
     again.destroy();
+  });
+});
+
+describe('a proposed plan, changed before it is approved (2026-11-17)', () => {
+  const proposedFirst = makePlan({
+    version: 1,
+    status: 'PROPOSED',
+    summary: `Two steps ${HOSTILE}`,
+    proposed_by: { kind: 'master_brain', id: 'master-brain' },
+    tasks: [
+      makePlanTask({
+        key: 'page',
+        position: 1,
+        summary: 'Add the page',
+        role: 'frontend',
+        depends_on: ['api'],
+        acceptance_criteria: ['the page renders'],
+        scope: { write: ['frontend/**'], read: ['backend/**'] },
+        assign_to: 'claude-1',
+      }),
+      makePlanTask({
+        key: 'api',
+        position: 0,
+        summary: 'Add the API',
+        description: 'Follow the existing routes.',
+        acceptance_criteria: ['tests pass'],
+        priority: 'high',
+      }),
+    ],
+  });
+
+  it('turns a proposed first plan into the draft of the editor, in its order', () => {
+    expect(draftFromProposal(proposedFirst, { revision: false, objective: ' Ship it ' })).toEqual({
+      objective: 'Ship it',
+      summary: `Two steps ${HOSTILE}`,
+      tasks: [
+        {
+          key: 'api',
+          summary: 'Add the API',
+          kind: 'implementation',
+          role: 'backend',
+          description: 'Follow the existing routes.',
+          acceptance_criteria: ['tests pass'],
+          depends_on: [],
+          scope: { write: ['backend/**'], read: [] },
+          priority: 'high',
+          risk_level: 'low',
+        },
+        {
+          key: 'page',
+          summary: 'Add the page',
+          kind: 'implementation',
+          role: 'frontend',
+          acceptance_criteria: ['the page renders'],
+          depends_on: ['api'],
+          scope: { write: ['frontend/**'], read: ['backend/**'] },
+          priority: 'normal',
+          risk_level: 'low',
+          assign_to: 'claude-1',
+        },
+      ],
+    });
+  });
+
+  it('turns a proposed revision into what it changes, naming existing tasks by their id', () => {
+    const revision = makePlan({
+      version: 2,
+      status: 'PROPOSED',
+      summary: 'Fix the API, drop the docs, add tests',
+      tasks: [
+        makePlanTask({ key: 'api', position: 0, change: 'rework', task_id: 'task_api', note: 'handle empty carts' }),
+        makePlanTask({ key: 'ui', position: 1, change: 'keep', task_id: 'task_ui' }),
+        makePlanTask({ key: 'docs', position: 2, change: 'drop', task_id: 'task_docs', note: 'not needed' }),
+        makePlanTask({
+          key: 'tests',
+          position: 3,
+          change: 'new',
+          summary: 'Test it',
+          depends_on: ['ui', 'helpers'],
+          acceptance_criteria: [],
+        }),
+        makePlanTask({ key: 'helpers', position: 4, change: 'new', summary: 'Add helpers', kind: 'odd' as never }),
+      ],
+    });
+    expect(draftFromProposal(revision, { revision: true })).toEqual({
+      summary: 'Fix the API, drop the docs, add tests',
+      rework: [{ task_id: 'task_api', note: 'handle empty carts' }],
+      drop: [{ task_id: 'task_docs', reason: 'not needed' }],
+      new_tasks: [
+        expect.objectContaining({
+          key: 'tests',
+          // A task of the active plan by its id, another new task by its key.
+          depends_on: ['task_ui', 'helpers'],
+          // No criterion yet: one empty line to fill, as a new task has.
+          acceptance_criteria: [''],
+        }),
+        // A kind this page does not know becomes implementation, as an import does.
+        expect.objectContaining({ key: 'helpers', kind: 'implementation' }),
+      ],
+    });
+  });
+
+  function open(active: ReturnType<typeof makePlan> | null, proposed: ReturnType<typeof makePlan>, answers = {}) {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({
+        goals: [makeGoal({ status: active ? 'ACTIVE' : 'OPEN' })],
+        plans: { [GID]: { active, proposed } },
+        tasks: [makeTask({ task_id: 'task_api', status: 'FAILED', summary: 'Add the API' })],
+      }),
+      answers: { 'POST /files/match': { counts: {}, total: 0, truncated: false }, ...answers },
+    });
+    let closed = 0;
+    const m = planEditorModal(
+      ctx,
+      { kind: 'plan-editor', id: GID, mode: active ? 'revision' : 'first', seed: 'proposed' },
+      () => {
+        closed += 1;
+      },
+    );
+    return { ctx, m, closed: () => closed };
+  }
+
+  it('opens on the proposal, says what proposing it does, and sends the edited plan', async () => {
+    const { ctx, m, closed } = open(null, proposedFirst, {
+      [`POST ${PLANS}`]: makePlan({ status: 'PROPOSED', version: 2 }),
+    });
+    expect(m.title).toBe('Edit the proposed plan');
+    expect(m.el.textContent).toContain(
+      'This is version 1 as it was proposed. Change what you like: proposing it replaces that version',
+    );
+    expect(m.el.textContent).not.toContain('approve or reject it on the board');
+    expect(controlBy<HTMLTextAreaElement>(m.el, 'Summary').value).toBe(`Two steps ${HOSTILE}`);
+    expect(m.el.querySelector('img')).toBeNull();
+    const [api, page] = tasksOf(m.el) as [HTMLElement, HTMLElement];
+    expect(tasksOf(m.el)).toHaveLength(2);
+    expect(controlBy(api, 'Summary').value).toBe('Add the API');
+    expect(controlBy<HTMLTextAreaElement>(api, 'Description').value).toBe('Follow the existing routes.');
+    expect(controlBy(page, 'Role').value).toBe('frontend');
+    expect(controlBy<HTMLSelectElement>(page, 'Assign to').value).toBe('claude-1');
+    expect((page.querySelector('.pn-deps input') as HTMLInputElement).checked).toBe(true);
+    // Opened and closed without a change: nothing to ask about, and nothing kept as a draft.
+    expect(await m.beforeClose()).toBe(true);
+    expect(ctx.confirms).toHaveLength(0);
+    type(controlBy(api, 'Summary'), 'Add the API and its tests');
+    buttonBy(m.el, 'Propose the plan').click();
+    await flush();
+    const sent = ctx.transport.to('POST', PLANS)[0]?.body as { draft: { tasks: { summary: string }[] } } | undefined;
+    expect(sent?.draft.tasks.map((t) => t.summary)).toEqual(['Add the API and its tests', 'Add the page']);
+    expect(closed()).toBe(1);
+    m.destroy();
+  });
+
+  it('keeps an edited proposal apart from a plan written from nothing, and starts over from the proposal', () => {
+    const first = open(null, proposedFirst);
+    type(controlBy(tasksOf(first.m.el)[0] as HTMLElement, 'Summary'), 'Changed by me');
+    first.m.destroy();
+    // The plain editor of the same goal does not get the edited proposal as its draft.
+    const plain = planEditorModal(first.ctx, { kind: 'plan-editor', id: GID, mode: 'first' }, () => undefined);
+    expect(plain.el.textContent).not.toContain('Your draft for this goal was kept');
+    plain.destroy();
+    const again = planEditorModal(
+      first.ctx,
+      { kind: 'plan-editor', id: GID, mode: 'first', seed: 'proposed' },
+      () => undefined,
+    );
+    expect(again.el.textContent).toContain('Your draft for this goal was kept');
+    expect(controlBy(tasksOf(again.el)[0] as HTMLElement, 'Summary').value).toBe('Changed by me');
+    buttonBy(again.el, 'Start over').click();
+    expect(controlBy(tasksOf(again.el)[0] as HTMLElement, 'Summary').value).toBe('Add the API');
+    again.destroy();
+  });
+
+  it('opens a proposed revision as the changes it makes to the active plan', () => {
+    const active = makePlan({
+      status: 'ACTIVE',
+      tasks: [
+        makePlanTask({ key: 'api', task_id: 'task_api', status: 'FAILED', scope: { write: ['backend/**'], read: [] } }),
+        makePlanTask({ key: 'ui', task_id: 'task_ui', status: 'READY', scope: { write: ['frontend/**'], read: [] } }),
+      ],
+    });
+    const revision = makePlan({
+      version: 2,
+      status: 'PROPOSED',
+      summary: 'Fix the API and add its tests',
+      proposed_by: { kind: 'master_brain', id: 'master-brain' },
+      tasks: [
+        makePlanTask({ key: 'api', position: 0, change: 'rework', task_id: 'task_api', note: 'handle empty carts' }),
+        makePlanTask({ key: 'ui', position: 1, change: 'keep', task_id: 'task_ui' }),
+        makePlanTask({
+          key: 'api-tests',
+          position: 2,
+          change: 'new',
+          summary: 'Test the API',
+          acceptance_criteria: ['tests pass'],
+          scope: { write: ['backend/test/**'], read: [] },
+          depends_on: ['api'],
+        }),
+      ],
+    });
+    const { m } = open(active, revision);
+    expect(m.title).toBe('Edit the proposed plan');
+    expect(m.el.textContent).toContain('This is version 2 as it was proposed.');
+    expect(controlBy<HTMLTextAreaElement>(m.el, 'Summary of the revision').value).toBe('Fix the API and add its tests');
+    // The rework it proposed is ticked with its note, and its new task is there to change.
+    const note = m.el.querySelector('textarea[aria-label="Rework note for api"]') as HTMLTextAreaElement;
+    expect(note.value).toBe('handle empty carts');
+    const added = Array.from(m.el.querySelectorAll('.pn-tasks > .pn-task')) as HTMLElement[];
+    expect(added).toHaveLength(1);
+    expect(controlBy(added[0] as HTMLElement, 'Summary').value).toBe('Test the API');
+    m.destroy();
   });
 });
