@@ -169,6 +169,15 @@ export function diffNotices(memory: NoticeMemory, board: UiSnapshot, now: number
         body: `${item.task.agent_key ? `${short(item.task.agent_key, 40)}: ` : ''}${short(item.task.summary)}`,
         taskId: item.taskId,
       });
+    } else if (item.kind === 'quiet') {
+      if (memory.seen.has(item.key)) continue;
+      memory.seen.add(item.key);
+      notices.push({
+        key: item.key,
+        title: `${short(item.agentKey, 40)} has gone quiet`,
+        body: `Look at ${turnHost(item.host)}: ${short(item.task.summary)}`,
+        taskId: item.taskId,
+      });
     } else if (item.kind === 'turn') {
       if (memory.seen.has(item.key)) continue;
       memory.seen.add(item.key);

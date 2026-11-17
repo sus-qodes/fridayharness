@@ -43,6 +43,43 @@ interface PlanDiffView {
 }
 
 /** Reads the diff route's `diff` defensively (its type is the planner's, not the protocol's). */
+/** A glob's fixed beginning: `backend/**` gives `backend/`, a plain path gives itself. */
+const fixedPart = (glob: string): string => glob.replace(/[*?[{].*$/, '');
+
+/**
+ * Pairs of plan tasks that may change the same files and that neither depends on the other, by
+ * key (2026-11-17). Friday never runs two such tasks at once, so the plan is slower than it looks;
+ * the review says so before the person approves. The test is the coarse one delegation uses: one
+ * write scope's fixed beginning lies under the other's.
+ */
+export function tasksOnSameFiles(
+  tasks: readonly { key: string; depends_on: readonly string[]; scope?: { write?: readonly string[] } | null }[],
+): [string, string][] {
+  const byKey = new Map(tasks.map((t) => [t.key, t]));
+  const comesAfter = (a: string, b: string, seen = new Set<string>()): boolean => {
+    if (seen.has(a)) return false;
+    seen.add(a);
+    const deps = byKey.get(a)?.depends_on ?? [];
+    return deps.includes(b) || deps.some((d) => comesAfter(d, b, seen));
+  };
+  const meet = (x: readonly string[], y: readonly string[]) =>
+    x.some((a) => y.some((b) => fixedPart(a).startsWith(fixedPart(b)) || fixedPart(b).startsWith(fixedPart(a))));
+  const out: [string, string][] = [];
+  for (let i = 0; i < tasks.length; i += 1) {
+    for (let j = i + 1; j < tasks.length; j += 1) {
+      const a = tasks[i];
+      const b = tasks[j];
+      if (!a || !b) continue;
+      const wa = a.scope?.write ?? [];
+      const wb = b.scope?.write ?? [];
+      if (!wa.length || !wb.length || !meet(wa, wb)) continue;
+      if (comesAfter(a.key, b.key) || comesAfter(b.key, a.key)) continue;
+      out.push([a.key, b.key]);
+    }
+  }
+  return out;
+}
+
 export function readPlanDiff(raw: unknown): PlanDiffView | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
@@ -249,6 +286,7 @@ export function planReview(
   const again = button('Reject and ask again', () => undefined, { class: 'btn gv-decide' });
   again.hidden = !plannerReady();
   const tasks = [...p.tasks].sort((x, y) => x.position - y.position);
+  const sameFiles = tasksOnSameFiles(tasks);
 
   replace(
     el,
@@ -286,6 +324,16 @@ export function planReview(
       : null,
     h('h4', { class: 'section-title' }, `Tasks (${tasks.length})`),
     h('ol', { class: 'gv-plan-tasks' }, ...tasks.map(taskRow)),
+    sameFiles.length
+      ? h(
+          'p',
+          { class: 'gv-plan-overlap field-hint' },
+          `These tasks may change the same files and do not depend on each other, so Friday runs them one after the other, not together: ${sameFiles
+            .slice(0, 4)
+            .map(([a, b]) => `${visible(a)} and ${visible(b)}`)
+            .join('; ')}${sameFiles.length > 4 ? '; …' : ''}.`,
+        )
+      : null,
     h('h4', { class: 'section-title' }, active ? `Against the active plan v${active.version}` : 'Changes'),
     diffBox,
     h(

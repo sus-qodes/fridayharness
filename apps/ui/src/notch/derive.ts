@@ -51,6 +51,12 @@ export type WaitingItem =
    * Before, the card said "for antigravity-1" and nothing told the person to go there.
    */
   | { kind: 'turn'; key: string; id: string; taskId: string; task: SnapshotTask; agentKey: string; host: string }
+  /**
+   * A task an agent its person runs holds as running, with nothing reported for `QUIET_MS`: its
+   * window may be closed, or it may wait on a prompt of its own that Friday cannot see. Friday does
+   * not take the task away by itself; the person looks, or gives it to another agent (2026-11-17).
+   */
+  | { kind: 'quiet'; key: string; id: string; taskId: string; task: SnapshotTask; agentKey: string; host: string }
   /** A completed goal whose branch a person has not landed yet; `id` is the goal's. */
   | { kind: 'land'; key: string; id: string; taskId: null; goalId: string; request: string }
   /** An agent's message the human has not replied to (a request, or one the sender blocks on). */
@@ -135,6 +141,34 @@ export function turnHost(host: string): string {
 /** What they type there for the agent to take its task. */
 export function turnPrompt(host: string): string {
   return host === 'claude-code' ? '/friday start' : '/friday';
+}
+
+/** After this long with nothing reported, a running task of an agent its person runs is theirs to look at. */
+export const QUIET_MS = 15 * 60_000;
+
+/** Running tasks of agents their person runs that have reported nothing for `QUIET_MS` (see the `quiet` kind). */
+function toQuiet(board: UiSnapshot, now: number): WaitingItem[] {
+  const hosts = new Map(board.harnesses.map((x) => [x.harness_id, x]));
+  const out: WaitingItem[] = [];
+  for (const t of board.tasks) {
+    if (t.status !== 'RUNNING' || !t.agent_key) continue;
+    const last = Math.max(time(t.updated_at), time(t.started_at));
+    if (!last || now - last < QUIET_MS) continue;
+    const agent = board.agents.find((a) => a.agent_key === t.agent_key);
+    const host = agent?.harness_id ? hosts.get(agent.harness_id) : undefined;
+    // An agent Friday starts is watched by its adapter and by recovery.
+    if (!host || host.attach_mode === 'spawn') continue;
+    out.push({
+      kind: 'quiet',
+      key: `quiet:${t.task_id}`,
+      id: t.task_id,
+      taskId: t.task_id,
+      task: t,
+      agentKey: t.agent_key,
+      host: host.vendor,
+    });
+  }
+  return out;
 }
 
 /** Tasks kept for an agent its person runs themselves, oldest first (see the `turn` kind). */
@@ -230,6 +264,7 @@ export function waitingItems(board: UiSnapshot | null, now: number): WaitingItem
       (t): WaitingItem => ({ kind: 'waiting', key: `waiting:${t.task_id}`, id: t.task_id, taskId: t.task_id, task: t }),
     ),
     ...toTurn(board),
+    ...toQuiet(board, now),
     ...proposedPlans(board),
     ...toVerify(board, now),
     ...toLand(board),
@@ -267,6 +302,7 @@ const WAITING_WORDS: Record<WaitingKind, [one: string, many: string]> = {
   question: ['question', 'questions'],
   waiting: ['blocked agent', 'blocked agents'],
   turn: ['task for an agent you run', 'tasks for an agent you run'],
+  quiet: ['agent that has gone quiet', 'agents that have gone quiet'],
   plan: ['proposed plan', 'proposed plans'],
   verify: ['task to verify', 'tasks to verify'],
   land: ['goal to land', 'goals to land'],
@@ -280,6 +316,7 @@ const WAITING_ORDER: readonly WaitingKind[] = [
   'question',
   'waiting',
   'turn',
+  'quiet',
   'plan',
   'verify',
   'land',
@@ -362,6 +399,7 @@ export function itemSignature(item: WaitingItem): string {
     case 'verify':
       return [item.key, item.task.status, item.task.current_run_id].join('\u0000');
     case 'turn':
+    case 'quiet':
       return [item.key, item.agentKey, item.host, item.task.summary].join('\u0000');
     case 'land':
       return item.key;
@@ -404,7 +442,7 @@ export function studioTarget(item: WaitingItem | null, activeTaskId: string | nu
   if (item?.kind === 'verify') return { task_id: item.taskId, panel: 'verify', id: item.taskId };
   if (item?.kind === 'land') return { panel: 'land', id: item.goalId };
   // The task itself: its inspector is where it is given to another agent.
-  if (item?.kind === 'turn') return { task_id: item.taskId };
+  if (item?.kind === 'turn' || item?.kind === 'quiet') return { task_id: item.taskId };
   // The delivery too: with two open messages the drawer opens on this one, as the rail's row does.
   if (item?.kind === 'message') return { panel: 'inbox', id: item.id };
   if (item?.kind === 'memory') return { panel: 'memory', tab: 'review' };

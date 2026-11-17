@@ -63,6 +63,7 @@ const ICONS: Record<TrayItem['kind'], IconName> = {
   question: 'question',
   waiting: 'hourglass',
   turn: 'hourglass',
+  quiet: 'hourglass',
   plan: 'goal',
   verify: 'check',
   land: 'branch',
@@ -72,7 +73,16 @@ const ICONS: Record<TrayItem['kind'], IconName> = {
 };
 
 /** Rows that open another place instead of a card under themselves. */
-const OPENS_PLACE = new Set<TrayItem['kind']>(['turn', 'plan', 'verify', 'land', 'message', 'memory', 'policy']);
+const OPENS_PLACE = new Set<TrayItem['kind']>([
+  'turn',
+  'quiet',
+  'plan',
+  'verify',
+  'land',
+  'message',
+  'memory',
+  'policy',
+]);
 
 function senderOf(m: SnapshotInboxItem): string {
   if (m.from.kind === 'agent') return m.from.agent_key ?? m.from.id;
@@ -141,6 +151,11 @@ export function mountDecisionsTray(
           label: `${visible(item.task.agent_key ?? 'An agent')} waits`,
           sub: truncate(cleanText(item.task.waiting_note ?? item.task.summary), 110),
         };
+      case 'quiet':
+        return {
+          label: `${visible(item.agentKey)} has gone quiet`,
+          sub: `Look at ${turnHost(item.host)}: it may be closed, or waiting for you there · ${truncate(cleanText(item.task.summary), 80)}`,
+        };
       case 'turn':
         return {
           label: `Your turn in ${turnHost(item.host)}`,
@@ -203,7 +218,7 @@ export function mountDecisionsTray(
 
   /** Where a row without a card is decided. */
   const openPlace = (item: TrayItem): void => {
-    if (item.kind === 'turn') {
+    if (item.kind === 'turn' || item.kind === 'quiet') {
       ctx.store.patch('ui', { selectedTaskId: item.taskId });
       openDrawer(ctx, { kind: 'inspector', id: item.taskId });
     } else if (item.kind === 'plan') openModal(ctx, { kind: 'plan-review', id: item.goalId });

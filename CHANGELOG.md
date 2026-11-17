@@ -2,6 +2,12 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — agents working together, part 11: three things said in time
+
+- **An agent you run that has gone quiet is pointed out.** When Antigravity, or Claude Code in your editor, holds a task as running and nothing was reported on it for fifteen minutes, it is listed with what waits for you: its window may be closed, or it may be waiting on a prompt of its own. Friday does not take the task away by itself; the task's own page gives it to another agent.
+- **"Prompt it there" names the app.** The hint after an answer said "Agents connected from VS Code", also for Antigravity. It now says which app, and what to type.
+- **The plan review says when tasks would change the same files.** Two tasks that do not depend on each other and may write the same files are never run together, so such a plan is slower than it looks. The review names them before you approve.
+
 ## Unreleased — agents working together, part 10: what one agent leaves for the next
 
 - **The next agent is told what the earlier tasks did.** A task that depends on others gets one line for each: who did it and what that agent reported, from Friday's own records, with no model call and no list of files to open. Before, it was told only that it was "plan task X".

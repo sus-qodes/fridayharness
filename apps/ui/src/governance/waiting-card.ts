@@ -6,6 +6,7 @@
  */
 import type { SnapshotTask } from '@friday/protocol';
 import { visible } from '../model/text.js';
+import { turnHost, turnPrompt } from '../notch/derive.js';
 import type { AppContext, Component } from '../shell/context.js';
 import { button, h, setText } from '../ui/dom.js';
 import { cleanText, timeAgo } from '../ui/format.js';
@@ -20,13 +21,25 @@ export interface WaitingCardOptions {
   clock?: Clock;
 }
 
-/** Shown when Friday cannot continue the session itself. */
-export const ATTACHED_HINT = 'Agents connected from VS Code continue when you prompt them there.';
+/** Shown when Friday cannot continue the session itself, and the app it runs in is not known. */
+export const ATTACHED_HINT = 'An agent you run in your own editor continues when you prompt it there.';
+
+/** The same, naming the app and what to type (2026-11-17): it said "VS Code" for Antigravity too. */
+export function attachedHint(host: string | null): string {
+  return host ? `It continues when you prompt it in ${turnHost(host)}: type ${turnPrompt(host)} there.` : ATTACHED_HINT;
+}
 
 export function waitingCard(ctx: AppContext, task: SnapshotTask, opts: WaitingCardOptions = {}): Component {
   const board = ctx.store.select('board');
   const titleId = nextId('waiting-title');
   const blocked = task.waiting_reason === 'blocked';
+  /** The app the task's agent runs in, when it is one its person runs; null otherwise. */
+  const hostOfTask = (): string | null => {
+    const b = ctx.store.select('board');
+    const agent = b?.agents.find((a) => a.agent_key === task.agent_key);
+    const host = b?.harnesses.find((x) => x.harness_id === agent?.harness_id);
+    return host && host.attach_mode !== 'spawn' ? host.vendor : null;
+  };
   const hint = h('div', { class: 'gv-arming-hint', aria: { live: 'polite' } }, ARMING_TEXT);
   const status = h('div', { class: 'gv-status', role: 'status', aria: { live: 'polite' } });
   const reasonBox = h('div', { class: 'gv-continue-reason', role: 'note', hidden: true });
@@ -74,7 +87,7 @@ export function waitingCard(ctx: AppContext, task: SnapshotTask, opts: WaitingCa
         h('strong', null, 'Friday could not continue it: '),
         cleanText(r.reason ?? 'its session cannot be resumed from here'),
         h('br'),
-        ATTACHED_HINT,
+        attachedHint(hostOfTask()),
       );
       ctx.refresh();
     }

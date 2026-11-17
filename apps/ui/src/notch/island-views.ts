@@ -229,6 +229,10 @@ function noticeItem(item: WaitingItem, handlers: ViewHandlers): HTMLElement | nu
     title = 'A goal is ready to land';
     line = truncate(cleanText(item.request), 120);
     door = 'Open the landing';
+  } else if (item.kind === 'quiet') {
+    title = `${visible(item.agentKey)} has gone quiet`;
+    line = `Nothing was reported on this task for a while. Look at ${turnHost(item.host)}: it may be closed, or waiting for you there · ${truncate(cleanText(item.task.summary), 90)}`;
+    door = 'Open the task';
   } else if (item.kind === 'turn') {
     title = `Your turn in ${turnHost(item.host)}`;
     line = `${visible(item.agentKey)} takes this task when you type ${turnPrompt(item.host)} there · ${truncate(cleanText(item.task.summary), 100)}`;

@@ -27,6 +27,7 @@ import {
   nextExpiryIn,
   POLICY_UNTRUSTED_KEY,
   projectName,
+  QUIET_MS,
   runningCount,
   statsText,
   statusSentence,
@@ -526,5 +527,38 @@ describe('your turn: a task kept for an agent its person runs (2026-11-17)', () 
     expect([turnHost('antigravity'), turnPrompt('antigravity')]).toEqual(['Antigravity', '/friday']);
     expect([turnHost('claude-code'), turnPrompt('claude-code')]).toEqual(['Claude Code', '/friday start']);
     expect(turnHost('something-new')).toBe('your editor');
+  });
+});
+
+describe('gone quiet: a running task of an agent its person runs (2026-11-17)', () => {
+  const NOW = Date.parse('2026-10-17T10:00:00.000Z');
+  const board = (attach: 'attach' | 'spawn', updated: string) =>
+    makeSnapshot({
+      harnesses: [makeHarness({ harness_id: 'h_ag', vendor: 'antigravity', attach_mode: attach })],
+      agents: [makeAgent({ agent_key: 'antigravity-1', harness_id: 'h_ag' })],
+      tasks: [
+        makeTask({
+          task_id: 't1',
+          status: 'RUNNING',
+          agent_key: 'antigravity-1',
+          started_at: '2026-10-17T09:00:00.000Z',
+          updated_at: updated,
+          summary: 'Write the README',
+        }),
+      ],
+    });
+  const longAgo = new Date(NOW - QUIET_MS - 1000).toISOString();
+  const justNow = new Date(NOW - 60_000).toISOString();
+
+  it('is listed once nothing was reported for a quarter of an hour, and opens the task', () => {
+    const items = waitingItems(board('attach', longAgo), NOW);
+    expect(items.map((i) => i.key)).toEqual(['quiet:t1']);
+    expect(statusSentence(board('attach', longAgo), NOW)).toContain('1 agent that has gone quiet');
+    expect(studioTarget(items[0] ?? null, null)).toEqual({ task_id: 't1' });
+  });
+
+  it('is not listed while it reports, nor for an agent Friday starts', () => {
+    expect(waitingItems(board('attach', justNow), NOW)).toEqual([]);
+    expect(waitingItems(board('spawn', longAgo), NOW)).toEqual([]);
   });
 });

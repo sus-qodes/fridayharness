@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeContext, type TestContext } from '../test/context.js';
 import { makeGoal, makePlan, makePlanTask, makeSnapshot } from '../test/fixtures.js';
-import { planReview, readPlanDiff } from './plan-review.js';
+import { planReview, readPlanDiff, tasksOnSameFiles } from './plan-review.js';
 
 const HOSTILE = '<img src=x onerror=alert(1)>';
 const GOAL = 'goal_0000000000000000000000gg01';
@@ -287,5 +287,24 @@ describe('plan review', () => {
       changed: [{ task: { key: 'a' }, fields: ['kind'] }],
       unchanged: 0,
     });
+  });
+});
+
+describe('tasks that would change the same files (2026-11-17)', () => {
+  const t = (key: string, write: string[], depends_on: string[] = []) => ({ key, depends_on, scope: { write } });
+
+  it('names pairs that overlap and do not depend on each other', () => {
+    expect(tasksOnSameFiles([t('a', ['backend/**']), t('b', ['backend/src/x.ts']), t('c', ['frontend/**'])])).toEqual([
+      ['a', 'b'],
+    ]);
+  });
+
+  it('leaves out tasks one of which comes after the other, also through a third', () => {
+    expect(tasksOnSameFiles([t('a', ['src/**']), t('b', ['src/**'], ['a'])])).toEqual([]);
+    expect(tasksOnSameFiles([t('a', ['src/**']), t('m', ['docs/**'], ['a']), t('b', ['src/**'], ['m'])])).toEqual([]);
+  });
+
+  it('says nothing of a task that writes nothing', () => {
+    expect(tasksOnSameFiles([t('a', []), t('b', ['src/**'])])).toEqual([]);
   });
 });
