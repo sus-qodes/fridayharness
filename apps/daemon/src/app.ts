@@ -1,4 +1,4 @@
-import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { blastRadius, lookupSymbol, skeletonOf } from '@friday/code-graph';
@@ -407,10 +407,31 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     const file = path.join(project.root, FRIDAY_DIR, CONFIG_FILE);
     const { text, changed } = editConfigText(readFileSync(file, 'utf8'), body.set, `${FRIDAY_DIR}/${CONFIG_FILE}`);
     if (changed.length) {
-      // Written beside it, then renamed over it: the file is never seen half written.
+      // Written beside it, then renamed over it: the file is never seen half written. A file that
+      // is read-only, or held for a moment by an editor, a sync client or a scanner, is tried
+      // again briefly and then refused in words, with nothing left behind (2026-11-17: it was an
+      // "internal error" and a stray `.tmp` file in the repository).
       const temp = `${file}.${process.pid}.tmp`;
-      writeFileSync(temp, text);
-      renameSync(temp, file);
+      try {
+        writeFileSync(temp, text);
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            renameSync(temp, file);
+            break;
+          } catch (e) {
+            const code = (e as NodeJS.ErrnoException).code ?? '';
+            if (attempt >= 4 || !['EPERM', 'EBUSY', 'EACCES'].includes(code)) throw e;
+            await new Promise((r) => setTimeout(r, 80 * (attempt + 1)));
+          }
+        }
+      } catch (e) {
+        rmSync(temp, { force: true });
+        const code = (e as NodeJS.ErrnoException).code ?? (e as Error).message;
+        throw new FridayError(
+          'invalid_request',
+          `${FRIDAY_DIR}/${CONFIG_FILE} could not be written (${code}): it is read-only, or open in a program that holds it. Close it there, or make it writable, then try again; nothing was changed`,
+        );
+      }
       state.recordObservation(pid, humanOf(c), 'config.edited', { changed }, []);
     }
     return c.json({ changed });

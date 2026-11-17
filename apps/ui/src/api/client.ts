@@ -10,6 +10,7 @@ import type {
   AgentView,
   AntigravitySetupPlan,
   AntigravitySetupResult,
+  BrainStatusView,
   ClaudeSetupPlan,
   ClaudeSetupResult,
   ContextExplanation,
@@ -441,6 +442,15 @@ export class FridayApi {
   /** Sets a few config.yaml settings (the daemon's `EDITABLE_SETTINGS`); answers those that changed. */
   editSettings(set: Record<string, unknown>): Promise<{ changed: string[] }> {
     return this.post('/config/settings', { set });
+  }
+
+  /**
+   * How this person plans on this machine (kept outside config.yaml): through Claude Code, with an
+   * Anthropic key, by writing plans themselves, or, with null, as the project's config.yaml says.
+   * Answers the planner's status; while its `choice.wanted` differs from `provider`, a restart applies it.
+   */
+  choosePlanner(provider: 'anthropic' | 'claude-code' | 'none' | null): Promise<BrainStatusView> {
+    return this.post('/brain/planner-choice', { provider });
   }
 
   /**

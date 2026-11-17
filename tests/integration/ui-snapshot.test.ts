@@ -47,7 +47,8 @@ describe('the board snapshot', () => {
     expect(snap.ui_api).toBe(UI_API_VERSION);
     expect(snap.project).toMatchObject({ has_commit: true, worktrees_mode: 'per_task' });
     expect(snap.config.loaded_hash).toBe(snap.config.current_hash);
-    expect(snap.verification).toEqual({ checks: [], auto_on_completion: false });
+    // Automatic verification: neither asked for in config.yaml nor in force.
+    expect(snap.verification).toEqual({ checks: [], auto_on_completion: false, auto_requested: false });
     const t = snap.tasks.find((x) => x.task_id === task.task_id);
     expect(t).toMatchObject({ status: 'WAITING', agent_key: 'dev-1', waiting_note: 'need the API key name' });
     expect(snap.runs[task.task_id]?.base_commit).toMatch(/^[0-9a-f]{40}$/);

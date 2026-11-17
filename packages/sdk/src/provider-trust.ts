@@ -85,6 +85,46 @@ export function revokeProvider(
   return true;
 }
 
+/**
+ * How this person plans in this project, kept on this machine (2026-11-17): through Claude Code,
+ * with an Anthropic key, or by writing plans themselves. It depends on the accounts a person has,
+ * so it is theirs, not the team's: set in the tracked config.yaml, one person's choice switched
+ * every teammate's planner, whose own then read "not ready". `<private dir>/planner.json`; null
+ * when this machine chose nothing and `master_brain.provider` of config.yaml stands.
+ */
+export const PLANNER_CHOICES = ['anthropic', 'claude-code', 'none'] as const;
+export type PlannerChoice = (typeof PLANNER_CHOICES)[number];
+
+export function plannerChoice(
+  ref: Pick<ProjectRef, 'project_key'>,
+  env: NodeJS.ProcessEnv = process.env,
+): PlannerChoice | null {
+  try {
+    const v = JSON.parse(readFileSync(path.join(privateDirFor(ref, env), 'planner.json'), 'utf8')) as {
+      provider?: unknown;
+    };
+    return (PLANNER_CHOICES as readonly unknown[]).includes(v.provider) ? (v.provider as PlannerChoice) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Sets this machine's choice, or with null removes it (the project's setting stands again). */
+export function choosePlanner(
+  ref: Pick<ProjectRef, 'project_key'>,
+  provider: PlannerChoice | null,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (provider === null) {
+    rmSync(path.join(privateDirFor(ref, env), 'planner.json'), { force: true });
+    return;
+  }
+  if (!(PLANNER_CHOICES as readonly string[]).includes(provider)) {
+    throw new FridayError('invalid_request', `"${provider}" is not a planner this machine can choose`);
+  }
+  writePrivateFile(privateDirFor(ref, env), 'planner.json', `${JSON.stringify({ provider }, null, 2)}\n`);
+}
+
 /** The endpoint the user chose for a provider's key on this machine, or undefined for the default. */
 export function providerEndpoint(provider: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
   checkName(provider);

@@ -167,6 +167,20 @@ export interface BrainStatusView {
   spent_today_usd: number;
   cursor: number;
   head: number;
+  /**
+   * How planning is chosen (2026-11-17); absent from an older daemon. `here`: this machine's own
+   * choice, or null; `project`: `master_brain.provider` of config.yaml; `wanted`: the one of the two
+   * that counts. The planner runs `provider`, which it read when Friday started: while `wanted`
+   * differs, a restart is needed.
+   */
+  choice?: { here: string | null; project: string; wanted: string };
+  /**
+   * What planning through Claude Code needs, read now; absent from an older daemon. `found`:
+   * Friday knows where Claude Code is (looked for when Friday started); `allowed`: the project
+   * allows it (`providers.claude-code.allow_remote`); `approved`: this machine approved its
+   * spending; `project_budget_usd`: the project's own daily limit, which a person's cannot exceed.
+   */
+  claude_code?: { found: boolean; allowed: boolean; approved: boolean; project_budget_usd: number };
 }
 
 /** An open Master Brain job; `calling` while a model request is in flight (the mascot thinks). */
@@ -308,7 +322,16 @@ export interface UiSnapshot {
    */
   config: { loaded_hash: string; current_hash: string | null; changes?: ConfigChanges };
   control: ControlState;
-  verification: { checks: { name: string; kind: string; required: boolean }[]; auto_on_completion: boolean };
+  verification: {
+    checks: { name: string; kind: string; required: boolean }[];
+    /** Automatic verification is in force: asked for in config.yaml and trusted on this clone. */
+    auto_on_completion: boolean;
+    /**
+     * config.yaml asks for it (`verification.auto_on_completion: true`), in force or not: with
+     * `auto_on_completion` false, this clone has not trusted it yet. Absent from an older daemon.
+     */
+    auto_requested?: boolean;
+  };
   counts: Record<string, number>;
   goals: GoalView[];
   /**

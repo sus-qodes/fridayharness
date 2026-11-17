@@ -20,7 +20,7 @@ import {
   ProjectIntentProposeRequest,
   type TokenClass,
 } from '@friday/protocol';
-import type { ProjectRef } from '@friday/sdk';
+import { PLANNER_CHOICES, type PlannerChoice, type ProjectRef } from '@friday/sdk';
 import type { FridayState, PlanProposal } from '@friday/state';
 import type { Context, Hono, MiddlewareHandler } from 'hono';
 import type { AppEnv } from './app.js';
@@ -323,6 +323,23 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
   app.get(`${P}/brain`, op, (c) => c.json(brain().status()));
 
   app.post(`${P}/brain/run-once`, op, async (c) => c.json(await brain().brain.runOnce()));
+
+  // How this person plans here, kept on this machine and not in the tracked config.yaml
+  // (2026-11-17): null hands the choice back to the project's `master_brain.provider`. The planner
+  // is built when Friday starts, so the answer's `choice.wanted` differs from `provider` until then.
+  app.post(`${P}/brain/planner-choice`, op, async (c) => {
+    const raw = (await json(c)).provider;
+    if (raw !== null && !(PLANNER_CHOICES as readonly unknown[]).includes(raw)) {
+      throw new FridayError('invalid_request', `provider is one of ${PLANNER_CHOICES.join(', ')}, or null`);
+    }
+    const provider = raw as PlannerChoice | null;
+    const before = brain().status().choice.here;
+    brain().choosePlanner(provider);
+    if (before !== provider) {
+      state.recordObservation(pid, human, 'planner.chosen', { provider, was: before }, []);
+    }
+    return c.json(brain().status());
+  });
 
   app.get(`${P}/model-calls`, op, (c) => {
     const goalId = c.req.query('goal');

@@ -44,6 +44,13 @@ describe('getting started', () => {
 
   it('counts only harnesses that are not terminated', () => {
     expect(checklist(makeSnapshot({ harnesses: [makeHarness({ status: 'TERMINATED' })] }))[1]?.done).toBe(false);
+    // A session that left, or is trying to come back, is not a connected agent.
+    for (const status of ['DISCONNECTED', 'RECONNECTING'] as const) {
+      expect(checklist(makeSnapshot({ harnesses: [makeHarness({ status })] }))[1]?.done, status).toBe(false);
+    }
+    for (const status of ['REGISTERED', 'READY', 'BUSY'] as const) {
+      expect(checklist(makeSnapshot({ harnesses: [makeHarness({ status })] }))[1]?.done, status).toBe(true);
+    }
     expect(checklist(makeSnapshot({ harnesses: [makeHarness(), makeHarness({ harness_id: 'h2' })] }))[1]?.title).toBe(
       '2 agents are connected',
     );

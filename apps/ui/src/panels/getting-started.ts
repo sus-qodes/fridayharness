@@ -38,7 +38,10 @@ const DEFAULT_CONTEXT: ChecklistContext = { notifications: false, native: false 
 /** The checklist's items from the board (pure). */
 export function checklist(board: UiSnapshot | null, context: Partial<ChecklistContext> = {}): ChecklistItem[] {
   const c = { ...DEFAULT_CONTEXT, ...context };
-  const connected = (board?.harnesses ?? []).filter((x) => x.status !== 'TERMINATED').length;
+  // A session that is there now: one that left or is trying to come back is not a connected agent.
+  const connected = (board?.harnesses ?? []).filter((x) =>
+    ['REGISTERED', 'READY', 'BUSY'].includes(String(x.status)),
+  ).length;
   const planner = plannerState(board?.brain);
   const checks = board?.verification.checks.length ?? 0;
   const commit = board?.project.has_commit ?? true;

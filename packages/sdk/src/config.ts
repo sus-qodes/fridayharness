@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { FridayError, TaskKind, TaskScope } from '@friday/protocol';
-import { parseDocument, parse as parseYaml } from 'yaml';
+import { isMap, isScalar, parseDocument, parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
 /**
@@ -640,21 +640,153 @@ export const EDITABLE_SETTINGS = {
 } as const;
 export type EditableSetting = keyof typeof EDITABLE_SETTINGS;
 
+/** A scalar as config.yaml writes it: a word plain, anything else quoted as JSON (valid YAML). */
+function yamlScalar(value: unknown): string {
+  if (typeof value === 'boolean' || typeof value === 'number') return String(value);
+  const s = String(value);
+  return /^[A-Za-z][A-Za-z0-9_-]*$/.test(s) && !/^(?:true|false|null|yes|no|on|off)$/i.test(s) ? s : JSON.stringify(s);
+}
+
+const yamlKey = (k: string): string => (/^[A-Za-z0-9_-]+$/.test(k) ? k : JSON.stringify(k));
+
+/** The text of the line an offset is on, up to the offset: what stands before it on its line. */
+function lineBefore(text: string, offset: number): string {
+  return text.slice(text.lastIndexOf('\n', offset - 1) + 1, offset);
+}
+
 /**
- * `text` (a config.yaml) with these settings set, its comments, order and the rest of its values
- * kept; refused when a setting is not editable, a value is not one it takes, or the result is not a
- * valid configuration. Answers the new text and the settings that changed.
+ * `text` with one setting set by changing as little of it as can be: the value's own characters
+ * when the key is there, new lines after its section when it is not. Null when the file is laid
+ * out in a way this does not handle (a flow map, an empty or aliased section): the caller then
+ * writes the document whole.
+ */
+function patchOne(text: string, at: readonly string[], value: unknown): string | null {
+  const doc = parseDocument(text);
+  if (doc.errors.length) return null;
+  let node: unknown;
+  try {
+    node = doc.getIn(at, true);
+  } catch {
+    return null;
+  }
+  if (node !== undefined) {
+    // The key is there: its value is replaced where it stands, and nothing else moves.
+    if (!isScalar(node) || !node.range) return null;
+    const [start, end] = node.range;
+    if (text.slice(start, end).includes('\n')) return null;
+    return `${text.slice(0, start)}${yamlScalar(value)}${text.slice(end)}`;
+  }
+  // The key is not there: the deepest section of its path that is, takes it as new lines.
+  let depth = at.length - 1;
+  let parent: unknown;
+  for (; depth >= 0; depth -= 1) {
+    try {
+      parent = depth === 0 ? doc.contents : doc.getIn(at.slice(0, depth), true);
+    } catch {
+      return null;
+    }
+    if (parent !== undefined) break;
+  }
+  const missing = at.slice(depth);
+  const linesAt = (indent: string) =>
+    missing.map((k, i) => {
+      const pad = `${indent}${'  '.repeat(i)}`;
+      return i === missing.length - 1 ? `${pad}${yamlKey(k)}: ${yamlScalar(value)}` : `${pad}${yamlKey(k)}:`;
+    });
+  if (isScalar(parent) && parent.value === null && depth > 0) {
+    // A section with nothing under it (`providers:` whose lines are commented out): the new lines
+    // go right under its key, before those comments, which stay.
+    let holder: unknown;
+    try {
+      holder = depth === 1 ? doc.contents : doc.getIn(at.slice(0, depth - 1), true);
+    } catch {
+      return null;
+    }
+    if (!isMap(holder) || holder.flow) return null;
+    const pair = holder.items.find((item) => isScalar(item.key) && item.key.value === at[depth - 1]);
+    const key = pair?.key as { range?: [number, number, number] | null } | undefined;
+    if (!key?.range) return null;
+    const keyIndent = lineBefore(text, key.range[0]);
+    const lineEnd = text.indexOf('\n', key.range[1]);
+    const rest = text.slice(key.range[1], lineEnd === -1 ? text.length : lineEnd);
+    // Only `key:` alone on its line, a comment after it at most (`key: ~` is written whole).
+    if (!/^ *$/.test(keyIndent) || !/^:[ \t]*(#.*)?$/.test(rest)) return null;
+    const added = linesAt(`${keyIndent}  `).join('\n');
+    return lineEnd === -1 ? `${text}\n${added}\n` : `${text.slice(0, lineEnd)}\n${added}${text.slice(lineEnd)}`;
+  }
+  if (!isMap(parent) || parent.flow || !parent.items.length || !parent.range) return null;
+  const first = parent.items[0]?.key as { range?: [number, number, number] | null } | null | undefined;
+  if (!first?.range) return null;
+  const indent = lineBefore(text, first.range[0]);
+  // Only a block map whose keys start their lines is extended (`a: { b: 1 }` and `- a: 1` are not).
+  if (!/^ *$/.test(indent)) return null;
+  const lines = linesAt(indent);
+  // After the last line of the section, a comment at its end included.
+  const lastLineEnd = text.indexOf('\n', Math.max(0, parent.range[1] - 1));
+  const head = lastLineEnd === -1 ? text : text.slice(0, lastLineEnd);
+  const tail = lastLineEnd === -1 ? '' : text.slice(lastLineEnd);
+  // A new section of the whole file stands apart from the one before it.
+  const gap = depth === 0 && head.trim() ? '\n' : '';
+  return `${head}\n${gap}${lines.join('\n')}${tail || '\n'}`;
+}
+
+/** The parsed values of a config text with these settings set: what an edit must produce, nothing more. */
+function expected(text: string, sets: readonly (readonly [readonly string[], unknown])[]): string {
+  const root = (parseYaml(text) ?? {}) as Record<string, unknown>;
+  for (const [at, value] of sets) {
+    let o = root;
+    for (const k of at.slice(0, -1)) {
+      if (typeof o[k] !== 'object' || o[k] === null || Array.isArray(o[k])) o[k] = {};
+      o = o[k] as Record<string, unknown>;
+    }
+    o[at.at(-1) as string] = value;
+  }
+  return canonical(root);
+}
+
+/** A value with its keys in order, as text: two configurations are the same when these are. */
+function canonical(v: unknown): string {
+  const sort = (x: unknown): unknown =>
+    Array.isArray(x)
+      ? x.map(sort)
+      : x && typeof x === 'object'
+        ? Object.fromEntries(
+            Object.keys(x as Record<string, unknown>)
+              .sort()
+              .map((k) => [k, sort((x as Record<string, unknown>)[k])]),
+          )
+        : x;
+  return JSON.stringify(sort(v));
+}
+
+/**
+ * `text` (a config.yaml) with these settings set; refused when a setting is not editable, a value
+ * is not one it takes, or the result is not a valid configuration. Answers the new text and the
+ * settings that changed.
+ *
+ * The file is a person's, and tracked: only what was asked changes (2026-11-17). A value is
+ * replaced where it stands and a missing key is added as new lines, so every comment, its spacing
+ * and every other line stay as they were, as do the file's line endings (CRLF on a Windows
+ * checkout) and its byte-order mark. Written whole through the YAML library, as before, only when
+ * the layout is one the small edit does not handle, and then without folding long lines. Either way
+ * the result is read back: it must be a configuration Friday reads whose values are the old ones
+ * with exactly these settings set, or nothing is written.
  */
 export function editConfigText(
   text: string,
   sets: Readonly<Record<string, unknown>>,
   source = 'config.yaml',
 ): { text: string; changed: EditableSetting[] } {
-  const doc = parseDocument(text);
+  const bom = text.startsWith('\uFEFF') ? '\uFEFF' : '';
+  const raw = bom ? text.slice(1) : text;
+  const newlines = raw.match(/\r\n|\n/g) ?? [];
+  const crlf = newlines.length > 0 && newlines.filter((n) => n === '\r\n').length * 2 >= newlines.length;
+  const lf = raw.replace(/\r\n/g, '\n');
+  const doc = parseDocument(lf);
   if (doc.errors.length) {
     throw new FridayError('invalid_request', `${source} is not valid YAML: ${doc.errors[0]?.message ?? 'unreadable'}`);
   }
-  const changed: EditableSetting[] = [];
+  const wanted: [EditableSetting, readonly string[], unknown][] = [];
   for (const [key, value] of Object.entries(sets)) {
     if (!Object.hasOwn(EDITABLE_SETTINGS, key)) {
       throw new FridayError('invalid_request', `${key} is not a setting the interface changes`);
@@ -665,14 +797,74 @@ export function editConfigText(
       throw new FridayError('invalid_request', `${key}: ${checked.error.issues[0]?.message ?? 'not a value it takes'}`);
     }
     const at = setting.split('.');
-    if (doc.getIn(at) === checked.data) continue;
-    doc.setIn(at, checked.data);
-    changed.push(setting);
+    let now: unknown;
+    try {
+      now = doc.getIn(at);
+    } catch {
+      now = undefined;
+    }
+    if (now !== checked.data) wanted.push([setting, at, checked.data]);
   }
-  const next = doc.toString();
+  if (!wanted.length) return { text, changed: [] };
+  const goal = expected(
+    lf,
+    wanted.map(([, at, value]) => [at, value] as const),
+  );
+  const reads = (candidate: string): boolean => {
+    try {
+      return canonical(parseYaml(candidate) ?? {}) === goal;
+    } catch {
+      return false;
+    }
+  };
+
+  // The small edit, one setting after another (a second key may go into a section the first made).
+  let out: string | null = lf;
+  for (const [, at, value] of wanted) {
+    out = out === null ? null : patchOne(out, at, value);
+  }
+  if (out !== null && !reads(out)) out = null;
+
+  if (out === null) {
+    // The whole document, through the YAML library: comments are kept, their spacing is its own.
+    try {
+      for (const [setting, at, value] of wanted) {
+        for (let i = 1; i < at.length; i += 1) {
+          const prefix = at.slice(0, i);
+          const node = doc.getIn(prefix, true);
+          if (node === undefined) continue;
+          // `providers:` with nothing under it is an empty section, not a value.
+          if (isScalar(node) && node.value === null) doc.setIn(prefix, doc.createNode({}));
+          else if (!isMap(node)) {
+            throw new FridayError(
+              'invalid_request',
+              `${source}: ${prefix.join('.')} is not a section of settings (it is a value, a list or a reference), so ${setting} cannot be set under it; correct the file by hand`,
+            );
+          }
+        }
+        doc.setIn(at, value);
+      }
+      out = doc.toString({ lineWidth: 0 });
+    } catch (e) {
+      if (e instanceof FridayError) throw e;
+      throw new FridayError(
+        'invalid_request',
+        `${source} could not be changed (${(e as Error).message}); correct the file by hand`,
+      );
+    }
+    if (!reads(out)) {
+      throw new FridayError(
+        'invalid_request',
+        `${source} could not be changed without altering other settings; correct the file by hand`,
+      );
+    }
+  }
   // The result must still be a configuration Friday reads, or nothing is written.
-  parseConfig(next, source);
-  return { text: changed.length ? next : text, changed };
+  parseConfig(out, source);
+  return {
+    text: `${bom}${crlf ? out.replace(/\n/g, '\r\n') : out}`,
+    changed: wanted.map(([setting]) => setting),
+  };
 }
 
 /** Initial config written by `friday init`. Block style so the hook launcher can find the id without a YAML parser. */

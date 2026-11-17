@@ -85,7 +85,8 @@ describe('the Settings Hub, Planner', () => {
     expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'The key is stored' });
     buttonBy(el, 'Allow spending up to $7.00 a day…').click();
     await flush();
-    expect(shell.allowSpending).toHaveBeenCalledWith(7);
+    // Anthropic is the provider the shell approves when none is named.
+    expect(shell.allowSpending).toHaveBeenCalledWith(7, undefined);
     buttonBy(el, 'Open config.yaml in VS Code').click();
     expect(opened.at(-1)).toMatch(/\.friday[\\/]config\.yaml$/);
     hub.destroy();
@@ -99,6 +100,72 @@ describe('the Settings Hub, Planner', () => {
     expect(hub.el.textContent).toContain('friday doctor');
     expect(hub.el.textContent).not.toContain('Allow spending');
     hub.destroy();
+  });
+
+  it('shows no Anthropic key steps beside a planner that is, or is about to be, Claude Code', () => {
+    // Chosen by this person and not running yet: the steps for a key would lead nowhere.
+    const wanted = { here: 'claude-code', project: 'anthropic', wanted: 'claude-code' };
+    const found = { found: true, allowed: true, approved: false, project_budget_usd: 5 };
+    const { ctx } = desktopContext({ choice: wanted, claude_code: found });
+    const hub = hubAt(ctx, 'planner');
+    expect(hub.el.textContent).toContain('Plan with your Claude Code sign-in');
+    expect(hub.el.textContent).not.toContain('Store the key…');
+    expect(hub.el.textContent).not.toContain('friday secrets set anthropic');
+    hub.destroy();
+    // Running through it: the switch stays, where a person turns it off again.
+    const on = desktopContext({
+      provider: 'claude-code',
+      key: 'not needed',
+      planner_available: true,
+      choice: wanted,
+      claude_code: { ...found, approved: true },
+    });
+    const ready = hubAt(on.ctx, 'planner');
+    expect(ready.el.textContent).toContain('The Master Brain plans through Claude Code.');
+    expect(ready.el.textContent).toContain('I’ll write plans myself instead');
+    ready.destroy();
+  });
+
+  it('keeps what is typed while the board moves, and leaves no listener behind when it is drawn again', () => {
+    const { ctx } = desktopContext();
+    // Every subscription to the store is counted, and counted off when it is ended.
+    const real = ctx.store.subscribe.bind(ctx.store);
+    let live = 0;
+    (ctx.store as { subscribe: unknown }).subscribe = ((...args: Parameters<typeof real>) => {
+      live += 1;
+      const stop = real(...args);
+      let stopped = false;
+      return () => {
+        if (!stopped) live -= 1;
+        stopped = true;
+        stop();
+      };
+    }) as typeof real;
+    const hub = hubAt(ctx, 'planner');
+    const mounted = live;
+    const budget = hub.el.querySelector('input[type="number"]:not(.pn-qs-budget)') as HTMLInputElement;
+    type(budget, '9');
+    // Events arrive: `head` and `cursor` move with each one, and nothing the page shows changes.
+    for (let i = 1; i <= 5; i += 1) {
+      const board = ctx.store.select('board');
+      ctx.store.setState({ board: board && { ...board, head: 10 + i, brain: brain({ head: 10 + i, cursor: i }) } });
+    }
+    expect(hub.el.querySelector('input[type="number"]:not(.pn-qs-budget)')).toBe(budget);
+    expect(budget.value).toBe('9');
+    expect(live).toBe(mounted);
+    // The planner's state changing draws the page again: what the drawing before subscribed to is ended.
+    for (const key of ['stored', 'missing', 'stored', 'missing'] as const) {
+      const board = ctx.store.select('board');
+      ctx.store.setState({ board: board && { ...board, brain: brain({ key }) } });
+    }
+    expect(hub.el.querySelector('input[type="number"]:not(.pn-qs-budget)')).not.toBe(budget);
+    expect(live).toBe(mounted);
+    // Another tab, and back: the same.
+    ctx.store.patch('ui', { settingsTab: 'policy' });
+    ctx.store.patch('ui', { settingsTab: 'planner' });
+    expect(live).toBe(mounted);
+    hub.destroy();
+    expect(live).toBe(0);
   });
 
   it("follows the planner's state: once it can plan, the steps go", () => {

@@ -31,6 +31,98 @@ describe('editConfigText', () => {
       expect(text).toContain(line.trim());
   });
 
+  it('changes only the lines it has to: every other line is as it was, byte for byte', () => {
+    const before = fresh();
+    const { text } = editConfigText(before, {
+      'verification.auto_on_completion': true,
+      'providers.claude-code.allow_remote': true,
+      'providers.claude-code.daily_budget_usd': 2,
+    });
+    const was = before.split('\n');
+    const is = text.split('\n');
+    // One line changed where it stood, and three were added after the providers section.
+    const changedLine = was.findIndex((l) => l.includes('auto_on_completion: false'));
+    expect(is[changedLine]).toBe(was[changedLine]?.replace('false', 'true'));
+    const added = is.filter((l) => !was.includes(l));
+    expect(added).toEqual([
+      '  auto_on_completion: true',
+      '  claude-code:',
+      '    allow_remote: true',
+      '    daily_budget_usd: 2',
+    ]);
+    // Every other line of the file is still there, in order, spacing and comments untouched.
+    const kept = was.filter((_, i) => i !== changedLine);
+    let at = 0;
+    for (const line of kept) {
+      const found = is.indexOf(line, at);
+      expect(found, line).toBeGreaterThanOrEqual(at);
+      at = found + 1;
+    }
+    expect(text).toContain('  port: 0            # 0 = pick a free port each start');
+    // And a value that had a comment after it keeps the comment.
+    const provider = editConfigText(before, { 'master_brain.provider': 'none' }).text;
+    expect(provider).toContain('  provider: none   # anthropic | claude-code | local | fake | none');
+    expect(provider.split('\n')).toHaveLength(was.length);
+  });
+
+  it('keeps a Windows checkout’s line endings and a byte-order mark', () => {
+    const crlf = fresh().replace(/\n/g, '\r\n');
+    const out = editConfigText(crlf, { 'verification.auto_on_completion': true }).text;
+    expect(out.includes('\r\n')).toBe(true);
+    // No line of it ends in a bare line feed.
+    expect(out.replace(/\r\n/g, '')).not.toContain('\n');
+    expect(parseConfig(out).verification.auto_on_completion).toBe(true);
+    const withBom = `\uFEFF${fresh()}`;
+    const kept = editConfigText(withBom, { 'master_brain.provider': 'claude-code' }).text;
+    expect(kept.charCodeAt(0)).toBe(0xfeff);
+    expect(kept.slice(1)).not.toContain('\uFEFF');
+    expect(parseConfig(kept.slice(1)).master_brain.provider).toBe('claude-code');
+  });
+
+  it('sets a key under a section that is empty or written on one line', () => {
+    const base = 'project:\n  id: proj_00000000000000000000000001\n  name: shop\n';
+    // `providers:` with nothing under it (its lines commented out) is an empty section.
+    const empty = editConfigText(`${base}providers:\n  # anthropic:\n  #   allow_remote: false\n`, {
+      'providers.claude-code.allow_remote': true,
+    }).text;
+    expect(parseConfig(empty).providers['claude-code']?.allow_remote).toBe(true);
+    expect(empty).toContain('# anthropic:');
+    const tilde = editConfigText(`${base}verification: ~\n`, { 'verification.auto_on_completion': true }).text;
+    expect(parseConfig(tilde).verification.auto_on_completion).toBe(true);
+    const flow = editConfigText(`${base}verification: { auto_on_completion: false, checks: [] }\n`, {
+      'verification.auto_on_completion': true,
+    }).text;
+    expect(parseConfig(flow).verification).toMatchObject({ auto_on_completion: true, checks: [] });
+    // A file with no such section at all gets one, apart from what was there.
+    const none = editConfigText(base, { 'master_brain.provider': 'claude-code' }).text;
+    expect(none).toBe(`${base}\nmaster_brain:\n  provider: claude-code\n`);
+    // A file that does not end in a line break gets its new lines on lines of their own.
+    const cut = editConfigText(base.trimEnd(), { 'master_brain.provider': 'none' }).text;
+    expect(parseConfig(cut).master_brain.provider).toBe('none');
+    expect(parseConfig(cut).project.name).toBe('shop');
+  });
+
+  it('refuses, in words, what it cannot change without touching something else', () => {
+    const base = 'project:\n  id: proj_00000000000000000000000001\n  name: shop\n';
+    // A section that is a reference to another: writing into it would write into both.
+    const aliased = `${base}defaults: &d\n  allow_remote: false\nproviders:\n  anthropic: *d\n  claude-code: *d\n`;
+    expect(() => editConfigText(aliased, { 'providers.claude-code.allow_remote': true })).toThrow(
+      /providers\.claude-code is not a section of settings/,
+    );
+    // A section that is a plain value.
+    expect(() => editConfigText(`${base}verification: later\n`, { 'verification.auto_on_completion': true })).toThrow(
+      /verification is not a section of settings/,
+    );
+    for (const bad of [aliased, `${base}verification: later\n`]) {
+      try {
+        editConfigText(bad, { 'verification.auto_on_completion': true, 'providers.claude-code.allow_remote': true });
+      } catch (e) {
+        // Friday's own refusal, never an internal error.
+        expect((e as { name?: string }).name).toBe('FridayError');
+      }
+    }
+  });
+
   it('changes nothing, and says so, when a setting already has that value', () => {
     const once = editConfigText(fresh(), { 'master_brain.provider': 'claude-code' }).text;
     expect(editConfigText(once, { 'master_brain.provider': 'claude-code' })).toEqual({ text: once, changed: [] });

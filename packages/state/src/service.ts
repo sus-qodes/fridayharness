@@ -708,6 +708,8 @@ const OBSERVATION_TYPES = new Set([
   'goal.landed',
   // A person changed one of the settings the interface may change in config.yaml (2026-11-16).
   'config.edited',
+  // A person chose how they plan on this machine (their own planner, kept outside config.yaml).
+  'planner.chosen',
 ]);
 
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };

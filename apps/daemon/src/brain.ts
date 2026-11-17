@@ -15,9 +15,12 @@ import {
 } from '@friday/planner';
 import type { CostClass, TaskView } from '@friday/protocol';
 import {
+  choosePlanner,
   hasSecret,
   type MasterBrainConfig,
+  type PlannerChoice,
   type ProjectRef,
+  plannerChoice,
   providerApproval,
   providerEndpoint,
   resolveSecret,
@@ -138,11 +141,17 @@ export interface BrainStatus {
   spent_today_usd: number;
   cursor: number;
   head: number;
+  /** This machine's choice of planner, the project's, and the one that counts (see `BrainStatusView`). */
+  choice: { here: string | null; project: string; wanted: string };
+  /** What planning through Claude Code needs, read now. */
+  claude_code: { found: boolean; allowed: boolean; approved: boolean; project_budget_usd: number };
 }
 
 export interface BrainHandle {
   brain: MasterBrain;
   status(): BrainStatus;
+  /** Sets this machine's own choice of planner, or with null hands it back to the project's. */
+  choosePlanner(provider: PlannerChoice | null): void;
 }
 
 /**
@@ -169,8 +178,14 @@ export function createMasterBrain(input: {
   ) => { fit: number; cost: number; cost_class?: CostClass | null; blocked?: string } | null;
 }): BrainHandle {
   const { state, project, env, logger } = input;
-  /** The provider Friday started with (restart-only). */
-  const started = project.config.master_brain;
+  /**
+   * The provider Friday started with (restart-only): this machine's own choice when it made one
+   * (`friday`'s private `planner.json`), else `master_brain.provider` of config.yaml.
+   */
+  const chosenAtStart = input.model === undefined ? plannerChoice(project, env) : null;
+  const started = chosenAtStart
+    ? { ...project.config.master_brain, provider: chosenAtStart }
+    : project.config.master_brain;
   /** `master_brain` as config.yaml has it now: `project.config` is replaced when the file is read again. */
   const current = () => project.config.master_brain;
   const providerName = started.provider === 'none' ? 'none' : started.provider;
@@ -336,6 +351,7 @@ export function createMasterBrain(input: {
 
   return {
     brain,
+    choosePlanner: (provider) => choosePlanner(project, provider, env),
     status: () => {
       const pid = project.project_id;
       const remote = model?.remote ?? false;
@@ -364,6 +380,17 @@ export function createMasterBrain(input: {
         spent_today_usd: model ? state.q.modelSpend(pid, model.provider, dayStart) : 0,
         cursor: state.q.brainCursor(pid),
         head: state.store.head(pid),
+        choice: (() => {
+          const here = plannerChoice(project, env);
+          const ofProject = project.config.master_brain.provider;
+          return { here, project: ofProject, wanted: here ?? ofProject };
+        })(),
+        claude_code: {
+          found: Boolean(input.claudeCode ?? env.CLAUDE_CODE_BIN?.trim()),
+          allowed: project.config.providers['claude-code']?.allow_remote === true,
+          approved: Boolean(providerApproval(project, 'claude-code', env)),
+          project_budget_usd: project.config.providers['claude-code']?.daily_budget_usd ?? 5,
+        },
       };
     },
   };

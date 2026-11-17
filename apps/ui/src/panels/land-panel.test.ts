@@ -317,7 +317,7 @@ describe('landing', () => {
     expect(files[0]).toBe('src/a.ts');
     // A hostile name is shown with its hidden character visible.
     expect(files[1]).toContain('⟨U+202E⟩');
-    expect(files[1]).not.toContain('‮');
+    expect(files[1]).not.toContain('\u202E');
     // The person committed them: the same dialog now lands.
     plan = planOf();
     buttonBy(m.el, 'Check again').click();

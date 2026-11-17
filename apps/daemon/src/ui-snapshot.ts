@@ -308,6 +308,7 @@ export function buildUiSnapshot(deps: {
     verification: {
       checks: project.config.verification.checks.map((c) => ({ name: c.name, kind: c.kind, required: c.required })),
       auto_on_completion: info.auto_verification,
+      auto_requested: project.config.verification.auto_on_completion === true,
     },
     counts: state.q.statusCounts(pid),
     goals,

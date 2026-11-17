@@ -72,7 +72,11 @@ export {
 } from './policy-files.js';
 export {
   approveProvider,
+  choosePlanner,
+  PLANNER_CHOICES,
+  type PlannerChoice,
   type ProviderApproval,
+  plannerChoice,
   providerApproval,
   providerEndpoint,
   revokeProvider,

@@ -3,7 +3,7 @@
  * …/config/settings` writes only those, keeps the file's comments, records the change, and none of
  * them applies on its own say (automatic verification waits for this clone's trust).
  */
-import { readFileSync } from 'node:fs';
+import { chmodSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
@@ -64,4 +64,110 @@ describe('config settings from the interface', () => {
     ).rejects.toThrow();
     expect(readFileSync(file, 'utf8')).toBe(before);
   });
+});
+
+describe('how a person plans, kept on their machine (2026-11-17)', () => {
+  type Status = {
+    provider: string;
+    choice: { here: string | null; project: string; wanted: string };
+    claude_code: { found: boolean; allowed: boolean; approved: boolean; project_budget_usd: number };
+  };
+
+  it('records the choice outside config.yaml, and the planner runs it from the next start', async () => {
+    const td = await startTestDaemon(ws());
+    const P = (p: string) => td.operator.projectPath(p);
+    const file = path.join(ws().projectDir, '.friday', 'config.yaml');
+    const before = readFileSync(file, 'utf8');
+    const first = await td.operator.get<Status>(P('/brain'));
+    expect(first.choice).toEqual({ here: null, project: 'anthropic', wanted: 'anthropic' });
+    expect(first.claude_code).toMatchObject({ allowed: false, approved: false, project_budget_usd: 5 });
+
+    const chosen = await td.operator.post<Status>(P('/brain/planner-choice'), { provider: 'claude-code' });
+    expect(chosen.choice).toEqual({ here: 'claude-code', project: 'anthropic', wanted: 'claude-code' });
+    // The planner was built when Friday started: it runs the old one until a restart.
+    expect(chosen.provider).toBe('anthropic');
+    // The tracked file is untouched: a teammate's planner does not change with this person's.
+    expect(readFileSync(file, 'utf8')).toBe(before);
+    expect(
+      td.daemon.state.store
+        .readSince(td.project.project_id, 0, { types: ['planner.chosen'], limit: 5 })
+        .map((e) => e.payload),
+    ).toEqual([{ provider: 'claude-code', was: null }]);
+    // The same again records nothing more.
+    await td.operator.post(P('/brain/planner-choice'), { provider: 'claude-code' });
+    expect(
+      td.daemon.state.store.readSince(td.project.project_id, 0, { types: ['planner.chosen'], limit: 5 }),
+    ).toHaveLength(1);
+    // Only a planner a machine may choose, and only for the operator.
+    await expect(td.operator.post(P('/brain/planner-choice'), { provider: 'local' })).rejects.toThrow(
+      /provider is one of/,
+    );
+    await expect(
+      td.bootstrap.post(td.bootstrap.projectPath('/brain/planner-choice'), { provider: 'none' }),
+    ).rejects.toThrow();
+
+    // Friday starts again: the choice is the planner, and config.yaml still says what the project said.
+    await td.daemon.close('restart');
+    const again = await startTestDaemon(ws(), { initialized: true });
+    const A = (p: string) => again.operator.projectPath(p);
+    const after = await again.operator.get<Status>(A('/brain'));
+    expect(after.provider).toBe('claude-code');
+    expect(after.choice).toEqual({ here: 'claude-code', project: 'anthropic', wanted: 'claude-code' });
+    expect(readFileSync(file, 'utf8')).toBe(before);
+
+    // Handing the choice back: the project's setting stands again.
+    const back = await again.operator.post<Status>(A('/brain/planner-choice'), { provider: null });
+    expect(back.choice).toEqual({ here: null, project: 'anthropic', wanted: 'anthropic' });
+  });
+});
+
+describe('editing config.yaml from the interface, as a careful person would', () => {
+  it('changes the one line it has to, and says whether automatic checks are asked for and in force', async () => {
+    const td = await startTestDaemon(ws());
+    const P = (p: string) => td.operator.projectPath(p);
+    const file = path.join(ws().projectDir, '.friday', 'config.yaml');
+    const before = readFileSync(file, 'utf8').split('\n');
+    type Board = { verification: { auto_on_completion: boolean; auto_requested?: boolean } };
+    expect((await td.operator.get<Board>(P('/ui/snapshot'))).verification).toMatchObject({
+      auto_on_completion: false,
+      auto_requested: false,
+    });
+    await td.operator.post(P('/config/settings'), { set: { 'verification.auto_on_completion': true } });
+    const after = readFileSync(file, 'utf8').split('\n');
+    expect(after).toHaveLength(before.length);
+    const changed = after.filter((line, i) => line !== before[i]);
+    expect(changed).toEqual(['  auto_on_completion: true']);
+    // Asked for, and not in force: this clone has not trusted it.
+    expect((await td.operator.get<Board>(P('/ui/snapshot'))).verification).toMatchObject({
+      auto_on_completion: false,
+      auto_requested: true,
+    });
+  });
+
+  it.skipIf(process.platform !== 'win32')(
+    'refuses in words, and leaves nothing behind, when config.yaml cannot be written',
+    async () => {
+      const td = await startTestDaemon(ws());
+      const dir = path.join(ws().projectDir, '.friday');
+      const file = path.join(dir, 'config.yaml');
+      const before = readFileSync(file, 'utf8');
+      // Read-only, as a file checked out so, or held by a program that locks it.
+      chmodSync(file, 0o444);
+      try {
+        await expect(
+          td.operator.post(td.operator.projectPath('/config/settings'), {
+            set: { 'verification.auto_on_completion': true },
+          }),
+        ).rejects.toThrow(/could not be written.*nothing was changed/s);
+        expect(readFileSync(file, 'utf8')).toBe(before);
+        expect(readdirSync(dir).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+        expect(
+          td.daemon.state.store.readSince(td.project.project_id, 0, { types: ['config.edited'], limit: 5 }),
+        ).toHaveLength(0);
+      } finally {
+        chmodSync(file, 0o644);
+      }
+    },
+    30_000,
+  );
 });

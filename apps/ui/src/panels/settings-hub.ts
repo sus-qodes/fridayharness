@@ -237,7 +237,18 @@ export function mountSettingsHub(ctx: AppContext): Component {
     }
   }
 
+  /**
+   * What the tab now shown subscribed to (the planner switch, the pins, the automatic-checks switch
+   * follow the board). Ended when the tab is drawn again or another one is shown: they were added
+   * to the hub's own teardown before, so every redraw left one more subscriber behind for as long
+   * as the Studio ran (2026-11-17).
+   */
+  let tabTd = new Teardown();
+  td.add(() => tabTd.run());
+
   function renderActiveTab(tabId: string): void {
+    tabTd.run();
+    tabTd = new Teardown();
     currentTab = tabId;
     const def = HUB_PAGES.find((p) => p.id === tabId) ?? HUB_PAGES[0];
     if (!def) return;
@@ -637,7 +648,9 @@ export function mountSettingsHub(ctx: AppContext): Component {
       if (!native) return;
       spendBtn.disabled = true;
       const amount = budget;
-      const done = await ctx.act('Allow this clone to spend', () => native.allowSpending(amount));
+      // The provider the planner runs: the shell approves Anthropic when none is named.
+      const provider = brain?.provider === 'claude-code' ? 'claude-code' : undefined;
+      const done = await ctx.act('Allow this clone to spend', () => native.allowSpending(amount, provider));
       if (done) {
         ctx.toast({ kind: 'success', text: `This clone may spend up to ${usd(amount)} a day` });
         ctx.refresh();
@@ -683,15 +696,19 @@ export function mountSettingsHub(ctx: AppContext): Component {
     cardActions.append(...actionParts.filter((x): x is HTMLElement => x !== null));
 
     // No API key needed: the installed Claude Code plans, signed in as it already is.
-    const cardQuick = h('div', { class: 'hub-card' }, plannerQuickSetup(ctx, td));
-    // The steps are offered while the planner is not ready, as in the Settings drawer.
-    return st.ready ? [cardStatus] : [cardStatus, cardQuick, cardActions];
+    const cardQuick = h('div', { class: 'hub-card' }, plannerQuickSetup(ctx, tabTd));
+    // The key-and-terminal steps are Anthropic's: beside a planner that is (or is about to be)
+    // Claude Code they led nowhere, and their button approved the wrong provider (2026-11-17).
+    const viaClaudeCode = (brain?.choice?.wanted ?? brain?.provider) === 'claude-code';
+    // The switch stays once planning works through it: it is where a person turns it off again.
+    if (st.ready) return viaClaudeCode ? [cardStatus, cardQuick] : [cardStatus];
+    return viaClaudeCode ? [cardStatus, cardQuick] : [cardStatus, cardQuick, cardActions];
   }
 
   // ── 5. Routing & Pins Tab ─────────────────────────────────────────────────
   function renderRoutingTab(): HTMLElement[] {
     const card = h('div', { class: 'hub-card' });
-    const pins = routingPins(ctx, td);
+    const pins = routingPins(ctx, tabTd);
     pins.load();
 
     card.append(
@@ -797,7 +814,24 @@ export function mountSettingsHub(ctx: AppContext): Component {
     void loadPolicy();
 
     card.append(h('div', { class: 'hub-card-title' }, 'Workspace Security Policy'), policyBox);
-    return [h('div', { class: 'hub-card' }, autoVerifySwitch(ctx, td)), card];
+    // What the card lists follows what is trusted and asked for: read again when either changes
+    // (the switch above just did one of them), not only when the tab is opened.
+    const trustFacts = (b: UiSnapshot | null | undefined) =>
+      JSON.stringify([
+        b?.policy_untrusted ?? null,
+        b?.verification.auto_on_completion ?? null,
+        b?.verification.auto_requested ?? null,
+      ]);
+    let trustSeen = trustFacts(ctx.store.select('board'));
+    tabTd.add(
+      ctx.store.subscribe('board', (b) => {
+        const now = trustFacts(b);
+        if (now === trustSeen) return;
+        trustSeen = now;
+        void loadPolicy();
+      }),
+    );
+    return [h('div', { class: 'hub-card' }, autoVerifySwitch(ctx, tabTd)), card];
   }
 
   // ── 7. Friday Engine Tab ──────────────────────────────────────────────────
@@ -1047,10 +1081,14 @@ export function mountSettingsHub(ctx: AppContext): Component {
 
   // The planner page is drawn again when the planner's state changes (a key stored, spending
   // allowed, a provider configured), not on every board change, so a budget being typed stays.
-  let brainSeen = JSON.stringify(ctx.store.select('board')?.brain ?? null);
+  // `head` and `cursor` move with every event and are not shown: with them in, the page was drawn
+  // again on every event, and a budget being typed was lost (2026-11-17).
+  const brainFacts = (board: UiSnapshot | null | undefined) =>
+    JSON.stringify(board?.brain ?? null, (key, value) => (key === 'head' || key === 'cursor' ? undefined : value));
+  let brainSeen = brainFacts(ctx.store.select('board'));
   td.add(
     ctx.store.subscribe('board', (board) => {
-      const now = JSON.stringify(board?.brain ?? null);
+      const now = brainFacts(board);
       if (now === brainSeen) return;
       brainSeen = now;
       if (currentTab === 'planner') renderActiveTab('planner');
