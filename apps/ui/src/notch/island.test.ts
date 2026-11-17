@@ -844,6 +844,35 @@ describe('mounted Notch: the expanded card', () => {
     expect(handle.el.dataset.state).toBe('compact');
   });
 
+  it('the handle at the lower edge folds the card back up, as Esc does (2026-11-17)', () => {
+    const ctx = makeContext({ snapshot: makeScenario() });
+    const { handle, q } = mount(ctx);
+    expect(handle.el.dataset.state).toBe('expanded');
+    const fold = q<HTMLButtonElement>('.nt-fold');
+    expect(fold.getAttribute('aria-label')).toBe('Fold back up (Esc)');
+    expect(fold.title).toBe('Fold back up (Esc)');
+    expect(fold.closest('.nt-foot')).not.toBeNull();
+    fold.focus();
+    fold.click();
+    // Folded while something waits: the pill stays, and the card is not reopened by a timer.
+    expect(handle.state()).toMatchObject({ state: 'compact', folded: true });
+    expect(document.activeElement).toBe(q('.nt-compact-open'));
+    // The card opens again from the pill, with the handle still there.
+    handle.open();
+    expect(handle.el.dataset.state).toBe('expanded');
+    q<HTMLButtonElement>('.nt-fold').click();
+    expect(handle.el.dataset.state).toBe('compact');
+  });
+
+  it('with nothing waiting the handle folds the card to the pill', () => {
+    const ctx = makeContext();
+    const { handle, q } = mount(ctx);
+    handle.open();
+    expect(handle.el.dataset.state).toBe('expanded');
+    q<HTMLButtonElement>('.nt-fold').click();
+    expect(handle.state()).toMatchObject({ state: 'compact', folded: false, pinned: false });
+  });
+
   it('in the notch window Settings names its drawer for the Studio (deep review R7)', () => {
     const ctx = makeContext();
     const onOpenStudio = vi.fn();

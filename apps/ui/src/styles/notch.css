@@ -499,12 +499,29 @@
 }
 
 .nt-foot {
+  position: relative;
   display: flex;
   flex: none;
   align-items: center;
   gap: 4px;
   padding: 4px 8px 6px;
   border-top: 1px solid var(--border-subtle);
+}
+
+/* The fold: a handle in the middle of the card's lower edge that rolls it back up into the pill.
+   Placed by `left`, not a transform: `.btn:active` scales with one. */
+.nt-fold {
+  position: absolute;
+  top: 5px;
+  left: calc(50% - 24px);
+  width: 48px;
+  min-height: 24px;
+  padding: 0;
+  color: var(--color-slate-300);
+}
+
+.nt-fold:hover {
+  color: var(--color-slate-200);
 }
 
 .nt-foot-btn {

@@ -314,15 +314,23 @@ export function expandedView(ctx: AppContext, slots: NotchSlots, handlers: ViewH
   const prompt = slots.quickPrompt(ctx, { onDone: () => handlers.promptDone() });
   const promptHolder = h('div', { class: 'nt-prompt' }, prompt.el);
 
-  // Footer: settings, mute, Open Studio.
+  // Footer: settings, mute, the fold, Open Studio.
   const settings = button([icon('gear', 14), 'Settings'], () => handlers.settings(), {
     class: 'btn btn-ghost nt-foot-btn',
+  });
+  // The fold (2026-11-17): a handle in the middle of the card's lower edge that rolls it back up
+  // into the pill. It is what `Esc` and "Later" do, which a hand on the mouse had no button for
+  // while the card showed a notice or nothing at all.
+  const fold = button(icon('chevronUp', 16), () => handlers.later(), {
+    class: 'btn nt-fold',
+    ariaLabel: 'Fold back up (Esc)',
+    title: 'Fold back up (Esc)',
   });
   const mute = button('', () => handlers.toggleMute(), { class: 'btn btn-ghost nt-foot-btn nt-mute' });
   const studioFoot = button([icon('expand', 14), 'Open Studio'], () => handlers.openStudioGeneral(), {
     class: 'btn btn-ghost nt-foot-btn',
   });
-  const footer = h('footer', { class: 'nt-foot' }, settings, mute, h('span', { class: 'spacer' }), studioFoot);
+  const footer = h('footer', { class: 'nt-foot' }, settings, mute, h('span', { class: 'spacer' }), fold, studioFoot);
 
   const el = h(
     'section',

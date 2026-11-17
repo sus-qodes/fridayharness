@@ -2,6 +2,10 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — the Notch folds back up
+
+- **The open Notch card has a button that rolls it back up.** A handle with an upward arrow sits in the middle of the card's lower edge, between Sound and Open Studio: one click folds the card back into the pill at the top of the screen. It is what `Esc` does, and what "Later" does on a request; a card that showed a notice, or nothing at all, had no button for it.
+
 ## Unreleased — loose ends, part 3
 
 - **What you allowed for a task can be seen, and taken back.** "Allow for this task" lets an agent do the same thing again without asking; once given, such an allowance was nowhere in the app, and taking it back was a terminal command. The task inspector lists the ones that still hold under "Allowed for this task" (the act in words, exactly what, and how long it holds), each with **Take back** (`POST approvals/:aid/revoke`): the agent asks again the next time. The heading shows only while there is something under it. The list comes from a route of its own (`GET tasks/:tid/approvals`, the task's granted approvals): the desktop shell still never forwards the whole list of approvals.
