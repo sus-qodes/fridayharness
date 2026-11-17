@@ -173,9 +173,9 @@ describe('drawer host', () => {
   it('keeps Tab inside while focus is in it, without holding the page', () => {
     const { ctx, drawers, opener } = setup();
     teardown.push(drawers);
-    const made = content('Settings');
-    ctx.registry.drawer('settings', () => made);
-    openDrawer(ctx, { kind: 'settings' });
+    const made = content('Agents');
+    ctx.registry.drawer('agents', () => made);
+    openDrawer(ctx, { kind: 'agents' });
     const panel = drawers.el.querySelector('.sh-drawer') as HTMLElement;
     made.last.focus();
     tab(made.last);

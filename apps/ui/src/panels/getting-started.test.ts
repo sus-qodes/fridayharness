@@ -38,7 +38,9 @@ describe('getting started', () => {
       ['notify', false],
     ]);
     expect(items[2]?.detail).toBe('To let it plan: allow this clone to spend. You can always write plans yourself.');
-    expect(items[3]?.detail).toMatch(/Verification will run Friday's scope and credential checks only/);
+    expect(items[3]?.detail).toMatch(/Verification runs only Friday's own checks/);
+    // The way to fix it is the page that suggests them, not a file to write by hand (2026-11-17).
+    expect(items[3]?.fix).toEqual({ label: 'Settings → Checks', action: 'checks' });
     expect(items[4]?.detail).toMatch(/every agent works in the main checkout until you commit once/i);
   });
 
@@ -79,7 +81,7 @@ describe('getting started', () => {
     expect(items[1]).toMatchObject({
       done: false,
       title: "Trust this project's policy",
-      fix: { label: 'Settings → Policy', action: 'policy' },
+      fix: { label: 'Settings → Permissions', action: 'policy' },
     });
     expect(items[1]?.detail).toMatch(/nothing of it applies on this clone until you trust exactly that list/);
   });
@@ -96,13 +98,18 @@ describe('getting started', () => {
     buttonBy(c.el, 'Open Agents').click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents' });
     buttonBy(c.el, 'Settings → Planner').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'planner' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'planner', drawer: null });
     buttonBy(c.el, 'Settings → Notifications').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'notifications' });
-    buttonBy(c.el, 'Settings → Policy').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'policy' });
-    buttonBy(c.el, 'Open config.yaml').click();
-    expect(opened).toEqual(['C:/demo/shop/.friday/config.yaml']);
+    expect(ctx.store.select('ui')).toMatchObject({
+      activeView: 'settings',
+      settingsTab: 'notifications',
+      drawer: null,
+    });
+    buttonBy(c.el, 'Settings → Permissions').click();
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'policy', drawer: null });
+    buttonBy(c.el, 'Settings → Checks').click();
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'checks', drawer: null });
+    expect(opened).toEqual([]);
     // Trusted, connected, planning, notifying: all set, and the policy item is gone.
     ctx.board(makeSnapshot({ harnesses: [makeHarness()], brain: brain() }));
     ctx.store.patch('prefs', { notifications: true });
@@ -132,6 +139,7 @@ describe('registerPanels', () => {
       'start-agent',
       'verify',
     ]);
-    expect([...registry.drawers.keys()].sort()).toEqual(['agents', 'settings']);
+    // Settings is a view of its own, not a drawer.
+    expect([...registry.drawers.keys()].sort()).toEqual(['agents']);
   });
 });

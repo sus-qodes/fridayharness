@@ -112,6 +112,32 @@ export interface MemoryHit {
 }
 
 /** `GET policy`: the effective policy (ADR-0028); what loosens waits for this clone's trust. */
+/** A check of the project's own, as config.yaml has it. */
+export interface ProjectCheck {
+  name: string;
+  kind: string;
+  command: string;
+  args: string[];
+  required: boolean;
+}
+
+/** A check Friday found in package.json: the script it runs and what that script is. */
+export interface SuggestedProjectCheck {
+  name: string;
+  kind: string;
+  command: string;
+  args: string[];
+  script: string;
+  runs: string;
+}
+
+export interface ProjectChecksView {
+  checks: ProjectCheck[];
+  suggested: SuggestedProjectCheck[];
+  /** The package manager the project uses (its lockfile's), for the words around the list. */
+  manager: string;
+}
+
 export interface PolicyView {
   policy: {
     version: string;
@@ -475,6 +501,33 @@ export class FridayApi {
   /** Sets a few config.yaml settings (the daemon's `EDITABLE_SETTINGS`); answers those that changed. */
   editSettings(set: Record<string, unknown>): Promise<{ changed: string[] }> {
     return this.post('/config/settings', { set });
+  }
+
+  /**
+   * The project's checks as config.yaml has them, and the ones Friday found in package.json that
+   * it does not have yet.
+   */
+  projectChecks(): Promise<ProjectChecksView> {
+    return this.get('/config/checks');
+  }
+
+  /**
+   * Adds checks from the suggestions, and removes checks, by name: the daemon builds each command
+   * from what it read in package.json, so the page sends none.
+   */
+  changeProjectChecks(change: {
+    add?: string[];
+    remove?: string[];
+  }): Promise<ProjectChecksView & { added: string[]; removed: string[] }> {
+    return this.post('/config/checks', { add: change.add ?? [], remove: change.remove ?? [] });
+  }
+
+  /**
+   * Takes back this machine's approval to spend on planning (the running planner's provider when
+   * none is named). Giving it is the machine's own act: the desktop's dialog, or a terminal.
+   */
+  denySpending(provider?: 'anthropic' | 'claude-code'): Promise<{ removed: boolean; brain: BrainStatusView }> {
+    return this.post('/brain/deny-remote', provider ? { provider } : {});
   }
 
   /**

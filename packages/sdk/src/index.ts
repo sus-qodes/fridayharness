@@ -18,6 +18,7 @@ export {
 export { DaemonClient, type DaemonClientOptions, DaemonUnreachableError, type RequestOptions } from './client.js';
 export {
   ApprovalSettings,
+  ASKABLE_COMMAND_CLASSES,
   type CheckConfig,
   type ConfigKeyEffect,
   changedConfigKeys,
@@ -41,6 +42,7 @@ export {
   RESTART_CONFIG_KEYS,
   RoutingSettings,
   renderInitialConfig,
+  settingPath,
 } from './config.js';
 export {
   CONFIG_FILE,
@@ -70,6 +72,14 @@ export {
   readPolicyTrust,
   writePolicyTrust,
 } from './policy-files.js';
+export {
+  type CheckToAdd,
+  editChecksText,
+  packageManagerOf,
+  type SuggestedCheck,
+  type SuggestedKind,
+  suggestChecks,
+} from './project-checks.js';
 export {
   approveProvider,
   choosePlanner,

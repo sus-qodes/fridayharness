@@ -11,6 +11,8 @@ import { makeContext } from '../test/context.js';
 import { makeSnapshot } from '../test/fixtures.js';
 import { Teardown } from './common.js';
 import {
+  autoApproval,
+  autoApproveSwitch,
   autoVerification,
   autoVerifySwitch,
   CLAUDE_CODE_BUDGET,
@@ -457,6 +459,116 @@ describe('checking the work automatically', () => {
     // With checks of its own, that note is not shown.
     const td2 = new Teardown();
     expect(autoVerifySwitch(makeContext(), td2).textContent).not.toContain('no checks of its own');
+    td2.run();
+  });
+});
+
+describe('turning a switch off again (2026-11-17)', () => {
+  it('sets it back at once, with no trust to ask for when nothing else was on', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ verification: { checks: [], auto_on_completion: true, auto_requested: true } }),
+      answers: { 'GET /policy': { policy: { loosening: [], loosening_hash: null, trusted: true } } },
+    });
+    const td = new Teardown();
+    const el = autoVerifySwitch(ctx, td);
+    expect(() => buttonBy(el, 'Turn on')).toThrow();
+    buttonBy(el, 'Turn off').click();
+    await flush();
+    expect(sent(ctx, '/config/settings')).toEqual([{ set: { 'verification.auto_on_completion': false } }]);
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Finished work waits for you to click Verify' });
+    expect(ctx.confirms).toHaveLength(0);
+    expect(sent(ctx, '/policy/trust')).toHaveLength(0);
+    expect(ctx.refreshes).toBe(1);
+    td.run();
+  });
+
+  it('asks again for the settings that stay on: they were trusted with it as one list', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ verification: { checks: [], auto_on_completion: true, auto_requested: true } }),
+      // What is left once automatic checks are out of config.yaml.
+      answers: { 'GET /policy': POLICY(false, ['master_brain.auto_approve']) },
+    });
+    const td = new Teardown();
+    buttonBy(autoVerifySwitch(ctx, td), 'Turn off').click();
+    await flush();
+    expect(ctx.confirms).toHaveLength(1);
+    expect(ctx.confirms[0]?.title).toBe('Keep these settings on?');
+    expect(ctx.confirms[0]?.body[0]).toBe('master_brain.auto_approve: false → true (.friday/config.yaml)');
+    expect(ctx.confirms[0]?.body[1]).toContain('trusted together with the one you just turned off');
+    expect(sent(ctx, '/policy/trust')).toEqual([{ loosening_hash: 'hash0123456789ab' }]);
+    td.run();
+  });
+
+  it('takes a setting nobody trusted here out of config.yaml', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ verification: { checks: [], auto_on_completion: false, auto_requested: true } }),
+      answers: { 'GET /policy': { policy: { loosening: [], loosening_hash: null, trusted: true } } },
+    });
+    const td = new Teardown();
+    buttonBy(autoVerifySwitch(ctx, td), 'Take it out of config.yaml').click();
+    await flush();
+    expect(sent(ctx, '/config/settings')).toEqual([{ set: { 'verification.auto_on_completion': false } }]);
+    td.run();
+  });
+});
+
+describe('starting plans without asking (2026-11-17)', () => {
+  it('reads it from that setting alone', () => {
+    expect(autoApproval(null)).toBe('off');
+    expect(autoApproval(makeSnapshot({ brain: brain() }))).toBe('off');
+    expect(autoApproval(makeSnapshot({ brain: brain({ auto_approve_requested: true }) }))).toBe('untrusted');
+    expect(autoApproval(makeSnapshot({ brain: brain({ auto_approve: true, auto_approve_requested: true }) }))).toBe(
+      'on',
+    );
+    // Another loosening waiting for trust says nothing about this one.
+    expect(autoApproval(makeSnapshot({ brain: brain(), policy_untrusted: true }))).toBe('off');
+  });
+
+  it('sets config.yaml, then asks for this computer’s trust in the list that holds it', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ brain: brain() }),
+      answers: { 'GET /policy': POLICY(false, ['master_brain.auto_approve']) },
+    });
+    const td = new Teardown();
+    const el = autoApproveSwitch(ctx, td);
+    expect(el.textContent).toContain('Start plans without asking me');
+    expect(el.textContent).toContain('A plan the planner has a question about still waits for you.');
+    buttonBy(el, 'Turn on').click();
+    await flush();
+    expect(sent(ctx, '/config/settings')).toEqual([{ set: { 'master_brain.auto_approve': true } }]);
+    expect(ctx.confirms[0]?.body).toContain('master_brain.auto_approve: false → true (.friday/config.yaml)');
+    expect(sent(ctx, '/policy/trust')).toEqual([{ loosening_hash: 'hash0123456789ab' }]);
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Plans now start without waiting for you' });
+    td.run();
+  });
+
+  it('never trusts another setting in its place, and says when it is on, with the way back', async () => {
+    const other = makeContext({
+      snapshot: makeSnapshot({ brain: brain({ auto_approve_requested: true }) }),
+      answers: { 'GET /policy': POLICY(false, ['sandbox']) },
+    });
+    const td = new Teardown();
+    buttonBy(autoApproveSwitch(other, td), 'Trust and turn on').click();
+    await flush();
+    expect(sent(other, '/config/settings')).toHaveLength(0);
+    expect(sent(other, '/policy/trust')).toHaveLength(0);
+    expect(other.toasts.at(-1)).toMatchObject({
+      kind: 'warn',
+      text: 'Starting plans automatically is not among the settings that wait for trust',
+    });
+    td.run();
+
+    const on = makeContext({
+      snapshot: makeSnapshot({ brain: brain({ auto_approve: true, auto_approve_requested: true }) }),
+      answers: { 'GET /policy': { policy: { loosening: [], loosening_hash: null, trusted: true } } },
+    });
+    const td2 = new Teardown();
+    const el = autoApproveSwitch(on, td2);
+    expect(el.textContent).toContain('Plans start as soon as the planner proposes them.');
+    buttonBy(el, 'Turn off').click();
+    await flush();
+    expect(sent(on, '/config/settings')).toEqual([{ set: { 'master_brain.auto_approve': false } }]);
+    expect(on.toasts.at(-1)).toEqual({ kind: 'success', text: 'Each plan waits for your approval' });
     td2.run();
   });
 });

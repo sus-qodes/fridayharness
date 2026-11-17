@@ -906,7 +906,7 @@ describe('question cards by kind (plan FD-21)', () => {
         // A goal without a plan gets its first plan, not a "revision" of nothing.
         expect(ctx.store.select('ui').modal).toEqual({ kind: 'plan-editor', id: GOAL, mode: 'first' });
         buttonNamed(card.el, 'Planner settings').click();
-        expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'planner' });
+        expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'planner', drawer: null });
         card.destroy();
       });
 
@@ -933,7 +933,7 @@ describe('question cards by kind (plan FD-21)', () => {
       card.destroy();
       const p = mount(makeEscalation({ kind: 'planner_unavailable', goal_id: null, task_id: null }));
       buttonNamed(p.el, 'Planner settings').click();
-      expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'planner' });
+      expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'planner', drawer: null });
       p.destroy();
     });
   });

@@ -401,7 +401,7 @@ describe('start agent modal', () => {
     const m = startAgentModal(ctx, { kind: 'start-agent' }, () => undefined);
     expect(m.el.textContent).toContain('Settings → Models');
     buttonBy(m.el, 'Open the model choices').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'routing' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'routing', drawer: null });
     expect(ctx.store.select('ui').modal).toBeNull();
     m.destroy();
   });

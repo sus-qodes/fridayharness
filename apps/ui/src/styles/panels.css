@@ -939,3 +939,66 @@
   max-height: 320px;
   overflow: auto;
 }
+
+/* The cards of Settings that set something up (2026-11-17): planning, the project's checks, what
+   agents may do without asking, what planning may spend. Their title and rows had no style. */
+.pn-qs-title {
+  font-size: var(--text-title-sm);
+  font-weight: 700;
+  color: var(--color-white);
+  margin-bottom: 2px;
+}
+
+.pn-qs-body {
+  display: grid;
+  gap: 8px;
+}
+
+.pn-qs-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--text-sm);
+}
+
+.pn-qs-budget {
+  width: 110px;
+}
+
+.pn-qs-limit {
+  font-size: var(--text-sm);
+}
+
+.pn-pc-body,
+.pn-perm-body,
+.pn-spend-under {
+  display: grid;
+  gap: 8px;
+}
+
+.pn-pc-name,
+.pn-perm-title {
+  font-weight: 600;
+}
+
+/* The command of a check: it shares the row, and wraps inside its own space. */
+.pn-pc-cmd {
+  flex: 1 1 180px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+}
+
+.pn-perm-text {
+  flex: 1 1 220px;
+}
+
+.pn-perm-examples {
+  font-size: var(--text-caption);
+}
+
+.pn-spending .row {
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}

@@ -303,3 +303,90 @@ describe('the Settings Hub, Policy and Friday', () => {
     hub.destroy();
   });
 });
+
+describe('the Settings Hub, what was added on 2026-11-17', () => {
+  const NOTHING = { policy: { loosening: [], loosening_hash: null, trusted: true } };
+  const CHECKS = {
+    checks: [],
+    suggested: [
+      { name: 'tests', kind: 'test', command: 'npm', args: ['run', 'test'], script: 'test', runs: 'vitest run' },
+    ],
+    manager: 'npm',
+  };
+
+  it('lists Checks and Permissions among its pages, by those names', () => {
+    const hub = hubAt(makeContext(), 'look');
+    const names = [...hub.el.querySelectorAll('.hub-item')].map((b) => b.textContent);
+    expect(names).toContain('Checks');
+    expect(names).toContain('Permissions');
+    expect(names).not.toContain('Policy & Trust');
+    hub.destroy();
+  });
+
+  it('Checks holds the project’s own checks, with what package.json suggests, and the automatic switch', async () => {
+    const ctx = makeContext({ answers: { 'GET /config/checks': CHECKS, 'GET /policy': NOTHING } });
+    const hub = hubAt(ctx, 'checks');
+    await flush();
+    expect(hub.el.querySelector('[data-setup="checks"]')?.textContent).toContain('npm run test');
+    expect(hub.el.querySelector('[data-setup="verify"]')?.textContent).toContain('Check the work automatically');
+    // The switch moved here from the page of permissions.
+    ctx.store.patch('ui', { settingsTab: 'policy' });
+    await flush();
+    expect(hub.el.querySelector('[data-setup="verify"]')).toBeNull();
+    expect(hub.el.querySelector('[data-setup="permissions"]')?.textContent).toContain(
+      'What agents may do without asking',
+    );
+    expect(hub.el.textContent).toContain('What this computer trusts');
+    hub.destroy();
+  });
+
+  it('the Planner says what planning may spend once it was allowed, and whether plans wait', () => {
+    const ready = {
+      key: 'stored' as const,
+      planner_available: true,
+      reason: null,
+      allow_remote: true,
+      approved_here: true,
+    };
+    const { ctx } = desktopContext({
+      ...ready,
+      spending: { provider: 'anthropic', approved: true, yours_usd: 3, project_usd: 5 },
+    });
+    const hub = hubAt(ctx, 'planner');
+    expect(hub.el.querySelector('[data-setup="spending"]')?.textContent).toContain('Up to $3.00 a day');
+    expect(hub.el.querySelector('[data-setup="auto-approve"]')?.textContent).toContain('Start plans without asking me');
+    hub.destroy();
+    // Not allowed here yet: the steps that allow it are shown, and no card to change a limit.
+    const before = desktopContext({
+      spending: { provider: 'anthropic', approved: false, yours_usd: null, project_usd: 5 },
+    });
+    const hub2 = hubAt(before.ctx, 'planner');
+    expect(hub2.el.querySelector('[data-setup="spending"]')).toBeNull();
+    expect(hub2.el.querySelector('[data-setup="auto-approve"]')).not.toBeNull();
+    hub2.destroy();
+  });
+
+  it('allows planning with a key for the project from the page: asked, said to be shared, then a restart', async () => {
+    const restart = vi.fn(async () => true);
+    const { ctx } = desktopContext({ allow_remote: false }, { restart });
+    const hub = hubAt(ctx, 'planner');
+    ctx.confirmAnswer = false;
+    buttonBy(hub.el, 'Allow it for this project').click();
+    await flush();
+    expect(ctx.transport.to('POST', '/config/settings')).toHaveLength(0);
+    ctx.confirmAnswer = true;
+    buttonBy(hub.el, 'Allow it for this project').click();
+    await flush();
+    expect([ctx.confirms.at(-1)?.body].flat().join(' ')).toContain('which your team shares');
+    expect(ctx.transport.to('POST', '/config/settings').map((c) => c.body)).toEqual([
+      { set: { 'providers.anthropic.allow_remote': true } },
+    ]);
+    expect(restart).toHaveBeenCalledOnce();
+    hub.destroy();
+    // A project that allows it already is not asked.
+    const allowed = desktopContext({ allow_remote: true });
+    const hub2 = hubAt(allowed.ctx, 'planner');
+    expect(buttonBy(hub2.el, 'Allow it for this project').hidden).toBe(true);
+    hub2.destroy();
+  });
+});

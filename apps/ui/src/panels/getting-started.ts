@@ -21,7 +21,7 @@ export interface ChecklistItem {
   /** Where to fix it. */
   fix: {
     label: string;
-    action: 'agents' | 'start-agent' | 'planner' | 'config' | 'folder' | 'notifications' | 'policy';
+    action: 'agents' | 'start-agent' | 'planner' | 'checks' | 'config' | 'folder' | 'notifications' | 'policy';
   } | null;
 }
 
@@ -55,7 +55,7 @@ export function checklist(board: UiSnapshot | null, context: Partial<ChecklistCo
       title: "Trust this project's policy",
       detail:
         "The project's tracked files loosen Friday's defaults; nothing of it applies on this clone until you trust exactly that list.",
-      fix: { label: 'Settings → Policy', action: 'policy' },
+      fix: { label: 'Settings → Permissions', action: 'policy' },
     });
   }
   items.push(
@@ -84,8 +84,8 @@ export function checklist(board: UiSnapshot | null, context: Partial<ChecklistCo
           ? `${checks === 1 ? '1 project check is' : `${checks} project checks are`} configured`
           : 'No project checks are configured',
       detail:
-        "Verification will run Friday's scope and credential checks only. Add your tests under verification.checks.",
-      fix: { label: 'Open config.yaml', action: 'config' },
+        "Verification runs only Friday's own checks (scope, credentials) until the project has its own. Settings suggests them from package.json.",
+      fix: { label: 'Settings → Checks', action: 'checks' },
     },
     {
       id: 'commit',
@@ -134,6 +134,7 @@ export function gettingStarted(ctx: AppContext): Component {
     else if (action === 'planner') openDrawer(ctx, { kind: 'settings', tab: 'planner' });
     else if (action === 'notifications') openDrawer(ctx, { kind: 'settings', tab: 'notifications' });
     else if (action === 'policy') openDrawer(ctx, { kind: 'settings', tab: 'policy' });
+    else if (action === 'checks') openDrawer(ctx, { kind: 'settings', tab: 'checks' });
     else if (action === 'config') {
       if (root) ctx.platform.openInEditor(projectPath(root, '.friday/config.yaml'));
     } else if (root) ctx.platform.openInEditor(root);

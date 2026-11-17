@@ -3,7 +3,7 @@
  * Features:
  * - Round left panel layout (.hub-side) with 3 categorized groups:
  *   1. General (Look & Friday, Notifications, Sound)
- *   2. AI & Governance (Planner, Routing & Pins, Policy & Trust)
+ *   2. AI & Governance (Planner, Models, Checks, Permissions)
  *   3. System & Desktop (Friday Engine, Desktop Shell, About)
  * - Animated Friday mascot in the brand header and hero banner
  * - Live daemon status indicator dot and address at bottom
@@ -22,6 +22,7 @@ import type { Prefs } from '../store/state.js';
 import { button, h, replace, setText } from '../ui/dom.js';
 import { usd } from '../ui/format.js';
 import { type IconName, icon } from '../ui/svg.js';
+import { agentPermissionsCard } from './agent-permissions.js';
 import {
   badge,
   checkbox,
@@ -39,7 +40,9 @@ import {
   Teardown,
 } from './common.js';
 import { plannerModelRow } from './planner-model.js';
-import { autoVerifySwitch, plannerQuickSetup } from './quick-setup.js';
+import { plannerSpendingCard } from './planner-spending.js';
+import { projectChecksCard } from './project-checks.js';
+import { autoApproveSwitch, autoVerifySwitch, plannerQuickSetup } from './quick-setup.js';
 import { routingPins } from './routing-pins.js';
 import {
   clampNumber,
@@ -92,7 +95,7 @@ export const HUB_PAGES: HubPageDef[] = [
     group: 'AI & Governance',
     icon: 'brain',
     title: 'Planner',
-    subtitle: 'Anthropic planner model status, terminal key storage, and daily spending budget limits.',
+    subtitle: 'Who writes the plans, on which model, what it may spend, and whether plans wait for you.',
   },
   {
     id: 'routing',
@@ -102,11 +105,18 @@ export const HUB_PAGES: HubPageDef[] = [
     subtitle: 'Which model does the work: let Friday choose, or pick one.',
   },
   {
+    id: 'checks',
+    group: 'AI & Governance',
+    icon: 'check',
+    title: 'Checks',
+    subtitle: 'What Friday runs to verify an agent’s work, and whether it runs on its own.',
+  },
+  {
     id: 'policy',
     group: 'AI & Governance',
     icon: 'shield',
-    title: 'Policy & Trust',
-    subtitle: 'Workspace security loosening, file permission bounds, and SHA-256 trust validation.',
+    title: 'Permissions',
+    subtitle: 'What agents may do without asking, and the project settings this computer trusts.',
   },
 
   // System & Desktop
@@ -281,6 +291,8 @@ export function mountSettingsHub(ctx: AppContext): Component {
         return renderPlannerTab();
       case 'routing':
         return renderRoutingTab();
+      case 'checks':
+        return renderChecksTab();
       case 'policy':
         return renderPolicyTab();
       case 'friday':
@@ -635,6 +647,41 @@ export function mountSettingsHub(ctx: AppContext): Component {
     const native = ctx.platform.desktop ?? null;
     const keyBtn = button([icon('shield', 14), 'Store the key…'], () => void storeKey(), { class: 'hub-btn' });
     const spendBtn = button('', () => void allowSpending(), { class: 'hub-btn' });
+    // The project's part (2026-11-17): it was a line to write into config.yaml by hand.
+    const projectBtn = button('Allow it for this project…', () => void allowForProject(), { class: 'hub-btn' });
+    /** Whether the project allows planning with a key: config.yaml as it is now, or as Friday started with it. */
+    const projectAllows = () =>
+      !!brain?.allow_remote ||
+      (ctx.store.select('board')?.config.changes?.restart_needed ?? []).includes('providers.anthropic.allow_remote');
+    async function allowForProject() {
+      const ok = await ctx.confirm({
+        title: 'Allow planning with an Anthropic key in this project?',
+        body: [
+          'To plan, Friday sends the goal and a summary of the project to Anthropic, with the key stored on this computer.',
+          'Whether a project allows that is the project’s own setting, in .friday/config.yaml, which your team shares. Turning it on changes that file: commit it to share it. Each person still stores their own key and allows the spending on their own computer.',
+        ],
+        confirmLabel: 'Allow it for this project',
+      });
+      if (!ok) return;
+      projectBtn.disabled = true;
+      const set = await ctx.act(
+        'Allow planning with a key',
+        () => ctx.api.editSettings({ 'providers.anthropic.allow_remote': true }),
+        'The project allows it: Friday reads that when it restarts',
+      );
+      if (set && native && !restartBlocked(ctx)) {
+        await ctx.act(
+          'Restart Friday',
+          () => native.restart(),
+          (done) => (done ? 'Friday restarts with the new setting' : ''),
+        );
+      }
+      if (!td.done) {
+        projectBtn.disabled = false;
+        ctx.refresh();
+        renderSteps();
+      }
+    }
     // A cancelled dialog answers false: nothing changed, nothing to say. Once done, the board is read
     // again, and the page follows the planner's new state (below).
     async function storeKey() {
@@ -671,6 +718,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
       // Each native step is offered while it is still needed; a planner on this machine needs neither.
       keyBtn.hidden = local || brain?.key === 'not needed' || (!!brain?.remote && brain.key !== 'missing');
       spendBtn.hidden = local || !!brain?.approved_here;
+      projectBtn.hidden = local || projectAllows();
       replace(spendBtn, icon('check', 14), `Allow spending up to ${usd(budget)} a day…`);
     }
     renderSteps();
@@ -690,9 +738,11 @@ export function mountSettingsHub(ctx: AppContext): Component {
             note(
               'The desktop app can do the first two steps with its own dialogs; the key goes into Windows’ password prompt, never into this page.',
             ),
-            h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, keyBtn, spendBtn),
+            h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, keyBtn, spendBtn, projectBtn),
           )
-        : null,
+        : local
+          ? null
+          : h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, projectBtn),
       stepsList,
       h('div', { style: { display: 'flex', gap: '8px' } }, openConfig),
     ];
@@ -703,9 +753,29 @@ export function mountSettingsHub(ctx: AppContext): Component {
     // The key-and-terminal steps are Anthropic's: beside a planner that is (or is about to be)
     // Claude Code they led nowhere, and their button approved the wrong provider (2026-11-17).
     const viaClaudeCode = (brain?.choice?.wanted ?? brain?.provider) === 'claude-code';
+    // What planning may spend, once it was allowed here: the limit, changed, and turned off.
+    const spending = plannerSpendingCard(ctx, tabTd, brain);
+    const cardSpending = spending ? h('div', { class: 'hub-card' }, spending) : null;
+    // Whether a proposed plan waits for a person: asked wherever there is a planner at all.
+    const cardApprove = brain ? h('div', { class: 'hub-card' }, autoApproveSwitch(ctx, tabTd)) : null;
     // The switch stays once planning works through it: it is where a person turns it off again.
-    if (st.ready) return viaClaudeCode ? [cardStatus, cardQuick] : [cardStatus];
-    return viaClaudeCode ? [cardStatus, cardQuick] : [cardStatus, cardQuick, cardActions];
+    const setup = st.ready
+      ? viaClaudeCode
+        ? [cardQuick]
+        : []
+      : viaClaudeCode
+        ? [cardQuick]
+        : [cardQuick, cardActions];
+    const all: (HTMLElement | null)[] = [cardStatus, cardSpending, ...setup, cardApprove];
+    return all.filter((x): x is HTMLElement => x !== null);
+  }
+
+  // ── Checks Tab: the project's own checks, and whether they run on their own ──
+  function renderChecksTab(): HTMLElement[] {
+    return [
+      h('div', { class: 'hub-card' }, projectChecksCard(ctx, tabTd)),
+      h('div', { class: 'hub-card' }, autoVerifySwitch(ctx, tabTd)),
+    ];
   }
 
   // ── 5. Routing & Pins Tab ─────────────────────────────────────────────────
@@ -740,7 +810,11 @@ export function mountSettingsHub(ctx: AppContext): Component {
       if (p.items.length === 0) {
         replace(
           policyBox,
-          h('div', { class: 'detail' }, "Nothing in the project's policy files loosens Friday's security defaults."),
+          h(
+            'div',
+            { class: 'detail' },
+            'Nothing in this project’s settings lets Friday or an agent do more than the defaults.',
+          ),
         );
         return;
       }
@@ -774,12 +848,14 @@ export function mountSettingsHub(ctx: AppContext): Component {
           h(
             'div',
             { class: 'text' },
-            h('span', { class: 'title' }, p.trusted ? 'Policy Trusted' : 'Pending Trust Verification'),
-            p.hash ? h('span', { class: 'mono detail' }, `SHA-256: ${visible(p.hash)}`) : null,
+            h('span', { class: 'title' }, p.trusted ? 'Trusted on this computer' : 'Waiting for your trust'),
+            p.hash ? h('span', { class: 'mono detail' }, `List ${visible(p.hash)}`) : null,
           ),
-          p.trusted ? badge('trusted', 'good') : badge('untrusted', 'warn'),
+          p.trusted ? badge('trusted', 'good') : badge('not in force', 'warn'),
         ),
-        note('Tracked files loosen sandbox defaults. They apply only once trusted on this clone.'),
+        note(
+          'The project’s files ask for these: each lets Friday or an agent do more than it would by default. None applies on this computer until you trust the list as it stands; when a file changes it, Friday asks again.',
+        ),
         list,
         trustBtn ? h('div', { style: { marginTop: '12px' } }, trustBtn) : null,
       );
@@ -810,7 +886,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
 
     void loadPolicy();
 
-    card.append(h('div', { class: 'hub-card-title' }, 'Workspace Security Policy'), policyBox);
+    card.append(h('div', { class: 'hub-card-title' }, 'What this computer trusts'), policyBox);
     // What the card lists follows what is trusted and asked for: read again when either changes
     // (the switch above just did one of them), not only when the tab is opened.
     const trustFacts = (b: UiSnapshot | null | undefined) =>
@@ -828,7 +904,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
         void loadPolicy();
       }),
     );
-    return [h('div', { class: 'hub-card' }, autoVerifySwitch(ctx, tabTd)), card];
+    return [h('div', { class: 'hub-card' }, agentPermissionsCard(ctx, tabTd)), card];
   }
 
   // ── 7. Friday Engine Tab ──────────────────────────────────────────────────

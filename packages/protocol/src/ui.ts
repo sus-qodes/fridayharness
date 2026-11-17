@@ -188,6 +188,18 @@ export interface BrainStatusView {
    * spending; `project_budget_usd`: the project's own daily limit, which a person's cannot exceed.
    */
   claude_code?: { found: boolean; allowed: boolean; approved: boolean; project_budget_usd: number };
+  /**
+   * config.yaml asks for plans to start without a person's approval (2026-11-17); absent from an
+   * older daemon. With `auto_approve` false, this clone has not trusted it yet.
+   */
+  auto_approve_requested?: boolean;
+  /**
+   * What the running planner may spend a day (2026-11-17); absent from an older daemon.
+   * `provider`: whose spending it is (`anthropic` or `claude-code`); `approved`: this machine
+   * allowed it; `yours_usd`: the limit this machine set with that (null: the project's);
+   * `project_usd`: the project's own. The lower of the two holds (`daily_budget_usd`).
+   */
+  spending?: { provider: string; approved: boolean; yours_usd: number | null; project_usd: number };
 }
 
 /** An open Master Brain job; `calling` while a model request is in flight (the mascot thinks). */

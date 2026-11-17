@@ -718,6 +718,7 @@ const OBSERVATION_TYPES = new Set([
   'config.edited',
   // A person chose how they plan on this machine (their own planner, kept outside config.yaml).
   'planner.chosen',
+  'planner.spending_denied',
 ]);
 
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };

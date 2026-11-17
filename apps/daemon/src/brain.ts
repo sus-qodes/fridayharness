@@ -27,6 +27,7 @@ import {
   providerApproval,
   providerEndpoint,
   resolveSecret,
+  revokeProvider,
   stateDir,
 } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
@@ -150,6 +151,14 @@ export interface BrainStatus {
   model_choice: { here: string | null; project: string; applies: boolean };
   /** What planning through Claude Code needs, read now. */
   claude_code: { found: boolean; allowed: boolean; approved: boolean; project_budget_usd: number };
+  /** config.yaml asks for plans to start without approval, in force (`auto_approve`) or not yet trusted. */
+  auto_approve_requested: boolean;
+  /**
+   * What the running planner may spend a day: `provider`, whose spending it is; `approved`, this
+   * machine allowed it; `yours_usd`, the limit this machine set with that (null: the project's);
+   * `project_usd`, the project's own, read when Friday started. The lower of the two holds.
+   */
+  spending: { provider: string; approved: boolean; yours_usd: number | null; project_usd: number };
 }
 
 export interface BrainHandle {
@@ -163,6 +172,11 @@ export interface BrainHandle {
    * against the spending limit is one it does not make. Applies from the next planning call.
    */
   choosePlannerModel(model: string | null): void;
+  /**
+   * Takes back this machine's approval to spend on a provider (the running planner's when none is
+   * named); answers whether there was one. Read at each planning call: it holds from the next.
+   */
+  denySpending(provider?: 'anthropic' | 'claude-code'): boolean;
 }
 
 /**
@@ -368,6 +382,8 @@ export function createMasterBrain(input: {
   return {
     brain,
     choosePlanner: (provider) => choosePlanner(project, provider, env),
+    denySpending: (name) =>
+      revokeProvider(project, name ?? (providerName === 'claude-code' ? 'claude-code' : 'anthropic'), env),
     choosePlannerModel: (chosen) => {
       if (chosen !== null && !priceEntry(chosen, provider.prices)) {
         throw new FridayError(
@@ -418,6 +434,17 @@ export function createMasterBrain(input: {
           approved: Boolean(providerApproval(project, 'claude-code', env)),
           project_budget_usd: project.config.providers['claude-code']?.daily_budget_usd ?? 5,
         },
+        auto_approve_requested: current().auto_approve === true,
+        spending: (() => {
+          const name = providerName === 'claude-code' ? 'claude-code' : 'anthropic';
+          const approval = providerApproval(project, name, env);
+          return {
+            provider: name,
+            approved: Boolean(approval),
+            yours_usd: approval?.daily_budget_usd ?? null,
+            project_usd: provider.daily_budget_usd,
+          };
+        })(),
       };
     },
   };

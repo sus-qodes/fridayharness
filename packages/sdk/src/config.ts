@@ -635,10 +635,45 @@ export function loadConfig(path: string): FridayConfig {
 export const EDITABLE_SETTINGS = {
   'verification.auto_on_completion': z.boolean(),
   'master_brain.provider': z.enum(['anthropic', 'claude-code', 'none']),
+  // Plans start without a person's approval: a loosening, in force once this clone trusts it.
+  'master_brain.auto_approve': z.boolean(),
   'providers.claude-code.allow_remote': z.boolean(),
   'providers.claude-code.daily_budget_usd': z.number().min(0).max(100_000),
+  // The same two for planning with an Anthropic key (2026-11-17): they were a line to write by hand.
+  'providers.anthropic.allow_remote': z.boolean(),
+  'providers.anthropic.daily_budget_usd': z.number().min(0).max(100_000),
+  // What agents may run without asking (below): `auto` is a loosening this clone trusts first.
+  'autonomy.git.mutate': z.enum(['auto', 'review']),
+  'autonomy.package.install': z.enum(['auto', 'review']),
+  'autonomy.fs.destructive': z.enum(['auto', 'review']),
+  'autonomy.process.kill': z.enum(['auto', 'review']),
+  'autonomy.network.fetch': z.enum(['auto', 'review']),
+  'autonomy.unknown': z.enum(['auto', 'review']),
 } as const;
 export type EditableSetting = keyof typeof EDITABLE_SETTINGS;
+
+/**
+ * The command classes a person may let agents run without asking, from the interface (2026-11-17):
+ * the ones Friday asks about by default (`review` in the policy's `DEFAULT_AUTONOMY`). Pushing,
+ * force-pushing and publishing always ask, and reading secrets is never allowed: those are not
+ * here, so no page can loosen them.
+ */
+export const ASKABLE_COMMAND_CLASSES = [
+  'git.mutate',
+  'package.install',
+  'fs.destructive',
+  'process.kill',
+  'network.fetch',
+  'unknown',
+] as const;
+
+/**
+ * Where a setting stands in config.yaml. A command class is one key under `autonomy`, with its dot
+ * (`autonomy: { "git.mutate": auto }`); every other setting is a path of plain keys.
+ */
+export function settingPath(setting: string): string[] {
+  return setting.startsWith('autonomy.') ? ['autonomy', setting.slice('autonomy.'.length)] : setting.split('.');
+}
 
 /** A scalar as config.yaml writes it: a word plain, anything else quoted as JSON (valid YAML). */
 function yamlScalar(value: unknown): string {
@@ -796,7 +831,7 @@ export function editConfigText(
     if (!checked.success) {
       throw new FridayError('invalid_request', `${key}: ${checked.error.issues[0]?.message ?? 'not a value it takes'}`);
     }
-    const at = setting.split('.');
+    const at = settingPath(setting);
     let now: unknown;
     try {
       now = doc.getIn(at);

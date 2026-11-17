@@ -225,13 +225,16 @@ export class Registry {
   }
 }
 
-/** Opens a drawer (replacing the open one). Settings also switches activeView to settings. */
+/**
+ * Opens a drawer (replacing the open one). Settings is a view, not a drawer: kind `settings` shows
+ * it at the page `tab` names, and closes the drawer that was open, which would lie hidden behind it.
+ */
 export function openDrawer(ctx: Pick<AppContext, 'store'>, request: DrawerRequest): void {
   if (request.kind === 'settings') {
     ctx.store.patch('ui', {
       activeView: 'settings',
       settingsTab: request.tab,
-      drawer: request,
+      drawer: null,
     });
     return;
   }

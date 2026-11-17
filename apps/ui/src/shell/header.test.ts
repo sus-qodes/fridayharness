@@ -197,7 +197,7 @@ describe('header', () => {
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'inbox' });
     const settings = header.el.querySelector('[aria-label="Settings"]') as HTMLButtonElement;
     settings.click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', drawer: null });
   });
 
   it('the More menu opens Project memory, the Code graph and About (Settings at its About section)', () => {
@@ -226,7 +226,7 @@ describe('header', () => {
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'graph' });
     more.click();
     item('about').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'about' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'about', drawer: null });
     expect(ctx.store.select('ui').activeView).toBe('settings');
   });
 
@@ -339,7 +339,7 @@ describe('banners', () => {
     (banner.querySelector('button') as HTMLButtonElement).click();
     expect(open).toHaveBeenCalledWith('C:/demo/shop/.friday/config.yaml');
     (banner.querySelector('.sh-banner-settings') as HTMLButtonElement).click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'friday' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'friday', drawer: null });
     // Friday restarted (or the key was changed back): nothing waits, so nothing is said.
     ctx.board(
       makeSnapshot({

@@ -838,7 +838,7 @@ describe('mounted Notch: the expanded card', () => {
     expect(settings?.textContent).toBe('Settings');
     expect(studio?.textContent).toBe('Open Studio');
     settings?.click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', drawer: null });
     handle.open();
     studio?.click();
     expect(handle.el.dataset.state).toBe('compact');

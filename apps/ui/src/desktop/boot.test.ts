@@ -213,9 +213,9 @@ describe('deep links from the Notch window (deep review R7)', () => {
   it('opens the drawer each Notch target names, with its tab and file', () => {
     const ctx = studio();
     applyDeepLink(ctx, across(studioLink({ panel: 'settings' })));
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', drawer: null });
     applyDeepLink(ctx, across(studioLink({ panel: 'settings', tab: 'routing' })));
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'routing' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'routing', drawer: null });
     applyDeepLink(ctx, across(studioLink({ task_id: 't1', panel: 'diff', path: 'backend/src/checkout.ts' })));
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: 't1', path: 'backend/src/checkout.ts' });
     // A panel's own id goes before the task's: the Messages drawer opens on the delivery.
@@ -229,7 +229,7 @@ describe('deep links from the Notch window (deep review R7)', () => {
   it('drops a tab or a file path of an unexpected form', () => {
     const ctx = studio();
     applyDeepLink(ctx, { panel: 'settings', tab: '<b>routing</b>' });
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', drawer: null });
     applyDeepLink(ctx, { panel: 'diff', id: 't1', path: `a${String.fromCharCode(7)}b.ts` });
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: 't1' });
     applyDeepLink(ctx, { panel: 'diff', id: 't1', path: 'x'.repeat(2000) });
@@ -260,7 +260,7 @@ describe('deep links from the Notch window (deep review R7)', () => {
     try {
       q<HTMLButtonElement>('.nt-foot-btn').click();
       deliver();
-      expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
+      expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', drawer: null });
       // The card's Routing badge left with M9k.2: the pins live in Settings → Routing.
       expect(root.querySelector('.nt-routing')).toBeNull();
 

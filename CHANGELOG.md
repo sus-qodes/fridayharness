@@ -2,6 +2,21 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — ease of use, part 5: Settings
+
+Findings of the 2026-11-17 review of Settings: what a person could set only in a terminal or by editing config.yaml, and what Settings still built that nobody saw.
+
+- **The project's own checks are set in Settings → Checks.** Verification ran only Friday's own checks (scope, credentials, evidence) until someone wrote `verification.checks` into config.yaml by hand; the checklist's fix for "No project checks" was "Open config.yaml". The page lists the checks the project has, with what each runs, and the ones Friday found in the scripts of package.json (tests, lint, type check, build; never a watcher or npm's placeholder), run through the package manager the lockfile names. Each is added with one click, or all at once, and removed again (`GET` and `POST config/checks`). The page sends names only: the daemon builds each command from what it read itself. config.yaml changes only where the list stands, comments and line endings kept; removing the last check leaves the file as it was, byte for byte.
+- **What agents may do without asking is set in Settings → Permissions.** An agent that runs a command to install a package, commit, delete a file, download, stop a program, or one Friday does not recognise, waits for approval each time; whether it should was `autonomy` in config.yaml and a terminal command to trust it. Each kind is said in words with **Ask me** or **Allow**. Allowing is a loosening: written to config.yaml and in force on a computer only once the list is trusted there, as before. Pushing, force-pushing and publishing always ask, and reading secrets is never allowed: the daemon takes no such setting from a page (`ASKABLE_COMMAND_CLASSES`, held to the policy's defaults by a test).
+- **"Start plans without asking me"** in Settings → Planner (`master_brain.auto_approve`), with the same trust. A plan the planner has a question about still waits.
+- **Every such switch turns off again**, automatic checks included; before, a setting turned on in Settings could only be turned off in config.yaml. Trust covers one list, so turning one setting off would silently stop the others applying: Friday asks for the ones that stay on again, at once, and says why.
+- **What planning may spend can be changed, and turned off.** Once spending was allowed, the page showed the limit and nothing more; a new limit and taking the approval back were terminal commands. Settings → Planner now says the limit that holds and what was spent today, changes the limit through the desktop's own dialog (a browser is given the command), and **Turn spending off** takes this computer's approval back (`POST brain/deny-remote`; it only tightens, and holds from the next planning call). A limit above the project's own is said not to hold, with the way to raise the project's, which the team shares.
+- **Planning with an Anthropic key no longer needs a line written into config.yaml.** "Allow it for this project…" asks, says the setting is the project's and shared, sets it, and restarts Friday.
+- **The old Settings drawer is gone.** The Settings view replaced it, and it stayed registered: every "Open Settings" built it behind the view, hidden, where it read the policy and the shortcuts a second time and held the keyboard's layer, so Esc closed it before it left Settings. `openDrawer` of kind `settings` opens the view and leaves no drawer behind it.
+- Settings → "Policy & Trust" is **Permissions**; the list a computer trusts is said in words ("Waiting for your trust", what trusting means) in place of "Pending Trust Verification" and "SHA-256".
+
+Changed on purpose: `EDITABLE_SETTINGS` grew from four to thirteen, each still gated (a loosening by trust, spending by this machine's approval); `BrainStatusView` has `auto_approve_requested` and `spending`; the checklist's "No project checks" leads to Settings → Checks.
+
 ## Unreleased — ease of use, part 4: checks you can read
 
 Findings of the 2026-11-17 review of verification, as a person meets it.

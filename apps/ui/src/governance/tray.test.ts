@@ -228,7 +228,7 @@ describe('the "Waiting for you" tray', () => {
     const row = host.querySelector('.gv-tray-policy') as HTMLElement;
     expect(row.querySelector('.gv-tray-label')?.textContent).toBe('Policy change not yet trusted');
     (row.querySelector('.gv-tray-row') as HTMLButtonElement).click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'policy' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'policy', drawer: null });
     ctx.board(makeSnapshot({ policy_untrusted: false }));
     expect(host.querySelector('.gv-tray-policy')).toBeNull();
     tray.destroy();

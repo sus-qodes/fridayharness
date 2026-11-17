@@ -96,7 +96,7 @@ describe('new goal modal', () => {
     expect(m.el.textContent).toContain('store a provider key');
     expect(m.el.textContent).toContain('You can always write the plan yourself');
     buttonBy(m.el, 'Settings → Planner').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'planner' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'planner', drawer: null });
     m.destroy();
   });
 

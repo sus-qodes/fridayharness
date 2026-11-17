@@ -3,8 +3,10 @@
  * …/config/settings` writes only those, keeps the file's comments, records the change, and none of
  * them applies on its own say (automatic verification waits for this clone's trust).
  */
-import { chmodSync, readdirSync, readFileSync } from 'node:fs';
+import { chmodSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { DEFAULT_AUTONOMY } from '@friday/policy';
+import { ASKABLE_COMMAND_CLASSES, approveProvider, providerApproval } from '@friday/sdk';
 import { useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
 import { startTestDaemon } from '../helpers/daemon.js';
@@ -55,7 +57,8 @@ describe('config settings from the interface', () => {
       { sandbox: true },
       { 'verification.checks': [] },
       { 'master_brain.provider': 'somewhere-else' },
-      { 'master_brain.auto_approve': true },
+      { 'master_brain.max_replans': 9 },
+      { 'autonomy.git.push': 'auto' },
     ]) {
       await expect(td.operator.post(td.operator.projectPath('/config/settings'), { set })).rejects.toThrow();
     }
@@ -228,4 +231,193 @@ describe('editing config.yaml from the interface, as a careful person would', ()
     },
     30_000,
   );
+});
+
+describe('what Settings sets besides (2026-11-17)', () => {
+  type Checks = {
+    checks: { name: string; kind: string; command: string; args: string[]; required: boolean }[];
+    suggested: { name: string; command: string; args: string[]; runs: string }[];
+    manager: string;
+    added?: string[];
+    removed?: string[];
+  };
+
+  it("lists the project's checks with what package.json suggests, and adds and removes them by name", async () => {
+    const td = await startTestDaemon(ws());
+    const P = (p: string) => td.operator.projectPath(p);
+    const file = path.join(ws().projectDir, '.friday', 'config.yaml');
+    const before = readFileSync(file, 'utf8');
+    writeFileSync(
+      path.join(ws().projectDir, 'package.json'),
+      JSON.stringify({ scripts: { test: 'node --test', lint: 'eslint .', dev: 'vite', build: 'tsc --watch' } }),
+    );
+    const first = await td.operator.get<Checks>(P('/config/checks'));
+    expect(first).toMatchObject({ checks: [], manager: 'npm' });
+    // The dev server and the watcher are no checks.
+    expect(first.suggested.map((s) => [s.name, s.command, ...s.args, s.runs])).toEqual([
+      ['tests', 'npm', 'run', 'test', 'node --test'],
+      ['lint', 'npm', 'run', 'lint', 'eslint .'],
+    ]);
+
+    const added = await td.operator.post<Checks>(P('/config/checks'), { add: ['tests'] });
+    expect(added.added).toEqual(['tests']);
+    expect(added.checks).toEqual([
+      { name: 'tests', kind: 'test', command: 'npm', args: ['run', 'test'], required: true },
+    ]);
+    expect(added.suggested.map((s) => s.name)).toEqual(['lint']);
+    // Only the line of the list changed, into the lines of the check.
+    const was = before.split('\n');
+    const now = readFileSync(file, 'utf8').split('\n');
+    expect(was.filter((l) => l !== '  checks: []').every((l) => now.includes(l))).toBe(true);
+    expect(now).toHaveLength(was.length + 4);
+    // The board lists it with no restart: it judges the next verification.
+    type Board = { verification: { checks: { name: string; kind: string; required: boolean }[] } };
+    expect((await td.operator.get<Board>(P('/ui/snapshot'))).verification.checks).toEqual([
+      { name: 'tests', kind: 'test', required: true },
+    ]);
+    // Adding it again changes nothing; a name Friday did not find is refused, and nothing is written.
+    expect((await td.operator.post<Checks>(P('/config/checks'), { add: ['tests'] })).added).toEqual([]);
+    const held = readFileSync(file, 'utf8');
+    await expect(td.operator.post(P('/config/checks'), { add: ['deploy'] })).rejects.toThrow(
+      /not a check Friday found in this project's package.json/,
+    );
+    await expect(td.operator.post(P('/config/checks'), { add: ['lint', 'deploy'] })).rejects.toThrow();
+    expect(readFileSync(file, 'utf8')).toBe(held);
+
+    const removed = await td.operator.post<Checks>(P('/config/checks'), { remove: ['tests', 'nope'] });
+    expect(removed).toMatchObject({ removed: ['tests'], checks: [] });
+    expect(removed.suggested.map((s) => s.name)).toEqual(['tests', 'lint']);
+    // As it was before any of it, byte for byte.
+    expect(readFileSync(file, 'utf8')).toBe(before);
+    const recorded = td.daemon.state.store
+      .readSince(td.project.project_id, 0, { types: ['config.edited'], limit: 9 })
+      .map((e) => e.payload);
+    expect(recorded).toEqual([
+      { changed: ['verification.checks'], added: ['tests'], removed: [] },
+      { changed: ['verification.checks'], added: [], removed: ['tests'] },
+    ]);
+    // The operator only.
+    await expect(td.bootstrap.get(td.bootstrap.projectPath('/config/checks'))).rejects.toThrow();
+    await expect(td.bootstrap.post(td.bootstrap.projectPath('/config/checks'), { add: ['tests'] })).rejects.toThrow();
+  });
+
+  it('lets agents run a kind of command without asking only once this clone trusts it', async () => {
+    const td = await startTestDaemon(ws());
+    const P = (p: string) => td.operator.projectPath(p);
+    type Policy = {
+      policy: {
+        autonomy: Record<string, string>;
+        loosening: { source: string; setting: string; from: string; to: string }[];
+        loosening_hash: string | null;
+        trusted: boolean;
+      };
+    };
+    const set = (s: Record<string, unknown>) =>
+      td.operator.post<{ changed: string[] }>(P('/config/settings'), { set: s });
+    expect((await set({ 'autonomy.package.install': 'auto' })).changed).toEqual(['autonomy.package.install']);
+    const asked = await td.operator.get<Policy>(P('/policy'));
+    expect(asked.policy.loosening).toEqual([
+      { source: 'config.yaml', setting: 'autonomy.package.install', from: 'review', to: 'auto' },
+    ]);
+    // Asked for, and not in force.
+    expect(asked.policy.trusted).toBe(false);
+    expect(asked.policy.autonomy['package.install'] ?? 'review').toBe('review');
+    const trusted = await td.operator.post<Policy>(P('/policy/trust'), {
+      loosening_hash: asked.policy.loosening_hash,
+    });
+    expect(trusted.policy.trusted).toBe(true);
+    expect(trusted.policy.autonomy['package.install']).toBe('auto');
+
+    // A second kind makes it another list: neither applies until that one is trusted.
+    await set({ 'autonomy.unknown': 'auto' });
+    const two = await td.operator.get<Policy>(P('/policy'));
+    expect(two.policy.loosening.map((l) => l.setting)).toEqual(['autonomy.package.install', 'autonomy.unknown']);
+    expect(two.policy.trusted).toBe(false);
+    expect(two.policy.autonomy['package.install'] ?? 'review').toBe('review');
+    // Asking again for one is a tightening, in force at once; what stays on waits for trust again.
+    await set({ 'autonomy.unknown': 'review' });
+    const one = await td.operator.get<Policy>(P('/policy'));
+    expect(one.policy.loosening.map((l) => l.setting)).toEqual(['autonomy.package.install']);
+    // The list is the one trusted before: it holds again.
+    expect(one.policy.trusted).toBe(true);
+    expect(one.policy.autonomy['package.install']).toBe('auto');
+
+    // The kinds a page may allow are exactly the ones the policy asks about by default.
+    const asksByDefault = Object.entries(DEFAULT_AUTONOMY)
+      .filter(([, level]) => level === 'review')
+      .map(([cls]) => cls);
+    expect([...ASKABLE_COMMAND_CLASSES].sort()).toEqual(asksByDefault.sort());
+
+    // What always asks, and what is never allowed, no page loosens.
+    const file = path.join(ws().projectDir, '.friday', 'config.yaml');
+    const held = readFileSync(file, 'utf8');
+    for (const s of [
+      { 'autonomy.git.push': 'auto' },
+      { 'autonomy.secrets.read': 'auto' },
+      { 'autonomy.package.install': 'never' },
+      { autonomy: { 'git.push': 'auto' } },
+    ]) {
+      await expect(set(s)).rejects.toThrow();
+    }
+    expect(readFileSync(file, 'utf8')).toBe(held);
+  });
+
+  it('says whether plans are asked to start on their own, what planning may spend, and takes spending back', async () => {
+    const td = await startTestDaemon(ws());
+    const P = (p: string) => td.operator.projectPath(p);
+    type Status = {
+      auto_approve: boolean;
+      auto_approve_requested: boolean;
+      approved_here: boolean;
+      spending: { provider: string; approved: boolean; yours_usd: number | null; project_usd: number };
+    };
+    const first = await td.operator.get<Status>(P('/brain'));
+    expect(first).toMatchObject({ auto_approve: false, auto_approve_requested: false });
+    expect(first.spending).toEqual({ provider: 'anthropic', approved: false, yours_usd: null, project_usd: 5 });
+
+    // Starting plans without approval: asked for in config.yaml, in force only once trusted.
+    await td.operator.post(P('/config/settings'), { set: { 'master_brain.auto_approve': true } });
+    expect(await td.operator.get<Status>(P('/brain'))).toMatchObject({
+      auto_approve: false,
+      auto_approve_requested: true,
+    });
+    const policy = await td.operator.get<{ policy: { loosening_hash: string } }>(P('/policy'));
+    await td.operator.post(P('/policy/trust'), { loosening_hash: policy.policy.loosening_hash });
+    expect(await td.operator.get<Status>(P('/brain'))).toMatchObject({
+      auto_approve: true,
+      auto_approve_requested: true,
+    });
+    await td.operator.post(P('/config/settings'), { set: { 'master_brain.auto_approve': false } });
+    expect(await td.operator.get<Status>(P('/brain'))).toMatchObject({
+      auto_approve: false,
+      auto_approve_requested: false,
+    });
+
+    // This machine allows the spending: its own act, never a route's.
+    await expect(td.operator.post(P('/brain/allow-remote'), { budget: 100 })).rejects.toThrow();
+    approveProvider(td.project, 'anthropic', { daily_budget_usd: 2 }, { FRIDAY_STATE_DIR: ws().stateDir });
+    const allowed = await td.operator.get<Status>(P('/brain'));
+    expect(allowed.approved_here).toBe(true);
+    expect(allowed.spending).toEqual({ provider: 'anthropic', approved: true, yours_usd: 2, project_usd: 5 });
+
+    // Taking it back only tightens: the page may, and it holds at once.
+    await expect(td.operator.post(P('/brain/deny-remote'), { provider: 'openai' })).rejects.toThrow(
+      /anthropic or claude-code/,
+    );
+    await expect(td.bootstrap.post(td.bootstrap.projectPath('/brain/deny-remote'), {})).rejects.toThrow();
+    const off = await td.operator.post<{ removed: boolean; brain: Status }>(P('/brain/deny-remote'), {
+      provider: 'anthropic',
+    });
+    expect(off.removed).toBe(true);
+    expect(off.brain.approved_here).toBe(false);
+    expect(off.brain.spending.approved).toBe(false);
+    expect(providerApproval(td.project, 'anthropic', { FRIDAY_STATE_DIR: ws().stateDir })).toBeUndefined();
+    // Again: nothing was there, and nothing more is recorded.
+    expect((await td.operator.post<{ removed: boolean }>(P('/brain/deny-remote'), {})).removed).toBe(false);
+    expect(
+      td.daemon.state.store
+        .readSince(td.project.project_id, 0, { types: ['planner.spending_denied'], limit: 5 })
+        .map((e) => e.payload),
+    ).toEqual([{ provider: 'anthropic' }]);
+  });
 });

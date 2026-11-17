@@ -14,19 +14,21 @@
  *
  * Automatic verification: sets `verification.auto_on_completion`, then asks for this clone's
  * trust. Its state is read from that setting itself (`verification.auto_requested`), never from
- * whether some other setting of the project waits for trust.
+ * whether some other setting of the project waits for trust. Starting plans without approval
+ * (`master_brain.auto_approve`) is the same kind of switch (2026-11-17), and both turn off again.
  */
 import type { BrainStatusView, UiSnapshot } from '@friday/protocol';
 import type { AppContext } from '../shell/context.js';
 import { button, h, replace } from '../ui/dom.js';
 import { icon } from '../ui/svg.js';
-import { badge, copyLine, input, linkButton, note, plain, restartBlocked, type Teardown } from './common.js';
-import { readLoosening } from './settings.js';
+import { badge, copyLine, input, linkButton, note, restartBlocked, type Teardown } from './common.js';
+import { trustLoosening, trustWhatStays } from './trust.js';
 
 /** The daily budget offered for planning through Claude Code, in dollars. */
 export const CLAUDE_CODE_BUDGET = 2;
 
 const AUTO_VERIFY = 'verification.auto_on_completion';
+const AUTO_APPROVE = 'master_brain.auto_approve';
 
 /** The planner this person (or, when they chose none, the project) wants; the running one on an older daemon. */
 function wantedPlanner(brain: BrainStatusView | null): string | null {
@@ -284,71 +286,50 @@ export function plannerQuickSetup(ctx: AppContext, td: Teardown): HTMLElement {
   return el;
 }
 
-/** "Check the work automatically": verification runs as soon as an agent claims a task. */
-export function autoVerifySwitch(ctx: AppContext, td: Teardown): HTMLElement {
+/** A setting that loosens Friday's defaults, as a switch: what it sets, and the words around it. */
+interface LooseningSwitch {
+  /** `data-setup` of the card. */
+  setup: string;
+  /** The key in config.yaml. */
+  setting: string;
+  title: string;
+  what: string;
+  state(board: UiSnapshot | null | undefined): 'on' | 'untrusted' | 'off';
+  /** Said beside "on". */
+  on: string;
+  /** The label of the act of turning it on, for an error. */
+  act: string;
+  turnedOn: string;
+  turnedOff: string;
+  /** Said when the setting is not among what waits for trust. */
+  missing: string;
+  /** A note above the switch, from the board (null: none). */
+  before?(board: UiSnapshot | null | undefined): HTMLElement | null;
+}
+
+/**
+ * A switch for a loosening (2026-11-17): on sets the setting when config.yaml does not ask for it
+ * yet, then asks for the trust it needs; off sets it back, which needs no trust, and asks again for
+ * the settings that stay on, since they were trusted with it as one list. Before, a setting turned
+ * on here could only be turned off by editing config.yaml.
+ */
+function looseningSwitch(ctx: AppContext, td: Teardown, spec: LooseningSwitch): HTMLElement {
   let busy = false;
   const body = h('div', { class: 'pn-qs-body' });
   const el = h(
     'div',
-    { class: 'pn-quick-setup', dataset: { setup: 'verify' } },
-    h('div', { class: 'pn-qs-title' }, 'Check the work automatically'),
-    note(
-      "When an agent says it is done, Friday runs the project's checks at once instead of waiting for you to click Verify. They run code the agent wrote, so Friday asks you to trust this setting first.",
-    ),
+    { class: 'pn-quick-setup', dataset: { setup: spec.setup } },
+    h('div', { class: 'pn-qs-title' }, spec.title),
+    note(spec.what),
     body,
   );
 
-  /**
-   * This clone's trust in the project's loosening, through the platform's confirmation. Only when
-   * automatic verification is among what waits for trust: this switch never trusts some other
-   * setting on its own. Trust covers the whole list, which the confirmation shows.
-   */
-  async function trust(): Promise<boolean> {
-    const view = await ctx.act('Read the policy', () => ctx.api.policy());
-    const p = readLoosening(view ?? null);
-    if (!p.hash || p.trusted) return false;
-    if (!p.items.some((l) => l.setting === AUTO_VERIFY)) {
-      ctx.toast({
-        kind: 'warn',
-        text: 'Automatic checks are not among the settings that wait for trust',
-        detail: 'config.yaml may have changed; look at the list under this switch, and try again.',
-      });
-      return false;
-    }
-    // The desktop shows its own dialog (`confirm_and_send`); a browser asks here.
-    if (!ctx.platform.desktop) {
-      const ok = await ctx.confirm({
-        title: 'Trust these settings on this computer?',
-        body: [
-          ...p.items.map(
-            (l) => `${plain(l.setting, 120)}: ${plain(l.from, 60)} → ${plain(l.to, 120)} (${plain(l.source, 120)})`,
-          ),
-          'Anyone who can change the project files chose these settings.',
-        ],
-        confirmLabel: 'Trust them',
-        danger: true,
-      });
-      if (!ok) return false;
-    }
-    const done = await ctx.act(
-      'Trust the setting',
-      () => ctx.api.trustPolicy(p.hash as string),
-      'Work is now checked automatically',
-    );
-    return Boolean(done);
-  }
-
-  /** Sets the setting when config.yaml does not ask for it yet, then asks for the trust it needs. */
-  async function turnOn() {
+  async function run(work: () => Promise<void>) {
     if (busy) return;
     busy = true;
     render();
     try {
-      const asked = autoVerification(ctx.store.select('board')) === 'untrusted';
-      const set = asked
-        ? true
-        : await ctx.act('Check the work automatically', () => ctx.api.editSettings({ [AUTO_VERIFY]: true }));
-      if (set) await trust();
+      await work();
     } finally {
       busy = false;
       if (!td.done) {
@@ -358,25 +339,29 @@ export function autoVerifySwitch(ctx: AppContext, td: Teardown): HTMLElement {
     }
   }
 
+  /** Sets the setting when config.yaml does not ask for it yet, then asks for the trust it needs. */
+  const turnOn = () =>
+    run(async () => {
+      const asked = spec.state(ctx.store.select('board')) === 'untrusted';
+      const set = asked ? true : await ctx.act(spec.act, () => ctx.api.editSettings({ [spec.setting]: true }));
+      if (set) await trustLoosening(ctx, { expects: spec.setting, missing: spec.missing, success: spec.turnedOn });
+    });
+
+  /** Sets it back: a tightening, in force at once. What stays on is asked for again. */
+  const turnOff = () =>
+    run(async () => {
+      const set = await ctx.act('Turn it off', () => ctx.api.editSettings({ [spec.setting]: false }), spec.turnedOff);
+      if (set) await trustWhatStays(ctx);
+    });
+
   function render() {
     const board = ctx.store.select('board');
-    const state = autoVerification(board);
-    // Without checks of the project's own, checking is Friday's part alone: said, so "checked" is not over-read.
-    const noChecks = board ? board.verification.checks.length === 0 : false;
+    const state = spec.state(board);
     replace(
       body,
-      noChecks
-        ? note(
-            'This project has no checks of its own set yet (tests, lint, build), so Friday checks only that the changes stay in scope, hold no credentials and were run.',
-          )
-        : null,
+      spec.before?.(board) ?? null,
       state === 'on'
-        ? h(
-            'div',
-            { class: 'row' },
-            badge('on', 'good'),
-            h('span', null, 'Finished work is checked as soon as it is claimed.'),
-          )
+        ? h('div', { class: 'row' }, badge('on', 'good'), h('span', null, spec.on))
         : h(
             'div',
             { class: 'pn-actions pn-actions-start' },
@@ -388,10 +373,70 @@ export function autoVerifySwitch(ctx: AppContext, td: Teardown): HTMLElement {
       state === 'untrusted'
         ? note('config.yaml already asks for it; it applies once you trust it on this computer.')
         : null,
+      state === 'off'
+        ? null
+        : h(
+            'div',
+            { class: 'pn-actions pn-actions-start' },
+            linkButton(state === 'on' ? 'Turn off' : 'Take it out of config.yaml', () => void turnOff()),
+          ),
     );
   }
 
   render();
   td.add(ctx.store.subscribe('board', () => render()));
   return el;
+}
+
+/** "Check the work automatically": verification runs as soon as an agent claims a task. */
+export function autoVerifySwitch(ctx: AppContext, td: Teardown): HTMLElement {
+  return looseningSwitch(ctx, td, {
+    setup: 'verify',
+    setting: AUTO_VERIFY,
+    title: 'Check the work automatically',
+    what: "When an agent says it is done, Friday runs the project's checks at once instead of waiting for you to click Verify. They run code the agent wrote, so Friday asks you to trust this setting first.",
+    state: autoVerification,
+    on: 'Finished work is checked as soon as it is claimed.',
+    act: 'Check the work automatically',
+    turnedOn: 'Work is now checked automatically',
+    turnedOff: 'Finished work waits for you to click Verify',
+    missing: 'Automatic checks are not among the settings that wait for trust',
+    // Without checks of the project's own, checking is Friday's part alone: said, so "checked" is not over-read.
+    before: (board) =>
+      board && board.verification.checks.length === 0
+        ? note(
+            'This project has no checks of its own set yet (tests, lint, build), so Friday checks only that the changes stay in scope, hold no credentials and were run.',
+          )
+        : null,
+  });
+}
+
+/**
+ * Where approving plans automatically stands: `on` (in force), `untrusted` (config.yaml asks for
+ * it and this clone has not trusted it), or `off`. An older daemon does not say whether it is asked
+ * for: then it reads `off`, and turning it on sets it again, which changes nothing.
+ */
+export function autoApproval(board: UiSnapshot | null | undefined): 'on' | 'untrusted' | 'off' {
+  if (board?.brain?.auto_approve) return 'on';
+  return board?.brain?.auto_approve_requested === true ? 'untrusted' : 'off';
+}
+
+/**
+ * "Start plans without asking me" (2026-11-17): `master_brain.auto_approve`, which was a line to
+ * write into config.yaml and a command to trust it. A plan the planner has a question about still
+ * waits for a person, as does every change an agent needs approval for.
+ */
+export function autoApproveSwitch(ctx: AppContext, td: Teardown): HTMLElement {
+  return looseningSwitch(ctx, td, {
+    setup: 'auto-approve',
+    setting: AUTO_APPROVE,
+    title: 'Start plans without asking me',
+    what: 'When the planner proposes a plan, Friday approves it and the agents start, instead of waiting for you to review it. A plan the planner has a question about still waits for you. Agents then work on a plan nobody read, so Friday asks you to trust this setting first.',
+    state: autoApproval,
+    on: 'Plans start as soon as the planner proposes them.',
+    act: 'Start plans without asking',
+    turnedOn: 'Plans now start without waiting for you',
+    turnedOff: 'Each plan waits for your approval',
+    missing: 'Starting plans automatically is not among the settings that wait for trust',
+  });
 }

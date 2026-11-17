@@ -1,6 +1,13 @@
 import { newId } from '@friday/protocol';
 import { describe, expect, it } from 'vitest';
-import { EDITABLE_SETTINGS, editConfigText, parseConfig, renderInitialConfig } from './config.js';
+import {
+  ASKABLE_COMMAND_CLASSES,
+  EDITABLE_SETTINGS,
+  editConfigText,
+  parseConfig,
+  renderInitialConfig,
+  settingPath,
+} from './config.js';
 
 const fresh = () => renderInitialConfig(newId('proj'), 'shop');
 
@@ -134,7 +141,78 @@ describe('editConfigText', () => {
     expect(() => editConfigText(fresh(), { 'master_brain.provider': 'gpt' })).toThrow(/master_brain.provider/);
     expect(() => editConfigText(fresh(), { 'providers.claude-code.daily_budget_usd': -1 })).toThrow(/daily_budget_usd/);
     expect(() => editConfigText('a: [', { 'master_brain.provider': 'none' })).toThrow(/not valid YAML/);
-    // Only these four, each a loosening the trust rule or this machine's consent still gates.
-    expect(Object.keys(EDITABLE_SETTINGS)).toHaveLength(4);
+    // Only these, each one still gated: a loosening by the trust rule, spending by this machine's consent.
+    expect(Object.keys(EDITABLE_SETTINGS).sort()).toEqual(
+      [
+        'verification.auto_on_completion',
+        'master_brain.provider',
+        'master_brain.auto_approve',
+        'providers.claude-code.allow_remote',
+        'providers.claude-code.daily_budget_usd',
+        'providers.anthropic.allow_remote',
+        'providers.anthropic.daily_budget_usd',
+        ...ASKABLE_COMMAND_CLASSES.map((c) => `autonomy.${c}`),
+      ].sort(),
+    );
+  });
+
+  it('sets what agents may run without asking under its own key, dot and all (2026-11-17)', () => {
+    const before = fresh();
+    expect(settingPath('autonomy.package.install')).toEqual(['autonomy', 'package.install']);
+    expect(settingPath('autonomy.unknown')).toEqual(['autonomy', 'unknown']);
+    expect(settingPath('providers.claude-code.allow_remote')).toEqual(['providers', 'claude-code', 'allow_remote']);
+    const on = editConfigText(before, { 'autonomy.package.install': 'auto', 'autonomy.unknown': 'auto' });
+    expect(on.changed).toEqual(['autonomy.package.install', 'autonomy.unknown']);
+    expect(parseConfig(on.text).autonomy).toEqual({ 'package.install': 'auto', unknown: 'auto' });
+    // Every line that was there is still there, in order: the settings are new lines.
+    const was = before.split('\n');
+    const now = on.text.split('\n');
+    let at = 0;
+    for (const line of was) {
+      at = now.indexOf(line, at);
+      expect(at, line).toBeGreaterThanOrEqual(0);
+      at += 1;
+    }
+    // Asking again is the value replaced where it stands; the other stays.
+    const off = editConfigText(on.text, { 'autonomy.package.install': 'review' });
+    expect(off.changed).toEqual(['autonomy.package.install']);
+    expect(parseConfig(off.text).autonomy).toEqual({ 'package.install': 'review', unknown: 'auto' });
+    expect(off.text.split('\n')).toHaveLength(now.length);
+    // In a file that already has the section.
+    const more = editConfigText(off.text, { 'autonomy.git.mutate': 'auto' });
+    expect(parseConfig(more.text).autonomy).toEqual({
+      'package.install': 'review',
+      unknown: 'auto',
+      'git.mutate': 'auto',
+    });
+  });
+
+  it('never loosens what always asks or is never allowed, and takes no level but ask or allow', () => {
+    for (const cls of ['git.push', 'git.force', 'network.publish', 'secrets.read', 'friday.internal', 'read.local']) {
+      expect(() => editConfigText(fresh(), { [`autonomy.${cls}`]: 'auto' }), cls).toThrow(
+        /not a setting the interface changes/,
+      );
+    }
+    expect(() => editConfigText(fresh(), { 'autonomy.package.install': 'never' })).toThrow(/autonomy.package.install/);
+    expect(() => editConfigText(fresh(), { 'autonomy.package.install': true })).toThrow(/autonomy.package.install/);
+    expect(() => editConfigText(fresh(), { autonomy: { 'git.push': 'auto' } })).toThrow(/not a setting/);
+  });
+
+  it('sets plan approval and the settings of planning with an Anthropic key', () => {
+    const { text, changed } = editConfigText(fresh(), {
+      'master_brain.auto_approve': true,
+      'providers.anthropic.allow_remote': true,
+      'providers.anthropic.daily_budget_usd': 20,
+    });
+    expect(changed).toEqual([
+      'master_brain.auto_approve',
+      'providers.anthropic.allow_remote',
+      'providers.anthropic.daily_budget_usd',
+    ]);
+    const c = parseConfig(text);
+    expect(c.master_brain.auto_approve).toBe(true);
+    expect(c.providers.anthropic).toMatchObject({ allow_remote: true, daily_budget_usd: 20 });
+    expect(() => editConfigText(fresh(), { 'master_brain.auto_approve': 'yes' })).toThrow(/master_brain.auto_approve/);
+    expect(() => editConfigText(fresh(), { 'providers.anthropic.daily_budget_usd': 1e9 })).toThrow(/daily_budget_usd/);
   });
 });

@@ -364,6 +364,19 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
     return c.json(brain().status());
   });
 
+  // "Turn spending off" (2026-11-17): this machine's approval to spend on planning is taken back.
+  // Giving it stays the machine's own act (`friday brain allow-remote`, the desktop's dialog);
+  // taking it back only tightens, so the interface may. It holds from the next planning call.
+  app.post(`${P}/brain/deny-remote`, op, async (c) => {
+    const raw = (await json(c)).provider;
+    if (raw !== undefined && raw !== 'anthropic' && raw !== 'claude-code') {
+      throw new FridayError('invalid_request', 'provider is anthropic or claude-code, or left out');
+    }
+    const removed = brain().denySpending(raw);
+    if (removed) state.recordObservation(pid, human, 'planner.spending_denied', { provider: raw ?? null }, []);
+    return c.json({ removed, brain: brain().status() });
+  });
+
   app.get(`${P}/model-calls`, op, (c) => {
     const goalId = c.req.query('goal');
     const limit = Math.min(500, Number(c.req.query('limit') ?? 50) || 50);

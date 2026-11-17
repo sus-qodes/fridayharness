@@ -514,7 +514,7 @@ describe('agents drawer', () => {
     for (const tab of ['pins', 'routing']) {
       const ctx = makeContext({ answers: { ...quiet, 'GET /agent-processes': {} } });
       const d = agentsDrawer(ctx, { kind: 'agents', tab });
-      expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'routing' });
+      expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'routing', drawer: null });
       expect(d.el.textContent).not.toContain('Routing pins');
       expect(() => buttonBy(d.el, /^Pin$/)).toThrow();
       d.destroy();

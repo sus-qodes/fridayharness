@@ -20,7 +20,17 @@ import {
   type TokenClass,
   VerifyRequest,
 } from '@friday/protocol';
-import { CONFIG_FILE, editConfigText, FRIDAY_DIR, FRIDAY_VERSION, type ProjectRef } from '@friday/sdk';
+import {
+  CONFIG_FILE,
+  editChecksText,
+  editConfigText,
+  FRIDAY_DIR,
+  FRIDAY_VERSION,
+  type ProjectRef,
+  packageManagerOf,
+  parseConfig,
+  suggestChecks,
+} from '@friday/sdk';
 import {
   backupTo,
   createSnapshot,
@@ -404,39 +414,93 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   // The few settings of config.yaml a person changes from the interface (`EDITABLE_SETTINGS`).
   // None applies on its own say: automatic verification waits for this clone's trust, remote
   // planning for this machine's approval, the planner's provider for a restart.
+  const configFile = path.join(project.root, FRIDAY_DIR, CONFIG_FILE);
+  /**
+   * Writes config.yaml beside itself, then renames it over the file: it is never seen half written.
+   * A file that is read-only, or held for a moment by an editor, a sync client or a scanner, is
+   * tried again briefly and then refused in words, with nothing left behind (2026-11-17: it was an
+   * "internal error" and a stray `.tmp` file in the repository).
+   */
+  const writeConfig = async (text: string): Promise<void> => {
+    const temp = `${configFile}.${process.pid}.tmp`;
+    try {
+      writeFileSync(temp, text);
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          renameSync(temp, configFile);
+          break;
+        } catch (e) {
+          const code = (e as NodeJS.ErrnoException).code ?? '';
+          if (attempt >= 4 || !['EPERM', 'EBUSY', 'EACCES'].includes(code)) throw e;
+          await new Promise((r) => setTimeout(r, 80 * (attempt + 1)));
+        }
+      }
+    } catch (e) {
+      rmSync(temp, { force: true });
+      const code = (e as NodeJS.ErrnoException).code ?? (e as Error).message;
+      throw new FridayError(
+        'invalid_request',
+        `${FRIDAY_DIR}/${CONFIG_FILE} could not be written (${code}): it is read-only, or open in a program that holds it. Close it there, or make it writable, then try again; nothing was changed`,
+      );
+    }
+  };
   app.post(`${P}/config/settings`, allow(...OPERATOR), async (c) => {
     const body = z.object({ set: z.record(z.string(), z.unknown()) }).parse(await json(c));
-    const file = path.join(project.root, FRIDAY_DIR, CONFIG_FILE);
-    const { text, changed } = editConfigText(readFileSync(file, 'utf8'), body.set, `${FRIDAY_DIR}/${CONFIG_FILE}`);
+    const { text, changed } = editConfigText(
+      readFileSync(configFile, 'utf8'),
+      body.set,
+      `${FRIDAY_DIR}/${CONFIG_FILE}`,
+    );
     if (changed.length) {
-      // Written beside it, then renamed over it: the file is never seen half written. A file that
-      // is read-only, or held for a moment by an editor, a sync client or a scanner, is tried
-      // again briefly and then refused in words, with nothing left behind (2026-11-17: it was an
-      // "internal error" and a stray `.tmp` file in the repository).
-      const temp = `${file}.${process.pid}.tmp`;
-      try {
-        writeFileSync(temp, text);
-        for (let attempt = 0; ; attempt += 1) {
-          try {
-            renameSync(temp, file);
-            break;
-          } catch (e) {
-            const code = (e as NodeJS.ErrnoException).code ?? '';
-            if (attempt >= 4 || !['EPERM', 'EBUSY', 'EACCES'].includes(code)) throw e;
-            await new Promise((r) => setTimeout(r, 80 * (attempt + 1)));
-          }
-        }
-      } catch (e) {
-        rmSync(temp, { force: true });
-        const code = (e as NodeJS.ErrnoException).code ?? (e as Error).message;
-        throw new FridayError(
-          'invalid_request',
-          `${FRIDAY_DIR}/${CONFIG_FILE} could not be written (${code}): it is read-only, or open in a program that holds it. Close it there, or make it writable, then try again; nothing was changed`,
-        );
-      }
+      await writeConfig(text);
       state.recordObservation(pid, humanOf(c), 'config.edited', { changed }, []);
     }
     return c.json({ changed });
+  });
+  // The project's checks, set from the interface (2026-11-17): the ones config.yaml has (read from
+  // the file as it is now), and the ones the project most likely wants, read from the scripts of
+  // its package.json. A check is added only from that list, by its name: the page never sends a
+  // command. Verification reads config.yaml again, so a new check judges the next verification.
+  const checksView = () => {
+    const have = parseConfig(readFileSync(configFile, 'utf8'), `${FRIDAY_DIR}/${CONFIG_FILE}`).verification.checks;
+    const names = new Set(have.map((k) => k.name));
+    return {
+      checks: have.map((k) => ({ name: k.name, kind: k.kind, command: k.command, args: k.args, required: k.required })),
+      suggested: suggestChecks(project.root).filter((s) => !names.has(s.name)),
+      manager: packageManagerOf(project.root),
+    };
+  };
+  app.get(`${P}/config/checks`, allow(...OPERATOR), (c) => c.json(checksView()));
+  app.post(`${P}/config/checks`, allow(...OPERATOR), async (c) => {
+    const Names = z.array(z.string().min(1).max(60)).max(20).default([]);
+    const body = z.object({ add: Names, remove: Names }).parse(await json(c));
+    const offered = suggestChecks(project.root);
+    const add = body.add.map((name) => {
+      const s = offered.find((o) => o.name === name);
+      if (!s) {
+        throw new FridayError(
+          'invalid_request',
+          `"${name}" is not a check Friday found in this project's package.json; write it into ${FRIDAY_DIR}/${CONFIG_FILE} by hand`,
+        );
+      }
+      return { name: s.name, kind: s.kind, command: s.command, args: s.args };
+    });
+    const { text, added, removed } = editChecksText(
+      readFileSync(configFile, 'utf8'),
+      { add, remove: body.remove },
+      `${FRIDAY_DIR}/${CONFIG_FILE}`,
+    );
+    if (added.length || removed.length) {
+      await writeConfig(text);
+      state.recordObservation(
+        pid,
+        humanOf(c),
+        'config.edited',
+        { changed: ['verification.checks'], added, removed },
+        [],
+      );
+    }
+    return c.json({ added, removed, ...checksView() });
   });
   // The scope picker's view of the repository (plan M9 §5.11): tracked files only, capped.
   app.get(`${P}/files`, allow(...OPERATOR), async (c) =>

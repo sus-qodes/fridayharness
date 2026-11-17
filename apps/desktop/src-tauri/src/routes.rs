@@ -176,9 +176,15 @@ pub static ROUTES: &[Route] = &[
     // The few config.yaml settings the interface changes: none applies on its own say (trust,
     // this machine's approval or a restart still decides), so no dialog of the shell's.
     post("config/settings"),
+    // The project's checks: read with what its package.json suggests, and changed by name only
+    // (the daemon builds the command from that list; the page sends none).
+    get("config/checks", &[]),
+    post("config/checks"),
     // How this person plans on this machine (kept outside config.yaml); the spending approval and
     // the restart it needs stay the shell's own dialogs.
     post("brain/planner-choice"),
+    // Takes this machine's spending approval back: it only tightens. Giving it is `allow_spending`.
+    post("brain/deny-remote"),
     // Lifts what keeps a host out of work (a failed sign-in, a bench): "I signed in: try again".
     post("readiness/clear"),
     post("control/pause"),
@@ -588,6 +594,18 @@ mod tests {
         assert!(refused("GET", &p("agent-setup/antigravity?agent=dev-1&run=1")));
         assert!(refused("POST", &p("agent-setup/antigravity/start")));
         assert!(refused("POST", &p("agent-setup/gemini")));
+    }
+
+    #[test]
+    fn the_checks_are_read_and_changed_and_spending_is_only_ever_taken_back() {
+        assert!(req("GET", &p("config/checks")).is_ok());
+        assert!(req("POST", &p("config/checks")).is_ok());
+        assert!(refused("GET", &p("config/checks?root=x")));
+        assert!(refused("GET", &p("config/checks/tests")));
+        assert!(req("POST", &p("brain/deny-remote")).is_ok());
+        // No route gives the approval: that is the shell's own command, behind its own dialog.
+        assert!(refused("POST", &p("brain/allow-remote")));
+        assert!(refused("GET", &p("brain/deny-remote")));
     }
 
     #[test]

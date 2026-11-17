@@ -142,8 +142,10 @@ describe('every door that left the first screen still opens (review §6)', () =>
   it('the dock’s gear: the header’s gear, and the palette’s Settings', () => {
     const { ctx, root } = mount();
     (root.querySelector('.sh-settings') as HTMLButtonElement).click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
-    expect(root.querySelector('.sh-drawer[data-kind="settings"]')).not.toBeNull();
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', drawer: null });
+    // The Settings view itself, and no drawer built behind it (2026-11-17).
+    expect((root.querySelector('.sh-settings-hub') as HTMLElement).hidden).toBe(false);
+    expect(root.querySelector('.sh-drawer')).toBeNull();
   });
 
   it('the dock’s Mute: the palette’s Mute sounds and Unmute sounds, typed', async () => {
@@ -177,7 +179,7 @@ describe('every door that left the first screen still opens (review §6)', () =>
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'graph' });
     more.click();
     item('about').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'about' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'about', drawer: null });
     expect(ctx.store.select('ui').activeView).toBe('settings');
     expect(root.querySelector('.sh-settings-hub')).not.toBeNull();
   });
@@ -217,14 +219,14 @@ describe('every door that left the first screen still opens (review §6)', () =>
     expect(listed()).not.toContain('cmd:zoom-out');
   });
 
-  it('closes the Settings drawer with the Settings view, so leaving by a key leaves nothing over the canvas', () => {
+  it('opens Settings as a view with no drawer behind it, and a key leaves it for the canvas', () => {
     const { ctx } = mount();
     for (const leave of [
       () => ctx.keys.handle(keyEvent('Escape')),
       () => ctx.keys.handle(keyEvent(',', { ctrlKey: true })),
     ]) {
       openDrawer(ctx, { kind: 'settings' });
-      expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', drawer: { kind: 'settings' } });
+      expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', drawer: null });
       leave();
       expect(ctx.store.select('ui')).toMatchObject({ activeView: 'canvas', drawer: null });
     }

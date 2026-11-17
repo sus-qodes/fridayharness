@@ -343,11 +343,7 @@ export function applyDeepLink(ctx: AppContext, t: StudioTarget | null | undefine
     openModal(ctx, { kind: 'approval', id: t.approval_id });
   } else if (panel === 'settings') {
     const tab = typeof t.tab === 'string' && TAB.test(t.tab) ? t.tab : undefined;
-    ctx.store.patch('ui', {
-      activeView: 'settings',
-      settingsTab: tab,
-      drawer: { kind: 'settings', ...(tab ? { tab } : {}) },
-    });
+    ctx.store.patch('ui', { activeView: 'settings', settingsTab: tab, drawer: null });
   } else if (panel && ctx.registry.drawers.has(panel as DrawerKind))
     openDrawer(ctx, { kind: panel as DrawerKind, ...where });
   else if (panel && ctx.registry.modals.has(panel as ModalKind)) openModal(ctx, { kind: panel as ModalKind, ...id });
