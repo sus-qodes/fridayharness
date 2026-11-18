@@ -238,6 +238,13 @@ function noticeItem(item: WaitingItem, handlers: ViewHandlers): HTMLElement | nu
     title = 'A goal is ready to land';
     line = truncate(cleanText(item.request), 120);
     door = 'Open the landing';
+  } else if (item.kind === 'answer') {
+    // The beginning of the answer is read right here; the rest is one step away.
+    title = item.failed ? 'A question got no answer' : 'Your answer is ready';
+    line = item.failed
+      ? truncate(cleanText(item.question), 160)
+      : truncate(cleanText(item.preview ?? item.question), 320);
+    door = item.failed ? 'See what happened' : 'Read the whole answer';
   } else if (item.kind === 'stopped' || item.kind === 'asking') {
     const w = attentionWords(item, turnHost(item.host));
     title = w.title;

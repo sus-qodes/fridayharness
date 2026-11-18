@@ -276,6 +276,29 @@ export interface GoalProgressView {
  * sessions attached from an editor, or worktrees off; nothing to land, the person commits), or
  * `mixed`. `landed`: the landing a person made from the interface, else null.
  */
+/** Where a question a person asked stands (a goal of mode `ask`, 2026-11-18). */
+export interface AnswerView {
+  goal_id: string;
+  question: string;
+  /**
+   * `waiting`: no agent has taken it yet. `answering`: one is at work. `ready`: the answer is
+   * here. `failed`: the attempt ended without one. `cancelled`.
+   */
+  state: 'waiting' | 'answering' | 'ready' | 'failed' | 'cancelled';
+  task_id: string | null;
+  agent_key: string | null;
+  /** One sentence about the answer, as the agent put it. */
+  summary: string | null;
+  /** The beginning of the answer, for lists and notices. */
+  preview: string | null;
+  /** The whole answer: on `GET …/goals/:gid/answer` only, never on the board. */
+  answer?: string | null;
+  note: string | null;
+  at: string | null;
+  /** Whether the person opened it. */
+  read: boolean;
+}
+
 export interface GoalLandingView {
   work: 'branch' | 'folder' | 'mixed';
   landed: { into: string; at: string } | null;
@@ -415,6 +438,8 @@ export interface UiSnapshot {
   host_blocks?: HostBlockView[];
   /** Per completed goal: where its work is, and whether a person landed it. Absent from an older daemon. */
   goal_landing?: Record<string, GoalLandingView>;
+  /** Per goal that is a question: where its answer stands. Absent from an older daemon. */
+  answers?: Record<string, AnswerView>;
   plans: Record<string, { active: LivePlanVersion | null; proposed: LivePlanVersion | null }>;
   tasks: SnapshotTask[];
   runs: Record<string, RunView>;

@@ -160,7 +160,12 @@ export function mountNotchWith(
       opts.onOpenStudio(target);
       return;
     }
-    if (target.panel === 'plan-review' || target.panel === 'verify' || target.panel === 'land') {
+    if (
+      target.panel === 'plan-review' ||
+      target.panel === 'verify' ||
+      target.panel === 'land' ||
+      target.panel === 'answer'
+    ) {
       // These are dialogs, not drawers: the plan review and the landing open on the goal, the
       // verification on the task.
       if (target.task_id) store.patch('ui', { selectedTaskId: target.task_id });

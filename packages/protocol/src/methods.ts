@@ -241,6 +241,11 @@ export const AgentResultParams = z.object({
   run_id: z.string(),
   status: z.enum(['completed_claim', 'blocked']),
   summary: z.string().min(1).max(2000),
+  /**
+   * The whole answer, when the task was a question a person asked (2026-11-18): what they read.
+   * Kept as an artifact, never in an event. A summary is one sentence about it.
+   */
+  answer: z.string().max(60_000).optional(),
   changed_paths: z.array(z.string()).max(200).default([]),
   checks: z.array(CheckReport).max(50).default([]),
   notes: z.array(z.string().max(1000)).max(20).default([]),

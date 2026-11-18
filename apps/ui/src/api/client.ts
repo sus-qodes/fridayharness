@@ -10,6 +10,7 @@ import type {
   AgentProcessesView,
   AgentProfile,
   AgentView,
+  AnswerView,
   AntigravitySetupPlan,
   AntigravitySetupResult,
   ApprovalRow,
@@ -367,8 +368,20 @@ export class FridayApi {
     outcomes: string[];
     priority: string;
     plan: boolean;
+    /** `ask`: a question, answered and nothing changed. `do`: one task, started at once. Default: planned. */
+    mode?: 'plan' | 'do' | 'ask';
   }): Promise<GoalView> {
     return this.post('/goals', body, { idempotencyKey: newKey() });
+  }
+
+  /** A question's answer in full, with where it stands. */
+  goalAnswer(goalId: string): Promise<AnswerView> {
+    return this.get(`/goals/${encodeURIComponent(goalId)}/answer`);
+  }
+
+  /** The person opened the answer: it no longer waits for them. */
+  markAnswerRead(goalId: string): Promise<{ ok: boolean }> {
+    return this.post(`/goals/${encodeURIComponent(goalId)}/answer/read`, {});
   }
 
   cancelGoal(goalId: string, reason?: string): Promise<GoalView> {

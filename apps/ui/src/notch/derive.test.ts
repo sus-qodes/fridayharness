@@ -642,3 +642,56 @@ describe('an agent its person runs that stopped, or asks in its own window (2026
     expect(w.line).toContain('own window');
   });
 });
+
+describe('an answer that waits to be read (2026-11-18)', () => {
+  const GID = 'goal_0000000000000000000000gg01';
+  const board = (a: Record<string, unknown> | null) =>
+    makeSnapshot({
+      goals: [makeGoal({ mode: 'ask', status: 'COMPLETED', request: 'How do price revisions work?' })],
+      ...(a
+        ? {
+            answers: {
+              [GID]: {
+                goal_id: GID,
+                question: 'How do price revisions work?',
+                state: 'ready',
+                task_id: 't1',
+                agent_key: 'claude-1',
+                summary: 'Each change is a new row',
+                preview: 'A price is kept per outlet.',
+                note: null,
+                at: '2026-11-18T07:00:00.000Z',
+                read: false,
+                ...a,
+              } as never,
+            },
+          }
+        : {}),
+    });
+  const NOW = Date.parse('2026-11-18T07:02:30.000Z');
+
+  it('is listed with how it begins until its person opens it, and opens the answer', () => {
+    const items = waitingItems(board({}), NOW);
+    expect(items.map((i) => i.kind)).toEqual(['answer']);
+    const item = items[0] as Extract<(typeof items)[number], { kind: 'answer' }>;
+    expect(item).toMatchObject({
+      goalId: GID,
+      preview: 'A price is kept per outlet.',
+      agentKey: 'claude-1',
+      failed: false,
+    });
+    expect(studioTarget(item, null)).toEqual({ panel: 'answer', id: GID });
+    expect(statusSentence(board({}), NOW)).toContain('1 answer to read');
+    // Opened: it no longer waits. And a question has nothing to land.
+    expect(waitingItems(board({ read: true }), NOW)).toEqual([]);
+  });
+
+  it('is not listed while the agent is still at it, and is listed when it ended without one', () => {
+    expect(waitingItems(board({ state: 'answering', preview: null, summary: null }), NOW)).toEqual([]);
+    expect(waitingItems(board({ state: 'waiting' }), NOW)).toEqual([]);
+    const failed = waitingItems(board({ state: 'failed', preview: null, summary: null }), NOW);
+    expect(failed).toMatchObject([{ kind: 'answer', failed: true, preview: null }]);
+    // A board from an older daemon has no answers: nothing is listed, nothing breaks.
+    expect(waitingItems(board(null), NOW)).toEqual([]);
+  });
+});

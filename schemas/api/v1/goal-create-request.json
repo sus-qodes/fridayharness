@@ -61,6 +61,15 @@
     "plan": {
       "default": true,
       "type": "boolean"
+    },
+    "mode": {
+      "default": "plan",
+      "type": "string",
+      "enum": [
+        "plan",
+        "do",
+        "ask"
+      ]
     }
   },
   "required": [

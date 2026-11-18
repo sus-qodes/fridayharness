@@ -96,6 +96,15 @@
         "CANCELLED"
       ]
     },
+    "mode": {
+      "default": "plan",
+      "type": "string",
+      "enum": [
+        "plan",
+        "do",
+        "ask"
+      ]
+    },
     "plan_id": {
       "type": [
         "string",

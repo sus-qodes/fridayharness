@@ -2007,3 +2007,194 @@ describe('checks that fit the change (2026-11-18)', () => {
     expect(both.checks.map((c) => c.name)).toEqual(['tests', 'lint']);
   }, 240_000);
 });
+
+describe('a question, and one task to do now (2026-11-18)', () => {
+  interface Answer {
+    state: string;
+    question: string;
+    agent_key: string | null;
+    summary: string | null;
+    preview: string | null;
+    answer?: string | null;
+    read: boolean;
+  }
+  type Board = {
+    goals: { goal_id: string; mode: string; status: string }[];
+    answers?: Record<string, Answer>;
+    goal_landing?: Record<string, unknown>;
+  };
+  const board = (td: TestDaemon) => td.operator.get<Board>(td.operator.projectPath('/ui/snapshot'));
+  const answer = (td: TestDaemon, goalId: string) =>
+    td.operator.get<Answer>(td.operator.projectPath(`/goals/${goalId}/answer`));
+  const make = (td: TestDaemon, request: string, mode: 'ask' | 'do') =>
+    td.operator.post<{ goal_id: string; mode: string; plan_id: string | null; status: string }>(
+      td.operator.projectPath('/goals'),
+      { request, mode },
+    );
+  const onlyTask = async (td: TestDaemon, goalId: string) => {
+    const detail = await td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`));
+    expect(detail.active?.tasks).toHaveLength(1);
+    return (detail.active?.tasks[0]?.task_id ?? '') as string;
+  };
+  const LONG = `Prices are kept per outlet, and every change is a new row.\n\n${'A revision records who changed what, and when. '.repeat(120)}`;
+
+  it('answers a question with one read-only task: no plan to approve, no project check, nothing to land', async () => {
+    const td = await project();
+    const QUESTION = 'How do a and b add up, and where is that tested?';
+    const goal = await make(td, QUESTION, 'ask');
+    expect(goal).toMatchObject({ mode: 'ask' });
+    // One task, there at once, with nothing proposed for a person to read.
+    const detail = await td.operator.get<GoalDetail & { proposed: unknown }>(
+      td.operator.projectPath(`/goals/${goal.goal_id}`),
+    );
+    expect(detail.proposed ?? null).toBeNull();
+    const taskId = await onlyTask(td, goal.goal_id);
+    const task = await taskOf(td, taskId);
+    expect(task).toMatchObject({ kind: 'research', status: 'READY', summary: QUESTION });
+    expect(task.scope?.write).toEqual([]);
+    expect(task.description).toContain('Change no file');
+    expect(task.description).toContain(QUESTION);
+    expect(await answer(td, goal.goal_id)).toMatchObject({ state: 'waiting', question: QUESTION, read: false });
+
+    const w = await begin(td, 'be-1', taskId);
+    expect((await answer(td, goal.goal_id)).state).toBe('answering');
+    await w.fake.client.reportResult({
+      task_id: taskId,
+      run_id: w.start.run_id,
+      status: 'completed_claim',
+      summary: 'a and b are added in the test, which keeps their sum at 3 or less',
+      answer: LONG,
+      changed_paths: [],
+      checks: [],
+    });
+    await w.fake.close();
+    // Nobody presses Verify, and this computer trusts no automatic verification: the answer is
+    // checked by itself, because checking it runs nothing of the project.
+    const done = await eventually(
+      () => taskOf(td, taskId),
+      (t) => t.status === 'COMPLETED' || t.status === 'FAILED',
+      'the answer to be checked',
+    );
+    expect(done.status).toBe('COMPLETED');
+    const v = td.daemon.state.q.latestVerification(taskId);
+    expect(v?.checks.map((c) => c.name)).toEqual(['friday.diff', 'friday.secrets']);
+
+    const full = await answer(td, goal.goal_id);
+    expect(full).toMatchObject({ state: 'ready', agent_key: 'be-1', read: false });
+    expect(full.answer).toBe(LONG.trim());
+    expect(full.summary).toContain('their sum at 3 or less');
+    const b = await eventually(
+      async () => {
+        await runOnce(td);
+        return board(td);
+      },
+      (x) => x.goals.find((g) => g.goal_id === goal.goal_id)?.status === 'COMPLETED',
+      'the question to be done',
+      15_000,
+    );
+    expect(b.goals.find((g) => g.goal_id === goal.goal_id)).toMatchObject({ mode: 'ask', status: 'COMPLETED' });
+    // On the board: where it stands and how it begins, never the whole text; and nothing to land.
+    expect(b.answers?.[goal.goal_id]).toMatchObject({ state: 'ready', read: false });
+    expect(b.answers?.[goal.goal_id]?.preview).toBe(LONG.trim().slice(0, 400));
+    expect(b.answers?.[goal.goal_id]?.answer).toBeUndefined();
+    expect(b.goal_landing?.[goal.goal_id]).toBeUndefined();
+    // No event holds the long text.
+    const events = td.daemon.state.store.readSince(td.project.project_id, 0, { limit: 5000 });
+    const whole = JSON.stringify(LONG.trim()).slice(1, -1);
+    expect(events.some((e) => JSON.stringify(e.payload).includes(whole))).toBe(false);
+    expect(Math.max(...events.map((e) => JSON.stringify(e.payload).length))).toBeLessThan(LONG.length);
+
+    await td.operator.post(td.operator.projectPath(`/goals/${goal.goal_id}/answer/read`), {});
+    await td.operator.post(td.operator.projectPath(`/goals/${goal.goal_id}/answer/read`), {});
+    expect((await answer(td, goal.goal_id)).read).toBe(true);
+    expect(events.filter((e) => e.type === 'goal.answer_read')).toHaveLength(0);
+    expect(
+      td.daemon.state.store.readSince(td.project.project_id, 0, { types: ['goal.answer_read'], limit: 10 }),
+    ).toHaveLength(1);
+    // Only a question has an answer to read.
+    const { goalId: planned } = await goalWith(td, [{ key: 'x', summary: 'Raise a', write: ['src/a.mjs'] }]);
+    await expect(answer(td, planned)).rejects.toThrow(/is not a question/);
+  }, 120_000);
+
+  it('fails a question whose agent changed a file, and takes an answer given as the summary alone', async () => {
+    const td = await project();
+    const changed = await make(td, 'What does a hold?', 'ask');
+    const taskId = await onlyTask(td, changed.goal_id);
+    const w = await begin(td, 'be-1', taskId);
+    writeFileSync(path.join(w.start.working_directory, 'src/a.mjs'), 'export const a = 9;\n');
+    await w.fake.client.reportResult({
+      task_id: taskId,
+      run_id: w.start.run_id,
+      status: 'completed_claim',
+      summary: 'a holds 1; I also changed it',
+      answer: 'It holds 1.',
+      changed_paths: ['src/a.mjs'],
+      checks: [],
+    });
+    await w.fake.close();
+    const failed = await eventually(
+      () => taskOf(td, taskId),
+      (t) => t.status === 'COMPLETED' || t.status === 'FAILED',
+      'the check of the changed question',
+    );
+    expect(failed.status).toBe('FAILED');
+    const v = td.daemon.state.q.latestVerification(taskId);
+    const diff = v?.checks.find((c) => c.name === 'friday.diff');
+    expect(diff?.details?.findings?.map((f) => f.rule)).toContain('diff.read_only_task');
+    // The project's tests were not run on what it changed: nothing here was trusted to run them.
+    expect(v?.checks.some((c) => c.name === 'tests')).toBe(false);
+    expect((await answer(td, changed.goal_id)).state).toBe('failed');
+
+    const terse = await make(td, 'What does b hold?', 'ask');
+    const second = await onlyTask(td, terse.goal_id);
+    const w2 = await begin(td, 'be-2', second);
+    await w2.fake.client.reportResult({
+      task_id: second,
+      run_id: w2.start.run_id,
+      status: 'completed_claim',
+      summary: 'b holds 1.',
+      changed_paths: [],
+      checks: [],
+    });
+    await w2.fake.close();
+    await eventually(
+      () => taskOf(td, second),
+      (t) => t.status === 'COMPLETED',
+      'the short answer to be checked',
+    );
+    expect(await answer(td, terse.goal_id)).toMatchObject({
+      state: 'ready',
+      answer: 'b holds 1.',
+      preview: 'b holds 1.',
+    });
+  }, 120_000);
+
+  it('does one task at once, with no planner and no plan to approve, then checks and lands it as any other', async () => {
+    const td = await project();
+    const REQUEST = 'Raise a to 2 in src/a.mjs';
+    const goal = await make(td, REQUEST, 'do');
+    expect(goal.mode).toBe('do');
+    const taskId = await onlyTask(td, goal.goal_id);
+    expect(await taskOf(td, taskId)).toMatchObject({ kind: 'implementation', status: 'READY', summary: REQUEST });
+    // No model was asked for anything.
+    expect(
+      td.daemon.state.store.readSince(td.project.project_id, 0, { types: ['model.called'], limit: 10 }),
+    ).toHaveLength(0);
+    await work(td, 'be-1', taskId, { 'src/a.mjs': 'export const a = 2;\n' });
+    expect((await integrationOf(td, taskId)).status).toBe('integrated');
+    await runOnce(td);
+    const b = await board(td);
+    expect(b.goals.find((g) => g.goal_id === goal.goal_id)).toMatchObject({ mode: 'do', status: 'COMPLETED' });
+    // Work to land, like any goal's; and no answer to read.
+    expect(b.goal_landing?.[goal.goal_id]).toBeDefined();
+    expect(b.answers?.[goal.goal_id]).toBeUndefined();
+    const landed = await td.operator.post<{ status: string }>(
+      td.operator.projectPath(`/goals/${goal.goal_id}/land`),
+      {},
+    );
+    expect(landed.status).toBe('landed');
+    expect(readFileSync(path.join(ws().projectDir, 'src/a.mjs'), 'utf8').replace(/\r\n/g, '\n')).toBe(
+      'export const a = 2;\n',
+    );
+  }, 120_000);
+});

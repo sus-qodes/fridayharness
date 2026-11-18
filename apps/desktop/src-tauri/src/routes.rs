@@ -146,6 +146,9 @@ pub static ROUTES: &[Route] = &[
     // What landing would do, read before the dialog (the POST of the same path is confirmed below).
     get("goals/{gid}/land", &[]),
     post("goals"),
+    // A question's answer in full, and that its person opened it.
+    get("goals/{gid}/answer", &[]),
+    post("goals/{gid}/answer/read"),
     confirm("goals/{gid}/cancel", Confirm::CancelGoal),
     confirm("goals/{gid}/land", Confirm::LandGoal),
     // Uncommitted files in the way are kept and taken out of the way first, then it lands.

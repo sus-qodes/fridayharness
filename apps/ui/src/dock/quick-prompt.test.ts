@@ -209,3 +209,74 @@ describe('the goal line (review §4, owner decision 4)', () => {
     expect(t.ctx.transport.calls).toHaveLength(0);
   });
 });
+
+describe('Ask, Do or Plan on the line itself (2026-11-18)', () => {
+  const press = (t: ReturnType<typeof setup>, label: string) => {
+    const b = [...t.c.el.querySelectorAll<HTMLButtonElement>('.dk-qp-mode')].find((x) => x.textContent === label);
+    if (!b) throw new Error(`no mode ${label}`);
+    b.click();
+  };
+  const pressed = (t: ReturnType<typeof setup>) =>
+    [...t.c.el.querySelectorAll('.dk-qp-mode')]
+      .filter((b) => b.getAttribute('aria-pressed') === 'true')
+      .map((b) => b.textContent);
+
+  it('plans by default, as before, and says which way is chosen', () => {
+    const t = track(setup());
+    expect([...t.c.el.querySelectorAll('.dk-qp-mode')].map((b) => b.textContent)).toEqual(['Ask', 'Do', 'Plan']);
+    expect(pressed(t)).toEqual(['Plan']);
+    expect(t.input.placeholder).toBe(GOAL_PLACEHOLDER);
+  });
+
+  it('asks a question: no plan, no planner, and the answer is promised here', async () => {
+    const t = track(setup(undefined, { 'POST /goals': { goal_id: 'goal_q' } }));
+    press(t, 'Ask');
+    expect(pressed(t)).toEqual(['Ask']);
+    expect(t.input.placeholder).toBe('Ask about this project…');
+    await t.type('How do price revisions work?');
+    await t.enter();
+    expect(t.feedback.textContent).toBe('Ask: How do price revisions work?? Press Enter');
+    expect(t.ctx.transport.to('POST', '/goals')).toHaveLength(0);
+    await t.enter();
+    expect(t.ctx.transport.to('POST', '/goals').map((c) => c.body)).toEqual([
+      {
+        request: 'How do price revisions work?',
+        constraints: [],
+        outcomes: [],
+        priority: 'normal',
+        plan: false,
+        mode: 'ask',
+      },
+    ]);
+    expect(t.feedback.textContent).toBe('Asked. The answer will wait for you here.');
+    expect(t.ctx.toasts.at(-1)?.text).toBe('Asked: the answer appears here when it is ready');
+    // No plan editor opens for a question, planner or not.
+    expect(t.ctx.store.select('ui').modal).toBeFalsy();
+    expect(t.onDone).toHaveBeenCalledOnce();
+  });
+
+  it('does one task at once, with no plan to write or approve', async () => {
+    const t = track(setup(undefined, { 'POST /goals': { goal_id: 'goal_d' } }));
+    press(t, 'Do');
+    await t.type('Fix the typo in the README');
+    await t.enter();
+    expect(t.feedback.textContent).toBe('Start now with one agent: Fix the typo in the README? Press Enter');
+    await t.enter();
+    expect(t.ctx.transport.to('POST', '/goals').map((c) => c.body)).toMatchObject([{ mode: 'do', plan: false }]);
+    expect(t.feedback.textContent).toBe('Started.');
+    expect(t.ctx.store.select('ui').modal).toBeFalsy();
+  });
+
+  it('changing the way forgets what Enter had offered for the other', async () => {
+    const t = track(setup(undefined, { 'POST /goals': { goal_id: 'goal_q' } }));
+    await t.type('How do price revisions work?');
+    await t.enter();
+    expect(t.feedback.textContent).toContain('Create a goal:');
+    press(t, 'Ask');
+    expect(t.feedback.textContent).toBe('');
+    await t.enter();
+    // Offered again, as a question; nothing was created by the switch.
+    expect(t.feedback.textContent).toContain('Ask:');
+    expect(t.ctx.transport.to('POST', '/goals')).toHaveLength(0);
+  });
+});

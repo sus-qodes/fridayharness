@@ -2,6 +2,8 @@
  * The Codex adapter's pure parts (ADR-0032): the JSON-RPC line client, the turn's final message,
  * the usage record a thread's token counts become, and the environment its host gets.
  */
+
+import { answerOf, MAX_ANSWER } from '@friday/adapter-generic';
 import { describe, expect, it } from 'vitest';
 import { codexModelName, routedModelName } from './adapter.js';
 import {
@@ -65,12 +67,14 @@ describe('the final message', () => {
     expect(parseFinal(JSON.stringify({ status: 'blocked', summary: 's', blocked_reason: 'needs a key' }))).toEqual({
       status: 'blocked',
       summary: 's',
+      answer: '',
       blocked_reason: 'needs a key',
       checks: [],
     });
     expect(parseFinal('  I changed src/a.ts.  ')).toEqual({
       status: 'completed',
       summary: 'I changed src/a.ts.',
+      answer: '',
       blocked_reason: '',
       checks: [],
     });
@@ -101,7 +105,7 @@ describe('the final message', () => {
 
   it('asks only for what Friday cannot read from the worktree (plan M13.4)', () => {
     // Codex's structured output is strict: every field required, nothing else.
-    expect(STRICT_FINAL_SCHEMA.required).toEqual(['status', 'summary', 'blocked_reason', 'checks']);
+    expect(STRICT_FINAL_SCHEMA.required).toEqual(['status', 'summary', 'answer', 'blocked_reason', 'checks']);
     expect(STRICT_FINAL_SCHEMA.properties.checks.items.required).toEqual(['name', 'command', 'outcome']);
     expect(STRICT_FINAL_SCHEMA.additionalProperties).toBe(false);
     // A host that refuses an answer that does not fit requires only the status, and takes extra fields.
@@ -113,7 +117,7 @@ describe('the final message', () => {
   it("keeps the model's summary and cuts another parameter's markup out of it (CC-35)", () => {
     expect(
       parseFinal({ status: 'completed', summary: 'Added the module.</summary> <parameter name="changed_paths">["a"]' }),
-    ).toEqual({ status: 'completed', summary: 'Added the module.', blocked_reason: '', checks: [] });
+    ).toEqual({ status: 'completed', summary: 'Added the module.', answer: '', blocked_reason: '', checks: [] });
     // No summary at all: the session's last text stands in for it.
     expect(parseFinal({ status: 'completed' }, ' I added backend/src/a.ts. ').summary).toBe(
       'I added backend/src/a.ts.',
@@ -122,9 +126,30 @@ describe('the final message', () => {
     expect(parseFinal({ status: 'completed', summary: 's', changed_paths: ['x'] })).toEqual({
       status: 'completed',
       summary: 's',
+      answer: '',
       blocked_reason: '',
       checks: [],
     });
+  });
+
+  it('carries the answer to a question a person asked, whole (2026-11-18)', () => {
+    const long = `Prices are revised in three places.\n\n${'It works like this. '.repeat(200)}`;
+    // The field it was asked for.
+    const asked = parseFinal({ status: 'completed', summary: 'How price revisions work', answer: ` ${long} ` });
+    expect(asked.answer).toBe(long.trim());
+    expect(answerOf(asked, '')).toEqual({ answer: long.trim() });
+    // Prose longer than a summary is the answer itself; a short line is only a summary.
+    expect(parseFinal(long).answer).toBe(long.trim());
+    expect(parseFinal('Done.').answer).toBe('');
+    // No answer field: what the session last wrote, when that says more than its summary.
+    const terse = parseFinal({ status: 'completed', summary: 'Explained it' });
+    expect(answerOf(terse, long)).toEqual({ answer: long.trim() });
+    expect(answerOf(terse, 'Explained it.')).toEqual({});
+    expect(answerOf(parseFinal({ status: 'completed', summary: 's' }), '')).toEqual({});
+    // Never longer than Friday takes.
+    expect(
+      answerOf(parseFinal({ status: 'completed', summary: 's', answer: 'x'.repeat(70_000) }), '').answer,
+    ).toHaveLength(MAX_ANSWER);
   });
 });
 

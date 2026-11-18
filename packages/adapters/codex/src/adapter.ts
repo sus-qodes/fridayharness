@@ -2,6 +2,7 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
   AttemptStops,
+  answerOf,
   classifyHostFailure,
   FINAL_SCHEMA,
   type GenericHarnessClient,
@@ -810,6 +811,8 @@ export class CodexAdapter {
             ...ids,
             status: 'completed_claim',
             summary: final.summary.slice(0, 2000) || 'done',
+            // A question's answer, when the thread gave one (Friday keeps it only for a question).
+            ...answerOf(final, ''),
             changed_paths: [...changed].slice(0, 200),
             // What the thread says it ran: verification's evidence, bounded by what the hooks saw.
             checks: final.checks,

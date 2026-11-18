@@ -892,9 +892,10 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
       name: 'friday_claim_done',
       title: 'Submit a completion claim',
       description:
-        'Finish your task: list the exact changed paths and each check you actually ran with its real outcome. Friday verifies the claim; the task is not complete until verification passes.',
+        'Finish your task: list the exact changed paths and each check you actually ran with its real outcome. Friday verifies the claim; the task is not complete until verification passes. When the task was a question a person asked, put the whole answer in `answer` and one sentence about it in `summary`.',
       shape: {
         summary: z.string().min(1).max(2000),
+        answer: z.string().max(60_000).optional(),
         changed_paths: z.array(z.string()).max(200),
         checks: z
           .array(
@@ -932,6 +933,7 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
           run_id,
           status: 'completed_claim',
           summary: a.summary as string,
+          ...(typeof a.answer === 'string' && a.answer.trim() ? { answer: a.answer } : {}),
           changed_paths: a.changed_paths as string[],
           checks,
           risks: (a.risks as string[] | undefined) ?? [],

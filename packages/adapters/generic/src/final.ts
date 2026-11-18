@@ -13,6 +13,9 @@ const CHECK_PROPERTIES = {
 const FINAL_PROPERTIES = {
   status: { type: 'string', enum: ['completed', 'blocked'] },
   summary: { type: 'string' },
+  // The whole answer, when the task was a question a person asked: what they will read. Empty
+  // for every other task.
+  answer: { type: 'string' },
   blocked_reason: { type: 'string' },
   // What the session ran to check its work (a test, a build, the program on an input), each with
   // its outcome: verification's evidence that the work was run, bounded by what the hooks saw.
@@ -57,7 +60,7 @@ export const FINAL_SCHEMA = {
 export const STRICT_FINAL_SCHEMA = {
   type: 'object',
   properties: STRICT_FINAL_PROPERTIES,
-  required: ['status', 'summary', 'blocked_reason', 'checks'],
+  required: ['status', 'summary', 'answer', 'blocked_reason', 'checks'],
   additionalProperties: false,
 } as const;
 
@@ -71,8 +74,23 @@ export interface FinalCheck {
 export interface Final {
   status: 'completed' | 'blocked';
   summary: string;
+  /** The whole answer to a person's question, or empty. */
+  answer: string;
   blocked_reason: string;
   checks: FinalCheck[];
+}
+
+/** The most an answer holds (`AgentResultParams.answer`). */
+export const MAX_ANSWER = 60_000;
+
+/**
+ * The `answer` of a result report: what the final message gave as one, else the session's last
+ * text when that says more than the summary does. Nothing when there is neither.
+ */
+export function answerOf(final: Final, lastText: string): { answer?: string } {
+  const last = lastText.trim();
+  const text = final.answer || (last.length > final.summary.length + 200 ? last : '');
+  return text ? { answer: text.slice(0, MAX_ANSWER) } : {};
 }
 
 /** The checks of a parsed answer: well-formed entries only, bounded in number and length. */
@@ -109,8 +127,14 @@ export function parseFinal(message: unknown, fallback = ''): Final {
     try {
       v = JSON.parse(message);
     } catch {
-      // not JSON: the model answered in prose
-      return { status: 'completed', summary: cleanSummary(message) || fallback.trim(), blocked_reason: '', checks: [] };
+      // not JSON: the model answered in prose, and prose longer than a summary is the answer itself
+      return {
+        status: 'completed',
+        summary: cleanSummary(message) || fallback.trim(),
+        answer: message.trim().length > 2000 ? message.trim().slice(0, MAX_ANSWER) : '',
+        blocked_reason: '',
+        checks: [],
+      };
     }
   }
   const o = (v ?? {}) as Partial<Final>;
@@ -118,6 +142,7 @@ export function parseFinal(message: unknown, fallback = ''): Final {
     return {
       status: o.status,
       summary: (typeof o.summary === 'string' ? cleanSummary(o.summary) : '') || fallback.trim(),
+      answer: typeof o.answer === 'string' ? o.answer.trim().slice(0, MAX_ANSWER) : '',
       blocked_reason: typeof o.blocked_reason === 'string' ? o.blocked_reason.trim() : '',
       checks: parseChecks(o.checks),
     };
@@ -125,6 +150,7 @@ export function parseFinal(message: unknown, fallback = ''): Final {
   return {
     status: 'completed',
     summary: (typeof message === 'string' ? cleanSummary(message) : '') || fallback.trim(),
+    answer: '',
     blocked_reason: '',
     checks: [],
   };

@@ -90,6 +90,7 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
   const shared = samePath(root, project.root);
   const checks = selectChecks(configured, task.kind);
   let fitted: FittedChecks<(typeof checks)[number]> = { run: checks, skipped: [], why: null };
+  const question = Boolean(task.goal_id && state.q.findGoal(pid, task.goal_id)?.mode === 'ask');
   // What is verified must be read from git: every task worktree, and the main checkout of a project
   // kept in git. A checkout git cannot read is not verified at all (review F05); only a project
   // outside git is judged without a diff.
@@ -243,6 +244,18 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
             paths: [],
           },
         ];
+    // A task that only reads (a question, a review without files of its own) changed something.
+    if ((task.kind === 'research' || task.kind === 'review') && (task.scope?.write ?? []).length === 0 && since) {
+      const touched = changes.map((c) => c.path);
+      if (touched.length) {
+        findings.push({
+          rule: 'diff.read_only_task',
+          severity: 'fail',
+          message: `this task only reads, and it changed ${touched.length} file(s): ${touched.slice(0, 10).join(', ')}${touched.length > 10 ? ` (and ${touched.length - 10} more)` : ''}`,
+          paths: touched.slice(0, 20),
+        });
+      }
+    }
     if (artifacts.length) {
       findings.push({
         rule: 'diff.artifacts',
@@ -359,6 +372,9 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       c.origPath && c.origPath !== c.path ? [c.path, c.origPath] : [c.path],
     );
     fitted = checksForChange(checks, since ? changedPaths : null, task.kind);
+    // A question is checked for one thing, that nothing changed: none of the project's checks is
+    // its judge, and none runs for it, so it needs no trust to be checked by itself.
+    if (question) fitted = { run: [], skipped: [], why: null };
 
     // 3. Evidence that the work was run, when no configured check judges it (a configured check is
     // that evidence, run by Friday itself). A claim made after a minute with an untested edit is

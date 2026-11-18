@@ -92,6 +92,22 @@ export type WaitingItem =
     }
   /** A completed goal whose branch a person has not landed yet; `id` is the goal's. */
   | { kind: 'land'; key: string; id: string; taskId: null; goalId: string; request: string }
+  /**
+   * A question the person asked has its answer, or ended without one, and they have not opened
+   * it yet (2026-11-18). `id` is the goal's.
+   */
+  | {
+      kind: 'answer';
+      key: string;
+      id: string;
+      taskId: null;
+      goalId: string;
+      question: string;
+      /** How the answer begins; null when the attempt ended without one. */
+      preview: string | null;
+      agentKey: string | null;
+      failed: boolean;
+    }
   /** An agent's message the human has not replied to (a request, or one the sender blocks on). */
   | { kind: 'message'; key: string; id: string; taskId: string | null; message: SnapshotInboxItem }
   /** One row for every memory that needs review. */
@@ -276,6 +292,27 @@ function toTurn(board: UiSnapshot): WaitingItem[] {
   return out;
 }
 
+/** Questions answered, or ended without an answer, that their person has not opened. */
+function toRead(board: UiSnapshot): WaitingItem[] {
+  const out: WaitingItem[] = [];
+  for (const g of board.goals) {
+    const a = board.answers?.[g.goal_id];
+    if (!a || a.read || (a.state !== 'ready' && a.state !== 'failed')) continue;
+    out.push({
+      kind: 'answer',
+      key: `answer:${g.goal_id}`,
+      id: g.goal_id,
+      taskId: null,
+      goalId: g.goal_id,
+      question: a.question,
+      preview: a.state === 'ready' ? (a.preview ?? a.summary) : null,
+      agentKey: a.agent_key,
+      failed: a.state === 'failed',
+    });
+  }
+  return out;
+}
+
 /**
  * Completed goals whose branch waits to be landed, in the goals' order. Work made in the project
  * folder itself is not listed: it is already there, and nothing tells Friday when it was committed.
@@ -347,6 +384,7 @@ export function waitingItems(board: UiSnapshot | null, now: number): WaitingItem
     ...toQuiet(board, now),
     ...proposedPlans(board),
     ...toVerify(board, now),
+    ...toRead(board),
     ...toLand(board),
     ...messages.map(
       (m): WaitingItem => ({
@@ -387,6 +425,7 @@ const WAITING_WORDS: Record<WaitingKind, [one: string, many: string]> = {
   asking: ['agent asking you in its window', 'agents asking you in their windows'],
   plan: ['proposed plan', 'proposed plans'],
   verify: ['task to verify', 'tasks to verify'],
+  answer: ['answer to read', 'answers to read'],
   land: ['goal to land', 'goals to land'],
   message: ['message to reply to', 'messages to reply to'],
   memory: ['memory to review', 'memories to review'],
@@ -403,6 +442,7 @@ const WAITING_ORDER: readonly WaitingKind[] = [
   'quiet',
   'plan',
   'verify',
+  'answer',
   'land',
   'message',
   'memory',
@@ -489,6 +529,8 @@ export function itemSignature(item: WaitingItem): string {
       return [item.key, item.agentKey, item.host, item.reason, item.error].join('\u0000');
     case 'asking':
       return [item.key, item.agentKey, item.host, item.tool, item.target].join('\u0000');
+    case 'answer':
+      return [item.key, String(item.failed), item.preview ?? '', item.agentKey ?? ''].join('\u0000');
     case 'land':
       return item.key;
     case 'message': {
@@ -513,7 +555,7 @@ export interface StudioTarget {
    * A drawer (Settings, the agents drawer at `tab`, the diff of `task_id` at `path`, Messages at
    * `id`, Project memory) or the plan review dialog of the goal `id`.
    */
-  panel?: 'settings' | 'agents' | 'diff' | 'inbox' | 'memory' | 'plan-review' | 'verify' | 'land';
+  panel?: 'settings' | 'agents' | 'diff' | 'inbox' | 'memory' | 'plan-review' | 'verify' | 'land' | 'answer';
   /** What the panel opens on: a delivery for Messages, a goal for the plan review. */
   id?: string;
   tab?: string;
@@ -529,6 +571,7 @@ export function studioTarget(item: WaitingItem | null, activeTaskId: string | nu
   // The dialogs where each is done: the task's verification, the goal's landing.
   if (item?.kind === 'verify') return { task_id: item.taskId, panel: 'verify', id: item.taskId };
   if (item?.kind === 'land') return { panel: 'land', id: item.goalId };
+  if (item?.kind === 'answer') return { panel: 'answer', id: item.goalId };
   // The task itself: its inspector is where it is given to another agent.
   if (item?.kind === 'turn' || item?.kind === 'quiet' || item?.kind === 'stopped' || item?.kind === 'asking') {
     return { task_id: item.taskId };

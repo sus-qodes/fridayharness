@@ -685,6 +685,15 @@ export type PlanChange = z.infer<typeof PlanChange>;
 const IntentLine = z.string().trim().min(1).max(300);
 const IntentLines = z.array(IntentLine).max(12);
 
+/**
+ * How a goal is taken up (2026-11-18). `plan`: it is planned, by the Master Brain or by a person,
+ * and the plan is approved before anything starts. `do`: one task with the request as it was
+ * typed, started at once, with no plan to read. `ask`: a question; one agent answers it and
+ * changes nothing, and there is nothing to check or to land.
+ */
+export const GoalMode = z.enum(['plan', 'do', 'ask']);
+export type GoalMode = z.infer<typeof GoalMode>;
+
 export const GoalCreateRequest = z.object({
   request: z.string().min(3).max(4000),
   constraints: IntentLines.default([]),
@@ -695,6 +704,8 @@ export const GoalCreateRequest = z.object({
   priority: Priority.default('normal'),
   /** Ask the Master Brain for a plan right away (default). False: a human will propose one. */
   plan: z.boolean().default(true),
+  /** `do` and `ask` need no plan: `plan` is not read for them. */
+  mode: GoalMode.default('plan'),
 });
 export type GoalCreateRequest = z.input<typeof GoalCreateRequest>;
 
@@ -718,6 +729,8 @@ export const GoalView = z.object({
   intent_revision: z.number().int().positive().default(1),
   priority: Priority,
   status: GoalStatus,
+  /** How it was taken up; `plan` for every goal made before 2026-11-18. */
+  mode: GoalMode.default('plan'),
   plan_id: z.string().nullable(),
   created_by: Actor,
   created_at: z.string(),

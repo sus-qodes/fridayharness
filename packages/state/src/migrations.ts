@@ -1069,6 +1069,17 @@ ALTER TABLE plan_tasks ADD COLUMN assign_to TEXT;
   },
 ];
 
+export const GOAL_MODE_MIGRATIONS: Migration[] = [
+  {
+    // How a goal is taken up (2026-11-18): planned, done at once as one task, or asked as a question.
+    version: 29,
+    name: 'goal_mode',
+    up: `
+ALTER TABLE goals ADD COLUMN mode TEXT NOT NULL DEFAULT 'plan';
+`,
+  },
+];
+
 /** Every migration for a Friday project database, in order. */
 export const ALL_MIGRATIONS: Migration[] = [
   ...EVENT_MIGRATIONS,
@@ -1095,6 +1106,7 @@ export const ALL_MIGRATIONS: Migration[] = [
   ...RUN_INTENT_MIGRATIONS,
   ...READINESS_MIGRATIONS,
   ...PLAN_ASSIGNMENT_MIGRATIONS,
+  ...GOAL_MODE_MIGRATIONS,
 ];
 
 /** Domain tables cleared by a replay, children first. */

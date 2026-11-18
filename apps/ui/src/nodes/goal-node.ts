@@ -9,7 +9,7 @@
  * the goal detail's `summary` and refreshed when the goal's tasks change; the full set, one row per
  * fact, is the line's tooltip and the landing dialog's "What Friday did".
  */
-import type { GoalSummary, UiSnapshot } from '@friday/protocol';
+import type { AnswerView, GoalSummary, UiSnapshot } from '@friday/protocol';
 import type { GoalGroup } from '../model/board.js';
 import { type AppContext, openModal } from '../shell/context.js';
 import { button, h, replace, setVar, toggleClass } from '../ui/dom.js';
@@ -21,6 +21,19 @@ export interface GoalCardModel {
 }
 
 const GOAL_TONE: Record<string, Tone> = { OPEN: 'info', ACTIVE: 'good', COMPLETED: 'good', CANCELLED: 'muted' };
+
+/** Where a question's answer stands, as the badge on its card. */
+function answerBadge(a: AnswerView | null): HTMLElement {
+  const who = a?.agent_key ? truncate(cleanText(a.agent_key), 30) : 'An agent';
+  if (!a || a.state === 'waiting')
+    return badge('Waiting for an agent', 'muted', 'It starts as soon as an agent is free');
+  if (a.state === 'answering')
+    return badge(`${who} is answering`, 'info', 'Reading the project and writing the answer');
+  if (a.state === 'ready')
+    return badge(a.read ? 'Answered' : 'Answer ready', 'good', `${who} answered. Nothing was changed.`);
+  if (a.state === 'failed') return badge('No answer', 'warn', `${who} ended without an answer`);
+  return badge('Cancelled', 'muted');
+}
 
 /** "1 claim" / "3 claims". */
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -191,6 +204,8 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
     })();
   }
   const land = () => openModal(ctx, { kind: 'land', id: model.group.goal.goal_id });
+  /** A question's answer (a goal of mode `ask`): where it is read. */
+  const readAnswer = () => openModal(ctx, { kind: 'answer', id: model.group.goal.goal_id });
   /**
    * A completed goal's last step, from the board's `goal_landing`: landed already (it says into
    * which branch), work that was made in the project folder itself (nothing to land: review and
@@ -272,7 +287,8 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
         keydown: (e) => {
           if (e.target === el && e.key === 'Enter' && model.group.goal.status === 'COMPLETED') {
             e.preventDefault();
-            land();
+            if (model.group.goal.mode === 'ask') readAnswer();
+            else land();
           }
         },
       },
@@ -292,8 +308,14 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
       loadSummary(fingerprint([goal.status, goal.updated_at, g.progress, tasks.map((t) => [t.status, t.updated_at])]));
     }
     const need = planNeed(g, board);
+    // A question (2026-11-18): the card says where its answer stands, and has nothing to plan or land.
+    const asked = goal.mode === 'ask';
+    const answer = asked ? (board?.answers?.[goal.goal_id] ?? null) : null;
     const print = fingerprint([
       goal,
+      answer?.state,
+      answer?.read,
+      answer?.agent_key,
       g.progress,
       g.integration,
       g.active?.version,
@@ -322,7 +344,7 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
         { class: 'nd-head', dataset: { dragHandle: '' } },
         // The id is for whoever looks for it: the tooltip of "Goal".
         nodeIcon('target', 14),
-        h('span', { class: 'nd-id', title: `Goal ${goal.goal_id}` }, 'Goal'),
+        h('span', { class: 'nd-id', title: `Goal ${goal.goal_id}` }, asked ? 'Question' : 'Goal'),
         h('span', { class: 'spacer' }),
         badge(humanize(goal.status), GOAL_TONE[goal.status] ?? 'muted'),
       ),
@@ -372,13 +394,17 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
     const integration = integrationText(g.integration);
     replace(
       foot,
-      g.active
-        ? badge(`Plan v${g.active.version}`, 'muted', truncate(cleanText(g.active.summary), 300))
-        : need?.planning
-          ? badge('Friday is planning', 'info', 'Friday is writing a plan for this goal')
-          : need
-            ? null
-            : badge('No plan yet', 'muted'),
+      asked
+        ? answerBadge(answer)
+        : goal.mode === 'do' && g.active
+          ? badge('One task, no plan', 'muted', 'Started at once from what you typed: nobody planned it')
+          : g.active
+            ? badge(`Plan v${g.active.version}`, 'muted', truncate(cleanText(g.active.summary), 300))
+            : need?.planning
+              ? badge('Friday is planning', 'info', 'Friday is writing a plan for this goal')
+              : need
+                ? null
+                : badge('No plan yet', 'muted'),
       g.proposed ? badge(`v${g.proposed.version} proposed`, 'warn', 'A plan version waits for your review') : null,
       integration
         ? h(
@@ -393,7 +419,7 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
       h('span', { class: 'spacer' }),
       // A goal whose plan runs can be changed (2026-11-17): the planner is asked from a note, or
       // the change is written in the editor; before, nothing on the card led to either.
-      goal.status === 'ACTIVE' && g.active
+      goal.status === 'ACTIVE' && g.active && !asked
         ? button('Change this goal…', () => openModal(ctx, { kind: 'change-goal', id: goal.goal_id }), {
             class: 'btn btn-ghost nd-change-goal',
             title: 'Add, drop or redo tasks: a new version of the plan, reviewed before anything starts',
@@ -421,7 +447,19 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
             title: 'Ask Friday for a plan; you review it before anything starts',
           })
         : null,
-      goal.status === 'COMPLETED' ? landButton(goal.goal_id) : null,
+      asked && answer && (answer.state === 'ready' || answer.state === 'failed')
+        ? button(
+            [nodeIcon('check', 13), answer.state === 'ready' ? 'Read the answer' : 'See what happened'],
+            readAnswer,
+            {
+              class: ['btn', answer.state === 'ready' && !answer.read ? 'btn-primary' : null, 'nd-land'],
+              title:
+                answer.state === 'ready' ? 'Open the answer to this question' : 'The attempt ended without an answer',
+              dataset: { action: 'answer' },
+            },
+          )
+        : null,
+      goal.status === 'COMPLETED' && !asked ? landButton(goal.goal_id) : null,
     );
     el.dataset.status = goal.status;
     el.setAttribute('aria-label', `Goal ${goal.status.toLowerCase()}: ${truncate(cleanText(text), 120)}`);

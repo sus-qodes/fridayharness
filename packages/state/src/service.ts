@@ -740,6 +740,8 @@ const OBSERVATION_TYPES = new Set([
   // Files in the way of a landing, kept and taken out of it, and written back (2026-11-18).
   'goal.files_set_aside',
   'goal.set_aside_restored',
+  // A person opened the answer to a question they asked (2026-11-18).
+  'goal.answer_read',
   // A person chose, for one goal, when its work lands; and a landing Friday tried by itself was held.
   'goal.landing_choice',
   'goal.landing_held',
@@ -2852,9 +2854,17 @@ export class FridayState {
             .filter((o) => !claimed.includes(o))
             .map((path) => ({ path, note: 'changed but not listed in the claim' })),
         ];
+        // The answer to a person's question: kept as an artifact (an event holds no long text),
+        // with its beginning beside the claim for lists and notices.
+        const answer = task.kind === 'research' && p.answer?.trim() ? p.answer.trim() : null;
+        const answerRef =
+          answer && this.artifacts ? this.artifacts.storeText(projectId, 'answer', answer).artifact_id : null;
         this.endRun(ctx, run, 'completed_claim', {
           claim: {
             summary: p.summary,
+            ...(answer
+              ? { answer_ref: answerRef, answer_preview: answer.slice(0, 400), answer_chars: answer.length }
+              : {}),
             changed_paths: claimed,
             checks: p.checks,
             notes: p.notes,
@@ -3594,9 +3604,11 @@ export class FridayState {
               non_goals: req.non_goals,
               definition_of_done: req.definition_of_done,
               priority: req.priority,
+              mode: req.mode,
               created_by: actor,
             },
-            plan_requested: req.plan,
+            // A goal that is done or asked directly gets its one task from the daemon, not a planner.
+            plan_requested: req.mode === 'plan' ? req.plan : false,
           },
           refs: [{ kind: 'goal', id: goal_id }],
         });

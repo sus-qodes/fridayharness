@@ -22,6 +22,7 @@ import type { ProjectRef } from '@friday/sdk';
 import type { FridayState, MemoryActor } from '@friday/state';
 import type { BrainHandle } from './brain.js';
 import { escalationView, liveVersion } from './brain-routes.js';
+import { answersOf } from './direct-goal.js';
 import { goalWork, landedGoals } from './land.js';
 
 /** The interface API version this daemon speaks; a page built for another asks to be reloaded (plan §5.3). */
@@ -234,7 +235,8 @@ export function buildUiSnapshot(deps: {
   const landed = landedGoals(state, pid);
   const goalLanding: NonNullable<UiSnapshot['goal_landing']> = {};
   for (const g of goals) {
-    if (g.status !== 'COMPLETED') continue;
+    // A question has nothing to land.
+    if (g.status !== 'COMPLETED' || g.mode === 'ask') continue;
     const l = landed.get(g.goal_id);
     goalLanding[g.goal_id] = { work: goalWork(state, pid, g.goal_id), landed: l ? { into: l.into, at: l.at } : null };
   }
@@ -320,6 +322,7 @@ export function buildUiSnapshot(deps: {
     goals,
     goal_progress: goalProgress,
     goal_landing: goalLanding,
+    answers: answersOf(state, pid, goals),
     host_blocks: hostBlocks,
     plans,
     tasks,

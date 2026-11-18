@@ -1126,8 +1126,8 @@ export class StateProjector implements Projector {
     this.db
       .prepare(
         `INSERT INTO goals (goal_id, project_id, request, objective, constraints_json, outcomes_json,
-           non_goals_json, definition_of_done_json, priority, status, created_by_kind, created_by_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
+           non_goals_json, definition_of_done_json, priority, status, created_by_kind, created_by_id, created_at, updated_at, mode)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?)`,
       )
       .run(
         str(g.goal_id),
@@ -1143,6 +1143,7 @@ export class StateProjector implements Projector {
         str(by.id),
         e.occurred_at,
         e.occurred_at,
+        g.mode === 'do' || g.mode === 'ask' ? g.mode : 'plan',
       );
   }
 

@@ -75,6 +75,7 @@ const ICONS: Record<TrayItem['kind'], IconName> = {
   asking: 'question',
   plan: 'goal',
   verify: 'check',
+  answer: 'message',
   land: 'branch',
   message: 'message',
   memory: 'memory',
@@ -89,6 +90,7 @@ const OPENS_PLACE = new Set<TrayItem['kind']>([
   'asking',
   'plan',
   'verify',
+  'answer',
   'land',
   'message',
   'memory',
@@ -187,6 +189,13 @@ export function mountDecisionsTray(
           label: 'Work to verify',
           sub: `${visible(item.task.agent_key ?? 'An agent')} says it is done · ${truncate(cleanText(item.task.summary), 90)}`,
         };
+      case 'answer':
+        return item.failed
+          ? { label: 'A question got no answer', sub: truncate(cleanText(item.question), 110) }
+          : {
+              label: 'Your answer is ready',
+              sub: `${visible(item.agentKey ?? 'An agent')} · ${truncate(cleanText(item.question), 100)}`,
+            };
       case 'land':
         return { label: 'Goal ready to land', sub: truncate(cleanText(item.request), 110) };
       case 'message': {
@@ -243,6 +252,7 @@ export function mountDecisionsTray(
     } else if (item.kind === 'plan') openModal(ctx, { kind: 'plan-review', id: item.goalId });
     else if (item.kind === 'verify') openModal(ctx, { kind: 'verify', id: item.taskId });
     else if (item.kind === 'land') openModal(ctx, { kind: 'land', id: item.goalId });
+    else if (item.kind === 'answer') openModal(ctx, { kind: 'answer', id: item.goalId });
     else if (item.kind === 'message') openDrawer(ctx, { kind: 'inbox', id: item.message.delivery_id });
     else if (item.kind === 'memory') openDrawer(ctx, { kind: 'memory', tab: 'review' });
     else if (item.kind === 'policy') openDrawer(ctx, { kind: 'settings', tab: 'policy' });

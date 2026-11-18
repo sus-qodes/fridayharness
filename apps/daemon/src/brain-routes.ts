@@ -25,6 +25,7 @@ import type { FridayState, PlanProposal } from '@friday/state';
 import type { Context, Hono, MiddlewareHandler } from 'hono';
 import type { AppEnv } from './app.js';
 import type { BrainHandle } from './brain.js';
+import { answerOf, directDraft } from './direct-goal.js';
 
 export interface BrainRouteDeps {
   app: Hono<AppEnv>;
@@ -146,8 +147,47 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
   app.post(`${P}/goals`, op, async (c) => {
     const body = await json(c);
     const key = c.req.header('idempotency-key');
-    const goal = state.createGoal(pid, human, GoalCreateRequest.parse(body), key ? { idempotency_key: key } : {});
+    const req = GoalCreateRequest.parse(body);
+    const goal = state.createGoal(pid, human, req, key ? { idempotency_key: key } : {});
+    // A question, or one task to do now (2026-11-18): its one task is written here from the
+    // request as it was typed, and started. The person who typed it is who approves it; no model
+    // planned anything. A repeated request (the same idempotency key) finds the plan there.
+    if (req.mode !== 'plan' && !goal.plan_id) {
+      const bound = (t: Parameters<FridayState['boundPlanTask']>[0]) => state.boundPlanTask(t);
+      const r = parsePlanDraft(directDraft(req.request, req.mode), bound);
+      if (!r.ok) {
+        throw new FridayError('schema_mismatch', `the request could not be started: ${r.errors.join('; ')}`, {
+          errors: r.errors,
+        });
+      }
+      const asked = req.mode === 'ask';
+      const v = state.proposePlan(
+        pid,
+        human,
+        goal.goal_id,
+        proposalFromDraft(r.value, { trigger: asked ? 'a question, asked directly' : 'one task, started directly' }),
+      );
+      state.approvePlan(pid, human, v.plan_id, v.version, asked ? 'asked directly' : 'started directly');
+      return c.json(state.q.goal(pid, goal.goal_id), 201);
+    }
     return c.json(goal, 201);
+  });
+
+  /** A question's answer, in full, for the person who asked (`ask` goals only). */
+  app.get(`${P}/goals/:gid/answer`, op, (c) => {
+    const goal = state.q.goal(pid, c.req.param('gid'));
+    if (goal.mode !== 'ask') throw new FridayError('invalid_request', `goal ${goal.goal_id} is not a question`);
+    return c.json(answerOf(state, pid, goal, { full: true }));
+  });
+
+  /** The person opened the answer: it leaves what waits for them. */
+  app.post(`${P}/goals/:gid/answer/read`, op, (c) => {
+    const goal = state.q.goal(pid, c.req.param('gid'));
+    if (goal.mode !== 'ask') throw new FridayError('invalid_request', `goal ${goal.goal_id} is not a question`);
+    if (!answerOf(state, pid, goal).read) {
+      state.recordObservation(pid, human, 'goal.answer_read', { goal_id: goal.goal_id }, []);
+    }
+    return c.json({ ok: true });
   });
 
   app.get(`${P}/goals/:gid`, op, (c) => c.json(goalDetail(c.req.param('gid'))));

@@ -123,7 +123,7 @@ export function openCodeOutcome(messages: unknown): { final: Final; text: string
   let final = parseFinal(text, prose);
   if (BLOCKED.test(text)) {
     const why = text.replace(BLOCKED, '').trim();
-    final = { status: 'blocked', summary: why, blocked_reason: why, checks: [] };
+    final = { status: 'blocked', summary: why, answer: '', blocked_reason: why, checks: [] };
   } else if (json) {
     try {
       final = parseFinal(JSON.parse(json), prose);

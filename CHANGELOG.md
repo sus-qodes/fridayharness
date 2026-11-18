@@ -2,6 +2,17 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — the trial's fault list, part 3: a question is answered, a small task just starts
+
+In the trial "Explain how menu price revisions work" cost a planner call, a plan with a rationale and six criteria to approve, three minutes of waiting for that approval, then the build, the types, the lint and 565 tests on a change of no file, and ended at "Ready to land" with nothing to land.
+
+- **Ask.** Type a question and choose Ask on the goal line, or "Just answer this" in the New goal dialog. One agent reads the project and answers; it changes nothing. There is no plan to approve, none of the project's checks runs, and nothing waits to be landed.
+- **The answer is read in Friday.** Its card says who is answering, then "Read the answer"; the answer is laid out with its headings, lists and code, and can be copied. "Your answer is ready" joins what waits for you, shows its first lines in the Notch, and comes as a notification. A question that got no answer says so, with "Ask again".
+- **Do.** For something small enough for one agent: it starts at once on what you typed, with no planner call and no plan to wait for. Its work is checked and landed as any other. "Do" on the goal line, "Do it now, one agent" in the dialog.
+- **Plan** is what a goal was before, and stays the default. No plan a model wrote starts without your approval unless you turned that on.
+- **A question is checked without a click, on every computer.** The check is that nothing was changed; it runs no code of the project, so it needs none of the trust that checking work automatically needs. An agent that changed a file while answering fails it, and so does any task that only reads.
+- **An agent's result has room for the answer**, beside its one-sentence summary. Claude Code, Codex and the agents you run all hand it in; the text is kept as a file of its own, not in the event log.
+
 ## Unreleased — the trial's fault list, part 2: fewer questions
 
 From the fifteen commands the trial put on a person's screen. Thirteen of them needed no answer.

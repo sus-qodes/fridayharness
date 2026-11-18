@@ -168,6 +168,8 @@ export type ModalKind =
   /** A goal whose plan runs: what should be different, for the planner or the editor; `id` is the goal. */
   | 'change-goal'
   | 'plan-review'
+  /** The answer to a question a person asked; `id` is the goal. */
+  | 'answer'
   | 'feedback';
 
 /** What a modal is opened for (the store's `ui.modal`). */

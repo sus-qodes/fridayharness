@@ -33,6 +33,10 @@
       "minLength": 1,
       "maxLength": 2000
     },
+    "answer": {
+      "type": "string",
+      "maxLength": 60000
+    },
     "changed_paths": {
       "default": [],
       "maxItems": 200,

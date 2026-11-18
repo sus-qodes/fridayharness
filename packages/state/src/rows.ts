@@ -315,6 +315,7 @@ export interface GoalRow {
   intent_revision?: number;
   priority: string;
   status: string;
+  mode?: string;
   plan_id: string | null;
   created_by_kind: string;
   created_by_id: string;
@@ -340,6 +341,7 @@ export function toGoalView(row: GoalRow): GoalView {
     intent_revision: row.intent_revision ?? 1,
     priority: row.priority as GoalView['priority'],
     status: row.status as GoalView['status'],
+    mode: row.mode === 'do' || row.mode === 'ask' ? row.mode : 'plan',
     plan_id: row.plan_id,
     created_by: { kind: row.created_by_kind as ActorKind, id: row.created_by_id },
     created_at: row.created_at,

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   AttemptStops,
+  answerOf,
   classifyHostFailure,
   FINAL_SCHEMA,
   type GenericHarnessClient,
@@ -811,6 +812,9 @@ export class ClaudeSpawnAdapter {
             ...ids,
             status: 'completed_claim',
             summary: final.summary.slice(0, 2000) || 'done',
+            // A question's answer: the field it was asked for, else what the session last wrote
+            // when that says more than its summary (Friday keeps it only for a question).
+            ...answerOf(final, a.lastText),
             changed_paths: [...changed].slice(0, 200),
             // What the session says it ran: verification's evidence, bounded by what the hooks saw.
             checks: final.checks,

@@ -196,6 +196,15 @@ export function diffNotices(memory: NoticeMemory, board: UiSnapshot, now: number
       if (memory.seen.has(item.key)) continue;
       memory.seen.add(item.key);
       notices.push({ key: item.key, title: 'A goal is ready to land', body: short(item.request), taskId: null });
+    } else if (item.kind === 'answer') {
+      if (memory.seen.has(item.key)) continue;
+      memory.seen.add(item.key);
+      notices.push({
+        key: item.key,
+        title: item.failed ? 'A question got no answer' : 'Your answer is ready',
+        body: short(item.question),
+        taskId: null,
+      });
     }
   }
   for (const p of planKeys(board)) {

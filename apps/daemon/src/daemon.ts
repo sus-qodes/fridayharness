@@ -513,6 +513,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   const landItself = async (goalId: string): Promise<void> => {
     const goal = state.q.findGoal(project.project_id, goalId);
     if (!goal) return;
+    // A question has nothing to land.
+    if (goal.mode === 'ask') return;
     const mode = landingFor(goalId);
     const whole = goal.status === 'COMPLETED';
     if (mode === 'ask' || (mode === 'goal' && !whole) || (!whole && goal.status !== 'ACTIVE')) return;
@@ -631,13 +633,19 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   // With no project checks Friday's own checks judge the claim (diff, evidence, credentials): a
   // project that trusts automatic verification gets it whether or not it configured checks.
   const autoVerifies = () => currentPolicy().auto_verification;
+  // A question a person asked (2026-11-18) is checked the moment it is answered, trusted or not:
+  // its check runs none of the project's code (verify.ts), only that nothing was changed.
+  const isQuestion = (taskId: string): boolean => {
+    const goalId = state.q.findTask(project.project_id, taskId)?.goal_id;
+    return Boolean(goalId && state.q.findGoal(project.project_id, goalId)?.mode === 'ask');
+  };
   const paused = () => state.q.control(project.project_id).paused;
   const stopAutoVerify = state.transport.subscribe(
     { project_id: project.project_id, types: ['task.completion_claimed'] },
     (e) => {
       const taskId = (e.payload as { task_id?: string }).task_id;
       // A claim made while Friday is paused is recorded; its checks run after the resume (plan M9 §5.5).
-      if (taskId && autoVerifies() && !paused()) void autoVerify(taskId);
+      if (taskId && (autoVerifies() || isQuestion(taskId)) && !paused()) void autoVerify(taskId);
     },
   );
   // A human resumed Friday: what waited for it runs now, as after a restart.
@@ -645,10 +653,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     { project_id: project.project_id, types: ['control.resumed'] },
     () => {
       void (async () => {
-        if (autoVerifies()) {
-          for (const t of state.q.tasks(project.project_id, { statuses: ['READY_FOR_VERIFICATION'] })) {
-            await autoVerify(t.task_id);
-          }
+        for (const t of state.q.tasks(project.project_id, { statuses: ['READY_FOR_VERIFICATION'] })) {
+          if (autoVerifies() || isQuestion(t.task_id)) await autoVerify(t.task_id);
         }
         await integration.sweep();
       })().catch((err) =>
@@ -657,14 +663,15 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     },
   );
   /** Verifies every claim that waits: after a start, and when automatic verification is turned on. */
-  const verifyWaitingClaims = async () => {
+  const verifyWaitingClaims = async (only: (taskId: string) => boolean = () => true) => {
     for (const t of state.q.tasks(project.project_id, { statuses: ['READY_FOR_VERIFICATION'] })) {
-      await autoVerify(t.task_id);
+      if (only(t.task_id)) await autoVerify(t.task_id);
     }
   };
-  if (autoVerifies() && !paused()) {
-    // Claims made while the daemon was down, or whose verification it interrupted.
-    void verifyWaitingClaims();
+  if (!paused()) {
+    // Claims made while the daemon was down, or whose verification it interrupted; without the
+    // trust that automatic verification needs, the answered questions alone.
+    void verifyWaitingClaims(autoVerifies() ? undefined : isQuestion);
   }
   // A person turned automatic verification on (and trusted it) while work already waited: it is
   // checked now, not at the next restart or resume (2026-11-17). Off the reload's own call stack.

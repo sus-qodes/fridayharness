@@ -162,3 +162,54 @@ describe('new goal modal', () => {
     m.destroy();
   });
 });
+
+describe('a question, or one task, from the dialog (2026-11-18)', () => {
+  it('offers both without a planner, and sends each as its own mode, with no plan editor', async () => {
+    for (const [label, mode, toast] of [
+      ['Just answer this', 'ask', 'Asked: the answer appears here when it is ready'],
+      ['Do it now, one agent', 'do', 'Started: one agent takes it now'],
+    ] as const) {
+      const ctx = makeContext({
+        snapshot: makeSnapshot({ brain: brain({ planner_available: false, key: 'missing' }) }),
+        answers: { 'POST /goals': makeGoal() },
+      });
+      let closed = 0;
+      const m = newGoalModal(ctx, { kind: 'new-goal' }, () => {
+        closed += 1;
+      });
+      expect(buttonBy(m.el, label).disabled).toBe(true);
+      type(m.el.querySelector('textarea') as HTMLTextAreaElement, 'How does checkout work?');
+      expect(buttonBy(m.el, label).disabled).toBe(false);
+      buttonBy(m.el, label).click();
+      await flush();
+      expect(ctx.transport.to('POST', '/goals')[0]?.body).toEqual({
+        request: 'How does checkout work?',
+        constraints: [],
+        outcomes: [],
+        priority: 'normal',
+        plan: false,
+        mode,
+      });
+      expect(ctx.toasts.at(-1)?.text).toBe(toast);
+      expect(closed).toBe(1);
+      expect(ctx.store.select('ui').modal?.kind).not.toBe('plan-editor');
+      m.destroy();
+    }
+  });
+
+  it('keeps a planned goal as it was: no mode is sent', () => {
+    expect(goalBody({ request: ' Add billing ', constraints: [], outcomes: [], priority: 'normal' }, true)).toEqual({
+      request: 'Add billing',
+      constraints: [],
+      outcomes: [],
+      priority: 'normal',
+      plan: true,
+    });
+    expect(
+      goalBody({ request: 'x y z', constraints: [], outcomes: [], priority: 'normal' }, true, 'ask'),
+    ).toMatchObject({
+      plan: false,
+      mode: 'ask',
+    });
+  });
+});
