@@ -38,10 +38,10 @@ export const PERMISSIONS: readonly Permission[] = [
   },
   {
     cls: 'file.write',
-    title: 'Change any file with a command',
+    title: 'Change files with a command that does not name them',
     examples:
-      'mkdir, cp, mv, sed -i, > file. Inside a task’s own files these already run without asking; this is for the others, and for commands that do not say which files',
-    allowed: 'Agents change files with a command without asking, also outside a task’s own files',
+      'sed -i on a pattern (src/*.ts), a script that writes files. A command that names its files is judged by them: inside the task’s own files it runs, outside them it asks',
+    allowed: 'Agents run commands that change files Friday cannot name without asking',
   },
   {
     cls: 'git.mutate',

@@ -328,17 +328,15 @@ export function evaluate(input: PolicyInput): PolicyResult {
         },
       );
     }
-    if (c.autonomy === 'auto')
-      return r('allow', `command.${c.class}`, `${c.class} runs without review.`, {
-        command_class: c.class,
-        targets: [target],
-      });
     // A command that changes files Friday can name (`sed -i … a.ts`, `mkdir src/x`, `> notes.md`)
     // is judged as a write of those files (2026-11-18): inside the task's files it passes as an
-    // edit of them does; anything else is asked about as before, with the file named. It is the
-    // class of the command only when everything else in it runs without asking.
+    // edit of them does; outside them a human decides, with the file named, whatever
+    // `autonomy.file.write` says: that setting is for commands whose files cannot be named, and a
+    // change outside a task's own files always asks. Only where everything else in the command
+    // runs without asking (`file.write` is then its class, or nothing in it asks at all).
     let unnamed = '';
-    if (c.class === 'file.write' && c.writes && !c.writes.opaque && c.writes.paths.length) {
+    const named = Boolean(c.writes && !c.writes.opaque && c.writes.paths.length);
+    if (named && c.writes && (c.class === 'file.write' || c.autonomy === 'auto')) {
       const from = action.cwd ?? ctx.projectRoot;
       const win = ctx.windows ?? process.platform === 'win32';
       const lib = win ? path.win32 : path.posix;
@@ -359,7 +357,24 @@ export function evaluate(input: PolicyInput): PolicyResult {
       // What is protected stays so, whoever asks.
       if (w.sensitive_class) return { ...w, command_class: 'file.write' };
       unnamed = ` It would change ${w.targets.slice(0, 3).join(', ') || 'a file'}: ${w.reason.replace(HOW_TO_ASK, '').trim()}`;
+      if (input.approved?.('file.write', target)) {
+        return r('allow', 'command.approved', 'a human approved this command.', {
+          command_class: 'file.write',
+          targets: [target],
+          relied_on: [{ capability: 'file.write', target }],
+        });
+      }
+      return r('ask', 'command.file.write', `this command changes files, and a human decides.${unnamed}`, {
+        command_class: 'file.write',
+        targets: [target],
+        grant: { capability: 'file.write', target },
+      });
     }
+    if (c.autonomy === 'auto')
+      return r('allow', `command.${c.class}`, `${c.class} runs without review.`, {
+        command_class: c.class,
+        targets: [target],
+      });
     if (input.approved?.(CLASS_CAPABILITY[c.class], target)) {
       return r('allow', 'command.approved', `a human approved this ${c.class} command.`, {
         command_class: c.class,
@@ -377,7 +392,7 @@ export function evaluate(input: PolicyInput): PolicyResult {
       'ask',
       `command.${c.class}`,
       c.class === 'file.write'
-        ? `this command changes files, and a human decides.${unnamed || ' Friday cannot tell from the command which files.'}`
+        ? 'this command changes files, and a human decides. Friday cannot tell from the command which files.'
         : `${c.class} commands need a human decision.`,
       {
         command_class: c.class,

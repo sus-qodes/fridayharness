@@ -19,7 +19,7 @@ export interface LooseningItem {
 
 /** What an agent does under each command class, as the end of "Agents may … without asking". */
 const COMMANDS: Record<string, string> = {
-  'file.write': 'change files with a command, also outside a task’s own files',
+  'file.write': 'run commands that change files Friday cannot name',
   'git.mutate': 'commit and change branches',
   'package.install': 'install packages',
   'fs.destructive': 'delete files with a command',

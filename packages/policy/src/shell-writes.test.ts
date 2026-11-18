@@ -218,6 +218,23 @@ describe('a command that changes files is judged by its files', () => {
     expect(run('sed -i s/a/b/ apps/owner-web/src/*.ts', { autonomy: { 'file.write': 'auto' } }).decision).toBe('allow');
   });
 
+  it('asks about a named file outside the task’s files whatever that setting says', () => {
+    const loose = { autonomy: { 'file.write': 'auto' } } as const;
+    const outside = run("sed -i 's/a/b/' apps/api/src/main.ts", loose);
+    expect(outside).toMatchObject({ decision: 'ask', rule: 'command.file.write', command_class: 'file.write' });
+    expect(outside.reason).toContain('apps/api/src/main.ts');
+    expect(outside.grant).toEqual({ capability: 'file.write', target: "sed -i 's/a/b/' apps/api/src/main.ts" });
+    // Through a redirection too, where no segment is a file-changing command.
+    expect(run('echo x > apps/api/notes.txt', loose).decision).toBe('ask');
+    // Inside them it still runs, and what is protected is still refused.
+    expect(run('touch apps/owner-web/a.ts', loose).decision).toBe('allow');
+    expect(run('echo KEY=1 > .env', loose).decision).toBe('deny');
+    // Approved once, it passes.
+    expect(
+      run("sed -i 's/a/b/' apps/api/src/main.ts", { ...loose, approved: (cap) => cap === 'file.write' }).decision,
+    ).toBe('allow');
+  });
+
   it('never lets its files carry another command through', () => {
     // The install is asked about as an install, whatever the mkdir writes.
     const install = run('mkdir -p apps/owner-web/x && npm install left-pad');
