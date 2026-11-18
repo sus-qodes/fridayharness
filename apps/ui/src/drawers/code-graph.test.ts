@@ -210,7 +210,11 @@ describe('the code graph drawer', () => {
     input.value = 'missing.ts';
     drawer.el.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await settle();
-    expect(drawer.el.querySelector('.dr-error')?.textContent).toContain('missing.ts is not in the code graph');
+    // Not an error (2026-11-18): the file is not in the project folder's graph, and that is said.
+    expect(drawer.el.querySelector('.dr-error')).toBeNull();
+    expect(drawer.el.textContent).toContain('Nothing to show for missing.ts yet');
+    expect(drawer.el.textContent).toContain('appears once the goal is landed');
+    expect(drawer.el.textContent).not.toContain('COS-');
     buttonNamed(drawer.el, 'Show')?.click();
     input.value = `.\\shared\\src\\api.ts`;
     drawer.el.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));

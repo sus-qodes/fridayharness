@@ -553,6 +553,31 @@ describe('goal card', () => {
     expect((hostile ?? '').length).toBeLessThan(60);
   });
 
+  // In the trial a goal landed at 05:39 and its card still said "Ready to land" at 06:06: the card
+  // redrew only when something it watched changed, and the landing was not among them (2026-11-18).
+  it('turns "Ready to land" into "Landed into …" as soon as the board learns of the landing', () => {
+    const done = makeGoal({ status: 'COMPLETED' });
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ goals: [done], goal_landing: { [done.goal_id]: { work: 'branch', landed: null } } }),
+    });
+    const g = group({ goal: done });
+    const node = createGoalNode(ctx, { group: g });
+    const text = () => node.el.querySelector('[data-action="land"]')?.textContent;
+    expect(text()).toBe('Ready to land');
+    ctx.store.setState({
+      board: makeSnapshot({
+        goals: [done],
+        goal_landing: {
+          [done.goal_id]: { work: 'branch', landed: { into: 's03-menu', at: '2026-11-18T05:39:00.000Z' } },
+        },
+      }),
+    });
+    // The same model, as the canvas hands it on every snapshot.
+    node.update({ group: g });
+    expect(text()).toBe('Landed into s03-menu');
+    node.destroy();
+  });
+
   describe('what Friday did (plan M12.7)', () => {
     const GID = 'goal_0000000000000000000000gg01';
     /** A goal with tasks and nothing else on record; each test changes what it needs. */
@@ -581,15 +606,15 @@ describe('goal card', () => {
         hosts: { attempts: 2, reported: 2, tokens: 184_321, tokens_reporters: 2, cost_usd: 0.42, cost_reporters: 2 },
       });
       expect(goalSummaryLine(s)).toBe(
-        '3 of 3 tasks verified · 1 claim refused by the checks, reworked · 2 actions held for you · 1 session recovered · hosts reported 184k tokens, $0.42 (2 of 2 attempts)',
+        '3 of 3 tasks passed their checks · 1 sent back by the checks, redone · you were asked 2 times · 1 agent stopped midway, picked up again · agents used 184k tokens, $0.42 (from 2 of 2 tries)',
       );
       expect(goalSummaryRows(s)).toEqual([
-        { label: 'Tasks verified', value: '3 of 3' },
-        { label: 'Claims refused by the checks', value: '1, reworked' },
-        { label: 'Actions held for you', value: '2' },
-        { label: 'Actions refused by policy', value: 'none' },
-        { label: 'Sessions lost', value: '1, recovered' },
-        { label: 'Hosts reported', value: '184k tokens, $0.42 (2 of 2 attempts)' },
+        { label: 'Tasks that passed their checks', value: '3 of 3' },
+        { label: 'Work the checks sent back', value: '1, redone' },
+        { label: 'Times an agent asked you', value: '2' },
+        { label: 'Actions Friday stopped', value: 'none' },
+        { label: 'Agents that stopped midway', value: '1, picked up again' },
+        { label: 'What the agents used', value: '184k tokens, $0.42 (from 2 of 2 tries)' },
       ]);
       // Fewer reworked or recovered than refused or lost, and a planning cost.
       expect(
@@ -604,7 +629,7 @@ describe('goal card', () => {
           }),
         ),
       ).toBe(
-        '1 of 4 tasks verified · 2 claims refused by the checks, 1 reworked · 1 action refused by policy · 1 of 2 sessions recovered · Friday planned in 2 calls, $0.03',
+        '1 of 4 tasks passed their checks · 2 sent back by the checks, 1 redone · Friday stopped 1 action · 2 agents stopped midway, 1 picked up again · Friday planned in 2 calls, $0.03',
       );
     });
 
@@ -613,16 +638,19 @@ describe('goal card', () => {
       const none = summary({
         hosts: { attempts: 3, reported: 0, tokens: null, tokens_reporters: 0, cost_usd: null, cost_reporters: 0 },
       });
-      expect(goalSummaryLine(none)).toBe('1 of 4 tasks verified');
-      expect(goalSummaryRows(none)).toContainEqual({ label: 'Hosts reported', value: 'nothing (0 of 3 attempts)' });
+      expect(goalSummaryLine(none)).toBe('1 of 4 tasks passed their checks');
+      expect(goalSummaryRows(none)).toContainEqual({
+        label: 'What the agents used',
+        value: 'not reported (from 0 of 3 tries)',
+      });
       // One of three counted tokens and named no cost.
       expect(
         hostsWords({ attempts: 3, reported: 1, tokens: 1234, tokens_reporters: 1, cost_usd: null, cost_reporters: 0 }),
-      ).toBe('1.2k tokens (1 of 3 attempts)');
+      ).toBe('1.2k tokens (from 1 of 3 tries)');
       // Both counted tokens, one named a cost.
       expect(
         hostsWords({ attempts: 2, reported: 2, tokens: 5000, tokens_reporters: 2, cost_usd: 0.1, cost_reporters: 1 }),
-      ).toBe('5.0k tokens (2 of 2 attempts), $0.10 (1 of 2 attempts)');
+      ).toBe('5.0k tokens (from 2 of 2 tries), $0.10 (from 1 of 2 tries)');
       // A goal without work has no line and no rows.
       const idle = summary({ tasks: { total: 0, verified: 0 } });
       expect(goalSummaryLine(idle)).toBeNull();
@@ -637,8 +665,8 @@ describe('goal card', () => {
       expect(line(node.el).hidden).toBe(true);
       await flush();
       expect(line(node.el).hidden).toBe(false);
-      expect(line(node.el).textContent).toBe('1 of 4 tasks verified · 1 claim refused by the checks, reworked');
-      expect(line(node.el).title).toContain('Actions refused by policy: none');
+      expect(line(node.el).textContent).toBe('1 of 4 tasks passed their checks · 1 sent back by the checks, redone');
+      expect(line(node.el).title).toContain('Actions Friday stopped: none');
       expect(line(node.el).title).not.toContain('tokens');
       expectNoMarkup(node.el);
       // The same board again reads nothing new.

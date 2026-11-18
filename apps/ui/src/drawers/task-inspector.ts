@@ -17,6 +17,7 @@ import type {
   TaskView,
   VerificationView,
 } from '@friday/protocol';
+import { modelName } from '../model/models.js';
 import { notStartedText, PRIORITY, RISK, TASK_KIND, WAITING_REASON } from '../model/status.js';
 import { visible } from '../model/text.js';
 import { checkName, checkOutput, findingsList, summaryIsCodes } from '../panels/check-details.js';
@@ -77,7 +78,20 @@ export function inspectorActions(
   return out;
 }
 
-type InspectedTask = TaskView & Partial<Pick<SnapshotTask, 'agent_key' | 'waiting_note' | 'delegation_note'>>;
+type InspectedTask = TaskView & Partial<Pick<SnapshotTask, 'agent_key' | 'waiting_note' | 'delegation_note' | 'why'>>;
+
+/**
+ * Why the task went to its agent and runs on its model (2026-11-18): "Why claude-1: the best fit of
+ * the free agents. Why Claude Opus 5.5: you chose it for every task (Settings → Models)." Null when
+ * Friday has nothing on record.
+ */
+export function whyLine(why: SnapshotTask['why']): string | null {
+  if (!why) return null;
+  const parts: string[] = [];
+  if (why.agent && why.agent_key) parts.push(`Why ${cleanText(why.agent_key)}: ${why.agent}.`);
+  if (why.model && why.model_reason) parts.push(`Why ${modelName(why.model)}: ${why.model_reason}.`);
+  return parts.length ? parts.join(' ') : null;
+}
 
 interface View {
   task: InspectedTask;
@@ -411,6 +425,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
       (t.status === 'READY' || t.status === 'PROPOSED') && t.delegation_note
         ? h('div', { class: 'dr-banner', role: 'note' }, truncate(notStartedText(cleanText(t.delegation_note)), 400))
         : null,
+      whyLine(t.why) ? h('p', { class: 'dr-why muted', dataset: { role: 'why' } }, whyLine(t.why)) : null,
       section(
         'Description',
         t.description ? h('p', { class: 'dr-text dr-prewrap' }, cleanText(t.description)) : empty('No description.'),
@@ -482,6 +497,16 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
     const fileSources = packet.sections
       .flatMap((s) => s.sources)
       .filter((s) => s.source_type === 'file' || s.source_type === 'graph');
+    /**
+     * The file a source is about, for the code graph (2026-11-18): `src/a.ts`, or the file of
+     * `src/a.ts#Money`. The repository's shape (`graph:<version>`) and a name looked up
+     * (`name:Money`) are no file: the button sent them as one, and the graph answered with an error.
+     */
+    const fileOf = (id: string): string | null => {
+      if (/^(graph|name):/.test(id)) return null;
+      const file = id.split('#')[0] ?? '';
+      return file && !file.endsWith('/') ? file : null;
+    };
     const files = [...new Map(fileSources.map((s) => [s.source_id, s] as const)).values()];
     const included = new Map((explanation?.included ?? []).map((i) => [i.source_id, i]));
     const fileIds = new Set(files.map((f) => f.source_id));
@@ -536,11 +561,13 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
                     { class: 'row' },
                     mono(f.source_id, 'dr-ctx-path'),
                     h('span', { class: 'spacer' }),
-                    button(
-                      [icon('graph', 14), 'Code graph'],
-                      () => openDrawer(ctx, { kind: 'graph', path: f.source_id }),
-                      { class: 'btn btn-ghost', ariaLabel: `Code graph of ${visible(f.source_id)}` },
-                    ),
+                    fileOf(f.source_id)
+                      ? button(
+                          [icon('graph', 14), 'Code graph'],
+                          () => openDrawer(ctx, { kind: 'graph', path: fileOf(f.source_id) as string }),
+                          { class: 'btn btn-ghost', ariaLabel: `Code graph of ${visible(fileOf(f.source_id) ?? '')}` },
+                        )
+                      : null,
                   ),
                   h(
                     'div',

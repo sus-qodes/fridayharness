@@ -64,11 +64,11 @@ function storyList(lines: readonly StoryLine[]): HTMLElement {
 /** "1 claim" / "3 claims". */
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** "2 of 2 attempts". */
-const attemptsOf = (n: number, h: GoalSummary['hosts']) => `(${n} of ${count(h.attempts, 'attempt')})`;
+/** "from 2 of 2 tries": how many of the goal's agent runs the figures come from. */
+const attemptsOf = (n: number, h: GoalSummary['hosts']) => `(from ${n} of ${count(h.attempts, 'try', 'tries')})`;
 
 /**
- * "184k tokens, $0.42 (2 of 2 attempts)": what the hosts reported, as they reported it, with how
+ * "184k tokens, $0.42 (from 2 of 2 tries)": what the agents reported, as they reported it, with how
  * many of the goal's attempts the figures come from; the cost gets its own count when fewer hosts
  * named one. Null when no host reported anything.
  */
@@ -89,33 +89,32 @@ export function hostsWords(h: GoalSummary['hosts']): string | null {
 const followed = (n: number, of: number, word: string) => (n === 0 ? '' : n === of ? `, ${word}` : `, ${n} ${word}`);
 
 /**
- * The card's one line: the facts with something to say, in the words of plan M12.7 ("3 of 3 tasks
- * verified · 1 claim refused by the checks, reworked · 2 actions held for you · 1 session recovered
- * · hosts reported 184k tokens, $0.42 (2 of 2 attempts)"). A count of zero is left out of the line;
- * a figure nobody reported is never written as 0. Null while the goal has no work on record.
+ * The card's one line: the facts with something to say (plan M12.7), in a person's words since
+ * 2026-11-18 ("3 of 3 tasks passed their checks · 1 sent back by the checks, redone · you were
+ * asked 2 times · 1 agent stopped midway, picked up again · agents used 184k tokens, $0.42 (from 2
+ * of 2 tries)"). A count of zero is left out of the line; a figure nobody reported is never
+ * written as 0. Null while the goal has no work on record.
  */
 export function goalSummaryLine(s: GoalSummary): string | null {
   if (s.tasks.total === 0 && s.hosts.attempts === 0 && s.planning.calls === 0) return null;
   const parts: string[] = [];
-  if (s.tasks.total > 0) parts.push(`${s.tasks.verified} of ${plural(s.tasks.total, 'task')} verified`);
+  if (s.tasks.total > 0) parts.push(`${s.tasks.verified} of ${plural(s.tasks.total, 'task')} passed their checks`);
   if (s.claims_refused > 0) {
-    parts.push(
-      `${count(s.claims_refused, 'claim')} refused by the checks${followed(s.reworked, s.claims_refused, 'reworked')}`,
-    );
+    parts.push(`${s.claims_refused} sent back by the checks${followed(s.reworked, s.claims_refused, 'redone')}`);
   }
-  if (s.held_for_human > 0) parts.push(`${count(s.held_for_human, 'action')} held for you`);
-  if (s.refused_by_policy > 0) parts.push(`${count(s.refused_by_policy, 'action')} refused by policy`);
+  if (s.held_for_human > 0) parts.push(`you were asked ${count(s.held_for_human, 'time')}`);
+  if (s.refused_by_policy > 0) parts.push(`Friday stopped ${count(s.refused_by_policy, 'action')}`);
   if (s.sessions_lost > 0) {
     parts.push(
       s.sessions_recovered === s.sessions_lost
-        ? `${count(s.sessions_recovered, 'session')} recovered`
+        ? `${count(s.sessions_lost, 'agent')} stopped midway, picked up again`
         : s.sessions_recovered === 0
-          ? `${count(s.sessions_lost, 'session')} lost`
-          : `${s.sessions_recovered} of ${s.sessions_lost} sessions recovered`,
+          ? `${count(s.sessions_lost, 'agent')} stopped midway`
+          : `${s.sessions_lost} agents stopped midway, ${s.sessions_recovered} picked up again`,
     );
   }
   const hosts = hostsWords(s.hosts);
-  if (hosts) parts.push(`hosts reported ${hosts}`);
+  if (hosts) parts.push(`agents used ${hosts}`);
   if (s.planning.calls > 0) {
     parts.push(
       `Friday planned in ${count(s.planning.calls, 'call')}${s.planning.cost_usd === null ? '' : `, ${usd(s.planning.cost_usd)}`}`,
@@ -134,24 +133,30 @@ export function goalSummaryRows(s: GoalSummary): { label: string; value: string 
   if (s.tasks.total === 0 && s.hosts.attempts === 0 && s.planning.calls === 0) return [];
   const none = (n: number, words: string) => (n === 0 ? 'none' : words);
   const rows = [
-    { label: 'Tasks verified', value: `${s.tasks.verified} of ${s.tasks.total}` },
+    { label: 'Tasks that passed their checks', value: `${s.tasks.verified} of ${s.tasks.total}` },
     {
-      label: 'Claims refused by the checks',
-      value: none(s.claims_refused, `${s.claims_refused}${followed(s.reworked, s.claims_refused, 'reworked')}`),
+      label: 'Work the checks sent back',
+      value: none(s.claims_refused, `${s.claims_refused}${followed(s.reworked, s.claims_refused, 'redone')}`),
     },
-    { label: 'Actions held for you', value: none(s.held_for_human, String(s.held_for_human)) },
-    { label: 'Actions refused by policy', value: none(s.refused_by_policy, String(s.refused_by_policy)) },
+    { label: 'Times an agent asked you', value: none(s.held_for_human, String(s.held_for_human)) },
+    { label: 'Actions Friday stopped', value: none(s.refused_by_policy, String(s.refused_by_policy)) },
     {
-      label: 'Sessions lost',
-      value: none(s.sessions_lost, `${s.sessions_lost}${followed(s.sessions_recovered, s.sessions_lost, 'recovered')}`),
+      label: 'Agents that stopped midway',
+      value: none(
+        s.sessions_lost,
+        `${s.sessions_lost}${followed(s.sessions_recovered, s.sessions_lost, 'picked up again')}`,
+      ),
     },
   ];
   if (s.hosts.attempts > 0) {
-    rows.push({ label: 'Hosts reported', value: hostsWords(s.hosts) ?? `nothing ${attemptsOf(0, s.hosts)}` });
+    rows.push({
+      label: 'What the agents used',
+      value: hostsWords(s.hosts) ?? `not reported ${attemptsOf(0, s.hosts)}`,
+    });
   }
   if (s.planning.calls > 0) {
     rows.push({
-      label: "Friday's planning",
+      label: 'Planning',
       value: `${count(s.planning.calls, 'call')}${s.planning.cost_usd === null ? '' : `, ${usd(s.planning.cost_usd)}`}`,
     });
   }
@@ -342,6 +347,7 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
     const print = fingerprint([
       goal,
       story,
+      board?.goal_landing?.[goal.goal_id] ?? null,
       answer?.state,
       answer?.read,
       answer?.agent_key,

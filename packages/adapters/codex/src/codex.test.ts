@@ -4,6 +4,7 @@
  */
 
 import { answerOf, MAX_ANSWER } from '@friday/adapter-generic';
+import { allTokens, type HostTokens } from '@friday/protocol';
 import { describe, expect, it } from 'vitest';
 import { codexModelName, routedModelName } from './adapter.js';
 import {
@@ -166,15 +167,19 @@ describe('the usage record (plan M11.4)', () => {
       outputTokens: 688,
       reasoningOutputTokens: 70,
     };
-    expect(codexHostUsage(total, 1, 'gpt-5.6-luna')).toEqual({
+    const usage = codexHostUsage(total, 1, 'gpt-5.6-luna');
+    expect(usage).toEqual({
       cost_usd: null,
       input_tokens: 64178,
       output_tokens: 688,
       cache_read_input_tokens: 39936,
       cache_creation_input_tokens: 0,
+      input_includes_cache: true,
       turns: 1,
       model: 'gpt-5.6-luna',
     });
+    // Counted as every host is (2026-11-18): the cache once, so Friday's figure is Codex's own total.
+    expect(allTokens(usage as unknown as HostTokens)).toBe(total.totalTokens);
     // A host that sent no count: every count unknown, never 0; the turn and the model still known.
     expect(codexHostUsage(null, 1, 'gpt-5.6-luna')).toEqual({
       cost_usd: null,
@@ -182,6 +187,7 @@ describe('the usage record (plan M11.4)', () => {
       output_tokens: null,
       cache_read_input_tokens: null,
       cache_creation_input_tokens: null,
+      input_includes_cache: true,
       turns: 1,
       model: 'gpt-5.6-luna',
     });
@@ -192,6 +198,7 @@ describe('the usage record (plan M11.4)', () => {
       output_tokens: null,
       cache_read_input_tokens: 3,
       cache_creation_input_tokens: null,
+      input_includes_cache: true,
       turns: 2,
       model: null,
     });

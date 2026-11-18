@@ -123,6 +123,31 @@ describe('which model does the work', () => {
     td.run();
   });
 
+  // In the trial Opus was chosen for everything, and a question cost about $1.60 (2026-11-18).
+  it('says what the model chosen for everything costs, beside a less costly one an agent here runs', async () => {
+    const { el, td } = open({
+      'GET /models': MODELS,
+      'GET /routing/pins': {
+        pins: [pin({ scope: 'project', target: null, model: 'claude-fable-5-1' })],
+        prices: { 'claude-fable-5-1': { input: 10, output: 50 }, 'claude-sonnet-5-5': { input: 2, output: 10 } },
+      },
+    });
+    await flush();
+    const cost = el.querySelector('[data-role="pin-cost"]')?.textContent ?? '';
+    expect(cost).toContain('Claude Fable 5.1 costs $10 to read and $50 to write a million tokens');
+    expect(cost).toContain('Claude Sonnet 5.5 costs $2 to read and $10 to write a million tokens');
+    expect(cost).toContain('Simple questions run on it too');
+    td.run();
+    // Without a price (a daemon from before, or a model Friday has none for), nothing is guessed.
+    const bare = open({
+      'GET /models': MODELS,
+      'GET /routing/pins': { pins: [pin({ scope: 'project', target: null, model: 'openai/gpt-6.1-sol' })] },
+    });
+    await flush();
+    expect(bare.el.querySelector('[data-role="pin-cost"]')).toBeNull();
+    bare.td.run();
+  });
+
   it('shows a project-wide choice made elsewhere as it is, and never takes a sensitive-work pin for it', async () => {
     const elsewhere = pin({ pin_id: 'p-x', scope: 'project', target: null, model: 'z-ai/glm-5.3' });
     const a = open({ 'GET /models': MODELS, 'GET /routing/pins': { pins: [elsewhere] } });

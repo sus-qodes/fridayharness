@@ -18,6 +18,7 @@ import type {
   UsageView,
   VerificationView,
 } from '@friday/protocol';
+import { promptTokens } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState, MemoryActor } from '@friday/state';
 import type { BrainHandle } from './brain.js';
@@ -25,6 +26,7 @@ import { escalationView, liveVersion } from './brain-routes.js';
 import { answersOf } from './direct-goal.js';
 import { goalWork, landedGoals } from './land.js';
 import { notStartedFacts, whyNotStarted } from './not-started.js';
+import { whyChosen } from './why-chosen.js';
 
 /** The interface API version this daemon speaks; a page built for another asks to be reloaded (plan §5.3). */
 export const UI_API_VERSION = 1;
@@ -182,8 +184,10 @@ export function buildUiSnapshot(deps: {
   const facts = notStartedFacts(state, pid, deps.nowMs);
   const tasks: SnapshotTask[] = shownTasks.map((t) => {
     const waits = whyNotStarted(state, pid, t, facts);
+    const run = t.current_run_id ? state.q.findRun(t.current_run_id) : state.q.runs(t.task_id).at(-1);
     return {
       ...t,
+      why: run || t.assigned_agent_id ? whyChosen(state, pid, t, run) : null,
       agent_key: agentKey(t.assigned_agent_id),
       waiting_note: t.status === 'WAITING' ? latestReason(state, pid, t.task_id, 'task.waiting') : null,
       delegation_note: waits?.text ?? null,
@@ -406,9 +410,18 @@ function lastUsage(state: FridayState, pid: string, runIds: Set<string>): Record
     if (p.event_type !== 'host.usage' || !p.run_id || !runIds.has(p.run_id) || out[p.run_id]) continue;
     const d = p.data ?? {};
     const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    const run = state.q.findRun(p.run_id);
+    const codex = run ? state.q.findHarness(run.harness_id)?.vendor === 'codex' : false;
     out[p.run_id] = {
       cost_usd: num(d.cost_usd),
-      input_tokens: num(d.input_tokens),
+      // The whole prompt, the cache included, for every host alike (2026-11-18).
+      input_tokens: promptTokens({
+        input_tokens: num(d.input_tokens),
+        output_tokens: num(d.output_tokens),
+        cache_read_input_tokens: num(d.cache_read_input_tokens),
+        cache_creation_input_tokens: num(d.cache_creation_input_tokens),
+        input_includes_cache: d.input_includes_cache === true || codex,
+      }),
       output_tokens: num(d.output_tokens),
       at: e.occurred_at,
     };

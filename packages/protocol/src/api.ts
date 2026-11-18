@@ -1124,6 +1124,11 @@ export const UsageHostView = z.object({
   turns: z.number().int().nullable(),
   /** The model the host named in its report. */
   model: z.string().nullable(),
+  /**
+   * `input_tokens` is the whole prompt, the cached part included (Codex), so `allTokens` counts the
+   * cache once. Absent from a report made before 2026-11-18.
+   */
+  input_includes_cache: z.boolean().optional(),
 });
 export type UsageHostView = z.infer<typeof UsageHostView>;
 

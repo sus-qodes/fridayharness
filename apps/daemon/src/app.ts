@@ -2,6 +2,7 @@ import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { blastRadius, lookupSymbol, skeletonOf } from '@friday/code-graph';
+import { DEFAULT_PRICES } from '@friday/planner';
 import { patternsOverlap } from '@friday/policy';
 import {
   type Actor,
@@ -147,6 +148,16 @@ function errorResponse(c: Context, err: FridayError) {
 }
 
 /** Builds the daemon's HTTP application (plan M1.5, Appendix 8). */
+/** Input and output prices of the models Friday has a price for, USD per million tokens. */
+function knownPrices(): Record<string, { input: number; output: number }> {
+  const out: Record<string, { input: number; output: number }> = {};
+  for (const [model, entry] of Object.entries(DEFAULT_PRICES)) {
+    const price = 'tiers' in entry ? entry.tiers[0]?.price : entry;
+    if (price) out[model] = { input: price.input, output: price.output };
+  }
+  return out;
+}
+
 export function buildApp(deps: AppDeps): Hono<Env> {
   const { state, project, logger } = deps;
   const pid = project.project_id;
@@ -1586,6 +1597,9 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.get(`${P}/routing/pins`, allow(...OPERATOR), (c) =>
     c.json({
       pins: c.req.query('all') === 'true' ? state.q.routingPins(pid) : state.q.routingPins(pid, state.clock.now()),
+      // USD per million tokens of the models Friday knows a price for (2026-11-18): the Models page
+      // says what choosing one model for everything costs.
+      prices: knownPrices(),
     }),
   );
   app.post(`${P}/routing/pins`, allow(...OPERATOR), async (c) => {
@@ -1781,7 +1795,10 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     const rel = file.replace(/\\/g, '/').replace(/^\.\//, '');
     const sk = await skeletonOf(g, g.root, rel, c.req.query('level') === '2' ? 2 : 1);
     if (!sk)
-      throw new FridayError('invalid_request', `${rel} is not in the code graph (only TS/JS files git sees are)`);
+      throw new FridayError(
+        'invalid_request',
+        `${rel} is not in the code graph of your project folder (it holds the TypeScript and JavaScript files git sees there)`,
+      );
     return c.json({ version: g.version, ...sk });
   });
   app.get(`${P}/graph/search`, allow(...OPERATOR), async (c) => {

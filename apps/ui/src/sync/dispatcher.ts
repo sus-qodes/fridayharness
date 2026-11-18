@@ -13,6 +13,7 @@
  * adds one to the card itself, and `reconcile` keeps the larger of a snapshot's count and the card's.
  */
 import type { ApprovalRow, DomainEvent, EscalationView, UiSnapshot } from '@friday/protocol';
+import { promptTokensOf } from '../model/usage.js';
 import type { Toast } from '../shell/context.js';
 import type { ActivityState, AgentActivity, FridayStore, LogLine, ReactionKind, ToolKind } from '../store/state.js';
 import { cleanText, truncate } from '../ui/format.js';
@@ -539,14 +540,23 @@ export class Dispatcher {
         };
         if (taskId && unmediated.length) files = touchFiles(files, taskId, unmediated, now);
         break;
-      case 'host.usage':
+      case 'host.usage': {
+        const n = (v: unknown) => (typeof v === 'number' ? v : null);
+        // Counted as the board counts it: the whole prompt, the cache included (2026-11-18).
         agent.usage = {
-          cost_usd: typeof data.cost_usd === 'number' ? data.cost_usd : null,
-          input_tokens: typeof data.input_tokens === 'number' ? data.input_tokens : null,
-          output_tokens: typeof data.output_tokens === 'number' ? data.output_tokens : null,
+          cost_usd: n(data.cost_usd),
+          input_tokens: promptTokensOf({
+            input_tokens: n(data.input_tokens),
+            output_tokens: n(data.output_tokens),
+            cache_read_input_tokens: n(data.cache_read_input_tokens),
+            cache_creation_input_tokens: n(data.cache_creation_input_tokens),
+            input_includes_cache: data.input_includes_cache === true,
+          }),
+          output_tokens: n(data.output_tokens),
         };
         line = { at: now, sequence: event.sequence, stream: 'info', text: 'usage reported' };
         break;
+      }
       case 'model.observed':
         agent.model = str(data.model);
         line = {

@@ -351,6 +351,12 @@ export function checksVersion(checks: readonly SelectableCheck[], kind: string):
 export interface TestGraph {
   /** Test files that import the file. */
   testsOf(file: string): string[];
+  /**
+   * Test files that reach the file through other files too (an index, a package's entry). Only
+   * whether a file is tested is judged by it; `tests` stays the direct importers, which targeted
+   * runs of a check are given. Without it, `testsOf` judges both.
+   */
+  testsReaching?(file: string): string[];
   /** The graph parsed the file (a source file it understands). */
   isSource(file: string): boolean;
   isTest(file: string): boolean;
@@ -370,8 +376,8 @@ export function relatedTests(changed: readonly string[], graph: TestGraph): { te
     }
     if (!graph.isSource(f)) continue;
     const related = graph.testsOf(f);
-    if (related.length) for (const t of related) tests.add(t);
-    else untested.push(f);
+    for (const t of related) tests.add(t);
+    if (!related.length && !(graph.testsReaching?.(f).length ?? 0)) untested.push(f);
   }
   return { tests: [...tests].sort(), untested: untested.sort() };
 }

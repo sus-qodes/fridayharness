@@ -169,7 +169,11 @@ export function query(g: CodeGraph, rawPath: string, depth: number) {
   const file = rawPath.replace(/\\/g, '/').replace(/^\.\//, '');
   const node = g.nodes.get(file);
   if (!node) {
-    throw new FridayError('invalid_request', `${file} is not in the code graph (only TS/JS files git sees are)`);
+    // The words the interface recognises: "is not in the code graph" (2026-11-18).
+    throw new FridayError(
+      'invalid_request',
+      `${file} is not in the code graph of your project folder (it holds the TypeScript and JavaScript files git sees there)`,
+    );
   }
   return {
     version: g.version,

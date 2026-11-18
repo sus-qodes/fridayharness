@@ -107,6 +107,23 @@ export function whoseFiles(
   return { left: left.size, left_by: [...leftBy].sort(), working: [...working].sort() };
 }
 
+/**
+ * The agents at work in the project folder itself now (2026-11-18): a session its person runs
+ * there (Antigravity, Claude Code in an editor) on a task that is not finished. Landing a goal
+ * changes files under it; in the trial a goal landed into the folder while Antigravity worked
+ * there, with no word about it.
+ */
+export function folderWorkers(state: FridayState, project: ProjectRef): string[] {
+  const working = new Set<string>();
+  for (const t of state.q.tasks(project.project_id, { statuses: [...ACTIVE] as never })) {
+    const run = t.current_run_id ? state.q.findRun(t.current_run_id) : undefined;
+    if (!run || run.ended_at || !run.execution_root || run.branch_ref) continue;
+    if (!sameDir(run.execution_root, project.root)) continue;
+    working.add(state.q.findAgent(run.agent_id)?.agent_key ?? 'an agent');
+  }
+  return [...working].sort();
+}
+
 /** The set-asides of a goal that still hold files not put back, oldest first. */
 export function setAsides(state: FridayState, projectId: string, goalId: string): SetAside[] {
   const out = new Map<string, SetAside>();

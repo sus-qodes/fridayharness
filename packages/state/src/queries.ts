@@ -2,6 +2,7 @@ import type { SqlDatabase, SqlValue } from '@friday/db';
 import {
   type AgentView,
   type AssignmentView,
+  allTokens,
   type ContextPacket,
   type ControlState,
   type FileReservationView,
@@ -1332,8 +1333,10 @@ export class Queries {
       cost_reporters: 0,
     };
     for (const { host } of usage.rows) {
-      if (host.input_tokens !== null || host.output_tokens !== null) {
-        hosts.tokens = (hosts.tokens ?? 0) + (host.input_tokens ?? 0) + (host.output_tokens ?? 0);
+      // Every host counted the same way, the cache included (2026-11-18).
+      const tokens = allTokens(host);
+      if (tokens !== null) {
+        hosts.tokens = (hosts.tokens ?? 0) + tokens;
         hosts.tokens_reporters += 1;
       }
       if (host.cost_usd !== null) {

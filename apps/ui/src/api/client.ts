@@ -526,7 +526,8 @@ export class FridayApi {
     return this.get('/models');
   }
 
-  pins(all = false): Promise<{ pins: RoutingPinView[] }> {
+  /** The choices, and since 2026-11-18 the price of each model Friday knows one for (USD per million tokens). */
+  pins(all = false): Promise<{ pins: RoutingPinView[]; prices?: Record<string, { input: number; output: number }> }> {
     return this.get(`/routing/pins${all ? '?all=true' : ''}`);
   }
 

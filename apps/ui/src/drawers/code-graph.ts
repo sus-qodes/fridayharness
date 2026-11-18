@@ -388,7 +388,17 @@ export function createCodeGraph(ctx: AppContext, request: DrawerRequest): Compon
       query = null;
       layout = null;
       replace(status);
-      replace(canvas, errorNote('Could not read the code graph', e));
+      // A file the graph does not hold is no error (2026-11-18): it may be one a task made in its
+      // own copy and that is not landed, or not a TypeScript or JavaScript file. The panel showed
+      // "COS-1000 … is not in the code graph (only TS/JS files git sees are)".
+      replace(
+        canvas,
+        e instanceof Error && /is not in the code graph/.test(e.message)
+          ? empty(
+              `Nothing to show for ${visible(p)} yet. The code graph shows your project folder, and this file is not in it: work a task made in its own copy appears once the goal is landed. Only TypeScript and JavaScript files are drawn.`,
+            )
+          : errorNote('Could not read the code graph', e),
+      );
       replace(panel);
     }
   }

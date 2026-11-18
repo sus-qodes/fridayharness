@@ -12,7 +12,7 @@ import {
   PID,
   T0,
 } from '../test/fixtures.js';
-import { createTaskInspector, INSPECTOR_TABS, inspectorActions, inspectorTabOf } from './task-inspector.js';
+import { createTaskInspector, INSPECTOR_TABS, inspectorActions, inspectorTabOf, whyLine } from './task-inspector.js';
 
 const IMG = '<img src=x onerror=alert(1)>';
 const BIDI = '\u202E';
@@ -525,6 +525,29 @@ const PACKET: ContextPacket = {
           selection_reason: 'in the write scope',
           estimated_tokens: 120,
         },
+        // The repository's shape and a name looked up: no file, so no code graph to open.
+        {
+          source_id: 'graph:14c3226ad9f20bd67e96e345aa408ceb3c29343e+5ed69f8997a8',
+          source_type: 'graph',
+          authority: 'git',
+          recency: T0,
+          relevance: 0.5,
+          relationship_distance: 1,
+          verification_status: 'verified',
+          selection_reason: 'the shape of the repository',
+          estimated_tokens: 40,
+        },
+        {
+          source_id: 'src/money.ts#Money',
+          source_type: 'graph',
+          authority: 'git',
+          recency: T0,
+          relevance: 0.5,
+          relationship_distance: 1,
+          verification_status: 'verified',
+          selection_reason: 'a declaration the task uses',
+          estimated_tokens: 40,
+        },
       ],
     },
   ],
@@ -594,9 +617,33 @@ describe('the task inspector: What the agent was given', () => {
     expect(el.textContent).toContain('1 source cut by the budget');
     expect(el.textContent).toContain('2 sources withheld');
     expect(el.querySelector('[role="meter"]')?.getAttribute('aria-valuenow')).toBe('29');
+    // One button per file: the shape of the repository has none, a declaration opens its file.
+    const graphButtons = [...el.querySelectorAll('button')].filter((b) => b.textContent?.includes('Code graph'));
+    expect(graphButtons).toHaveLength(2);
+    graphButtons[1]?.click();
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'graph', path: 'src/money.ts' });
     buttonNamed(el, 'Code graph')?.click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'graph', path: `src/${IMG}${BIDI}.ts` });
     drawer.destroy();
+  });
+
+  // "How does it decide that this needs to be done by Claude?" (the trial, 2026-11-18).
+  it('says why the task went to its agent and runs on its model', () => {
+    expect(
+      whyLine({
+        agent_key: 'claude-1',
+        agent: 'the best fit of the free agents',
+        model: 'claude-opus-5-5',
+        model_reason: 'you chose it for every task (Settings → Models)',
+      }),
+    ).toBe(
+      'Why claude-1: the best fit of the free agents. Why Claude Opus 5.5: you chose it for every task (Settings → Models).',
+    );
+    expect(whyLine({ agent_key: 'codex-1', agent: 'you gave it this task', model: null, model_reason: null })).toBe(
+      'Why codex-1: you gave it this task.',
+    );
+    expect(whyLine({ agent_key: null, agent: null, model: null, model_reason: null })).toBeNull();
+    expect(whyLine(undefined)).toBeNull();
   });
 
   it('compiles a fresh preview labelled as compiled for a human', async () => {

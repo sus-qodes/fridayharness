@@ -6,7 +6,7 @@
 import { claudeCodeHooks } from '@friday/adapter-claude';
 import { GenericHarnessClient } from '@friday/adapter-generic';
 import { FakePlannerModel } from '@friday/planner';
-import type { RunView, TaskRoleDecisionView, TaskStartParams, TaskView } from '@friday/protocol';
+import type { RunView, TaskRoleDecisionView, TaskStartParams, TaskView, UiSnapshot } from '@friday/protocol';
 import { useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { claudeSession } from '../helpers/claude-session.js';
@@ -552,6 +552,14 @@ describe('model routing', () => {
     );
     expect(decision?.reason).toContain('the pin of claude-sonnet-5-5 is set aside');
     expect(asked(t.task_id)).toEqual([]);
+    // The board says why, in words (2026-11-18): the person chose the agent, Friday the model.
+    const board = await td.operator.get<UiSnapshot>(td.operator.projectPath('/ui/snapshot'));
+    expect(board.tasks.find((x) => x.task_id === t.task_id)?.why).toEqual({
+      agent_key: 'codex-1',
+      agent: 'you gave it this task',
+      model: 'openai/gpt-6.1-sol',
+      model_reason: "Friday's choice for this kind of work",
+    });
 
     // The same task left to Friday is not started on Codex: the pin holds for what nobody assigned.
     const loose = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {

@@ -2,6 +2,19 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — the trial's fault list, part 6: what you see is true
+
+From the trial: a goal that had landed still said "Ready to land" half an hour later, an agent card counted 14k tokens for $0.98, and a task in the project folder showed 13 changed files for one.
+
+- **A landed goal says "Landed".** Its card changes the moment it lands. A goal you merged yourself, in git or in VS Code, is noticed within half a minute and says "Landed" too; there is no "Mark as landed" to press any more. A goal whose tasks changed nothing is not taken for landed.
+- **The landing dialog is written for people.** It is titled "Land this goal", "Landed" or "Review and commit", by what there is to do. Merging by hand is folded away under "Merge it yourself instead", and the line saying Friday never merges, beside the button that merges, is gone. "What Friday did" reads "Tasks that passed their checks", "Work the checks sent back", "Times an agent asked you", "Agents that stopped midway", "What the agents used".
+- **Land warns when an agent is at work in your folder.** "antigravity-1 is working in your project folder right now": the question says so and its button reads "Land anyway". Landing by itself waits until that work is done.
+- **Tokens are counted one way for every agent.** The whole prompt, what was read from and written to the cache included, plus the answer. Claude's figures left the cache out, which is most of the work, so they looked small beside their cost; Codex's included it. Codex reports no cost, and Friday does not guess one.
+- **A task in your project folder counts only its own changes.** Friday's setup files and your own edits are left out, as its checks already left them out.
+- **Why this agent, why this model.** Each task says it: "Why claude-1: the best fit of the free agents. Why Claude Opus 5.5: you chose it for every task (Settings → Models)." When one model is chosen for everything, the Models page says what it costs beside a less costly one.
+- **The code graph has no error codes for what is not there yet.** A file a task made in its own copy shows "Nothing to show yet: it appears once the goal is landed". The button is only offered for files.
+- **"No related tests" is said less often, and only when true.** A test that reaches a file through an index or a package's entry counts as testing it. The note says it is worth a look, not a failure.
+
 ## Unreleased — the trial's fault list, part 5: agents at work at the same time
 
 In the trial seven goals ran, and at no moment were two agents at work. Every plan listed the project's changelog, and a task waited for every running task that might touch one of its files.

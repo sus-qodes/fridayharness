@@ -319,6 +319,7 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
         changes.filter((c) => c.change !== 'deleted').map((c) => c.path),
         {
           testsOf: (f) => graph.testsOf(f),
+          testsReaching: (f) => graph.testsReaching(f),
           isSource: (f) => graph.nodes.has(f),
           isTest: (f) => graph.nodes.get(f)?.test === true,
         },
@@ -328,7 +329,7 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
         findings.push({
           rule: 'tests.none_related',
           severity: 'warn',
-          message: `no test imports these changed files: ${rel.untested.slice(0, 20).join(', ')}${rel.untested.length > 20 ? ` (and ${rel.untested.length - 20} more)` : ''}`,
+          message: `no test uses these changed files, directly or through another file: ${rel.untested.slice(0, 20).join(', ')}${rel.untested.length > 20 ? ` (and ${rel.untested.length - 20} more)` : ''}. Worth a look, not a failure`,
           paths: rel.untested.slice(0, 20),
         });
       }

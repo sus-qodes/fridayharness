@@ -55,6 +55,11 @@ describe('fixture-shop (M4b exit criterion)', () => {
     expect(graph.contracts().map((n) => n.path)).toEqual(['shared/src/api.ts']);
     expect(graph.testsOf('shared/src/api.ts')).toEqual(['shared/test/api.test.ts']);
     expect(graph.testsOf('frontend/src/api-client.ts')).toEqual(['frontend/test/api-client.test.ts']);
+    // Through the files that import it, the tests of those files reach it too (2026-11-18).
+    expect(graph.testsReaching('shared/src/api.ts')).toEqual(
+      expect.arrayContaining(['shared/test/api.test.ts', 'frontend/test/api-client.test.ts']),
+    );
+    expect(graph.testsReaching('shared/src/api.ts', 1)).toEqual(graph.testsOf('shared/src/api.ts'));
     expect(graph.nodes.get('backend/test/checkout.service.test.ts')).toMatchObject({
       test: true,
       external: ['node:assert/strict', 'node:test'],

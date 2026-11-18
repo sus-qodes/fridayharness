@@ -182,6 +182,31 @@ export class CodeGraph {
     return this.incoming.get(file) ?? [];
   }
 
+  /**
+   * Test files that reach the file through at most `depth` imports (2026-11-18): directly, through
+   * an index that re-exports it, through the entry of a workspace package, through a helper. A test
+   * that imports `src/index.ts`, which exports `src/money.ts`, tests `src/money.ts` too; only
+   * direct importers were counted, and a task that added such tests was warned it had none.
+   */
+  testsReaching(file: string, depth = 3): string[] {
+    const tests = new Set<string>();
+    const seen = new Set<string>([file]);
+    let layer = [file];
+    for (let step = 0; step < depth && layer.length; step += 1) {
+      const next: string[] = [];
+      for (const f of layer) {
+        for (const e of this.consumers(f)) {
+          if (seen.has(e.from)) continue;
+          seen.add(e.from);
+          if (this.nodes.get(e.from)?.test) tests.add(e.from);
+          else next.push(e.from);
+        }
+      }
+      layer = next;
+    }
+    return [...tests].sort();
+  }
+
   /** Test files that import the file directly. */
   testsOf(file: string): string[] {
     return [

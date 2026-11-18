@@ -5,9 +5,17 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { GenericHarnessClient } from '@friday/adapter-generic';
+import { landedGoals, landGoal, landingWatch } from '@friday/daemon';
 import { closeDatabase, openDatabase } from '@friday/db';
 import { commitContent, FRIDAY_IDENTITY, GitRoot, runGit } from '@friday/git';
-import type { GoalSummary, IntegrationView, TaskStartParams, TaskView, VerificationView } from '@friday/protocol';
+import type {
+  GoalSummary,
+  IntegrationView,
+  TaskStartParams,
+  TaskView,
+  UiSnapshot,
+  VerificationView,
+} from '@friday/protocol';
 import { FridayState } from '@friday/state';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -805,6 +813,30 @@ describe('landing a completed goal', () => {
     expect(await land(td, goalId)).toMatchObject({ status: 'already', head: landed.head });
   });
 
+  // In the trial a goal landed into the project folder while Antigravity worked there, and nothing
+  // said so (2026-11-18). The plan names who is at work; landing by itself waits; a person decides.
+  it('names an agent at work in the project folder before landing, and does not land by itself meanwhile', async () => {
+    const td = await project();
+    const goalId = await completedGoal(td);
+    // An agent its person runs, at work on a task in the project folder.
+    const editor = await FakeHarness.connect(td, { agentKey: 'antigravity-1', mode: 'attach' });
+    const loose = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'polish the docs',
+      scope: { write: ['docs/**'], read: [] },
+      assign_agent_key: 'antigravity-1',
+    });
+    await editor.client.claim({ task_id: loose.task_id });
+    expect(await plan(td, goalId)).toMatchObject({ state: 'ready', busy: ['antigravity-1'] });
+    const before = await head();
+    await expect(landGoal(td.daemon.state, td.project, goalId, { kind: 'system', id: 'friday' })).rejects.toThrow(
+      /antigravity-1 is working in the project folder right now/,
+    );
+    expect(await head()).toBe(before);
+    // A person who pressed Land was told, and lands.
+    expect(await land(td, goalId)).toMatchObject({ status: 'landed' });
+    await editor.close();
+  });
+
   /** What Land would do, read before anyone clicks. */
   const plan = (td: TestDaemon, goalId: string) =>
     td.operator.get<{
@@ -893,15 +925,58 @@ describe('landing a completed goal', () => {
     await integrationOf(td, id);
     await runOnce(td);
     await runGit(ws().projectDir, ['merge', '--no-edit', `friday/goal-${second}`]);
-    expect(await plan(td, second)).toMatchObject({ state: 'landed' });
     const landings = () =>
       td.daemon.state.store
         .readSince(td.project.project_id, 0, { types: ['goal.landed'], limit: 10 })
         .filter((e) => (e.payload as { goal_id?: string }).goal_id === second);
-    expect(landings()).toHaveLength(0);
-    expect(await land(td, second)).toMatchObject({ status: 'already' });
+    // Friday notices it by itself (2026-11-18): the card says "Landed" though nobody clicked. In the
+    // trial a goal said "Ready to land" for half an hour after it had landed.
+    const watch = landingWatch(td.daemon.state, td.project);
+    expect(await watch()).toEqual([second]);
+    expect(landedGoals(td.daemon.state, td.project.project_id).get(second)?.into).toBe(
+      (await git(['branch', '--show-current'])).trim(),
+    );
+    expect((landings()[0]?.payload as { by_hand?: boolean } | undefined)?.by_hand).toBe(true);
+    // Nothing changed since: nothing is read or recorded again.
+    expect(await watch()).toEqual([]);
+    expect(await plan(td, second)).toMatchObject({ state: 'landed' });
     expect(await land(td, second)).toMatchObject({ status: 'already' });
     expect(landings()).toHaveLength(1);
+    // Neither goal says "Ready to land" on the board.
+    const board = await td.operator.get<UiSnapshot>(td.operator.projectPath('/ui/snapshot'));
+    expect(board.goal_landing?.[second]?.landed).toBeTruthy();
+    expect(board.goal_landing?.[goalId]?.landed).toBeTruthy();
+  });
+
+  it('records a goal as landed when its dialog is opened after a merge made by hand (2026-11-18)', async () => {
+    const td = await project();
+    const goalId = await completedGoal(td);
+    await runGit(ws().projectDir, ['merge', '--no-edit', `friday/goal-${goalId}`]);
+    expect(landedGoals(td.daemon.state, td.project.project_id).has(goalId)).toBe(false);
+    // Reading what Land would do is enough: the dialog has nothing left to ask the person.
+    expect(await plan(td, goalId)).toMatchObject({ state: 'landed' });
+    expect(landedGoals(td.daemon.state, td.project.project_id).has(goalId)).toBe(true);
+    await plan(td, goalId);
+    expect(
+      td.daemon.state.store.readSince(td.project.project_id, 0, { types: ['goal.landed'], limit: 10 }),
+    ).toHaveLength(1);
+    // Not taken for landed: a goal whose task changed nothing (its branch is in the folder's history
+    // from the start, with nothing to bring), nor a goal not merged yet.
+    const { goalId: empty, ids: same } = await goalWith(td, [
+      { key: 'keep-b', summary: 'Keep b as it is', write: ['src/b.mjs'] },
+    ]);
+    await work(td, 'be-2', same['keep-b'] as string, { 'src/b.mjs': 'export const b = 1;\n' });
+    await integrationOf(td, same['keep-b'] as string);
+    const { goalId: other, ids } = await goalWith(td, [{ key: 'lower-b', summary: 'Lower b', write: ['src/b.mjs'] }]);
+    await work(td, 'be-3', ids['lower-b'] as string, { 'src/b.mjs': 'export const b = 0;\n' });
+    await integrationOf(td, ids['lower-b'] as string);
+    await runOnce(td);
+    expect(await landingWatch(td.daemon.state, td.project)()).toEqual([]);
+    expect(landedGoals(td.daemon.state, td.project.project_id).has(empty)).toBe(false);
+    expect(landedGoals(td.daemon.state, td.project.project_id).has(other)).toBe(false);
+    // Merged now: found.
+    await runGit(ws().projectDir, ['merge', '--no-edit', `friday/goal-${other}`]);
+    expect(await landingWatch(td.daemon.state, td.project)()).toEqual([other]);
   });
 
   it('refuses before git runs when the folder has changes in the way, and names the files', async () => {

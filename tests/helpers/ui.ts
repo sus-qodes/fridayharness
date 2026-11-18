@@ -128,7 +128,28 @@ export async function attachedSession(
     );
     return decisionOf(res.body.hook_output);
   };
-  return { client, task, run_id: claimed.run_id, pre, dir };
+  /**
+   * The agent writes a file in the project folder through its Write tool, as Claude Code does: the
+   * hooks see it, so it counts as this task's change (a file written there otherwise does not).
+   */
+  const wrote = async (rel: string, content: string | Buffer) => {
+    const file = path.join(dir, rel);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, content);
+    await postHook(
+      daemon,
+      'PostToolUse',
+      toolHook(
+        'PostToolUse',
+        'Write',
+        { file_path: file, content: String(content) },
+        { projectDir: dir, sessionId },
+        { tool_response: { filePath: file, success: true } },
+      ),
+      { claudePid: pid },
+    );
+  };
+  return { client, task, run_id: claimed.run_id, pre, wrote, dir };
 }
 
 /** Config that keeps spawned runs in the main checkout, so `task.start` is queued at once. */

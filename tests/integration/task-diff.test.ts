@@ -15,12 +15,12 @@ const ws = useTestWorkspace();
 describe('the task diff', () => {
   it('returns each changed file with both sides, committed and uncommitted', async () => {
     const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
-    const { task, dir } = await attachedSession(td);
-    writeFileSync(path.join(dir, 'README.md'), '# test project\n\nchanged\n');
+    const { task, dir, wrote } = await attachedSession(td);
+    await wrote('README.md', '# test project\n\nchanged\n');
     await deterministicGit(dir, { startEpoch: 1_767_226_000 }).commitAll('agent commit');
-    writeFileSync(path.join(dir, 'new.ts'), 'export const x = 1;\n');
-    writeFileSync(path.join(dir, 'data.bin'), Buffer.from([0, 1, 2, 3]));
-    writeFileSync(path.join(dir, 'latin1.txt'), Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]));
+    await wrote('new.ts', 'export const x = 1;\n');
+    await wrote('data.bin', Buffer.from([0, 1, 2, 3]));
+    await wrote('latin1.txt', Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]));
     const d = await td.operator.get<TaskDiff>(td.operator.projectPath(`/tasks/${task.task_id}/diff`));
     expect(d.source).toBe('worktree');
     const readme = d.files.find((f) => f.path === 'README.md');
@@ -38,25 +38,44 @@ describe('the task diff', () => {
 
   it('counts lines in stat mode, untracked files as all added', async () => {
     const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
-    const { task, dir } = await attachedSession(td);
-    writeFileSync(path.join(dir, 'README.md'), '# changed title\nline two\n');
-    writeFileSync(path.join(dir, 'notes.md'), 'a\nb\nc\n');
+    const { task, wrote } = await attachedSession(td);
+    await wrote('README.md', '# changed title\nline two\n');
+    await wrote('notes.md', 'a\nb\nc\n');
     const d = await td.operator.get<TaskDiff>(td.operator.projectPath(`/tasks/${task.task_id}/diff?stat=1`));
     const readme = d.files.find((f) => f.path === 'README.md');
     expect(readme).toMatchObject({ added: 2, removed: 1, before: null, after: null });
     expect(d.files.find((f) => f.path === 'notes.md')).toMatchObject({ added: 3, removed: 0 });
   });
 
+  // In the trial a task in the project folder showed "13 files, +3509 −3" for one changed file:
+  // Friday's own setup files and the person's edits were counted as the task's (2026-11-18).
+  it('counts only what the task changed in the project folder, not what else is there', async () => {
+    const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
+    const { task, dir, wrote } = await attachedSession(td);
+    await wrote('eslint.config.js', 'export default [];\n');
+    // What else is in the folder: Friday's harness files and the person's own edit.
+    mkdirSync(path.join(dir, '.agents', '.friday', 'harness'), { recursive: true });
+    writeFileSync(path.join(dir, '.agents', '.friday', 'harness', 'hook.mjs'), 'x\n'.repeat(3000));
+    writeFileSync(path.join(dir, 'AGENTS.md'), '# Friday\n');
+    writeFileSync(path.join(dir, 'mine.txt'), 'the person was here\n');
+    const d = await td.operator.get<TaskDiff>(td.operator.projectPath(`/tasks/${task.task_id}/diff?stat=1`));
+    expect(d.files.map((f) => f.path)).toEqual(['eslint.config.js']);
+    expect(d.notes.join(' ')).toMatch(/3 other change\(s\) in the project folder are not this task's/);
+  });
+
   it('never reads through a link in any component, and never shows protected files', async () => {
     const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
-    const { task, dir } = await attachedSession(td);
+    const { task, dir, wrote } = await attachedSession(td);
     const outside = path.join(ws().root, 'outside-secrets');
     mkdirSync(path.join(outside, 'deep'), { recursive: true });
     writeFileSync(path.join(outside, 'deep', 'token.txt'), 'operator-token-value');
     // A junction as a parent folder: git lists the files behind it as untracked.
     symlinkSync(outside, path.join(dir, 'linked'), 'junction');
-    writeFileSync(path.join(dir, '.env'), 'STRIPE_KEY=sk_live_abcdefghijklmnop\n');
+    // Both are the agent's changes: in the project folder a diff lists only those (2026-11-18).
+    await wrote('linked/deep/token.txt', 'operator-token-value');
+    await wrote('.env', 'STRIPE_KEY=sk_live_abcdefghijklmnop\n');
     const d = await td.operator.get<TaskDiff>(td.operator.projectPath(`/tasks/${task.task_id}/diff`));
+    expect(d.files.some((f) => f.path.startsWith('linked'))).toBe(true);
     for (const f of d.files.filter((x) => x.path.startsWith('linked'))) {
       expect(f.after).toBeNull();
       expect(f.link).toBe(true);

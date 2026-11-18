@@ -179,6 +179,8 @@ export function codexHostUsage(
     output_tokens: num(t.outputTokens),
     cache_read_input_tokens: num(t.cachedInputTokens),
     cache_creation_input_tokens: num(t.cacheWriteInputTokens),
+    // `inputTokens` is the whole prompt: `allTokens` must not add the cache to it again.
+    input_includes_cache: true,
     turns,
     model,
   };

@@ -221,6 +221,10 @@ export type HarnessEntry = HarnessView & {
 /** The last usage a host reported for a run (Claude Code in spawn mode reports it). */
 export interface UsageView {
   cost_usd: number | null;
+  /**
+   * The whole prompt the model read, the cached part included, counted the same way for every
+   * host (`promptTokens`, 2026-11-18); before, Claude Code's figure left the cache out.
+   */
   input_tokens: number | null;
   output_tokens: number | null;
   at: string;
@@ -261,8 +265,20 @@ export interface TaskWaits {
   text: string;
 }
 
+/** Why a task went to its agent and runs on its model, in a person's words (2026-11-18). */
+export interface TaskWhy {
+  agent_key: string | null;
+  /** "the best fit of the free agents", "you gave it this task"; null when not on record. */
+  agent: string | null;
+  model: string | null;
+  /** "you chose it for every task (Settings → Models)", "Friday's choice for this kind of work". */
+  model_reason: string | null;
+}
+
 /** A task as the board shows it. */
 export type SnapshotTask = TaskView & {
+  /** Why its agent and model, once it has had an attempt; absent from a daemon before 2026-11-18. */
+  why?: TaskWhy | null;
   agent_key: string | null;
   /** WAITING: the reason of its latest `task.waiting` (what the agent needs). */
   waiting_note: string | null;
@@ -374,6 +390,8 @@ export interface LandPlanView {
   };
   /** Files set aside at an earlier landing of this goal and not put back. */
   set_aside?: { ref: string; commit: string; count: number; files: string[]; into: string | null; at: string }[];
+  /** Agents at work in the project folder now, on a plan that would merge (2026-11-18). */
+  busy?: string[];
 }
 
 /** `POST …/goals/:gid/set-aside/restore`: what putting the set-aside files back did. */

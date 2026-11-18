@@ -13,6 +13,7 @@ export { ControlManager } from './control.js';
 export { createDaemon, type Daemon, type DaemonContext, type DaemonOptions } from './daemon.js';
 export { countMatches, listFiles } from './files.js';
 export { GraphService } from './graph-service.js';
+export { landedGoals, landGoal, landingWatch } from './land.js';
 export { createLogger, type Level, type Logger, silentLogger } from './log.js';
 export { type AuthInfo, callerFor, dispatchRpc } from './rpc.js';
 export {

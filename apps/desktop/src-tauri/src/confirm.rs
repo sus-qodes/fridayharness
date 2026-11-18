@@ -546,13 +546,30 @@ Set {} aside and land the goal?",
                     }),
                 });
             }
+            // Agents at work in the project folder now (2026-11-18): landing changes files under
+            // them, so the question names them, and the person decides with that in view.
+            let busy: Vec<String> = plan
+                .get("busy")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).take(5).map(visible).collect())
+                .unwrap_or_default();
+            let warning = if busy.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n\n{} {} working in your project folder right now. Landing changes files under {}: it is best to land when that work is done.",
+                    busy.join(" and "),
+                    if busy.len() == 1 { "is" } else { "are" },
+                    if busy.len() == 1 { "it" } else { "them" },
+                )
+            };
             Ok(Prepared {
                 // The land route takes nothing: what it merges is the goal's own branch.
                 body: json!({}),
                 dialog: Some(Dialog {
                     title: "Friday: land this goal?".into(),
                     text: format!(
-                        "Goal {}: {}\n\nThis merges {} ({} {}, {} {}) into {}, the branch your project folder has checked out, as \"git merge\" there would. If git cannot merge cleanly, nothing is changed.\n\nLand the goal?",
+                        "Goal {}: {}\n\nThis merges {} ({} {}, {} {}) into {}, the branch your project folder has checked out, as \"git merge\" there would. If git cannot merge cleanly, nothing is changed.{}\n\nLand the goal?",
                         visible(&gid),
                         shown(text),
                         visible(&branch),
@@ -561,8 +578,9 @@ Set {} aside and land the goal?",
                         files,
                         if files == 1 { "file" } else { "files" },
                         visible(&into),
+                        warning,
                     ),
-                    confirm: "Land the goal".into(),
+                    confirm: if busy.is_empty() { "Land the goal".into() } else { "Land anyway".into() },
                     danger: false,
                 }),
             })
@@ -927,6 +945,33 @@ mod tests {
             let (c, what) = checked("policy/trust", Some(&bad));
             assert!(prepare(what, &c, PID, Some(&bad), &get).is_err(), "{bad}");
         }
+    }
+
+    /// In the trial a goal landed into the project folder while Antigravity worked there, and
+    /// nothing said so (2026-11-18): the question names who is at work, once, and lets the person
+    /// decide.
+    #[test]
+    fn landing_while_an_agent_works_in_the_folder_says_who_and_asks_once() {
+        let get = |path: &str| -> Result<Value, CmdError> {
+            if path.ends_with("/goals/g1") {
+                Ok(json!({"goal": {"objective": "Menu screens"}}))
+            } else if path.ends_with("/goals/g1/land") {
+                Ok(json!({"state": "ready", "into": "main", "commits": 1, "busy": ["antigravity-1\u{202E}"]}))
+            } else if path.ends_with("/goals/g1/diff?stat=1") {
+                Ok(json!({"branch": "friday/goal-g1", "commits_ahead": [{"sha": "a"}], "files": []}))
+            } else {
+                panic!("unexpected read {path}")
+            }
+        };
+        let (c, what) = checked("goals/g1/land", None);
+        let d = prepare(what, &c, PID, None, &get).unwrap().dialog.expect("a dialog");
+        assert!(
+            d.text.contains("antigravity-1⟨U+202E⟩ is working in your project folder right now"),
+            "{}",
+            d.text
+        );
+        assert!(d.text.contains("best to land when that work is done"), "{}", d.text);
+        assert_eq!(d.confirm, "Land anyway");
     }
 
     #[test]

@@ -171,8 +171,9 @@ export function landModal(
               body: [
                 `This merges ${visible(branch)} into ${into()}, the branch your project folder has checked out, as "git merge" there would.`,
                 'If git cannot merge cleanly, nothing is changed and Friday says why.',
+                ...(busyWords() ? [busyWords() as string] : []),
               ],
-              confirmLabel: 'Land the goal',
+              confirmLabel: busyWords() ? 'Land anyway' : 'Land the goal',
             },
       );
       if (!ok) return;
@@ -275,9 +276,16 @@ export function landModal(
     );
   }
 
+  /** Agents at work in the project folder now, in a sentence; null when none is (2026-11-18). */
+  function busyWords(): string | null {
+    const busy = plan?.state === 'ready' ? (plan.busy ?? []) : [];
+    if (!busy.length) return null;
+    const names = busy.map((k) => visible(k)).join(' and ');
+    return `${names} ${busy.length === 1 ? 'is' : 'are'} working in your project folder right now. Landing changes files under ${busy.length === 1 ? 'it' : 'them'}: it is best to land when that work is done.`;
+  }
+
   function renderLand() {
     const known = goal ? goal.status === 'COMPLETED' : true;
-    const recorded = Boolean(ctx.store.select('board')?.goal_landing?.[goalId]?.landed);
     const again = linkButton('Check again', () => void readPlan());
     let body: (HTMLElement | null)[];
     if (!plan) {
@@ -297,16 +305,15 @@ export function landModal(
         planError ? note(`Friday could not say what landing would do: ${planError}`) : null,
       ];
     } else if (plan.state === 'landed') {
+      // Merged by hand is landed too: Friday records it when it reads this (2026-11-18), so there is
+      // nothing for the person to mark.
       body = [
-        h('div', { class: 'row' }, badge('landed', 'good'), h('span', null, `The goal's work is on ${into()}.`)),
-        // Merged by hand: the board learns it when the person says so.
-        recorded
-          ? null
-          : h(
-              'div',
-              { class: 'pn-actions pn-actions-start' },
-              button('Mark as landed', () => void landNow(), { class: 'btn', disabled: landing }),
-            ),
+        h(
+          'div',
+          { class: 'row' },
+          badge('landed', 'good'),
+          h('span', null, `The goal's work is on ${into()}. Nothing is pushed: push it when you are ready.`),
+        ),
         asideBox(),
         // What is left once the work is on your branch (2026-11-17): the folders of the finished
         // tasks. Nothing offered to remove them here; it was a command in the palette.
@@ -389,11 +396,14 @@ export function landModal(
         fileList(plan.files),
       ];
     } else {
+      const busy = busyWords();
       body = [
+        busy ? h('div', { class: 'pn-land-blocked', role: 'status' }, busy) : null,
         h(
           'div',
           { class: 'pn-actions pn-actions-start' },
-          button(`Land into ${into()}`, () => void landNow(), {
+          busy ? linkButton('Check again', () => void readPlan()) : null,
+          button(busy ? `Land into ${into()} anyway` : `Land into ${into()}`, () => void landNow(), {
             class: 'btn btn-primary',
             disabled: landing || plan.commits === 0,
             title:
@@ -418,24 +428,32 @@ export function landModal(
 
   function renderSteps() {
     renderLand();
-    if (inFolder()) {
+    // Landed, or the work is in the folder already: there is nothing to merge by hand.
+    if (inFolder() || plan?.state === 'landed') {
       replace(stepsBox, landBox);
       return;
     }
+    // Land does it; doing it yourself is the exception, folded away (2026-11-18). The dialog said
+    // "Friday never merges into your branch on its own" beside the button that merges.
     replace(
       stepsBox,
       landBox,
-      h('div', { class: 'field-label' }, 'Or yourself, in VS Code'),
+      note('Land merges the goal into the branch your folder is on, as a merge you could undo. Nothing is pushed.'),
       h(
-        'ol',
-        { class: 'pn-steps' },
-        h('li', null, 'Open the Source Control view.'),
-        h('li', null, 'In its "…" menu choose Branch → Merge Branch…'),
-        h('li', null, 'Pick ', pathText(branch), '.'),
+        'details',
+        { class: 'pn-fold' },
+        h('summary', null, 'Merge it yourself instead'),
+        h('div', { class: 'field-label' }, 'In VS Code'),
+        h(
+          'ol',
+          { class: 'pn-steps' },
+          h('li', null, 'Open the Source Control view.'),
+          h('li', null, 'In its "…" menu choose Branch → Merge Branch…'),
+          h('li', null, 'Pick ', pathText(branch), '.'),
+        ),
+        h('div', { class: 'field-label' }, 'In a terminal, in the project folder'),
+        copyLine(ctx, `git merge ${branch}`, 'merge command'),
       ),
-      h('div', { class: 'field-label' }, 'Or in git (in the project folder, on your branch)'),
-      copyLine(ctx, `git merge ${branch}`, 'merge command'),
-      note('Friday never merges into your branch on its own: landing the goal is your step. Review the diff first.'),
     );
   }
 
@@ -544,7 +562,7 @@ export function landModal(
         });
       }),
     ),
-    section('Merge it', stepsBox),
+    section('Land it', stepsBox),
     h(
       'div',
       { class: 'pn-actions' },
@@ -598,8 +616,10 @@ export function landModal(
   // A landing made meanwhile (another window) shows without reopening the dialog.
   td.add(ctx.store.subscribe('board', () => renderLand()));
 
+  // What the dialog is about, said the moment it opens: a landed goal is "Landed" (2026-11-18).
+  const known = ctx.store.select('board')?.goal_landing?.[goalId];
   return {
-    title: 'Ready to land',
+    title: known?.landed ? 'Landed' : known?.work === 'folder' ? 'Review and commit' : 'Land this goal',
     size: 'md',
     el,
     destroy() {

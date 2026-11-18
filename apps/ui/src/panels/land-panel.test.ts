@@ -1,4 +1,4 @@
-import type { GoalDiff, GoalSummary, LandPlanView } from '@friday/protocol';
+import type { GoalDiff, GoalLandingView, GoalSummary, LandPlanView } from '@friday/protocol';
 import { describe, expect, it } from 'vitest';
 import { makeContext } from '../test/context.js';
 import { makeGoal, makeSnapshot } from '../test/fixtures.js';
@@ -96,9 +96,13 @@ describe('landing', () => {
     expect(text).toContain('abcdef0123');
     expect(text).toContain('+42');
     expect(text).toContain('−3');
-    expect(text).toContain('Source Control');
-    expect(text).toContain('Merge Branch…');
-    expect(text).toContain('Friday never merges into your branch');
+    // Land is the way; doing it by hand is folded away, and nothing says Friday never merges.
+    expect(text).toContain('Land merges the goal into the branch your folder is on');
+    expect(text).not.toContain('Friday never merges');
+    const fold = m.el.querySelector('details.pn-fold');
+    expect(fold?.querySelector('summary')?.textContent).toBe('Merge it yourself instead');
+    expect(fold?.hasAttribute('open')).toBe(false);
+    expect(fold?.textContent).toContain('Merge Branch…');
     buttonBy(m.el, 'Copy the merge command').click();
     buttonBy(m.el, 'Copy the branch name').click();
     await flush();
@@ -163,13 +167,13 @@ describe('landing', () => {
     const dl = m.el.querySelector('dl[data-role="did"]') as HTMLElement;
     const dds = Array.from(dl.querySelectorAll('dd'));
     expect(Array.from(dl.querySelectorAll('dt')).map((dt, i) => [dt.textContent, dds[i]?.textContent])).toEqual([
-      ['Tasks verified', '3 of 3'],
-      ['Claims refused by the checks', '1, reworked'],
-      ['Actions held for you', '2'],
-      ['Actions refused by policy', 'none'],
-      ['Sessions lost', '1, recovered'],
-      ['Hosts reported', '184k tokens, $0.42 (2 of 3 attempts)'],
-      ["Friday's planning", '1 call, $0.03'],
+      ['Tasks that passed their checks', '3 of 3'],
+      ['Work the checks sent back', '1, redone'],
+      ['Times an agent asked you', '2'],
+      ['Actions Friday stopped', 'none'],
+      ['Agents that stopped midway', '1, picked up again'],
+      ['What the agents used', '184k tokens, $0.42 (from 2 of 3 tries)'],
+      ['Planning', '1 call, $0.03'],
     ]);
     expect(m.el.textContent).toContain('What Friday did');
     m.destroy();
@@ -232,6 +236,30 @@ describe('landing', () => {
     head: 'f'.repeat(40),
     fast_forward: true,
   };
+
+  // In the trial a goal landed into the folder while Antigravity worked there (2026-11-18).
+  it('says who is working in the project folder before Land, and lets the person land anyway', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ goals: [makeGoal({ status: 'COMPLETED' })] }),
+      answers: {
+        [`GET /goals/${GID}/diff`]: diff(),
+        [`GET /goals/${GID}/land`]: planOf({ busy: ['antigravity-1'] }),
+        [`POST /goals/${GID}/land`]: landed,
+      },
+    });
+    const m = landModal(ctx, { kind: 'land', id: GID }, () => undefined);
+    await flush();
+    expect(m.el.textContent).toContain('antigravity-1 is working in your project folder right now');
+    const go = buttonBy(m.el, 'Land into main anyway');
+    ctx.confirmAnswer = true;
+    go.click();
+    await flush();
+    // The page's own question (a browser) says it again, and the button says what it does.
+    expect(ctx.confirms.at(-1)?.confirmLabel).toBe('Land anyway');
+    expect(String(ctx.confirms.at(-1)?.body)).toContain('antigravity-1 is working in your project folder');
+    expect(ctx.transport.to('POST', `/goals/${GID}/land`)).toHaveLength(1);
+    m.destroy();
+  });
 
   it('offers to clean up the finished task folders once the goal has landed, and only then', async () => {
     const ctx = makeContext({
@@ -323,7 +351,7 @@ describe('landing', () => {
     expect(m.el.querySelector('img')).toBeNull();
     // Still offered: the person can merge by hand, or try again.
     expect(buttonBy(m.el, 'Land into main').disabled).toBe(false);
-    expect(m.el.textContent).toContain('Or in git');
+    expect(m.el.querySelector('details.pn-fold summary')?.textContent).toBe('Merge it yourself instead');
     m.destroy();
   });
 
@@ -395,7 +423,7 @@ describe('landing', () => {
     m.destroy();
   });
 
-  it('lets a merge made by hand be marked as landed, without asking, and warns of mixed work', async () => {
+  it('takes a merge made by hand as landed, with nothing to mark or merge, and warns of mixed work', async () => {
     const ctx = makeContext({
       snapshot: makeSnapshot({ goals: [makeGoal({ status: 'COMPLETED' })] }),
       answers: {
@@ -407,20 +435,33 @@ describe('landing', () => {
     const m = landModal(ctx, { kind: 'land', id: GID }, () => undefined);
     await flush();
     expect(m.el.textContent).toContain("The goal's work is on main.");
+    expect(m.el.textContent).toContain('Nothing is pushed');
     expect(m.el.textContent).toContain('that part is already in the folder and is not on this branch');
-    buttonBy(m.el, 'Mark as landed').click();
-    await flush();
-    expect(ctx.confirms).toHaveLength(0);
-    expect(ctx.transport.to('POST', `/goals/${GID}/land`)).toHaveLength(1);
-    // Once the board holds the landing, there is nothing left to mark.
-    ctx.board(
-      makeSnapshot({
-        goals: [makeGoal({ status: 'COMPLETED' })],
-        goal_landing: { [GID]: { work: 'mixed', landed: { into: 'main', at: '2026-11-17T10:00:00.000Z' } } },
-      }),
-    );
+    // Friday records it when it reads the plan (2026-11-18): there is no button to mark it, and no
+    // way to merge it by hand is offered for work already merged.
     expect(() => buttonBy(m.el, 'Mark as landed')).toThrow();
+    expect(m.el.querySelector('details.pn-fold')).toBeNull();
+    expect(ctx.transport.to('POST', `/goals/${GID}/land`)).toHaveLength(0);
     m.destroy();
+  });
+
+  it('is titled by what there is to do: land, landed, or review and commit (2026-11-18)', () => {
+    const title = (landing: GoalLandingView | null) => {
+      const ctx = makeContext({
+        snapshot: makeSnapshot({
+          goals: [makeGoal({ status: 'COMPLETED' })],
+          ...(landing ? { goal_landing: { [GID]: landing } } : {}),
+        }),
+        answers: { [`GET /goals/${GID}/diff`]: diff() },
+      });
+      const m = landModal(ctx, { kind: 'land', id: GID }, () => undefined);
+      m.destroy();
+      return m.title;
+    };
+    expect(title(null)).toBe('Land this goal');
+    expect(title({ work: 'branch', landed: null })).toBe('Land this goal');
+    expect(title({ work: 'branch', landed: { into: 'main', at: '2026-11-18T10:00:00.000Z' } })).toBe('Landed');
+    expect(title({ work: 'folder', landed: null })).toBe('Review and commit');
   });
 
   it('works with a daemon that cannot say what landing would do, and does not offer an unfinished goal', async () => {

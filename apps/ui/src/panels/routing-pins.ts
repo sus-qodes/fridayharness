@@ -76,6 +76,33 @@ export function routingPins(ctx: AppContext, td: Teardown): RoutingPins {
     return WORK_LABEL.get(p.target ?? '') ?? `Work of the role ${visible(truncate(p.target ?? '', 80))}`;
   };
 
+  /** USD per million tokens of the models Friday knows a price for. */
+  let prices: Record<string, { input: number; output: number }> = {};
+  /** "$4 to read and $20 to write a million tokens", or null without a price. */
+  const priceWords = (model: string): string | null => {
+    const p = prices[model];
+    return p ? `$${p.input} to read and $${p.output} to write a million tokens` : null;
+  };
+  /**
+   * What choosing one model for everything costs, beside the least costly model an agent here runs
+   * (2026-11-18): in the trial Opus was chosen for everything, perhaps by accident, and a question
+   * cost about $1.60. Nothing on screen said so.
+   */
+  const pinCost = (model: string): string | null => {
+    const mine = priceWords(model);
+    if (!mine) return null;
+    const cheaper = usableModels(models)
+      .filter((m) => prices[m.id] && m.id !== model)
+      .sort((a, b) => (prices[a.id]?.output ?? 0) - (prices[b.id]?.output ?? 0))[0];
+    const own = prices[model];
+    const less = cheaper && own && (prices[cheaper.id]?.output ?? Infinity) < own.output ? cheaper : undefined;
+    return `${modelName(model)} costs ${mine}.${
+      less
+        ? ` ${modelName(less.id)} costs ${priceWords(less.id)}: letting Friday choose gives it the work it does as well.`
+        : ''
+    } Simple questions run on it too.`;
+  };
+
   // ---- the one choice
   function renderEverything() {
     if (!pinsRead) return;
@@ -101,6 +128,9 @@ export function routingPins(ctx: AppContext, td: Teardown): RoutingPins {
           ? 'Every task runs on this model, so only agents that can run it take work.'
           : 'Friday picks a model for each kind of work from its ranking, on whichever agent is free.',
       }).el,
+      current?.model && pinCost(current.model)
+        ? h('p', { class: 'pn-pin-cost', dataset: { role: 'pin-cost' } }, pinCost(current.model))
+        : null,
       note(
         'An agent you run in your own editor (Claude Code in VS Code, Antigravity) chooses its own model: this choice does not reach it.',
       ),
@@ -170,6 +200,7 @@ export function routingPins(ctx: AppContext, td: Teardown): RoutingPins {
       const r = await ctx.api.pins();
       if (td.done) return;
       pins = Array.isArray(r?.pins) ? r.pins : [];
+      prices = r?.prices && typeof r.prices === 'object' ? r.prices : {};
       pinsRead = true;
       renderEverything();
       renderPins();

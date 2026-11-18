@@ -6,6 +6,7 @@ import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
 import {
   bringBack,
+  folderWorkers,
   type InTheWay,
   listed,
   type SetAside,
@@ -62,6 +63,11 @@ export interface LandPlan {
   in_the_way?: InTheWay;
   /** Files set aside at an earlier landing of this goal and not put back. */
   set_aside?: SetAside[];
+  /**
+   * Agents at work in the project folder now (2026-11-18), on a plan that would merge: landing
+   * changes files under them. The person is told before Land, and landing by itself waits.
+   */
+  busy?: string[];
 }
 
 const MAX_REASON = 600;
@@ -312,12 +318,112 @@ async function inspect(state: FridayState, project: ProjectRef, goalId: string, 
       );
     }
   }
-  return { plan: { ...base, commits }, tip, before, touched, status, already };
+  const busy = folderWorkers(state, project);
+  return { plan: { ...base, commits, ...(busy.length ? { busy } : {}) }, tip, before, touched, status, already };
 }
 
-/** What Land would do for a goal now (`GET goals/:gid/land`); it changes nothing. */
+/**
+ * What Land would do for a goal now (`GET goals/:gid/land`). It changes nothing in the folder; a
+ * goal whose work is on the open branch already (merged by hand) is recorded as landed, once: that
+ * is a fact, and the dialog no longer asks the person to say so (2026-11-18).
+ */
 export async function landPlan(state: FridayState, project: ProjectRef, goalId: string): Promise<LandPlan> {
-  return (await inspect(state, project, goalId)).plan;
+  const i = await inspect(state, project, goalId);
+  if (i.plan.state === 'landed' && i.plan.into && !landedGoals(state, project.project_id).has(goalId)) {
+    recordLandedByHand(state, project.project_id, goalId, i.plan.branch, i.plan.into, i.before);
+  }
+  return i.plan;
+}
+
+const NOTICED: Actor = { kind: 'system', id: 'friday' };
+
+/** A landing Friday did not make: the goal's work is on `into` all the same. */
+function recordLandedByHand(
+  state: FridayState,
+  projectId: string,
+  goalId: string,
+  branch: string,
+  into: string,
+  head: string | null,
+): void {
+  if (state.q.findGoal(projectId, goalId)?.status !== 'COMPLETED') return;
+  const result: LandResult & { by_hand: true } = {
+    goal_id: goalId,
+    status: 'already',
+    branch,
+    into,
+    head: head ?? '',
+    fast_forward: false,
+    by_hand: true,
+  };
+  state.recordObservation(projectId, NOTICED, 'goal.landed', { ...result, before: head }, []);
+}
+
+/**
+ * Notices goals merged into the open branch outside Friday (2026-11-18): in git, in VS Code, by a
+ * fast-forward. Each completed goal whose work was brought to its goal branch and whose branch is
+ * now in the folder's HEAD is recorded as landed into that branch, once. Before, such a goal said
+ * "Ready to land" until somebody opened its dialog and pressed "Mark as landed".
+ *
+ * Cheap enough to run every few seconds: nothing is read again while the folder's HEAD and the set
+ * of goals waiting to land are as they were at the last look.
+ */
+export function landingWatch(state: FridayState, project: ProjectRef): () => Promise<string[]> {
+  const pid = project.project_id;
+  let lastKey = '';
+  let running = false;
+  return async () => {
+    if (running) return [];
+    running = true;
+    try {
+      const landed = landedGoals(state, pid);
+      const waiting = state.q
+        .goals(pid, { statuses: ['COMPLETED'] })
+        .filter(
+          (g) =>
+            g.mode !== 'ask' &&
+            !landed.has(g.goal_id) &&
+            // It brought work to its branch: a goal whose tasks changed nothing has nothing to
+            // land, and its branch is in the folder's history from the start.
+            state.q
+              .integrations(pid, { goal_id: g.goal_id })
+              .some((x) => x.status === 'integrated' && x.merged_commit && x.merged_commit !== x.base_commit),
+        )
+        .map((g) => g.goal_id)
+        .slice(0, 50);
+      if (!waiting.length) {
+        lastKey = '';
+        return [];
+      }
+      const head = await runGit(project.root, ['rev-parse', '--verify', '--quiet', 'HEAD'], { okCodes: [1, 128] });
+      const current = await runGit(project.root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
+        okCodes: [1, 128],
+      });
+      if (head.code !== 0 || current.code !== 0) return [];
+      const before = head.stdout.trim();
+      const into = current.stdout.trim();
+      const key = `${before}|${into}|${waiting.join(',')}`;
+      if (key === lastKey) return [];
+      lastKey = key;
+      const found: string[] = [];
+      for (const goalId of waiting) {
+        const branch = `friday/goal-${goalId}`;
+        const tip = await runGit(project.root, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], {
+          okCodes: [1, 128],
+        });
+        if (tip.code !== 0) continue;
+        const inHead = await runGit(project.root, ['merge-base', '--is-ancestor', tip.stdout.trim(), before], {
+          okCodes: [1, 128],
+        });
+        if (inHead.code !== 0) continue;
+        recordLandedByHand(state, pid, goalId, branch, into, before);
+        found.push(goalId);
+      }
+      return found;
+    } finally {
+      running = false;
+    }
+  };
 }
 
 /**
@@ -463,6 +569,15 @@ export async function landGoal(
           state: plan.state,
           files: plan.files,
         },
+      );
+    }
+    // Landing by itself waits while an agent works in the folder: a person who presses Land was
+    // told, and decides; Friday does not change files under a session on its own.
+    if (actor.kind === 'system' && plan.state === 'ready' && plan.busy?.length) {
+      throw new FridayError(
+        'invalid_request',
+        `${plan.busy.join(' and ')} ${plan.busy.length === 1 ? 'is' : 'are'} working in the project folder right now: the goal lands when that work is done, or when you press Land`,
+        { state: 'busy', working: plan.busy },
       );
     }
     const into = plan.into as string;

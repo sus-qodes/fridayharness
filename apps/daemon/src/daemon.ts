@@ -41,7 +41,7 @@ import { DependencyCache, dependencyCacheDir } from './dependency-cache.js';
 import { profileCache } from './execution.js';
 import { GraphService } from './graph-service.js';
 import { IntegrationManager } from './integration.js';
-import { landGoal } from './land.js';
+import { landGoal, landingWatch } from './land.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
 import { OperationManager } from './operations.js';
 import { type EffectivePolicy, loadEffectivePolicy, reloadingPolicy, settleTrust, trustSettings } from './policy.js';
@@ -914,6 +914,17 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       : undefined;
   const sweep = setInterval(() => state.bus.sweepIdempotency(), 60 * 60 * 1000);
   sweep.unref();
+  // A goal merged into the open branch outside Friday is recorded as landed (2026-11-18).
+  const noticeLandings = landingWatch(state, project);
+  const notice = () =>
+    void noticeLandings()
+      .then((ids) => {
+        if (ids.length) logger.info('goals found landed outside Friday', { goal_ids: ids });
+      })
+      .catch((e) => logger.warn('looking for goals landed by hand failed', { message: (e as Error).message }));
+  const landingTimer = tickMs > 0 ? setInterval(notice, 30_000) : undefined;
+  landingTimer?.unref();
+  if (tickMs > 0) notice();
   if (brain && !(opts.brain && opts.brain.autoStart === false)) brain.brain.start();
   // A project initialized without its graph gets it once, now, in the background.
   void setup.start().catch((e) => logger.warn('setup did not finish', { message: (e as Error).message }));
@@ -932,6 +943,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       if (brain) await brain.brain.stop().catch(() => undefined);
       if (timer) clearInterval(timer);
       clearInterval(sweep);
+      if (landingTimer) clearInterval(landingTimer);
       stopWorkspaces();
       stopLanding();
       stopAutoVerify();
