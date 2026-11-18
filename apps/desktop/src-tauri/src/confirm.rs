@@ -99,6 +99,7 @@ pub(crate) fn loosening_words(setting: &str, to: &str) -> Option<String> {
     }
     let class = setting.strip_prefix("autonomy.")?;
     let what = match class {
+        "file.write" => "change files with a command, also outside a task's own files",
         "git.mutate" => "commit and change branches",
         "package.install" => "install packages",
         "fs.destructive" => "delete files with a command",

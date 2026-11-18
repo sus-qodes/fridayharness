@@ -27,7 +27,8 @@ import {
 
 /** The cards the Notch shows, built by their own areas. */
 export interface NotchSlots {
-  approval(ctx: AppContext, a: ApprovalRow, opts: { compact: boolean }): Component;
+  /** `onFull`: the card's full view is the Studio's; the Notch opens it there and folds. */
+  approval(ctx: AppContext, a: ApprovalRow, opts: { compact: boolean; onFull?: () => void }): Component;
   question(ctx: AppContext, e: EscalationView, opts: { compact: boolean; onLater: () => void }): Component;
   waiting(ctx: AppContext, t: SnapshotTask, opts: { compact: boolean }): Component;
   /** The goal line of the desktop card ("Describe a goal…"). */
@@ -382,7 +383,8 @@ export function expandedView(ctx: AppContext, slots: NotchSlots, handlers: ViewH
     if (!item) return;
     let comp: Component | null = null;
     try {
-      if (item.kind === 'approval') comp = slots.approval(ctx, item.approval, { compact: true });
+      if (item.kind === 'approval')
+        comp = slots.approval(ctx, item.approval, { compact: true, onFull: () => handlers.openItem(item) });
       else if (item.kind === 'question')
         comp = slots.question(ctx, item.escalation, { compact: true, onLater: () => handlers.later() });
       else if (item.kind === 'waiting') comp = slots.waiting(ctx, item.task, { compact: true });

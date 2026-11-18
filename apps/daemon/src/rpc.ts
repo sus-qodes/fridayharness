@@ -470,10 +470,17 @@ function requestCapability(deps: RpcDeps, c: Caller, p: ParsedParamsOf<'permissi
   // command. It is now judged as the command it is, by the judge the hook uses.
   if (p.command && !p.resource && deps.judgeTool && task && task.current_run_id === (run?.run_id ?? null)) {
     const agent = state.q.findAgent(c.agent_id);
+    const host = state.q.harness(c.harness_id);
     const { result, approval_id } = deps.judgeTool({
-      harness: state.q.harness(c.harness_id),
+      harness: host,
       agent: agent ? { agent_id: agent.agent_id, role: agent.role } : undefined,
-      action: { tool: 'Bash', kind: 'command', command: p.command },
+      // Claude Code runs it in its Bash tool; of another host's shell nothing is known here, and
+      // the command is read the stricter way (as its own hook or approval request will be).
+      action: {
+        tool: host.vendor === 'claude-code' ? 'Bash' : 'commandExecution',
+        kind: 'command',
+        command: p.command,
+      },
       actor: { kind: 'agent', id: c.agent_id },
       askHuman: true,
       request: { justification: p.justification, reuse: p.reuse, ttl_s: p.ttl_s },
@@ -488,7 +495,9 @@ function requestCapability(deps: RpcDeps, c: Caller, p: ParsedParamsOf<'permissi
         reason:
           result.rule === 'command.approved'
             ? 'a human already approved exactly this: run it now'
-            : `no approval needed: ${result.reason} Run it now`,
+            : // Codex asked a person for leave to run the tests its own sandbox had stopped (the trial,
+              // 2026-11-18): Friday had allowed them all along, and allows the run outside it too.
+              `no approval needed: ${result.reason} Run it now. If your own sandbox stopped it, run it again and let your host run it outside the sandbox: Friday allows that as well`,
         expires_at: null,
         capability: capabilityName,
         risk,

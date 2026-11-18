@@ -10,17 +10,29 @@ import { capabilityWords, knownCapability } from '../model/capability-words.js';
 import { hasHidden, visible } from '../model/text.js';
 import { type AppContext, type Component, openModal } from '../shell/context.js';
 import { button, h, replace, setText } from '../ui/dom.js';
-import { timeUntil } from '../ui/format.js';
+import { cleanText, timeUntil, truncate } from '../ui/format.js';
 import { icon } from '../ui/svg.js';
 import { ARMING_TEXT, armDecisions, type Clock } from './arming.js';
 import { agentKeyOf, agentText, HIDDEN_WARNING, isExpired, nextId, riskBadge, riskOf, taskLine } from './common.js';
-import { type DecisionOutcome, decideApproval, grantPath, modalReason, requestReach } from './decisions.js';
+import {
+  type DecisionOutcome,
+  decideApproval,
+  grantPath,
+  modalReason,
+  requestReach,
+  taskGrantPath,
+} from './decisions.js';
 
 export interface ApprovalCardOptions {
   /** The Notch's smaller card. */
   compact?: boolean;
   /** Called after a decision from this card settled (or the modal was opened for it). */
   onDecided?: (outcome: DecisionOutcome | 'modal') => void;
+  /**
+   * Opens the full view of this request where the card cannot (the Notch: in the Studio, brought
+   * to the front). Without it the card opens the dialog in its own page.
+   */
+  onFull?: () => void;
   /** Timers for arming (tests). */
   clock?: Clock;
 }
@@ -133,7 +145,9 @@ export function approvalCard(ctx: AppContext, approval: ApprovalRow, opts: Appro
 
   const openFull = (reach: 'once' | 'task'): void => {
     requestReach(a.approval_id, reach);
-    openModal(ctx, { kind: 'approval', id: a.approval_id });
+    // In the Notch the full view is the Studio's: it is opened there, in front, by the host.
+    if (opts.onFull) opts.onFull();
+    else openModal(ctx, { kind: 'approval', id: a.approval_id });
     finish('modal');
   };
 
@@ -146,9 +160,26 @@ export function approvalCard(ctx: AppContext, approval: ApprovalRow, opts: Appro
     finish(outcome);
   };
 
-  const doAllowTask = (): void => {
+  const doAllowTask = async (): Promise<void> => {
     if (settled || isExpired(a, ctx.now())) return;
-    openFull('task');
+    if (taskGrantPath(a) === 'modal') return openFull('task');
+    // One confirmation: the desktop shows its own for this reach (`confirm_and_send`), over the
+    // window that asked; a browser asks here.
+    if (!ctx.platform.desktop) {
+      const ok = await ctx.confirm({
+        title: 'Allow this for the whole task?',
+        body: [
+          `${capabilityWords(a.capability)}: ${truncate(cleanText(a.target ?? ''), 300)}`,
+          'The agent may then do exactly this again on this task without asking.',
+        ],
+        confirmLabel: 'Allow for this task',
+      });
+      if (!ok) return;
+    }
+    setText(status, 'Allowing for this task…');
+    const outcome = await decideApproval(ctx, a, { allow: true, reuse: 'task' });
+    setText(status, outcome === 'done' ? 'Allowed for this task' : outcome === 'already' ? 'Already decided' : '');
+    finish(outcome);
   };
 
   const openDeny = (): void => {
@@ -178,7 +209,7 @@ export function approvalCard(ctx: AppContext, approval: ApprovalRow, opts: Appro
   );
   allowTask.addEventListener(
     'click',
-    arming.guard(() => doAllowTask()),
+    arming.guard(() => void doAllowTask()),
   );
   deny.addEventListener(
     'click',
@@ -201,7 +232,7 @@ export function approvalCard(ctx: AppContext, approval: ApprovalRow, opts: Appro
       name: 'approval-card',
       bindings: [
         { key: '1', run: keyed(() => void doAllowOnce()), description: 'Allow once' },
-        { key: '2', run: keyed(doAllowTask), description: 'Allow for this task…' },
+        { key: '2', run: keyed(() => void doAllowTask()), description: 'Allow for this task…' },
         { key: '3', run: keyed(openDeny), description: 'Deny' },
       ],
     });

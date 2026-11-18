@@ -1887,3 +1887,123 @@ describe('a lockfile a clean install refuses (2026-11-18)', () => {
     360_000,
   );
 });
+
+describe('checks that fit the change (2026-11-18)', () => {
+  /** The project's test, and a lint check that fails on a line ending in a space. */
+  const TWO_CHECKS = [
+    '  checks:',
+    '    - name: tests',
+    '      command: node',
+    '      args: ["--test", "test/*.test.mjs"]',
+    '    - name: lint',
+    '      kind: lint',
+    '      command: node',
+    '      args: ["scripts/lint.cjs"]',
+    '',
+  ].join('\n');
+  const LINT = [
+    "const fs = require('node:fs');",
+    "const bad = ['README.md', 'src/a.mjs'].filter((f) => fs.existsSync(f) && /[ \\t]$/m.test(fs.readFileSync(f, 'utf8')));",
+    "if (bad.length) { console.error('trailing space in ' + bad.join(', ')); process.exit(1); }",
+    '',
+  ].join('\n');
+  const verify = (td: TestDaemon, taskId: string) =>
+    td.operator.post<{ task: TaskView; verification: VerificationView }>(
+      td.operator.projectPath(`/tasks/${taskId}/verify`),
+      {},
+      { timeoutMs: 120_000 },
+    );
+  const claim = async (w: Awaited<ReturnType<typeof begin>>, files: Record<string, string>) => {
+    for (const [rel, text] of Object.entries(files)) writeFileSync(path.join(w.start.working_directory, rel), text);
+    await w.fake.client.reportResult({
+      task_id: w.taskId,
+      run_id: w.start.run_id,
+      status: 'completed_claim',
+      summary: Object.keys(files).length ? `changed ${Object.keys(files).join(', ')}` : 'looked, changed nothing',
+      changed_paths: Object.keys(files),
+      // An agent that ran nothing: with a change to code, that alone would not do.
+      checks: [],
+    });
+    await w.fake.close();
+  };
+  const ran = (v: VerificationView) => v.checks.filter((c) => c.origin !== 'friday').map((c) => c.name);
+
+  it('runs no project check for a task that changed nothing, only lint for one that changed a document, and all for code', async () => {
+    const td = await project(TWO_CHECKS, { 'scripts/lint.cjs': LINT, 'README.md': '# Shop\n' });
+    const { goalId, ids } = await goalWith(td, [
+      { key: 'explain', summary: 'Explain how a and b add up', write: ['src/**', 'README.md'] },
+      { key: 'docs', summary: 'Describe the shop in the README', write: ['README.md'], depends_on: ['explain'] },
+      { key: 'code', summary: 'Raise a to 2', write: ['src/a.mjs'], depends_on: ['docs'] },
+    ]);
+
+    // Nothing changed: nothing of the project runs, and the task is done.
+    const explain = await begin(td, 'be-1', ids.explain as string);
+    await claim(explain, {});
+    const nothing = await verify(td, explain.taskId);
+    expect(nothing.task.status, JSON.stringify(nothing.verification.checks)).toBe('COMPLETED');
+    expect(ran(nothing.verification)).toEqual([]);
+    expect(nothing.verification.summary).toContain(
+      "nothing was changed, so the project's checks were not run (tests, lint)",
+    );
+    await runOnce(td);
+
+    // A document only: the lint check judges it, the tests do not run.
+    const docs = await begin(td, 'be-2', ids.docs as string);
+    await claim(docs, { 'README.md': '# Shop\n\nSells a and b. \n' });
+    const untidy = await verify(td, docs.taskId);
+    expect(ran(untidy.verification)).toEqual(['lint']);
+    expect(untidy.verification.checks.find((c) => c.name === 'lint')?.status).toBe('FAILED');
+    expect(untidy.task.status).not.toBe('COMPLETED');
+    await td.operator.post(td.operator.projectPath(`/tasks/${docs.taskId}/rework`), { reason: 'trailing space' });
+    const again = await begin(td, 'be-2', docs.taskId);
+    await claim(again, { 'README.md': '# Shop\n\nSells a and b.\n' });
+    const tidy = await verify(td, docs.taskId);
+    expect(tidy.task.status, JSON.stringify(tidy.verification.checks)).toBe('COMPLETED');
+    expect(ran(tidy.verification)).toEqual(['lint']);
+    expect(tidy.verification.summary).toContain('only documents were changed, so tests was not run');
+    expect((await integrationOf(td, docs.taskId)).status).toBe('integrated');
+    await runOnce(td);
+
+    // Code: every check, as before.
+    const code = await begin(td, 'be-1', ids.code as string);
+    await claim(code, { 'src/a.mjs': 'export const a = 2;\n' });
+    const full = await verify(td, code.taskId);
+    expect(full.task.status, JSON.stringify(full.verification.checks)).toBe('COMPLETED');
+    expect(ran(full.verification)).toEqual(['tests', 'lint']);
+    expect((await integrationOf(td, code.taskId)).status).toBe('integrated');
+    await runOnce(td);
+    expect((await td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`))).goal.status).toBe(
+      'COMPLETED',
+    );
+  }, 240_000);
+
+  it('checks a merge that brings only a document with the lint check alone, and one that brings code with all', async () => {
+    const td = await project(TWO_CHECKS, { 'scripts/lint.cjs': LINT, 'README.md': '# Shop\n' });
+    // Two pairs that start from the same commit: the second of each pair to finish is a real merge.
+    const { ids } = await goalWith(td, [
+      { key: 'code', summary: 'Lower b', write: ['src/b.mjs'] },
+      { key: 'docs', summary: 'Describe the shop', write: ['README.md'] },
+      { key: 'more', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+    ]);
+    const code = await begin(td, 'be-1', ids.code as string);
+    const docs = await begin(td, 'be-2', ids.docs as string);
+    await claim(code, { 'src/b.mjs': 'export const b = 0;\n' });
+    expect((await verify(td, code.taskId)).task.status).toBe('COMPLETED');
+    expect((await integrationOf(td, code.taskId)).status).toBe('integrated');
+    const more = await begin(td, 'be-1', ids.more as string);
+
+    // The document joins a branch that moved on: a merge, checked by the lint check alone.
+    await claim(docs, { 'README.md': '# Shop\n\nSells a and b.\n' });
+    expect((await verify(td, docs.taskId)).task.status).toBe('COMPLETED');
+    const merged = await integrationOf(td, docs.taskId);
+    expect(merged.status, merged.summary ?? '').toBe('integrated');
+    expect(merged.checks.map((c) => [c.name, c.status])).toEqual([['lint', 'PASSED']]);
+
+    // Code joins it: every check runs on what the two make together.
+    await claim(more, { 'src/a.mjs': 'export const a = 2;\n' });
+    expect((await verify(td, more.taskId)).task.status).toBe('COMPLETED');
+    const both = await integrationOf(td, more.taskId);
+    expect(both.status, both.summary ?? '').toBe('integrated');
+    expect(both.checks.map((c) => c.name)).toEqual(['tests', 'lint']);
+  }, 240_000);
+});

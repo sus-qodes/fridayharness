@@ -185,7 +185,7 @@ describe('tool.check', () => {
       h.client.call('tool.check', { tool: 'commandExecution', action: { kind: 'command', command } });
     // As Claude Code's PowerShell tool passes it, and as Codex wraps it.
     for (const command of ["'review redirection' > outside.txt", `${PS} "'review redirection' > outside.txt"`]) {
-      expect(await check(command), command).toMatchObject({ decision: 'ask', rule: 'command.git.mutate' });
+      expect(await check(command), command).toMatchObject({ decision: 'ask', rule: 'command.file.write' });
     }
     // Printed or thrown away, it still passes.
     expect((await check("'review redirection' > $null")).decision).toBe('allow');

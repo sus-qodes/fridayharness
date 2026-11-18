@@ -23,7 +23,7 @@ import {
 import type { Actor, IntegrationView, TaskView } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
-import { selectChecks, summarizeOutcome } from '@friday/verification';
+import { checksForChange, selectChecks, summarizeOutcome } from '@friday/verification';
 import type { FileCopier } from './copy-files.js';
 import { runCheckInProfile } from './execution.js';
 import { InFlight } from './in-flight.js';
@@ -520,7 +520,13 @@ export class IntegrationManager {
           });
         }
         // A repair is new content: its checks run before the goal branch moves to it.
-        const outcome = await this.#checkRevision(task, goalId, taskCommit, candidate);
+        const outcome = await this.#checkRevision(
+          task,
+          goalId,
+          taskCommit,
+          candidate,
+          await changedBetween(project.root, goalHead, taskCommit).catch(() => null),
+        );
         if (outcome.problem) {
           return record({ ...base, task_commit: taskCommit, base_commit: goalHead, ...outcome.problem });
         }
@@ -554,7 +560,13 @@ export class IntegrationManager {
       );
 
       // 4. Verify the merged revision in Friday's own checkout before the goal branch moves.
-      const outcome = await this.#checkRevision(task, goalId, commit, merged.tree);
+      const outcome = await this.#checkRevision(
+        task,
+        goalId,
+        commit,
+        merged.tree,
+        await changedBetween(project.root, goalHead, merged.tree).catch(() => null),
+      );
       if (outcome.problem) {
         return record({ ...base, task_commit: taskCommit, base_commit: goalHead, ...outcome.problem });
       }
@@ -609,6 +621,9 @@ export class IntegrationManager {
     goalId: string,
     commit: string,
     expected: string,
+    // What the revision changes in the goal branch, when that is known: the checks fit it
+    // (`checksForChange`). A merge that brings only documents has the code the branch had.
+    changed: readonly string[] | null = null,
   ): Promise<{
     results: Outcome['checks'];
     ran: boolean;
@@ -616,7 +631,7 @@ export class IntegrationManager {
   }> {
     const { state, project, workspaces } = this.opts;
     const branch = goalBranch(goalId);
-    const checks = selectChecks(project.config.verification.checks, task.kind);
+    const checks = checksForChange(selectChecks(project.config.verification.checks, task.kind), changed, task.kind).run;
     const results: Outcome['checks'] = [];
     if (!checks.length) return { results, ran: false, problem: null };
     const dir = await checkoutForVerification(project.root, workspaces.dir, `goal-${goalId.slice(-8)}`, commit);

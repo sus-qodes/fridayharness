@@ -34,6 +34,17 @@ export function modalReason(a: Pick<ApprovalRow, 'risk' | 'target'>, reuse: Reac
   return null;
 }
 
+/**
+ * How a card grants for the whole task (2026-11-18). It opened the full view, in the Studio, with
+ * a hold, and the desktop then asked once more; from the Notch that view opened behind the Notch.
+ * A request the card may grant once is granted for its task from the card too, after one
+ * confirmation (the desktop's own dialog there, the page's elsewhere). High risk, and a target too
+ * long to read on the card, still go to the full view.
+ */
+export function taskGrantPath(a: Pick<ApprovalRow, 'risk' | 'target'>): 'confirm' | 'modal' {
+  return modalReason(a, 'once') === null ? 'confirm' : 'modal';
+}
+
 /** `one-click` when the card may grant it directly; `modal` otherwise. */
 export function grantPath(a: Pick<ApprovalRow, 'risk' | 'target'>, reuse: Reach): 'one-click' | 'modal' {
   return modalReason(a, reuse) === null ? 'one-click' : 'modal';

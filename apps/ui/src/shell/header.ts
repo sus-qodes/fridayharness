@@ -175,7 +175,9 @@ export function mountHeader(ctx: AppContext, opts: HeaderOptions = {}): Componen
     h('nav', { class: 'sh-actions', aria: { label: 'Studio' } }, search, messages, more.el),
   );
 
-  const bar = h('div', { class: 'sh-bar' }, leftZone, centerZone, rightZone);
+  // In the desktop app the Notch sits at the top centre of the screen, over the centre of a
+  // maximized window: the view switch stands beside the project there, not under it (2026-11-18).
+  const bar = h('div', { class: ['sh-bar', shell && 'sh-bar-desktop'] }, leftZone, centerZone, rightZone);
 
   const pauseText = h('span', { class: 'sh-pause-text' });
   let resuming = false;

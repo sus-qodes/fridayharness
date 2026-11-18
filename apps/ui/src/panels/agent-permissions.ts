@@ -37,6 +37,13 @@ export const PERMISSIONS: readonly Permission[] = [
     allowed: 'Agents install packages without asking',
   },
   {
+    cls: 'file.write',
+    title: 'Change any file with a command',
+    examples:
+      'mkdir, cp, mv, sed -i, > file. Inside a task’s own files these already run without asking; this is for the others, and for commands that do not say which files',
+    allowed: 'Agents change files with a command without asking, also outside a task’s own files',
+  },
+  {
     cls: 'git.mutate',
     title: 'Commit and change branches',
     examples: 'git commit, git checkout, git merge, in the task’s own folder',

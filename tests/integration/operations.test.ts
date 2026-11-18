@@ -255,7 +255,7 @@ describe('execution gateway', () => {
       const a = await agentOnTask(td, `task ${n}`, n);
       mkdirSync(path.join(a.workdir, 'notes'), { recursive: true });
       writeFileSync(
-        path.join(a.workdir, 'notes', `n${n}.md`),
+        path.join(a.workdir, 'notes', `n${n}.txt`),
         `note ${n}
 `,
       );
@@ -264,7 +264,7 @@ describe('execution gateway', () => {
         run_id: a.run_id,
         status: 'completed_claim',
         summary: 'done',
-        changed_paths: [`notes/n${n}.md`],
+        changed_paths: [`notes/n${n}.txt`],
         checks: [],
       });
       return a.task.task_id;

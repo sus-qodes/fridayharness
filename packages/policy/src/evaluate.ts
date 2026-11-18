@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { TaskScope } from '@friday/protocol';
 import { CLASS_CAPABILITY } from './capabilities.js';
 import { type Autonomy, type CommandClass, classifyCommand } from './commands.js';
@@ -332,6 +333,33 @@ export function evaluate(input: PolicyInput): PolicyResult {
         command_class: c.class,
         targets: [target],
       });
+    // A command that changes files Friday can name (`sed -i … a.ts`, `mkdir src/x`, `> notes.md`)
+    // is judged as a write of those files (2026-11-18): inside the task's files it passes as an
+    // edit of them does; anything else is asked about as before, with the file named. It is the
+    // class of the command only when everything else in it runs without asking.
+    let unnamed = '';
+    if (c.class === 'file.write' && c.writes && !c.writes.opaque && c.writes.paths.length) {
+      const from = action.cwd ?? ctx.projectRoot;
+      const win = ctx.windows ?? process.platform === 'win32';
+      const lib = win ? path.win32 : path.posix;
+      const paths = c.writes.paths.map((p) => {
+        // Git Bash names a drive as `/c/…`.
+        const named = win ? p.replace(/^\/([A-Za-z])\/(?=.)/, '$1:/') : p;
+        return lib.resolve(from, named);
+      });
+      const w = evaluate({ ...input, action: { kind: 'write', tool: action.tool, paths } });
+      if (w.decision === 'allow') {
+        return r('allow', 'command.file.write', 'it changes only files this task may change.', {
+          command_class: 'file.write',
+          targets: [target],
+          ...(w.reserve ? { reserve: w.reserve } : {}),
+          ...(w.relied_on ? { relied_on: w.relied_on } : {}),
+        });
+      }
+      // What is protected stays so, whoever asks.
+      if (w.sensitive_class) return { ...w, command_class: 'file.write' };
+      unnamed = ` It would change ${w.targets.slice(0, 3).join(', ') || 'a file'}: ${w.reason.replace(HOW_TO_ASK, '').trim()}`;
+    }
     if (input.approved?.(CLASS_CAPABILITY[c.class], target)) {
       return r('allow', 'command.approved', `a human approved this ${c.class} command.`, {
         command_class: c.class,
@@ -345,11 +373,18 @@ export function evaluate(input: PolicyInput): PolicyResult {
         targets: [target],
       });
     }
-    return r('ask', `command.${c.class}`, `${c.class} commands need a human decision.`, {
-      command_class: c.class,
-      targets: [target],
-      grant: { capability: CLASS_CAPABILITY[c.class], target },
-    });
+    return r(
+      'ask',
+      `command.${c.class}`,
+      c.class === 'file.write'
+        ? `this command changes files, and a human decides.${unnamed || ' Friday cannot tell from the command which files.'}`
+        : `${c.class} commands need a human decision.`,
+      {
+        command_class: c.class,
+        targets: [target],
+        grant: { capability: CLASS_CAPABILITY[c.class], target },
+      },
+    );
   }
 
   // Writes: scope, approvals and the single-live-writer rule.

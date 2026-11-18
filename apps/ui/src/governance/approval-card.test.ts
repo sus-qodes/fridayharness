@@ -162,17 +162,68 @@ describe('approval card', () => {
     card.destroy();
   });
 
-  it('Allow for this task… (the dots: it always opens the full view) opens the modal with the task reach', async () => {
+  it('Allow for this task… (the dots: one confirmation follows) grants for the task from the card (2026-11-18)', async () => {
     const a = makeApproval({ risk: 'low' });
     const card = mount(a);
     arm(card.el);
     expect(buttonNamed(card.el, 'Allow for this task').textContent).toContain('Allow for this task…');
+    // Saying no changes nothing.
+    ctx.confirmAnswer = false;
+    buttonNamed(card.el, 'Allow for this task…').click();
+    await flush();
+    expect(ctx.confirms.at(-1)?.title).toBe('Allow this for the whole task?');
+    expect([ctx.confirms.at(-1)?.body].flat().join(' ')).toContain('again on this task without asking');
+    expect(ctx.transport.calls).toHaveLength(0);
+    // A yes grants it: no second view, no hold.
+    ctx.confirmAnswer = true;
+    buttonNamed(card.el, 'Allow for this task…').click();
+    await flush();
+    expect(ctx.store.select('ui').modal).toBeFalsy();
+    const sent = ctx.transport.to('POST', `/approvals/${a.approval_id}/approve`);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.body).toMatchObject({ reuse: 'task' });
+    card.destroy();
+  });
+
+  it('on the desktop asks nothing itself: the shell shows its own confirmation for the whole task', async () => {
+    const a = makeApproval({ risk: 'medium' });
+    const card = mount(a);
+    (ctx as { platform: unknown }).platform = { ...ctx.platform, kind: 'tauri', desktop: {} };
+    arm(card.el);
+    buttonNamed(card.el, 'Allow for this task…').click();
+    await flush();
+    expect(ctx.confirms).toHaveLength(0);
+    expect(ctx.transport.to('POST', `/approvals/${a.approval_id}/approve`).map((c) => c.body)).toMatchObject([
+      { reuse: 'task' },
+    ]);
+    card.destroy();
+  });
+
+  it('a high-risk request still goes to the full view for the whole task, where its host opens it', async () => {
+    const a = makeApproval({ risk: 'high' });
+    const card = mount(a);
+    arm(card.el);
     buttonNamed(card.el, 'Allow for this task…').click();
     await flush();
     expect(ctx.transport.calls).toHaveLength(0);
     expect(ctx.store.select('ui').modal?.kind).toBe('approval');
     expect(takeRequestedReach(a.approval_id)).toBe('task');
     card.destroy();
+    // In the Notch the full view is the Studio's: the card asks its host for it, and opens nothing itself.
+    const opened: string[] = [];
+    const inNotch = approvalCard(ctx, makeApproval({ risk: 'high', approval_id: 'apr_notch' }), {
+      compact: true,
+      onFull: () => opened.push('studio'),
+    });
+    document.body.appendChild(inNotch.el);
+    ctx.store.patch('ui', { modal: null });
+    vi.advanceTimersByTime(0);
+    arm(inNotch.el);
+    buttonNamed(inNotch.el, 'Allow for this task…').click();
+    await flush();
+    expect(opened).toEqual(['studio']);
+    expect(ctx.store.select('ui').modal).toBeFalsy();
+    inNotch.destroy();
   });
 
   it('Deny opens a reason field; Send denial sends it as the note', async () => {
@@ -230,7 +281,9 @@ describe('approval card', () => {
       const back = buttonNamed(card.el, 'Back');
       back.click();
       press(card.el.querySelector('button') as HTMLElement, '2');
-      expect(ctx.store.select('ui').modal?.kind).toBe('approval');
+      await flush();
+      // The same as its button: one confirmation, then the grant for the task.
+      expect(ctx.confirms.at(-1)?.title).toBe('Allow this for the whole task?');
       card.destroy();
     });
 

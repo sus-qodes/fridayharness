@@ -244,6 +244,11 @@ const Check = z.object({
   /** false: advisory; a failure is reported and does not fail the verification. */
   required: z.boolean().default(true),
   /**
+   * true: this check also runs for a change that touches only documents (`.md`, `.rst`, `.adoc`).
+   * By default only lint checks do: a build, the types and the tests do not read documents.
+   */
+  on_documents: z.boolean().optional(),
+  /**
    * Arguments that run only the tests related to the change, where "{files}" stands for them
    * (ADR-0024 §5). This targeted form runs first; if it fails, the full check is skipped.
    */
@@ -691,6 +696,7 @@ export const EDITABLE_SETTINGS = {
   'providers.anthropic.allow_remote': z.boolean(),
   'providers.anthropic.daily_budget_usd': z.number().min(0).max(100_000),
   // What agents may run without asking (below): `auto` is a loosening this clone trusts first.
+  'autonomy.file.write': z.enum(['auto', 'review']),
   'autonomy.git.mutate': z.enum(['auto', 'review']),
   'autonomy.package.install': z.enum(['auto', 'review']),
   'autonomy.fs.destructive': z.enum(['auto', 'review']),
@@ -709,6 +715,7 @@ export type EditableSetting = keyof typeof EDITABLE_SETTINGS;
  * here, so no page can loosen them.
  */
 export const ASKABLE_COMMAND_CLASSES = [
+  'file.write',
   'git.mutate',
   'package.install',
   'fs.destructive',

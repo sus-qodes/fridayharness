@@ -58,7 +58,15 @@ describe('where a permission stands', () => {
 
   it('offers only the kinds Friday asks about by default, never pushing, publishing or secrets', () => {
     expect(PERMISSIONS.map((p) => p.cls).sort()).toEqual(
-      ['fs.destructive', 'git.mutate', 'network.fetch', 'package.install', 'process.kill', 'unknown'].sort(),
+      [
+        'file.write',
+        'fs.destructive',
+        'git.mutate',
+        'network.fetch',
+        'package.install',
+        'process.kill',
+        'unknown',
+      ].sort(),
     );
   });
 });
@@ -70,7 +78,7 @@ describe('what agents may do without asking (2026-11-17)', () => {
     const el = agentPermissionsCard(ctx, td);
     await flush();
     const rows = [...el.querySelectorAll<HTMLElement>('.pn-perm-item')];
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(7);
     expect(rows.map((r) => r.querySelector('.pn-perm-title')?.textContent)).toEqual(PERMISSIONS.map((p) => p.title));
     expect(rows.every((r) => pressed(r) === 'ask')).toBe(true);
     expect(rowOf(el, 'package.install').textContent).toContain('npm install, pip install');

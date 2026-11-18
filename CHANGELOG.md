@@ -2,6 +2,18 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — the trial's fault list, part 2: fewer questions
+
+From the fifteen commands the trial put on a person's screen. Thirteen of them needed no answer.
+
+- **Commands that only read are not asked about.** The test runner behind `timeout`, the formatter run as `npm exec -- prettier --check`, `Get-Process`, a `grep` whose pattern holds an escaped quote, and the way Codex quotes a PowerShell command were each read as "a command Friday does not recognise". What such a wrapper hides is still found: the same wrapper around a delete asks.
+- **A temporary file is not a change to your project.** `> "$TEMP/lint.txt"` and `cp … /tmp/x` asked for leave to "commit and change branches".
+- **A command that changes files is judged by its files.** `sed -i`, `mkdir`, `cp`, `mv` and `> file` were filed under "commit and change branches". They are a kind of their own now. When the command names its files and they are the task's own, it runs as an edit of them does. Otherwise the card says which file it would change and why that needs you, or that Friday cannot tell from the command which files. Settings → Permissions has the switch for those, "Change any file with a command". A project that let agents commit without asking no longer lets them change files outside a task's own with a command by the same switch.
+- **An agent that asks leave for what needs none is told so at once**, and what to do when its own sandbox stopped the command. Codex waited twice for a person to allow the project's own tests, which Friday had allowed all along.
+- **"Allow for this task" is one click and one confirmation**, from the list and from the Notch. It opened a second view with a button to hold, and then a pop-up; from the Notch that view opened behind it. A high-risk request keeps the full view, which the Notch now opens in the Studio.
+- **The Notch does not sit on the Canvas and Settings tabs.** In the desktop app they stand beside the project's name.
+- **Checks fit the change.** A task that changed nothing runs none of the project's checks. A task that changed only documents (`.md`, `.rst`, `.adoc`) runs the lint checks, and not the build, the types or the tests; a check that reads documents says so with `on_documents: true`. A merge that brings only documents into the goal is checked by the same rule. In the trial a question that changed no file, and two edited Markdown files, each waited for 565 tests.
+
 ## Unreleased — the trial's fault list, part 1: nothing leaves you stuck
 
 From a day of real work with three agents on one project. Each of these left a person waiting with no way forward inside the app.

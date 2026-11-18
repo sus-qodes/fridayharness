@@ -59,9 +59,9 @@ const GIT_READS = ['git status --short', 'git --no-pager diff -- backend', 'git 
 
 /** Each must reach at least a human's decision; [command, class] where the class is certain. */
 const NOT_ALLOWED: [string, string][] = [
-  ["Set-Content backend/src/x.ts 'export {}'", 'git.mutate'],
-  ['New-Item -ItemType File backend/src/x.ts -Force', 'git.mutate'],
-  ['"export const x = 1" | Out-File backend/src/x.ts', 'git.mutate'],
+  ["Set-Content backend/src/x.ts 'export {}'", 'file.write'],
+  ['New-Item -ItemType File backend/src/x.ts -Force', 'file.write'],
+  ['"export const x = 1" | Out-File backend/src/x.ts', 'file.write'],
   ['Remove-Item -Recurse -Force backend/dist', 'fs.destructive'],
   ['git commit -am "wip"', 'git.mutate'],
   ['git push', 'git.push'],

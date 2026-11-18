@@ -17,8 +17,11 @@ import { type Actor, FridayError, isFridayError, type RunView, type Verification
 import {
   analyzeDiff,
   checkReservations,
+  checksForChange,
   checksVersion,
+  documentsOnly,
   type Finding,
+  type FittedChecks,
   isBuildArtifact,
   ownChanges,
   relatedTests,
@@ -86,6 +89,7 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
   const base = run?.base_commit ?? null;
   const shared = samePath(root, project.root);
   const checks = selectChecks(configured, task.kind);
+  let fitted: FittedChecks<(typeof checks)[number]> = { run: checks, skipped: [], why: null };
   // What is verified must be read from git: every task worktree, and the main checkout of a project
   // kept in git. A checkout git cannot read is not verified at all (review F05); only a project
   // outside git is judged without a diff.
@@ -349,11 +353,24 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       true,
     );
 
+    // The checks this change calls for (2026-11-18): none when nothing changed, the lint checks
+    // alone for a change to documents only.
+    const changedPaths = changes.flatMap((c) =>
+      c.origPath && c.origPath !== c.path ? [c.path, c.origPath] : [c.path],
+    );
+    fitted = checksForChange(checks, since ? changedPaths : null, task.kind);
+
     // 3. Evidence that the work was run, when no configured check judges it (a configured check is
     // that evidence, run by Friday itself). A claim made after a minute with an untested edit is
     // the common way an implementation task is lost: the claim names the checks the session ran
     // (with their outcome), or the attempt ran a test, build or lint command the hooks saw.
-    if (task.kind === 'implementation' && checks.length === 0) {
+    // A change to nothing, or to documents only, has nothing that could have been run.
+    if (
+      task.kind === 'implementation' &&
+      checks.length === 0 &&
+      changedPaths.length > 0 &&
+      !documentsOnly(changedPaths)
+    ) {
       const ev = evidenceOfRunning({
         claimed: claimChecks(run),
         executed: run ? executedCommands(state, pid, taskId, run) : [],
@@ -433,7 +450,7 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     }
 
     // 4. The configured checks for this kind of task, in the checkout it worked in.
-    for (const check of checks) {
+    for (const check of fitted.run) {
       const cwd = check.cwd ? path.resolve(root, check.cwd) : root;
       if (check.targeted_args?.length && related.length) {
         const files = related.map((t) => path.relative(cwd, path.join(root, t)).split(path.sep).join('/'));
@@ -556,6 +573,13 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
           `the project's dependencies were not installed in this task's folder (${notInstalled}), so a failing check may be the setup and not the work`,
         ]
       : []),
+    ...(fitted.why === 'nothing_changed'
+      ? [`nothing was changed, so the project's checks were not run (${fitted.skipped.map((c) => c.name).join(', ')})`]
+      : fitted.why === 'documents_only'
+        ? [
+            `only documents were changed, so ${fitted.skipped.map((c) => c.name).join(', ')} ${fitted.skipped.length === 1 ? 'was' : 'were'} not run`,
+          ]
+        : []),
     ...(advisoryFailed ? [`${advisoryFailed} advisory check(s) failed`] : []),
     ...(warnings ? [`${warnings} warning(s)`] : []),
     ...(configured.length === 0

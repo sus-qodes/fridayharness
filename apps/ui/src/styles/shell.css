@@ -422,6 +422,15 @@
   justify-self: end;
 }
 
+/* The desktop app: the Notch pill is at the top centre of the screen, so nothing of the header
+   stands there (2026-11-18). */
+.sh-bar.sh-bar-desktop {
+  grid-template-columns: auto auto 1fr;
+}
+.sh-bar.sh-bar-desktop .sh-center-zone {
+  justify-self: start;
+}
+
 .sh-metrics {
   display: flex;
   align-items: center;

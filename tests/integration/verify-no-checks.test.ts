@@ -46,13 +46,13 @@ describe('evidence that an implementation task was run', () => {
       kind: 'implementation',
       summary: 'add a helper',
     });
-    writeFileSync(path.join(dir, 'README.md'), '# test project\n\nwith a helper\n');
+    writeFileSync(path.join(dir, 'helper.mjs'), 'export const helper = 1;\n');
     await client.reportResult({
       task_id: task.task_id,
       run_id,
       status: 'completed_claim',
       summary: 'added the helper; I did not run anything',
-      changed_paths: ['README.md'],
+      changed_paths: ['helper.mjs'],
       checks: [],
       notes: [],
     });
@@ -70,13 +70,13 @@ describe('evidence that an implementation task was run', () => {
       kind: 'implementation',
       summary: 'add a helper',
     });
-    writeFileSync(path.join(dir, 'README.md'), '# test project\n\nwith a helper\n');
+    writeFileSync(path.join(dir, 'helper.mjs'), 'export const helper = 1;\n');
     await client.reportResult({
       task_id: task.task_id,
       run_id,
       status: 'completed_claim',
       summary: 'added the helper and ran the suite',
-      changed_paths: ['README.md'],
+      changed_paths: ['helper.mjs'],
       checks: [{ name: 'the suite', kind: 'test', command: 'node --test', outcome: 'passed' }],
       notes: [],
     });
@@ -86,6 +86,27 @@ describe('evidence that an implementation task was run', () => {
     expect(evidence?.status).toBe('PASSED');
     expect(evidence?.summary).toBe('the claim names 1 check(s), 1 not seen run');
     expect(evidence?.details?.findings?.map((f) => f.rule)).toEqual(['evidence.unconfirmed']);
+  });
+
+  it('asks for no such evidence of a change to documents only, nor of none: there was nothing to run (2026-11-18)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, extensions: [claudeCodeHooks()] });
+    const { client, task, run_id, dir } = await attachedSession(td, {
+      kind: 'implementation',
+      summary: 'describe the helper',
+    });
+    writeFileSync(path.join(dir, 'README.md'), '# test project\n\nwith a helper\n');
+    await client.reportResult({
+      task_id: task.task_id,
+      run_id,
+      status: 'completed_claim',
+      summary: 'described the helper; there was nothing to run',
+      changed_paths: ['README.md'],
+      checks: [],
+      notes: [],
+    });
+    const r = await verify(td, task.task_id);
+    expect(r.task.status, JSON.stringify(r.verification.checks)).toBe('COMPLETED');
+    expect(r.verification.checks.map((c) => c.name)).toEqual(['friday.diff', 'friday.secrets']);
   });
 
   it('does not blame the task for an untracked file that was there before its first attempt', async () => {

@@ -214,6 +214,7 @@ describe('the worktree install (plan Phase 7)', () => {
     const trusted = projectPolicy([own], untrusted.loosening_hash);
     expect(trusted.sandbox).toBe(true);
     expect(trusted.autonomy).toEqual({
+      'file.write': 'auto',
       'git.mutate': 'auto',
       'package.install': 'auto',
       'fs.destructive': 'auto',
