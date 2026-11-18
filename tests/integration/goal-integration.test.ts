@@ -36,6 +36,8 @@ const SUM_TEST = [
   '',
 ].join('\n');
 const CHECKS = '  checks:\n    - name: tests\n      command: node\n      args: ["--test", "test/*.test.mjs"]\n';
+/** Work that does not fit the goal's other work asks a person at once, never its agent first. */
+const ASK_AT_ONCE = 'integration:\n  back_to_agent: 0\n';
 
 /**
  * A check that repairs what it checks, as a formatter or a code generator might: when `a + b`
@@ -240,7 +242,7 @@ describe('goal branches', () => {
   });
 
   it('never moves the goal branch to a merge whose checks fail, nor through a conflict, and asks a human', async () => {
-    const td = await project();
+    const td = await project(CHECKS, {}, ASK_AT_ONCE);
     const { goalId, ids } = await goalWith(td, [
       { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
       { key: 'raise-b', summary: 'Raise b to 2', write: ['src/b.mjs'] },
@@ -395,7 +397,7 @@ describe('goal branches', () => {
 
   it('retries a failed integration from the verified commit Friday made, and refuses work changed since (review M7.1 R04)', async () => {
     const flag = path.join(ws().root, 'merged-ok').replace(/\\/g, '/');
-    const td = await project(limitChecks(flag), { 'scripts/limit.cjs': LIMIT });
+    const td = await project(limitChecks(flag), { 'scripts/limit.cjs': LIMIT }, ASK_AT_ONCE);
     const { goalId, ids } = await goalWith(td, [
       { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
       { key: 'raise-b', summary: 'Raise b to 2', write: ['src/b.mjs'] },
@@ -463,7 +465,7 @@ describe('goal branches', () => {
   });
 
   it('integrates a conflict a human repaired on the task branch only after verifying the repaired revision (review M7.1 R04)', async () => {
-    const td = await project();
+    const td = await project(CHECKS, {}, ASK_AT_ONCE);
     const { goalId, ids } = await goalWith(td, [
       { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
       { key: 'reset-a', summary: 'Set a to 0', write: ['src/a.mjs'], depends_on: ['raise-a'] },
@@ -534,6 +536,229 @@ describe('goal branches', () => {
     } finally {
       closeDatabase(db);
     }
+  });
+});
+
+/**
+ * Agents at work at the same time (2026-11-18). Until then a task waited for every running task
+ * whose write scope touched one of its files, and every plan of the trial project listed the
+ * changelog: seven goals, never two agents at once. Now each works in a folder of its own, Friday
+ * merges their verified work, and what does not fit goes back to its agent before a person is asked.
+ */
+describe('agents at work at the same time (2026-11-18)', () => {
+  const lf = (text: string) => text.replace(/\r\n/g, '\n');
+  const pending = (td: TestDaemon) =>
+    td.daemon.state.q.escalations(td.project.project_id, 'pending').map((e) => [e.kind, e.task_id]);
+  const reworks = (td: TestDaemon, taskId: string) =>
+    td.daemon.state.store
+      .readByRef(td.project.project_id, 'task', taskId, { types: ['task.rework'] })
+      .map((e) => (e.payload as { transition: { trigger: string; reason?: string } }).transition);
+  /** The task's `n`th integration: after work went back, the first one is still on record. */
+  const nthIntegration = (td: TestDaemon, taskId: string, n: number) =>
+    eventually(
+      () => td.daemon.state.q.integrations(td.project.project_id, { task_id: taskId }),
+      (all) => all.length >= n,
+      `integration ${n} of ${taskId}`,
+    ).then((all) => all[n - 1] as IntegrationView);
+  /** The agent that did the work is connected again and gets the task back from the coordinator. */
+  async function again(td: TestDaemon, agent: string, taskId: string, attempt: number) {
+    const fake = await FakeHarness.connect(td, { agentKey: agent });
+    await runOnce(td);
+    const start = (await fake.waitFor('task.start', 20_000, (m) => (m.params as TaskStartParams).attempt === attempt))
+      .params as TaskStartParams;
+    await eventually(
+      () => taskOf(td, taskId),
+      (t) => t.status === 'RUNNING',
+      `${taskId} to run again`,
+    );
+    return { fake, start, taskId };
+  }
+
+  it('gives two free agents a task each though both tasks change the changelog, and keeps both entries', async () => {
+    const td = await project(CHECKS, { 'CHANGELOG.md': '# Changelog\n\n- first\n' });
+    const one = await FakeHarness.connect(td, { agentKey: 'claude-1' });
+    const two = await FakeHarness.connect(td, { agentKey: 'codex-1' });
+    const { goalId, ids } = await goalWith(td, [
+      { key: 'wizard', summary: 'Add the wizard', write: ['src/a.mjs', 'CHANGELOG.md'] },
+      { key: 'settings', summary: 'Add the settings', write: ['src/b.mjs', 'CHANGELOG.md'] },
+    ]);
+    // One pass of the coordinator: both run, each agent with one, each in a folder of its own.
+    await runOnce(td);
+    const s1 = (await one.waitFor('task.start', 20_000)).params as TaskStartParams;
+    const s2 = (await two.waitFor('task.start', 20_000)).params as TaskStartParams;
+    expect(new Set([s1.task_id, s2.task_id])).toEqual(new Set([ids.wizard, ids.settings]));
+    expect(s1.working_directory).not.toBe(s2.working_directory);
+    for (const id of [ids.wizard, ids.settings]) {
+      await eventually(
+        () => taskOf(td, id as string),
+        (t) => t.status === 'RUNNING',
+        `${id} to run`,
+      );
+    }
+    // Each is told which file it shares, and how to treat it.
+    const packet = await td.operator.post<{ packet: { sections: { id: string; content: string }[] } }>(
+      td.operator.projectPath('/context/compile'),
+      { task_id: s1.task_id },
+    );
+    expect(JSON.stringify(packet)).toContain('Shared with other tasks of this goal');
+    expect(JSON.stringify(packet)).toContain('CHANGELOG.md');
+
+    const mine = (start: TaskStartParams) => (start.task_id === ids.wizard ? 'wizard' : 'settings');
+    const files = (which: string): Record<string, string> =>
+      which === 'wizard'
+        ? { 'src/a.mjs': 'export const a = 2;\n', 'CHANGELOG.md': '# Changelog\n\n- first\n- the wizard\n' }
+        : { 'src/b.mjs': 'export const b = 0;\n', 'CHANGELOG.md': '# Changelog\n\n- first\n- the settings\n' };
+    await finish(td, { fake: one, start: s1, taskId: s1.task_id }, files(mine(s1)));
+    expect((await integrationOf(td, s1.task_id)).status).toBe('integrated');
+    await finish(td, { fake: two, start: s2, taskId: s2.task_id }, files(mine(s2)));
+    const second = await integrationOf(td, s2.task_id);
+    // Git alone calls two additions at one place a conflict; Friday keeps both and checks the result.
+    expect(second, second.summary ?? '').toMatchObject({ status: 'integrated', conflicts: [] });
+    expect(second.summary).toContain("both sides' added lines were kept in CHANGELOG.md");
+    expect(second.checks.map((c) => [c.name, c.status])).toEqual([['tests', 'PASSED']]);
+    const branch = `friday/goal-${goalId}`;
+    const log = lf((await runGit(ws().projectDir, ['show', `${branch}:CHANGELOG.md`])).stdout);
+    expect(log).toBe(`# Changelog\n\n- first\n- the ${mine(s1)}\n- the ${mine(s2)}\n`);
+    expect(pending(td)).toEqual([]);
+    expect(reworks(td, s2.task_id)).toEqual([]);
+    await runOnce(td);
+    expect((await td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`))).goal.status).toBe(
+      'COMPLETED',
+    );
+  });
+
+  it('sends a real collision back to its agent with both versions in the file, and integrates what it makes of them', async () => {
+    const td = await project(CHECKS, { 'src/mode.mjs': 'export const mode = "none";\n' });
+    const { goalId, ids } = await goalWith(td, [
+      { key: 'raise-a', summary: 'Raise a', write: ['src/a.mjs', 'src/mode.mjs'] },
+      { key: 'lower-b', summary: 'Lower b', write: ['src/b.mjs', 'src/mode.mjs'] },
+    ]);
+    const branch = `friday/goal-${goalId}`;
+    const ra = await begin(td, 'be-1', ids['raise-a'] as string);
+    const rb = await begin(td, 'be-2', ids['lower-b'] as string);
+    await finish(td, ra, { 'src/a.mjs': 'export const a = 2;\n', 'src/mode.mjs': 'export const mode = "a";\n' });
+    expect((await integrationOf(td, ids['raise-a'] as string)).status).toBe('integrated');
+    await finish(td, rb, { 'src/b.mjs': 'export const b = 0;\n', 'src/mode.mjs': 'export const mode = "b";\n' });
+    const lower = ids['lower-b'] as string;
+    const collided = await integrationOf(td, lower);
+    expect(collided).toMatchObject({ status: 'conflicted', conflicts: ['src/mode.mjs'] });
+
+    // Nobody is asked: the task is its agent's again, with the reason, and the goal waits for it.
+    expect(pending(td)).toEqual([]);
+    const back = await taskOf(td, lower);
+    expect(back).toMatchObject({ status: 'READY', reserved_for_agent_key: 'be-2', completed_at: null });
+    expect(reworks(td, lower)).toEqual([
+      expect.objectContaining({ trigger: 'integration.rework', reason: expect.stringContaining('src/mode.mjs') }),
+    ]);
+    await runOnce(td);
+    expect((await td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`))).goal.status).toBe('ACTIVE');
+
+    // The agent gets it back in the folder it worked in, merged as far as git could.
+    const w = await again(td, 'be-2', lower, 2);
+    const dir = w.start.working_directory;
+    expect(dir).toBe(rb.start.working_directory);
+    expect(w.start.note).toContain('src/mode.mjs');
+    expect(w.start.note).toContain('hold both versions');
+    expect(lf(readFileSync(path.join(dir, 'src', 'a.mjs'), 'utf8'))).toBe('export const a = 2;\n');
+    expect(lf(readFileSync(path.join(dir, 'src', 'b.mjs'), 'utf8'))).toBe('export const b = 0;\n');
+    expect(lf(readFileSync(path.join(dir, 'src', 'mode.mjs'), 'utf8'))).toMatch(
+      /^<<<<<<< .*\nexport const mode = "b";\n=======\nexport const mode = "a";\n>>>>>>> .*\n$/,
+    );
+
+    // It keeps what both meant, by editing: no git command of its own.
+    await finish(td, w, { 'src/mode.mjs': 'export const mode = "a and b";\n' });
+    const done = await nthIntegration(td, lower, 2);
+    expect(done, done.summary ?? '').toMatchObject({ status: 'integrated' });
+    expect(done.summary).toContain('fast-forward');
+    expect(lf((await runGit(ws().projectDir, ['show', `${branch}:src/mode.mjs`])).stdout)).toBe(
+      'export const mode = "a and b";\n',
+    );
+    expect(lf((await runGit(ws().projectDir, ['show', `${branch}:src/a.mjs`])).stdout)).toBe('export const a = 2;\n');
+    expect(pending(td)).toEqual([]);
+    await runOnce(td);
+    expect((await td.operator.get<GoalDetail>(td.operator.projectPath(`/goals/${goalId}`))).goal.status).toBe(
+      'COMPLETED',
+    );
+  });
+
+  it('sends work back that passes alone and fails once merged, naming the check', async () => {
+    const td = await project();
+    const { goalId, ids } = await goalWith(td, [
+      { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+      { key: 'raise-b', summary: 'Raise b to 2', write: ['src/b.mjs'] },
+    ]);
+    const ra = await begin(td, 'be-1', ids['raise-a'] as string);
+    const rb = await begin(td, 'be-2', ids['raise-b'] as string);
+    await finish(td, ra, { 'src/a.mjs': 'export const a = 2;\n' });
+    expect((await integrationOf(td, ids['raise-a'] as string)).status).toBe('integrated');
+    // Alone b = 2 passes; with a = 2 the sum is 4.
+    await finish(td, rb, { 'src/b.mjs': 'export const b = 2;\n' });
+    const raiseB = ids['raise-b'] as string;
+    expect(await integrationOf(td, raiseB)).toMatchObject({ status: 'failed' });
+    expect(pending(td)).toEqual([]);
+    expect(reworks(td, raiseB)).toEqual([
+      expect.objectContaining({ trigger: 'integration.rework', reason: expect.stringContaining('tests') }),
+    ]);
+    expect(reworks(td, raiseB)[0]?.reason).toContain('merged with what other tasks');
+
+    // Its folder now holds the other task's work, so the failing check fails there too.
+    const w = await again(td, 'be-2', raiseB, 2);
+    expect(lf(readFileSync(path.join(w.start.working_directory, 'src', 'a.mjs'), 'utf8'))).toBe(
+      'export const a = 2;\n',
+    );
+    await finish(td, w, { 'src/b.mjs': 'export const b = 1;\n' });
+    expect(await nthIntegration(td, raiseB, 2)).toMatchObject({ status: 'integrated' });
+    expect(lf((await runGit(ws().projectDir, ['show', `friday/goal-${goalId}:src/b.mjs`])).stdout)).toBe(
+      'export const b = 1;\n',
+    );
+    expect(pending(td)).toEqual([]);
+  });
+
+  it('asks the person once the work went back as often as the setting says, with a button that sends it again', async () => {
+    const td = await project(CHECKS, {}, 'integration:\n  back_to_agent: 1\n');
+    const { goalId, ids } = await goalWith(td, [
+      { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+      { key: 'reset-a', summary: 'Set a to 0', write: ['src/a.mjs'], depends_on: ['raise-a'] },
+    ]);
+    const branch = `friday/goal-${goalId}`;
+    await work(td, 'be-1', ids['raise-a'] as string, { 'src/a.mjs': 'export const a = 2;\n' });
+    expect((await integrationOf(td, ids['raise-a'] as string)).status).toBe('integrated');
+    await runOnce(td);
+    const reset = ids['reset-a'] as string;
+    /** Somebody else changes the same line in the goal while the agent works. */
+    const meanwhile = async (value: number, epoch: number) => {
+      const human = path.join(ws().root, `human-${value}`);
+      await git(['worktree', 'add', '-q', human, branch]);
+      writeFileSync(path.join(human, 'src', 'a.mjs'), `export const a = ${value};\n`);
+      await deterministicGit(human, { startEpoch: epoch }).commitAll(`a is ${value}`);
+      await git(['worktree', 'remove', human]);
+    };
+    const w = await begin(td, 'be-2', reset);
+    await meanwhile(3, 1_767_226_000);
+    await finish(td, w, { 'src/a.mjs': 'export const a = 0;\n' });
+    expect(await integrationOf(td, reset)).toMatchObject({ status: 'conflicted' });
+    // Once by itself.
+    expect(pending(td)).toEqual([]);
+    const second = await again(td, 'be-2', reset, 2);
+    await meanwhile(1, 1_767_227_000);
+    await finish(td, second, { 'src/a.mjs': 'export const a = 0;\n' });
+    expect(await nthIntegration(td, reset, 2)).toMatchObject({ status: 'conflicted' });
+    // The second time the person is asked, and the task stays completed, its work kept.
+    expect(pending(td)).toEqual([['integration_conflict', reset]]);
+    expect((await taskOf(td, reset)).status).toBe('COMPLETED');
+
+    // Their button: the agent tries once more. The question closes, the task is its agent's again.
+    const sent = await td.operator.post<{ task: TaskView }>(
+      td.operator.projectPath(`/tasks/${reset}/integrate/back`),
+      {},
+    );
+    expect(sent.task).toMatchObject({ status: 'READY', reserved_for_agent_key: 'be-2' });
+    expect(pending(td)).toEqual([]);
+    expect(reworks(td, reset).map((r) => r.trigger)).toEqual(['integration.rework', 'integration.rework']);
+    // A task with nothing to send back says so.
+    await expect(
+      td.operator.post(td.operator.projectPath(`/tasks/${ids['raise-a']}/integrate/back`), {}),
+    ).rejects.toThrow(/no failed or conflicted integration/);
   });
 });
 

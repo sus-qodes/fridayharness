@@ -406,6 +406,54 @@ describe('goal card', () => {
     expect(node.el.querySelector('[data-action="land"]')).toBeNull();
   });
 
+  // Who finished, who works on what, what waits and why: on the goal's own card (2026-11-18).
+  it('tells the goal’s story in a few lines, what needs the person first, and keeps it up to date', () => {
+    const goal = makeGoal({ status: 'ACTIVE' });
+    const tasks = [
+      makeTask({
+        task_id: 't1',
+        goal_id: goal.goal_id,
+        summary: 'Wizard screens',
+        status: 'RUNNING',
+        agent_key: 'claude-1',
+      }),
+      makeTask({
+        task_id: 't2',
+        goal_id: goal.goal_id,
+        summary: `Settings ${HOSTILE}`,
+        status: 'PROPOSED',
+        delegation_note: 'waits for “Wizard screens” (claude-1 is working on it)',
+        waits_for: 'dependencies',
+      }),
+    ];
+    const ctx = makeContext({ snapshot: makeSnapshot({ goals: [goal], tasks }) });
+    const g = group({ goal, progress: { completed: 0, total: 2 }, taskIds: ['t1', 't2'] });
+    const node = createGoalNode(ctx, { group: g });
+    expectNoMarkup(node.el);
+    const lines = () => [...node.el.querySelectorAll('.nd-story-line')];
+    expect(lines().map((l) => l.querySelector('.nd-story-text')?.textContent)).toEqual([
+      'claude-1 is working on “Wizard screens”',
+      `“Settings ${HOSTILE}” waits for “Wizard screens” (claude-1 is working on it)`,
+    ]);
+    expect(lines().map((l) => l.className)).toEqual(['nd-story-line nd-story-work', 'nd-story-line nd-story-wait']);
+    // Said in words for whoever does not see the mark.
+    expect(lines()[0]?.querySelector('.visually-hidden')?.textContent).toBe('At work: ');
+    // The first task is finished and the agent asks for something on the second.
+    ctx.store.setState({
+      board: makeSnapshot({
+        goals: [goal],
+        tasks: [
+          { ...(tasks[0] as SnapshotTask), status: 'COMPLETED' },
+          { ...(tasks[1] as SnapshotTask), status: 'WAITING', waiting_reason: 'blocked', agent_key: 'codex-1' },
+        ],
+      }),
+    });
+    node.update({ group: { ...g, progress: { completed: 1, total: 2 } } });
+    expect(lines().map((l) => l.className)).toEqual(['nd-story-line nd-story-you', 'nd-story-line nd-story-done']);
+    expect(lines()[0]?.textContent).toContain('codex-1 needs you');
+    node.destroy();
+  });
+
   it('offers "Ready to land" once completed and shows the integration state', () => {
     const ctx = makeContext();
     const g = group({

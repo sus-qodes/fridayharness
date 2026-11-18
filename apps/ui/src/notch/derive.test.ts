@@ -526,6 +526,22 @@ describe('your turn: a task kept for an agent its person runs (2026-11-17)', () 
     expect(waitingItems(board('attach', 'RUNNING'), NOW)).toEqual([]);
   });
 
+  // "Your turn in Antigravity" stood in the list for a task whose own page said it could not
+  // start (2026-11-18). Only a task that prompting the agent would start is the person's turn.
+  it('is nobody’s turn while prompting the agent would not start it', () => {
+    const waiting = (waits_for: NonNullable<ReturnType<typeof makeTask>['waits_for']>) => {
+      const b = board('attach');
+      return waitingItems({ ...b, tasks: b.tasks.map((t) => (t.task_id === 't1' ? { ...t, waits_for } : t)) }, NOW).map(
+        (i) => i.key,
+      );
+    };
+    expect(waiting('your_turn')).toEqual(['turn:t1']);
+    expect(waiting('agent_busy')).toEqual([]);
+    expect(waiting('paused')).toEqual([]);
+    expect(waiting('agent_away')).toEqual([]);
+    expect(waiting('question')).toEqual([]);
+  });
+
   it('names the app and what to type there', () => {
     expect([turnHost('antigravity'), turnPrompt('antigravity')]).toEqual(['Antigravity', '/friday']);
     expect([turnHost('claude-code'), turnPrompt('claude-code')]).toEqual(['Claude Code', '/friday start']);

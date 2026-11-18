@@ -398,6 +398,13 @@ export const FridayConfig = z
      */
     landing: z.object({ mode: z.enum(['ask', 'goal', 'task']).default('ask') }).prefault({}),
     /**
+     * Verified work that does not fit the goal's other work (2026-11-18): it collides with what
+     * tasks running at the same time changed, or the checks fail once it is merged with theirs.
+     * `back_to_agent` is how often such work goes back to its agent by itself, in its own folder,
+     * before a person is asked; 0 asks a person at once, as Friday did before.
+     */
+    integration: z.object({ back_to_agent: z.number().int().min(0).max(5).default(2) }).prefault({}),
+    /**
      * Conflict-prone files (ADR-0025): writing under a `required` pattern takes an exclusive
      * reservation for the task; `ttl_ms` is how long it outlives a task that stands still.
      */
@@ -559,6 +566,7 @@ export const LIVE_CONFIG_KEYS: readonly string[] = [
   'security',
   'verification',
   'landing',
+  'integration',
   // Read when a copy is prepared, so a change needs no restart (the rest of `worktrees` does).
   'worktrees.files',
   'reservations',

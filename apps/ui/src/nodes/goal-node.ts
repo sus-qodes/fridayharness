@@ -11,6 +11,7 @@
  */
 import type { AnswerView, GoalSummary, UiSnapshot } from '@friday/protocol';
 import type { GoalGroup } from '../model/board.js';
+import { type StoryLine, storyOfGoal } from '../model/story.js';
 import { type AppContext, openModal } from '../shell/context.js';
 import { button, h, replace, setVar, toggleClass } from '../ui/dom.js';
 import { cleanText, compact, humanize, plural, truncate, usd } from '../ui/format.js';
@@ -33,6 +34,31 @@ function answerBadge(a: AnswerView | null): HTMLElement {
     return badge(a.read ? 'Answered' : 'Answer ready', 'good', `${who} answered. Nothing was changed.`);
   if (a.state === 'failed') return badge('No answer', 'warn', `${who} ended without an answer`);
   return badge('Cancelled', 'muted');
+}
+
+/** What each kind of line is called, for whoever does not see its mark. */
+const STORY_WORD: Record<StoryLine['tone'], string> = {
+  you: 'Needs you',
+  work: 'At work',
+  wait: 'Waiting',
+  done: 'Finished',
+};
+
+/** The goal's story: one line per task, what needs the person first. */
+function storyList(lines: readonly StoryLine[]): HTMLElement {
+  return h(
+    'ul',
+    { class: 'nd-story', aria: { label: 'Who is doing what' } },
+    lines.map((l) =>
+      h(
+        'li',
+        { class: ['nd-story-line', `nd-story-${l.tone}`], title: `${STORY_WORD[l.tone]}: ${l.text}` },
+        h('span', { class: 'nd-story-mark', aria: { hidden: 'true' } }),
+        h('span', { class: 'visually-hidden' }, `${STORY_WORD[l.tone]}: `),
+        h('span', { class: 'nd-story-text' }, l.text),
+      ),
+    ),
+  );
 }
 
 /** "1 claim" / "3 claims". */
@@ -311,8 +337,11 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
     // A question (2026-11-18): the card says where its answer stands, and has nothing to plan or land.
     const asked = goal.mode === 'ask';
     const answer = asked ? (board?.answers?.[goal.goal_id] ?? null) : null;
+    // Who finished, who is working on what, what waits and why (2026-11-18).
+    const story = storyOfGoal(board, goal.goal_id);
     const print = fingerprint([
       goal,
+      story,
       answer?.state,
       answer?.read,
       answer?.agent_key,
@@ -387,6 +416,7 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
           `${pct}% (${g.progress.completed} of ${plural(g.progress.total, 'task')})`,
         ),
       ),
+      story.length ? storyList(story) : null,
       did,
     );
     renderDid();

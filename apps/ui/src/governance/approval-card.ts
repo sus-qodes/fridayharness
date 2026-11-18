@@ -4,6 +4,10 @@
  * the expiry. Allow once (1), Allow for this task… (2, always the full view: the dots say so), Deny
  * (3, an optional reason sent as the decision note). The keys act only while focus is inside the card and no text
  * field has focus; `Enter` only activates the focused button; `Esc` never denies (FD-28).
+ *
+ * A request for one file outside the task's own, asked for the task (2026-11-18: Friday raises it
+ * when an agent it started is stopped at the edge of its files) offers that first: Allow this
+ * file… (1), then Just this edit (2). A file is rarely finished in one edit.
  */
 import type { ApprovalRow } from '@friday/protocol';
 import { capabilityWords, knownCapability } from '../model/capability-words.js';
@@ -43,6 +47,9 @@ export interface ApprovalCard extends Component {
   readonly approvalId: string;
 }
 
+/** One named file outside the task's own, wanted for the rest of the task. */
+const forFile = (a: ApprovalRow): boolean => a.capability === 'file.write' && a.reuse === 'task';
+
 function contentKey(a: ApprovalRow): string {
   return JSON.stringify([a.approval_id, a.capability, a.target, a.purpose, a.risk, a.task_id, a.requested_by_id]);
 }
@@ -71,16 +78,18 @@ export function approvalCard(ctx: AppContext, approval: ApprovalRow, opts: Appro
   const hint = h('div', { class: 'gv-arming-hint', aria: { live: 'polite' } }, ARMING_TEXT);
   const status = h('div', { class: 'gv-status', role: 'status', aria: { live: 'polite' } });
 
-  const allowOnce = button(
-    [h('span', null, 'Allow once'), h('span', { class: 'kbd', aria: { hidden: 'true' } }, '1')],
-    () => undefined,
-    { class: 'btn btn-primary gv-decide', aria: { keyshortcuts: '1' } },
-  );
-  const allowTask = button(
-    [h('span', null, 'Allow for this task…'), h('span', { class: 'kbd', aria: { hidden: 'true' } }, '2')],
-    () => undefined,
-    { class: 'btn gv-decide', aria: { keyshortcuts: '2' } },
-  );
+  const onceLabel = h('span', null, 'Allow once');
+  const onceKey = h('span', { class: 'kbd', aria: { hidden: 'true' } }, '1');
+  const taskLabel = h('span', null, 'Allow for this task…');
+  const taskKey = h('span', { class: 'kbd', aria: { hidden: 'true' } }, '2');
+  const allowOnce = button([onceLabel, onceKey], () => undefined, {
+    class: 'btn btn-primary gv-decide',
+    aria: { keyshortcuts: '1' },
+  });
+  const allowTask = button([taskLabel, taskKey], () => undefined, {
+    class: 'btn gv-decide',
+    aria: { keyshortcuts: '2' },
+  });
   const deny = button(
     [h('span', null, 'Deny'), h('span', { class: 'kbd', aria: { hidden: 'true' } }, '3')],
     () => undefined,
@@ -231,8 +240,17 @@ export function approvalCard(ctx: AppContext, approval: ApprovalRow, opts: Appro
     popScope = ctx.keys.push({
       name: 'approval-card',
       bindings: [
-        { key: '1', run: keyed(() => void doAllowOnce()), description: 'Allow once' },
-        { key: '2', run: keyed(() => void doAllowTask()), description: 'Allow for this task…' },
+        // The first button is key 1, whichever it is for this request.
+        {
+          key: '1',
+          run: keyed(() => void (forFile(a) ? doAllowTask() : doAllowOnce())),
+          description: 'The first choice: Allow once, or Allow this file…',
+        },
+        {
+          key: '2',
+          run: keyed(() => void (forFile(a) ? doAllowOnce() : doAllowTask())),
+          description: 'The second: Allow for this task…, or Just this edit',
+        },
         { key: '3', run: keyed(openDeny), description: 'Deny' },
       ],
     });
@@ -270,6 +288,17 @@ export function approvalCard(ctx: AppContext, approval: ApprovalRow, opts: Appro
   };
 
   const render = (): void => {
+    // Which choice comes first, and what each is called for this request.
+    const file = forFile(a);
+    setText(onceLabel, file ? 'Just this edit' : 'Allow once');
+    setText(taskLabel, file ? 'Allow this file…' : 'Allow for this task…');
+    setText(onceKey, file ? '2' : '1');
+    setText(taskKey, file ? '1' : '2');
+    allowOnce.setAttribute('aria-keyshortcuts', file ? '2' : '1');
+    allowTask.setAttribute('aria-keyshortcuts', file ? '1' : '2');
+    allowOnce.classList.toggle('btn-primary', !file);
+    allowTask.classList.toggle('btn-primary', file);
+    actions.replaceChildren(...(file ? [allowTask, allowOnce, deny] : [allowOnce, allowTask, deny]));
     replace(riskSlot, riskBadge(a));
     const agent = agentKeyOf(ctx.store.select('board'), a.requested_by_id) ?? a.requested_by_kind;
     replace(

@@ -55,7 +55,8 @@ const taskOf = (td: TestDaemon, id: string) =>
 describe('spawn runs work in their own worktrees', () => {
   // What the goal branch gained since a task's worktree was cut is in that worktree before its next
   // attempt starts (2026-11-17): here the agent reported blocked, the goal moved on, and a person
-  // gave the task to an agent again. A collision goes back to the agent as its next work.
+  // gave the task to an agent again. Where the two collide the folder still gets the merge
+  // (2026-11-18): the file holds both versions marked, and the attempt starts with it as its work.
   it.each([false, true])('refreshes a goal task before its next attempt starts (conflict=%s)', async (conflict) => {
     const td = await startTestDaemon(ws(), { git: true, brain: { autoStart: false } });
     const pid = td.project.project_id;
@@ -112,34 +113,43 @@ describe('spawn runs work in their own worktrees', () => {
     });
     await op.post(op.projectPath(`/tasks/${task.task_id}/assign`), { agent_key: 'refresh-dev' });
     if (conflict) {
-      await eventually(
-        () =>
-          td.daemon.state.store.readByRef(pid, 'task', task.task_id, { types: ['run.workspace_refresh_conflicted'] }),
-        (es) => es.length === 1,
-        'refresh conflict',
-      );
-      const event = td.daemon.state.store.readByRef(pid, 'task', task.task_id, {
-        types: ['run.workspace_refresh_conflicted'],
-      })[0];
-      expect(event?.payload).toMatchObject({
-        refresh: { goal_head: goalHead, conflicts: ['README.md'] },
-        reason: expect.stringContaining('+task edit'),
-      });
-      expect(String(event?.payload.reason)).toContain('+goal correction');
-      expect(event?.artifact_refs).toHaveLength(1);
-      expect((await taskOf(td, task.task_id)).status).toBe('READY');
-      const declined = td.daemon.state.q.runs(task.task_id).at(-1);
-      expect(declined?.status).toBe('DECLINED');
-      expect(h.received.filter((m) => m.method === 'task.start')).toHaveLength(1);
-      await op.post(op.projectPath(`/tasks/${task.task_id}/assign`), { agent_key: 'refresh-dev' });
-      const resolving = (await h.waitFor('task.start', 15_000, (m) => (m.params as TaskStartParams).attempt === 3))
+      // The same attempt, not a declined one and a third: its note names the file and says how.
+      const resolving = (await h.waitFor('task.start', 15_000, (m) => (m.params as TaskStartParams).attempt === 2))
         .params as TaskStartParams;
+      expect(resolving.working_directory).toBe(first.working_directory);
       expect(resolving.note).toContain('README.md');
+      expect(resolving.note).toContain('hold both versions');
+      expect(resolving.note).toContain('do not run git merge');
       expect(td.daemon.state.q.run(resolving.run_id).base_commit).toBe(goalHead);
       expect(td.daemon.state.q.escalations(pid, 'pending')).toEqual([]);
-      expect(
-        td.daemon.state.store.readByRef(pid, 'task', task.task_id, { types: ['task.rework'] }).at(-1)?.payload,
-      ).toMatchObject({ transition: { trigger: 'workspace.conflict' } });
+      expect(td.daemon.state.q.runs(task.task_id).map((r) => r.status)).not.toContain('DECLINED');
+      const ready = td.daemon.state.store.readByRef(pid, 'run', resolving.run_id, {
+        types: ['run.workspace_ready'],
+      })[0]?.payload as { refresh?: { conflicts?: string[]; marked?: boolean; artifact_ref?: string | null } };
+      expect(ready.refresh).toMatchObject({ goal_head: goalHead, conflicts: ['README.md'], marked: true });
+      expect(ready.refresh?.artifact_ref).toMatch(/^artifact:/);
+      // Both versions are in the file, the task's first; the folder descends from the goal's work.
+      const text = readFileSync(path.join(first.working_directory, 'README.md'), 'utf8').replace(/\r/g, '');
+      expect(text).toMatch(/<<<<<<< .*\ntask edit\n=======\ngoal correction\n>>>>>>> /);
+      const tree = deterministicGit(first.working_directory);
+      expect(await tree.run(['merge-base', '--is-ancestor', goalHead, 'HEAD']).then(() => true)).toBe(true);
+
+      // A claim with the marks still in the file is refused, by name...
+      await h.client.reportResult({
+        task_id: task.task_id,
+        run_id: resolving.run_id,
+        status: 'completed_claim',
+        summary: 'merged',
+        changed_paths: ['README.md'],
+        checks: [],
+      });
+      const refused = await op.post<{ verification: { status: string; checks: { name: string; summary: string }[] } }>(
+        op.projectPath(`/tasks/${task.task_id}/verify`),
+        {},
+      );
+      expect(refused.verification.status).toBe('FAILED');
+      expect(JSON.stringify(refused.verification.checks)).toContain('still hold two versions');
+      return;
     } else {
       const second = (await h.waitFor('task.start', 15_000, (m) => (m.params as TaskStartParams).attempt === 2))
         .params as TaskStartParams;

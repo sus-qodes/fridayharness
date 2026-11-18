@@ -135,6 +135,7 @@ pub static ROUTES: &[Route] = &[
     get("artifacts/{id}", &[]),
     post("tasks/{tid}/verify"),
     post("tasks/{tid}/integrate"),
+    post("tasks/{tid}/integrate/back"),
     post("tasks/{tid}/recover"),
     post("tasks/{tid}/worktree"),
     post("context/compile"),

@@ -1,4 +1,5 @@
 import { globsOverlap } from '@friday/policy';
+import { canRunSideBySide } from './parallel.js';
 import { PLAN_LIMITS, type PlanDraft, type PlanTaskDraft } from './schemas.js';
 
 /**
@@ -7,7 +8,10 @@ import { PLAN_LIMITS, type PlanDraft, type PlanTaskDraft } from './schemas.js';
  * piece after another buys no parallel time and costs a session per piece (LESSONS D-89).
  *
  * `consolidatePlan` merges a first plan of two or three tasks of one kind none of which can run
- * beside another (every pair ordered by `depends_on`, or writing a common file) into one task.
+ * beside another (every pair ordered by `depends_on`, or writing the same files) into one task.
+ * Two tasks that share a few files and each have their own can run side by side (2026-11-18,
+ * `canRunSideBySide`), so such a plan stays split, unless one agent is all there is to run it
+ * (`sideBySide: 1`): then they run one after the other anyway, and are one task as they were.
  * It merges nothing when the merged task would not fit a task's limits, or when the roles differ
  * and the project declares a team scope for one of them or for `developer`, the merged task's role,
  * so the ceiling on delegated work (plan M12.2) never widens or refuses the plan. Pure: the same draft always gives the same plan.
@@ -62,7 +66,14 @@ const highest = <T extends string>(order: readonly T[], xs: readonly T[]): T =>
  * The plan with its serial pieces as one task, or the plan unchanged. `teamRoles` are the roles
  * the project declares a team scope for (`teams` in its policy).
  */
-export function consolidatePlan(draft: PlanDraft, opts: { teamRoles?: ReadonlySet<string> } = {}): Consolidation {
+export function consolidatePlan(
+  draft: PlanDraft,
+  opts: {
+    teamRoles?: ReadonlySet<string>;
+    /** How many agents can work at the same time now; unknown when left out. */
+    sideBySide?: number;
+  } = {},
+): Consolidation {
   const keep: Consolidation = { draft, merged: null };
   const tasks = draft.tasks;
   if (tasks.length < 2 || tasks.length > CONSOLIDATE_MAX_TASKS) return keep;
@@ -71,8 +82,14 @@ export function consolidatePlan(draft: PlanDraft, opts: { teamRoles?: ReadonlySe
   for (const [i, a] of tasks.entries()) {
     for (const b of tasks.slice(i + 1)) {
       const ordered = prerequisites(tasks, a.key).has(b.key) || prerequisites(tasks, b.key).has(a.key);
-      const shared = a.scope.write.length > 0 && b.scope.write.length > 0 && globsOverlap(a.scope.write, b.scope.write);
-      if (!ordered && !shared) return keep;
+      // A task that writes nothing (a review, research) runs beside anything.
+      const beside =
+        a.scope.write.length === 0 ||
+        b.scope.write.length === 0 ||
+        (opts.sideBySide === 1
+          ? !globsOverlap(a.scope.write, b.scope.write)
+          : canRunSideBySide(a.scope.write, b.scope.write));
+      if (!ordered && beside) return keep;
     }
   }
   const roles = unique(tasks.map((t) => t.role));

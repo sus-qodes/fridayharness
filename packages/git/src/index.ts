@@ -31,6 +31,7 @@ export {
   isAncestor,
   type MergeResult,
   mergeCommits,
+  mergeJoining,
   moveRef,
   resolveCommit,
   treeOf,

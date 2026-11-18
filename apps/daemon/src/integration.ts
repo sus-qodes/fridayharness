@@ -11,7 +11,7 @@ import {
   GitRoot,
   goalBranch,
   isAncestor,
-  mergeCommits,
+  mergeJoining,
   moveRef,
   parentOf,
   resolveCommit,
@@ -338,8 +338,13 @@ export class IntegrationManager {
       checks: [],
       summary: null,
     };
-    const record = async (o: Outcome) => {
-      const rec = state.recordIntegration(this.pid, actor, o);
+    // How often work that does not fit goes back to its agent before a person is asked, read now:
+    // a change of the setting applies to the next integration.
+    const limit = project.config.integration.back_to_agent;
+    const record = async (o: Outcome, back: string | null = null) => {
+      const rec = state.recordIntegration(this.pid, actor, o, {
+        back: back && limit > 0 ? { reason: back, limit } : null,
+      });
       logger.info('task integration', { task_id: taskId, goal_id: goalId, status: o.status, summary: o.summary });
       if (o.status === 'integrated' || o.status === 'not_needed') {
         await workspaces.release(taskId, `integrated into ${branch}`).catch(() => undefined);
@@ -495,7 +500,8 @@ export class IntegrationManager {
         const goalTree = (await treeOf(project.root, goalHead)) as string;
         const outcome = await this.#checkRevision(task, goalId, goalHead, goalTree);
         if (outcome.problem) {
-          return record({ ...base, task_commit: taskCommit, base_commit: goalHead, ...outcome.problem });
+          const { unfit: _unfit, ...problem } = outcome.problem;
+          return record({ ...base, task_commit: taskCommit, base_commit: goalHead, ...problem });
         }
         return record({
           ...base,
@@ -528,7 +534,8 @@ export class IntegrationManager {
           await changedBetween(project.root, goalHead, taskCommit).catch(() => null),
         );
         if (outcome.problem) {
-          return record({ ...base, task_commit: taskCommit, base_commit: goalHead, ...outcome.problem });
+          const { unfit: _unfit, ...problem } = outcome.problem;
+          return record({ ...base, task_commit: taskCommit, base_commit: goalHead, ...problem });
         }
         await moveRef(project.root, ref, taskCommit, goalHead);
         return record({
@@ -541,16 +548,30 @@ export class IntegrationManager {
           summary: `fast-forward${repair}: ${outcome.ran ? `${outcome.results.length} check(s) passed on it` : 'no configured check applies to this kind of task'}`,
         });
       }
-      const merged = await mergeCommits(project.root, goalHead, taskCommit);
+      // Where this task and the goal's other tasks only added lines at the same place of a file
+      // (an entry in a changelog, a route in a list), both additions are kept (2026-11-18).
+      const merged = await mergeJoining(project.root, goalHead, taskCommit);
+      const joined = merged.joined?.length
+        ? `; both sides' added lines were kept in ${merged.joined.slice(0, 5).join(', ')}${merged.joined.length > 5 ? ` and ${merged.joined.length - 5} more` : ''}`
+        : '';
+      // Work made in a folder of its own goes back to its agent there before a person is asked;
+      // a person's own repair, and work made in the project folder, do not.
+      const canGoBack = Boolean(tree) && !opts.repaired;
       if (merged.conflicts.length) {
-        return record({
-          ...base,
-          status: 'conflicted',
-          task_commit: taskCommit,
-          base_commit: goalHead,
-          conflicts: merged.conflicts,
-          summary: `${merged.conflicts.length} file(s) conflict with ${branch}`,
-        });
+        const files = merged.conflicts;
+        return record(
+          {
+            ...base,
+            status: 'conflicted',
+            task_commit: taskCommit,
+            base_commit: goalHead,
+            conflicts: files,
+            summary: `${files.length} file(s) conflict with ${branch}`,
+          },
+          canGoBack
+            ? `Your verified work collides with what other tasks of this goal changed meanwhile, in ${files.length} file(s): ${files.slice(0, 20).join(', ')}${files.length > 20 ? ` and ${files.length - 20} more` : ''}. Keep what both sides meant.`
+            : null,
+        );
       }
       const commit = await commitTree(
         project.root,
@@ -568,7 +589,13 @@ export class IntegrationManager {
         await changedBetween(project.root, goalHead, merged.tree).catch(() => null),
       );
       if (outcome.problem) {
-        return record({ ...base, task_commit: taskCommit, base_commit: goalHead, ...outcome.problem });
+        const { unfit, ...problem } = outcome.problem;
+        return record(
+          { ...base, task_commit: taskCommit, base_commit: goalHead, ...problem },
+          canGoBack && unfit
+            ? `Your work passed its checks alone, but merged with what other tasks of this goal changed meanwhile it does not: ${unfit}. Run those checks in your worktree and make them pass.`
+            : null,
+        );
       }
 
       // 5. Move the goal branch, only from the commit Friday merged into.
@@ -580,9 +607,11 @@ export class IntegrationManager {
         base_commit: goalHead,
         merged_commit: commit,
         checks: outcome.results,
-        summary: outcome.ran
-          ? `${outcome.results.length} check(s) passed on the merged revision${repair}`
-          : `merged${repair}; no configured check applies to this kind of task`,
+        summary: `${
+          outcome.ran
+            ? `${outcome.results.length} check(s) passed on the merged revision${repair}`
+            : `merged${repair}; no configured check applies to this kind of task`
+        }${joined}`,
       });
     } catch (e) {
       logger.warn('task integration failed', { task_id: taskId, message: (e as Error).message });
@@ -627,7 +656,12 @@ export class IntegrationManager {
   ): Promise<{
     results: Outcome['checks'];
     ran: boolean;
-    problem: Pick<Outcome, 'summary' | 'checks'> | null;
+    /**
+     * `unfit` names the required checks that failed on a revision Friday's checkout was fully
+     * prepared for: the work itself does not fit, and its agent can make it. Absent when the
+     * checkout lacked something (packages, a settings file), which no agent's rework changes.
+     */
+    problem: (Pick<Outcome, 'summary' | 'checks'> & { unfit?: string }) | null;
   }> {
     const { state, project, workspaces } = this.opts;
     const branch = goalBranch(goalId);
@@ -702,12 +736,17 @@ export class IntegrationManager {
       };
     }
     if (failed) {
+      const names = results
+        .filter((r) => r.status === 'FAILED')
+        .map((r) => `${r.name}${r.summary ? ` (${r.summary.slice(0, 200)})` : ''}`)
+        .join('; ');
       return {
         results,
         ran: true,
         problem: {
           checks: results,
           summary: `${failed} required check(s) failed on the merged revision ${commit.slice(0, 12)}${unprepared}; ${branch} was not moved`,
+          ...(unprepared ? {} : { unfit: names.slice(0, 1200) }),
         },
       };
     }

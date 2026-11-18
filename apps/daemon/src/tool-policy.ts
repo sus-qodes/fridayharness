@@ -5,6 +5,7 @@ import {
   type CommandClass,
   DEFAULT_RISK,
   evaluate,
+  matchesAny,
   mcpLevel,
   type OtherWriter,
   type PolicyAction,
@@ -138,7 +139,8 @@ export function createToolJudge(deps: {
         resource: target,
         justification: (request?.justification ?? `${toolName}: ${result.reason}`).slice(0, 1000),
         ttl_s: request?.ttl_s ?? 3600,
-        reuse: request?.reuse ?? 'once',
+        // A file is rarely finished in one edit: leave for it holds for the task.
+        reuse: request?.reuse ?? (result.rule === 'write.outside_scope' ? 'task' : 'once'),
       },
       {
         capability,
@@ -208,6 +210,35 @@ export function createToolJudge(deps: {
       // Third-party MCP tools: the project's level for the server and tool (ADR-0030 §3).
       mcp: (server, tool) => (effective ? mcpLevel(effective, server, tool) : 'review'),
     });
+    // An edit outside the task's own files, by an agent Friday started (2026-11-18): the person is
+    // asked on its behalf, with the file named, and the agent goes on with the rest meanwhile. It
+    // was refused and told how to ask; agents rarely asked. In the trial one put lint rules into
+    // another file than the project's documents name, and nobody was told it had been stopped.
+    // Not where the project's own policy or the role's team scope keeps the file as well, and not
+    // again after the person said no for this task.
+    if (askHuman && task && result.decision === 'deny' && result.rule === 'write.outside_scope' && result.grant) {
+      const rel = result.grant.target;
+      const windows = process.platform === 'win32';
+      const teams = (agent?.role ? effective?.teams[agent.role] : undefined) ?? [];
+      const keptElsewhere =
+        (effective?.deny.write.length ? matchesAny(rel, effective.deny.write, windows) : false) ||
+        teams.some((t) => t.write.length > 0 && !matchesAny(rel, t.write, windows));
+      if (!keptElsewhere) {
+        const refused = state.q
+          .approvals(pid, 'denied', { task_id: task.task_id })
+          .some((a) => a.capability === 'file.write' && a.target === rel);
+        result = refused
+          ? {
+              ...result,
+              reason: `${rel} is outside the files of ${task.task_id}, and the person said no to changing it for this task. Do the task without it, and say in your final answer what that leaves undone.`,
+            }
+          : {
+              ...result,
+              decision: 'ask',
+              reason: `${rel} is outside the files this task may change (${(task.scope?.write ?? []).join(', ')}).`,
+            };
+      }
+    }
     // A task worktree belongs to its task: a session that does not hold it (a stale attempt after
     // recovery, or one that never claimed it) may not write there (ADR-0026 §2).
     const tree = action.kind === 'write' && result.decision !== 'deny' ? state.q.worktreeAt(pid, root) : undefined;

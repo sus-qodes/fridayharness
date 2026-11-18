@@ -471,10 +471,16 @@ describe('every host, with the daemon', () => {
     };
     for (const vendor of OTHER_VENDORS) {
       const out = await outside[vendor]();
-      expect(decided(vendor, out), vendor).toEqual({
-        decision: 'deny',
-        reason: expect.stringContaining(`outside the scope of ${s[vendor]?.task.task_id}`),
-      });
+      const verdict = decided(vendor, out);
+      expect(verdict.decision, vendor).toBe('deny');
+      // Where the host's hook can ask its own person, the agent is told how to ask; where it
+      // cannot, Friday asks the person for that file itself and says so (2026-11-18).
+      const reason = String(verdict.reason);
+      if (reason.includes('outside the files this task may change')) {
+        expect(reason, vendor).toMatch(/The person was asked in Friday \(approval apr_/);
+      } else {
+        expect(reason, vendor).toContain(`outside the scope of ${s[vendor]?.task.task_id}`);
+      }
       if (vendor !== 'antigravity') expect(out.code, vendor).toBe(2);
       const ok = await inside[vendor]();
       // No decision of Friday's, except in Antigravity, which takes no reply without one: there a

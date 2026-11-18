@@ -240,13 +240,39 @@ export interface TaskAttention {
   rule?: string | null;
 }
 
+/**
+ * Why a task that has not started is not at work (2026-11-18): what it waits for, in words for a
+ * person, and which kind of wait it is. Only `your_turn` is ended by the person prompting an agent
+ * in its own window; the waiting list says "Your turn" for that one alone.
+ */
+export interface TaskWaits {
+  code:
+    | 'dependencies'
+    | 'paused'
+    | 'question'
+    | 'agent_away'
+    | 'agent_busy'
+    | 'your_turn'
+    | 'shared_files'
+    | 'own_copy'
+    | 'no_agent'
+    | 'other';
+  /** Reads after "Not started yet: ". */
+  text: string;
+}
+
 /** A task as the board shows it. */
 export type SnapshotTask = TaskView & {
   agent_key: string | null;
   /** WAITING: the reason of its latest `task.waiting` (what the agent needs). */
   waiting_note: string | null;
-  /** READY: why delegation left it waiting ("no agent is available …"). */
+  /**
+   * PROPOSED or READY: why it is not at work, in words for a person (`TaskWaits.text`), from the
+   * state as it is now. Null when it is about to start.
+   */
   delegation_note: string | null;
+  /** The kind of wait `delegation_note` describes; absent from a daemon before 2026-11-18. */
+  waits_for?: TaskWaits['code'] | null;
   /**
    * RUNNING, held by an agent its person runs (Antigravity, Claude Code in an editor): what that
    * agent last did when it is not working (2026-11-18). `stopped`: its turn ended and nothing

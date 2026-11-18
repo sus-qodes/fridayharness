@@ -166,7 +166,10 @@ describe('OpenCode checkpoint D: the worker lifecycle (plan M14.4)', () => {
       ['allow', 'src/done.ts'],
       ['deny', 'docs/outside.txt'],
     ]);
-    expect(String(tools(o.entries())[1]?.reason)).toMatch(/outside the scope/);
+    // Outside the task's files a person is asked (2026-11-18), and the model is told so.
+    expect(String(tools(o.entries())[1]?.reason)).toMatch(
+      /docs\/outside\.txt is outside the files this task may change \(src\/\*\*\)\. A person decides this, and was asked in Friday \(approval apr_/,
+    );
     expect(existsSync(path.join(start.working_directory, 'src', 'done.ts'))).toBe(true);
     expect(existsSync(path.join(start.working_directory, 'docs', 'outside.txt'))).toBe(false);
     // The claim: the summary from the final line of JSON, the changed paths from the worktree.

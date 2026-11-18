@@ -18,6 +18,7 @@ import {
 import { type Actor, FridayError, type WorktreeView } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
+import { collisionNote, leftMarked, stillMarked, unfinishedNote } from './collisions.js';
 import type { FileCopier } from './copy-files.js';
 import { InFlight } from './in-flight.js';
 import { noteInstall } from './install-broken.js';
@@ -198,37 +199,21 @@ export class WorkspaceManager {
       // and the run's base moves to that point, so verification judges only this task's changes.
       const goalHead = alloc.reused_branch ? await this.baseFor(run.task_id) : undefined;
       if (goalHead) {
-        const prior = state.store.readByRef(this.pid, 'task', run.task_id, {
-          types: ['run.workspace_refresh_conflicted'],
-          desc: true,
-          limit: 1,
-        })[0]?.payload as { refresh?: { goal_head?: string }; reason?: string } | undefined;
-        if (prior?.refresh?.goal_head === goalHead) {
-          // The next attempt resolves the reported conflict; retrying the same preflight would loop.
-          note = prior.reason ?? null;
+        // Where the two collide, the folder still gets the merge (2026-11-18): the files git cannot
+        // merge hold both versions marked, and this attempt starts with them as its first work.
+        // Before, the attempt was declined, the next one was told to merge by a git command of its
+        // own, and its folder passed for a revert of the goal's work when it edited instead.
+        const result = await refreshWorktree({ dir: alloc.path, goalHead, taskId: run.task_id });
+        refresh = { ...result, conflicts: result.conflicts.map((c) => c.path).slice(0, 50) };
+        if (result.conflicts.length) {
+          const stored = state.artifacts?.storeText(this.pid, 'workspace', JSON.stringify(result, null, 2));
+          const artifact_ref = stored ? `artifact:${stored.artifact_id}` : null;
+          refresh = { ...refresh, artifact_ref };
+          note = collisionNote(result, artifact_ref);
         } else {
-          const result = await refreshWorktree({ dir: alloc.path, goalHead, taskId: run.task_id });
-          refresh = { ...result, conflicts: result.conflicts.map((c) => c.path).slice(0, 50) };
-          if (result.conflicts.length) {
-            const stored = state.artifacts?.storeText(this.pid, 'workspace', JSON.stringify(result, null, 2));
-            const artifact_ref = stored ? `artifact:${stored.artifact_id}` : null;
-            note = [
-              `Resolve the worktree refresh conflict with goal commit ${goalHead}. The worktree and its edits are preserved; merge that goal revision and resolve these files before claiming.`,
-              artifact_ref ? `Conflict report: ${artifact_ref}` : '',
-              `Conflicting files: ${result.conflicts
-                .map((c) => c.path)
-                .join(', ')
-                .slice(0, 1600)}`,
-              ...result.conflicts
-                .slice(0, 20)
-                .map((c) => `${c.path}\nTask side:\n${c.task.slice(0, 1200)}\nGoal side:\n${c.goal.slice(0, 1200)}`),
-              artifact_ref ? `Full conflict report (${result.conflicts.length} files): ${artifact_ref}` : '',
-            ]
-              .filter(Boolean)
-              .join('\n\n');
-            state.workspaceConflict(this.pid, runId, { ...refresh, artifact_ref }, note.slice(0, 24_000));
-            return;
-          }
+          // An earlier attempt was given such files and ended before it finished them.
+          const unfinished = stillMarked(alloc.path, leftMarked(state, this.pid, run.task_id));
+          if (unfinished.length) note = unfinishedNote(unfinished);
         }
         alloc = { ...alloc, base_commit: goalHead };
       }
@@ -259,7 +244,7 @@ export class WorkspaceManager {
         ...alloc,
         setup,
         refresh: refresh?.commits.length ? refresh : null,
-        note,
+        note: note ? note.slice(0, 2000) : null,
         lacking: lacking ?? null,
       });
       logger.info('task worktree ready', {

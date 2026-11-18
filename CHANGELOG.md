@@ -2,6 +2,20 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — the trial's fault list, part 5: agents at work at the same time
+
+In the trial seven goals ran, and at no moment were two agents at work. Every plan listed the project's changelog, and a task waited for every running task that might touch one of its files.
+
+- **Tasks that share a few files run side by side.** Each agent Friday starts works in a copy of its own, so two tasks may both add to a list of routes, a file of texts or a changelog, as long as each also has files that are its own. Two tasks whose work is in the very same files still run one after the other. An agent you run yourself (Antigravity, Claude Code in an editor) works in your project folder, so on shared files it still waits its turn.
+- **Two additions at the same place are both kept.** Git calls it a conflict when two tasks each add a line at the end of the same list. Friday keeps both, the earlier task's first, and checks the result as it checks any merged work. Only where both sides added and neither changed a line that was there: never in a lockfile, a file both created, or a file one of them deleted.
+- **A real collision goes back to the agent, not to you.** Friday merges the other tasks' work into the agent's copy and leaves the colliding file with both versions marked. The agent finishes it by editing, with no git command, and a claim is refused while a mark is left. The same when work passes its checks alone and fails once merged: the agent gets the other work and the name of the failing check. After two tries you are asked, with **Let the agent fix it** as the first button. The number is `integration.back_to_agent` in config.yaml; 0 asks you at once, as before.
+- **The planner splits work by itself, and stops chaining.** It is told that a shared file is no reason to run tasks one after another, to give independent parts a task each, and how many agents can work at once right now. A small goal is still one task, and so is work in parts that would run one after another anyway because only one agent is connected. A plan you write yourself is checked by the same rule.
+- **A task that has not started says why.** "Waits for “Wizard screens” (claude-1 is working on it)", "next for claude-1, after …", "no agent is free right now", "Friday is paused". The waiting list says "Your turn" only when prompting your agent would start the task; before, it said so for a task that could not start.
+- **Each task gets the whole of what the tasks before it reported**, no longer the first 320 characters. And it is told which files it shares with tasks running beside it, and to only add its own lines there.
+- **An agent stopped at the edge of its task's files asks you.** The card names the file outside the task's files and offers **Allow this file…** (for the rest of the task) first, then **Just this edit**, or Deny. The agent goes on with the rest meanwhile and is told your answer; a no is not asked about again. Before, it was refused and told how to ask, and usually wrote somewhere else instead. Files the project's policy or the agent's team keeps are refused as they were.
+- **The plan's files include what the project's own rules require.** The planner is told to put into a task's files every file its documents say such work must change.
+- **Each goal card tells its story.** What needs you first, then who is working on what, what waits and why, and what is finished, one line per task.
+
 ## Unreleased — the trial's fault list, part 4: one question, asked by Friday
 
 In the trial's recording, twenty-four seconds on one Settings page brought up six grey Windows boxes, each listing every setting again, and one "Trust" switched on a setting that had been cancelled a moment before.

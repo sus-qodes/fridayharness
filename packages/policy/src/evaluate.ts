@@ -490,7 +490,8 @@ export function evaluate(input: PolicyInput): PolicyResult {
         'deny',
         'write.outside_scope',
         `${rel} is outside the scope of ${task.task_id} (${scope.join(', ')}). ${HOW_TO_ASK}`,
-        { targets },
+        // What a person's approval would have to cover: the one file, for whoever asks them.
+        { targets, grant: { capability: 'file.write', target: rel } },
       );
     }
     // The project's deny rules and the team scopes of the agent's role only tighten (ADR-0028).

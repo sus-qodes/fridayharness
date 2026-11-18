@@ -116,9 +116,12 @@ export class PolicyBridge {
         // Only an explicit allow proceeds; a refusal or a question for a human carries Friday's reason.
         if (verdict?.decision === 'allow') return reply(200, { ok: true, decision: 'allow', reason: '' });
         const why = typeof verdict?.reason === 'string' && verdict.reason ? verdict.reason.slice(0, 300) : '';
+        // Nobody answers in this session: the person was asked in Friday, and the call passes once
+        // they allow it. It said only "no human answers this session", which reads as a dead end.
+        const asked = (verdict as { approval_id?: unknown } | undefined)?.approval_id;
         return deny(
           verdict?.decision === 'ask'
-            ? `a human decides this, and no human answers this session${why ? `: ${why}` : ''}`
+            ? `${why ? `${why} ` : ''}A person decides this, and was asked in Friday${typeof asked === 'string' ? ` (approval ${asked})` : ''}. Do not try it another way. Go on with whatever else the task needs: this same call passes once they allow it.`
             : why || 'Friday policy did not allow this call',
         );
       })().catch(() => {

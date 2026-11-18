@@ -10,7 +10,7 @@ import {
 import { ROLE_REGISTRY_SOURCE, type RoleDecision, type RoleDecisionInput } from '@friday/routing';
 import type { BrainJob, BrainJobInput, FridayState } from '@friday/state';
 import { consolidatePlan } from './consolidate.js';
-import { type DelegationCandidate, delegate } from './delegate.js';
+import { type DelegationCandidate, delegate, type RunningWork } from './delegate.js';
 import { buildEscalation, type EscalationReason } from './escalate.js';
 import {
   draftProjectIntent,
@@ -1099,6 +1099,7 @@ export class MasterBrain {
         instructions: PLAN_INSTRUCTIONS,
         prompt: planPrompt(promptGoal(goal), {
           feedback: [feedback, ...decisions].filter(Boolean).join('\n') || null,
+          sideBySide: this.#sideBySide(),
         }),
         schema: draftJsonSchema('plan'),
         schemaName: 'plan',
@@ -1131,6 +1132,7 @@ export class MasterBrain {
       ? drafted
       : consolidatePlan(drafted, {
           teamRoles: new Set(Object.keys(teams).filter((r) => (teams[r]?.length ?? 0) > 0)),
+          sideBySide: this.#sideBySide(),
         }).draft;
     const v = state.proposePlan(
       projectId,
@@ -1531,12 +1533,23 @@ export class MasterBrain {
             goals_done: stats.goals_done,
             cost: 0,
             waits_for_person: Boolean(h) && h?.attach_mode !== 'spawn',
+            // Each task of an agent Friday starts gets a folder of its own, where worktrees are on.
+            own_folder: h?.attach_mode === 'spawn' && state.config.worktreeMode === 'per_task',
           },
           spawn: h?.attach_mode === 'spawn',
           free: live && !a.shadow && a.status === 'AVAILABLE' && !a.current_task_id,
         },
       ];
     });
+  }
+
+  /**
+   * How many agents can work at the same time now: every connected agent Friday starts in a folder
+   * of its own, and one more for the project folder when an agent its person runs is connected.
+   */
+  #sideBySide(): number {
+    const live = this.#candidates(this.#deps.state.clock.now()).filter((x) => x.c.harness_live && !x.c.shadow);
+    return live.filter((x) => x.c.own_folder).length + (live.some((x) => !x.c.own_folder) ? 1 : 0);
   }
 
   /** Assigns READY plan tasks of active goals, best first (ADR-0013 §9). */
@@ -1595,10 +1608,21 @@ export class MasterBrain {
       }
       // A review or research task without a write scope is read-only (the policy keeps it so), so
       // it conflicts with nothing; an implementation task without a scope may write anywhere.
+      // Where each works matters (2026-11-18): tasks in folders of their own may change the same
+      // files, tasks in one folder may not.
       const running = state.q
         .tasks(projectId, { statuses: ['ASSIGNED', 'RUNNING', 'WAITING'] })
         .filter((t) => !((t.kind === 'review' || t.kind === 'research') && (t.scope?.write ?? []).length === 0))
-        .map((t) => t.scope?.write ?? []);
+        .map((t): RunningWork => {
+          const run = t.current_run_id ? state.q.findRun(t.current_run_id) : undefined;
+          return {
+            write: t.scope?.write ?? [],
+            // Its attempt works on the task's own branch, or waits for the folder of that branch.
+            own_folder: Boolean(run && (run.branch_ref || run.workspace === 'pending')),
+            task_id: t.task_id,
+            agent_key: (t.assigned_agent_id && state.q.findAgent(t.assigned_agent_id)?.agent_key) || null,
+          };
+        });
       // The model each agent's harness would run for this task, and its cost (ADR-0031 §9). An
       // agent whose route blocks the task is no candidate (review F01).
       const fitted = candidates.map((x) => ({ x, fit: this.#deps.modelFit?.(task, x.c.agent_id) ?? null }));

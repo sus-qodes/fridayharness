@@ -47,6 +47,21 @@ export interface DelegationCandidate {
    * given to it is only kept for it until that person prompts it there (2026-11-17).
    */
   waits_for_person?: boolean;
+  /**
+   * Friday gives each task of this agent a folder of its own (a task worktree), so it may work
+   * beside a task that changes the same files (2026-11-18). Without it the agent works in a
+   * folder it shares, the project folder.
+   */
+  own_folder?: boolean;
+}
+
+/** A task that is at work now, as delegation sees it. */
+export interface RunningWork {
+  write: string[];
+  /** It works in a folder of its own, not in one it shares with other tasks. */
+  own_folder?: boolean;
+  task_id?: string;
+  agent_key?: string | null;
 }
 
 /** The kinds of task a cheaper agent may take when small and low-risk. */
@@ -108,7 +123,12 @@ export const DELEGATION_WEIGHTS = {
 
 const round = (n: number) => Math.round(n * 1000) / 1000;
 
-export function scoreCandidate(task: DelegationTask, c: DelegationCandidate): CandidateScore {
+export function scoreCandidate(
+  task: DelegationTask,
+  c: DelegationCandidate,
+  /** Why this agent cannot take the task although it is free; said as its reason. */
+  held: string | null = null,
+): CandidateScore {
   const capability_fit = c.role === task.role ? 1 : c.role === 'developer' || task.role === 'developer' ? 0.6 : 0.2;
   const context_fit =
     task.write.length === 0 || c.recent_paths.length === 0
@@ -124,7 +144,7 @@ export function scoreCandidate(task: DelegationTask, c: DelegationCandidate): Ca
         ? `busy with ${c.current_task_id}`
         : c.status !== 'AVAILABLE'
           ? `agent is ${c.status}`
-          : '';
+          : (held ?? '');
   const parts: ScoreParts = {
     capability_fit,
     context_fit: round(context_fit),
@@ -155,24 +175,44 @@ export interface DelegationDecision {
   scores: CandidateScore[];
 }
 
+/** Said of an agent that is free but works in the folder the running tasks' files are in. */
+const SHARED_FOLDER = 'works in the project folder, and a task that is running changes the same files';
+
 /**
- * Picks an agent for one READY task. A task whose write scope overlaps a task that is running
- * now waits instead (single live writer until worktrees exist, plan B26).
+ * Picks an agent for one READY task.
+ *
+ * Two tasks never change the same files in one folder (single live writer, plan B26). In folders
+ * of their own they may (2026-11-18): Friday merges their verified work into the goal, and what
+ * collides goes back to the agent. So a task whose write scope overlaps a running task's waits
+ * only when one of the two would work in a folder it shares: the running task does (it is in the
+ * project folder), or the only free agents do. `runningWrites` may be bare write scopes, which
+ * count as work in a shared folder, as every task was before.
  */
 export function delegate(
   task: DelegationTask,
   candidates: DelegationCandidate[],
-  runningWrites: string[][],
+  runningWrites: readonly (string[] | RunningWork)[],
 ): DelegationDecision {
-  // A read-only task (no write scope) never conflicts; a running task without a scope may write anywhere.
-  if (task.write.length > 0 && runningWrites.some((w) => globsOverlap(w, task.write))) {
+  // A read-only task (no write scope) never conflicts; a running task without a scope may write anything.
+  const running = runningWrites.map((r): RunningWork => (Array.isArray(r) ? { write: r } : r));
+  const clashing = task.write.length > 0 ? running.filter((r) => globsOverlap(r.write, task.write)) : [];
+  const inSharedFolder = clashing.find((r) => !r.own_folder);
+  if (inSharedFolder) {
+    const who = inSharedFolder.agent_key ? `${inSharedFolder.agent_key} is` : 'a task that is running is';
     return {
       task_id: task.task_id,
       agent_key: null,
-      reason: 'waits: its write scope overlaps a task that is running',
+      // The first words are read by people ("Not started yet: …") and by tests of long standing.
+      reason: `waits: its write scope overlaps a task that is running${
+        inSharedFolder.own_folder === undefined && !inSharedFolder.task_id
+          ? ''
+          : ` in the project folder (${who} changing the same files${inSharedFolder.task_id ? ` for ${inSharedFolder.task_id}` : ''})`
+      }`,
       scores: [],
     };
   }
+  // The running tasks that share its files each have a folder of their own: so must this one.
+  const needsOwnFolder = clashing.length > 0;
   // A task that names a role goes to a free agent of that role when there is one: the score decides
   // among them, and among everyone when there is none. A generalist's history in the same files
   // must not outweigh the role the plan chose (LESSONS D-48).
@@ -196,7 +236,7 @@ export function delegate(
   /** Its role is the task's, or one of the two is the generalist: not another speciality. */
   const fits = (s: CandidateScore) => (s.parts.capability_fit > 0.2 ? 1 : 0);
   const scores = candidates
-    .map((c) => scoreCandidate(task, c))
+    .map((c) => scoreCandidate(task, c, needsOwnFolder && !c.own_folder ? SHARED_FOLDER : null))
     .sort(
       (a, b) =>
         Number(b.eligible) - Number(a.eligible) ||
@@ -212,8 +252,18 @@ export function delegate(
         a.agent_key.localeCompare(b.agent_key),
     );
   const best = scores.find((s) => s.eligible);
-  if (!best)
-    return { task_id: task.task_id, agent_key: null, reason: 'no available agent; the task stays claimable', scores };
+  if (!best) {
+    // Only agents that work in the project folder are free: it waits for one with a folder of its own.
+    const held = scores.some((s) => s.reason === SHARED_FOLDER);
+    return {
+      task_id: task.task_id,
+      agent_key: null,
+      reason: held
+        ? 'waits: it shares files with a task that is running, so it goes to an agent Friday starts in a folder of its own, and none is free'
+        : 'no available agent; the task stays claimable',
+      scores,
+    };
+  }
   const top = Math.max(...scores.filter((s) => s.eligible).map((s) => s.total));
   const cls = classOf.get(best.agent_id) ?? 'standard';
   if (waits.get(best.agent_id)) {

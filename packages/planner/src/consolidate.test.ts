@@ -44,12 +44,32 @@ describe('a small goal is one task (plan M13.1)', () => {
     expect(PlanDraft.safeParse(c.draft).success).toBe(true);
   });
 
-  it('merges tasks that write a common file, since Friday runs them one after another anyway', () => {
+  // Two tasks that share a file and each have files of their own run side by side, each in a copy
+  // of its own, and Friday merges their work (2026-11-18): the plan stays split. Before, a common
+  // file made them one task, as it made every pair of tasks wait for each other.
+  it('keeps tasks that share a common file apart when each has files of its own', () => {
     const d = plan([
       task('a', { scope: { write: ['shared/src/api.ts', 'frontend/**'], read: [] } }),
       task('b', { scope: { write: ['shared/src/api.ts', 'backend/**'], read: [] } }),
     ]);
-    expect(consolidatePlan(d).merged).toEqual(['a', 'b']);
+    expect(consolidatePlan(d)).toEqual({ draft: d, merged: null });
+    expect(consolidatePlan(d, { sideBySide: 2 }).merged).toBeNull();
+    // One agent is all there is: they would run one after the other, each a session of its own.
+    expect(consolidatePlan(d, { sideBySide: 1 }).merged).toEqual(['a', 'b']);
+  });
+
+  it('merges tasks whose work is in the same files, since they cannot run side by side', () => {
+    const same = plan([
+      task('a', { scope: { write: ['shared/src/api.ts'], read: [] } }),
+      task('b', { scope: { write: ['shared/src/api.ts'], read: [] } }),
+    ]);
+    expect(consolidatePlan(same).merged).toEqual(['a', 'b']);
+    // One lies wholly inside the other: it has nothing of its own.
+    const inside = plan([
+      task('a', { scope: { write: ['frontend/**'], read: [] } }),
+      task('b', { scope: { write: ['frontend/src/cart/**'], read: [] } }),
+    ]);
+    expect(consolidatePlan(inside).merged).toEqual(['a', 'b']);
   });
 
   it('keeps tasks that can run at the same time apart: that is what several agents are for', () => {

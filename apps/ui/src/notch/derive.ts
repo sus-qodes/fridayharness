@@ -279,6 +279,10 @@ function toTurn(board: UiSnapshot): WaitingItem[] {
     const host = agent?.harness_id ? hosts.get(agent.harness_id) : undefined;
     // An agent Friday starts takes its task by itself: nothing for the person to do.
     if (!host || host.attach_mode === 'spawn') continue;
+    // Nor when prompting the agent would not start it (2026-11-18): it is busy with another task,
+    // Friday is paused, a question of Friday's is open. The list said "Your turn in Antigravity"
+    // for a task whose own page said it could not start.
+    if (t.waits_for && t.waits_for !== 'your_turn') continue;
     out.push({
       kind: 'turn',
       key: `turn:${t.task_id}`,

@@ -36,6 +36,7 @@ import {
   judgeCleanInstall,
   lockRoots,
 } from './clean-install.js';
+import { leftMarked, stillMarked } from './collisions.js';
 import type { DaemonContext } from './daemon.js';
 import { runCheckInProfile } from './execution.js';
 
@@ -276,6 +277,20 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
             : `the verified code includes ${before.files} uncommitted change(s); integration needs them committed`,
         paths: before.paths.slice(0, 20),
       });
+    }
+    // A file Friday left with two versions marked, when it merged the goal's other work into this
+    // folder, is not finished while the marks are in it (2026-11-18): the claim is refused with
+    // their names, whatever the checks say (a document passes every check with marks in it).
+    if (!shared) {
+      const unfinished = stillMarked(root, leftMarked(state, pid, taskId));
+      if (unfinished.length) {
+        findings.push({
+          rule: 'diff.unfinished_merge',
+          severity: 'fail',
+          message: `${unfinished.length} file(s) still hold two versions from the merge with the goal's other work: ${unfinished.slice(0, 20).join(', ')}. In each, keep what both meant and remove the lines that start with "<<<<<<<", "=======" and ">>>>>>>"`,
+          paths: unfinished.slice(0, 20),
+        });
+      }
     }
     // Conflict-prone files (ADR-0025): a change to what another task holds fails; free ones are taken.
     if (since && ctx.policy().reservations_mode !== 'off') {

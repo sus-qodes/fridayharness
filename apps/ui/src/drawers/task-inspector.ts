@@ -408,7 +408,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
             h('span', { class: 'dr-text' }, truncate(cleanText(t.waiting_note), 1000)),
           )
         : null,
-      t.status === 'READY' && t.delegation_note
+      (t.status === 'READY' || t.status === 'PROPOSED') && t.delegation_note
         ? h('div', { class: 'dr-banner', role: 'note' }, truncate(notStartedText(cleanText(t.delegation_note)), 400))
         : null,
       section(

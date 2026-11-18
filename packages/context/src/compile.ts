@@ -10,7 +10,7 @@ import {
   symbolKey,
 } from '@friday/code-graph';
 import type { GitRoot, SourceIdentity } from '@friday/git';
-import { matchesAny } from '@friday/policy';
+import { globsOverlap, matchesAny } from '@friday/policy';
 import {
   type Actor,
   type ContextExplanation,
@@ -633,6 +633,44 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
       rule: 'protected: scope',
     });
 
+    // Files this task shares with tasks of its goal that may be at work at the same time
+    // (2026-11-18): each works in a copy of its own and Friday merges their work, which goes best
+    // when every one only adds its own lines there. A reformatted or reordered file collides with
+    // every other task's addition; then the work comes back to be merged by hand.
+    const mine = task.scope?.write ?? [];
+    if (goal && mine.length) {
+      const before = (id: string, seen = new Set<string>()): Set<string> => {
+        for (const d of state.q.dependencies(id)) {
+          if (seen.has(d)) continue;
+          seen.add(d);
+          before(d, seen);
+        }
+        return seen;
+      };
+      const earlier = before(task.task_id);
+      const shared = new Set<string>();
+      for (const other of state.q.goalTasks(pid, goal.goal_id)) {
+        if (other.task_id === task.task_id || ['COMPLETED', 'CANCELLED', 'ABANDONED'].includes(other.status)) continue;
+        const theirs = other.scope?.write ?? [];
+        if (!theirs.length || earlier.has(other.task_id) || before(other.task_id).has(task.task_id)) continue;
+        for (const p of mine) if (globsOverlap([p], theirs)) shared.add(p);
+      }
+      if (shared.size) {
+        const listed = [...shared].slice(0, 12).join(', ');
+        const line = `Shared with other tasks of this goal, which may be at work at the same time in a copy of their own: ${listed}. Friday merges your work with theirs. In those files only add what your task needs, where it belongs: do not reformat, reorder or rewrite lines you do not have to change.`;
+        add({
+          section: 'task.scope',
+          line,
+          source: taskSrc('the plan lets these tasks run side by side', line),
+          priority: 1,
+          relevance: 1,
+          protected: false,
+          reason: 'files other tasks change too',
+          rule: 'task state (priority 1)',
+        });
+      }
+    }
+
     if (goal) {
       // The goal's constraints and outcomes are in its intent above (ADR-0034 §5), not repeated here.
       const where = task.plan_key ? ` You do plan task "${task.plan_key}" of version ${task.plan_version}.` : '';
@@ -661,6 +699,9 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
       // each, from Friday's records, with no model call. The next agent starts knowing what is
       // already there instead of finding out, or guessing. No file names: a named file gets opened
       // whether it is needed or not (the measurements of 2026-10-20), and the work is in the folder.
+      // The whole of what each reported (2026-11-18), no longer its first 320 characters: a closing
+      // task asked two agents for "completion summaries and known gaps" and got no answer, while
+      // Friday held every word of them.
       for (const depId of state.q.dependencies(task.task_id).slice(0, DONE_BEFORE_MAX)) {
         const dep = state.q.findTask(pid, depId);
         if (dep?.status !== 'COMPLETED') continue;
@@ -1693,7 +1734,7 @@ function progressEvents(state: FridayState, pid: string, taskId: string) {
 
 /** At most this many "Done before you" lines, each with at most this much of what its agent reported. */
 const DONE_BEFORE_MAX = 6;
-const DONE_BEFORE_CHARS = 320;
+const DONE_BEFORE_CHARS = 1500;
 
 /** One line of at most `max` characters, without line breaks. */
 function oneLine(text: string, max: number): string {

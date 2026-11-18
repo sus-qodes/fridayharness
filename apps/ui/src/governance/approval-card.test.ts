@@ -150,6 +150,44 @@ describe('approval card', () => {
     card.destroy();
   });
 
+  // Friday asks for an agent it started that was stopped at the edge of its task's files
+  // (2026-11-18): the file, for the rest of the task, is the first choice.
+  it('offers the file for the task first when the request is for one file outside the task', async () => {
+    const a = makeApproval({
+      capability: 'file.write',
+      target: 'packages/config/eslint/boundaries.js',
+      purpose: 'Edit: packages/config/eslint/boundaries.js is outside the files this task may change (src/**).',
+      reuse: 'task',
+      risk: 'low',
+    });
+    const card = mount(a);
+    const names = [...card.el.querySelectorAll('.gv-actions:not([hidden]) > button')].map(
+      (b) => b.querySelector('span')?.textContent,
+    );
+    expect(names.slice(0, 3)).toEqual(['Allow this file…', 'Just this edit', 'Deny']);
+    expect(buttonNamed(card.el, 'Allow this file…').classList.contains('btn-primary')).toBe(true);
+    expect(buttonNamed(card.el, 'Just this edit').classList.contains('btn-primary')).toBe(false);
+    expect(buttonNamed(card.el, 'Allow this file…').getAttribute('aria-keyshortcuts')).toBe('1');
+    arm(card.el);
+    ctx.confirmAnswer = true;
+    buttonNamed(card.el, 'Allow this file…').click();
+    await flush();
+    expect(ctx.transport.to('POST', `/approvals/${a.approval_id}/approve`).map((c) => c.body)).toEqual([
+      expect.objectContaining({ reuse: 'task' }),
+    ]);
+    // Shown another request, the same card goes back to its usual order.
+    card.update(
+      makeApproval({ approval_id: 'apr_other', capability: 'shell.npm.run', target: 'npm test', reuse: 'once' }),
+    );
+    expect(
+      [...card.el.querySelectorAll('.gv-actions:not([hidden]) > button')]
+        .map((b) => b.querySelector('span')?.textContent)
+        .slice(0, 2),
+    ).toEqual(['Allow once', 'Allow for this task…']);
+    expect(buttonNamed(card.el, 'Allow once').classList.contains('btn-primary')).toBe(true);
+    card.destroy();
+  });
+
   it('Allow once on high risk opens the modal instead', async () => {
     const a = makeApproval({ risk: 'high' });
     const card = mount(a);

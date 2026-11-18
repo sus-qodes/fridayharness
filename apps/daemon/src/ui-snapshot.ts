@@ -24,6 +24,7 @@ import type { BrainHandle } from './brain.js';
 import { escalationView, liveVersion } from './brain-routes.js';
 import { answersOf } from './direct-goal.js';
 import { goalWork, landedGoals } from './land.js';
+import { notStartedFacts, whyNotStarted } from './not-started.js';
 
 /** The interface API version this daemon speaks; a page built for another asks to be reloaded (plan §5.3). */
 export const UI_API_VERSION = 1;
@@ -177,14 +178,20 @@ export function buildUiSnapshot(deps: {
   // From the event log, so the count is the same after a reload (review R13); only the events
   // since the last read are counted.
   const toolCalls = countToolCalls(state, pid, head, deps.toolCalls ?? toolCallTally());
-  const tasks: SnapshotTask[] = shownTasks.map((t) => ({
-    ...t,
-    agent_key: agentKey(t.assigned_agent_id),
-    waiting_note: t.status === 'WAITING' ? latestReason(state, pid, t.task_id, 'task.waiting') : null,
-    delegation_note: t.status === 'READY' ? delegationNote(state, t.task_id) : null,
-    attention: attentionOf(state, pid, t),
-    tool_calls: toolCalls.get(t.task_id) ?? 0,
-  }));
+  // Why each task that has not started is not at work, from the state as it is now (2026-11-18).
+  const facts = notStartedFacts(state, pid, deps.nowMs);
+  const tasks: SnapshotTask[] = shownTasks.map((t) => {
+    const waits = whyNotStarted(state, pid, t, facts);
+    return {
+      ...t,
+      agent_key: agentKey(t.assigned_agent_id),
+      waiting_note: t.status === 'WAITING' ? latestReason(state, pid, t.task_id, 'task.waiting') : null,
+      delegation_note: waits?.text ?? null,
+      waits_for: waits?.code ?? null,
+      attention: attentionOf(state, pid, t),
+      tool_calls: toolCalls.get(t.task_id) ?? 0,
+    };
+  });
 
   const runs: Record<string, RunView> = {};
   const verifications: Record<string, VerificationView> = {};
@@ -388,13 +395,6 @@ function attentionOf(state: FridayState, pid: string, t: TaskView): TaskAttentio
     };
   }
   return null;
-}
-
-/** Why delegation left a READY task waiting: its latest decision when nobody took it. */
-function delegationNote(state: FridayState, taskId: string): string | null {
-  const last = state.q.assignments(taskId).at(-1);
-  if (!last || last.agent_key) return null;
-  return last.reason ? String(last.reason).slice(0, 500) : null;
 }
 
 /** The last usage a host reported for each listed run, from the most recent agent events. */

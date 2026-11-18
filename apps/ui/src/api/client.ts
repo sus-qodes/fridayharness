@@ -290,6 +290,11 @@ export class FridayApi {
     });
   }
 
+  /** Work that did not fit the goal's other work goes back to its agent, which merges it in its own copy. */
+  sendBackToAgent(taskId: string): Promise<{ task: TaskView }> {
+    return this.post(`/tasks/${encodeURIComponent(taskId)}/integrate/back`, {});
+  }
+
   /**
    * What a check (or an operation) printed: the end of it, bounded, with how much came before.
    * `ref` is `artifact:<id>` as a check's `artifact_ref` gives it; the request carries the id

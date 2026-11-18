@@ -136,6 +136,10 @@ export interface WorkspaceRefreshRecord {
   preserved_ref: string | null;
   conflicts: string[];
   artifact_ref?: string | null;
+  /** Files where both sides only added lines: both additions were kept. */
+  joined?: string[];
+  /** `conflicts` are in the folder with both versions marked, for the agent to finish. */
+  marked?: boolean;
 }
 
 /** How long delegation keeps a task for a session that waits for its person to prompt it. */
@@ -5427,39 +5431,6 @@ export class FridayState {
     });
   }
 
-  /** A refresh conflict is agent work: decline the unstarted run and return the task through rework. */
-  workspaceConflict(projectId: string, runId: string, refresh: WorkspaceRefreshRecord, reason: string): void {
-    this.exec({ name: 'run.workspace_conflict', project_id: projectId, actor: SYSTEM, params: { runId } }, (ctx) => {
-      const run = this.q.run(runId);
-      const task = this.q.task(projectId, run.task_id);
-      if (
-        run.workspace !== 'pending' ||
-        run.status !== 'STARTING' ||
-        task.current_run_id !== runId ||
-        task.status !== 'ASSIGNED'
-      )
-        return;
-      ctx.emit({
-        type: 'run.workspace_refresh_conflicted',
-        payload: { run_id: runId, task_id: task.task_id, refresh, reason },
-        ...(refresh.artifact_ref ? { artifact_refs: [refresh.artifact_ref] } : {}),
-        refs: [
-          { kind: 'run', id: runId },
-          { kind: 'task', id: task.task_id },
-        ],
-      });
-      this.moveRun(ctx, run, 'DECLINED', reason, { outcome: 'declined', ended_at: ctx.now });
-      this.expireOutboxForRun(ctx, runId);
-      const rework = this.moveTask(ctx, task, 'workspace.conflict', {
-        reason,
-        changes: { assigned_agent_id: null, assigned_harness_id: null, current_run_id: null },
-      });
-      this.releaseAgent(ctx, run.agent_id, task.task_id);
-      this.syncHarnessBusy(ctx, run.harness_id);
-      this.moveTask(ctx, rework, 'task.ready', { reason });
-    });
-  }
-
   /** The worktree could not be prepared: the run is declined and the task is free again, with the reason. */
   workspaceFailed(projectId: string, runId: string, reason: string): void {
     const run = this.q.findRun(runId);
@@ -5645,11 +5616,17 @@ export class FridayState {
    * The outcome of integrating a task into its goal branch (ADR-0025 §2–§5). A conflict or a failed
    * check of the merged revision asks a human (or the Master Brain's next plan) in the same
    * transaction; whatever the outcome, the task's file reservations end with it.
+   *
+   * With `back` (2026-11-18) work that does not fit the goal's other work goes back to its agent
+   * first, with `reason` as its note: what tasks running at the same time cost now and then. The
+   * person is asked only once it went back `limit` times, or when the task cannot go back. Before,
+   * every collision was a question with git commands as its options.
    */
   recordIntegration(
     projectId: string,
     actor: Actor,
     rec: Omit<IntegrationView, 'integration_id' | 'created_at'>,
+    opts: { back?: { reason: string; limit: number } | null } = {},
   ): IntegrationView {
     return this.exec(
       { name: 'integration.record', project_id: projectId, actor, params: { task: rec.task_id, status: rec.status } },
@@ -5673,7 +5650,12 @@ export class FridayState {
         if (rec.status === 'integrated' || rec.status === 'not_needed') {
           this.settleQuestions(ctx, rec.task_id, INTEGRATION_QUESTIONS, 'the work was integrated');
         }
-        if (rec.status === 'conflicted' || rec.status === 'failed') {
+        const unfit = rec.status === 'conflicted' || rec.status === 'failed';
+        const back =
+          unfit && opts.back
+            ? this.backToAgentWithin(ctx, projectId, rec.task_id, opts.back.reason, opts.back.limit)
+            : false;
+        if (unfit && !back) {
           this.escalationWithin(ctx, {
             kind: rec.status === 'conflicted' ? 'integration_conflict' : 'integration_failed',
             goal_id: rec.goal_id,
@@ -5694,6 +5676,76 @@ export class FridayState {
         return this.q.integrations(projectId, { task_id: rec.task_id }).at(-1) as IntegrationView;
       },
     );
+  }
+
+  /** How often a task's verified work went back to its agent because it did not fit the goal's other work. */
+  integrationReworks(projectId: string, taskId: string): number {
+    return this.store
+      .readByRef(projectId, 'task', taskId, { types: ['task.rework'] })
+      .filter((e) => (e.payload as { transition?: { trigger?: string } }).transition?.trigger === 'integration.rework')
+      .length;
+  }
+
+  /**
+   * COMPLETED → REWORK → READY for a task whose verified work is not in its goal: kept for the
+   * agent that did it, which continues in the same folder. False when the task cannot go back:
+   * it is not a completed task of an active goal, or it went back `limit` times already (null:
+   * a person sends it, as often as they like).
+   */
+  private backToAgentWithin(
+    ctx: CommandContext,
+    projectId: string,
+    taskId: string,
+    reason: string,
+    limit: number | null,
+  ): boolean {
+    const task = this.q.findTask(projectId, taskId);
+    if (task?.status !== 'COMPLETED' || !task.goal_id) return false;
+    if (this.q.findGoal(projectId, task.goal_id)?.status !== 'ACTIVE') return false;
+    if (limit !== null && this.integrationReworks(projectId, taskId) >= limit) return false;
+    const agentId = task.assigned_agent_id ?? this.q.runs(taskId).at(-1)?.agent_id;
+    const agent = agentId ? this.q.findAgent(agentId) : undefined;
+    const rework = this.moveTask(ctx, task, 'integration.rework', {
+      reason: reason.slice(0, 4000),
+      changes: { completed_at: null },
+    });
+    this.settleQuestions(ctx, taskId, INTEGRATION_QUESTIONS, 'the task went back to its agent');
+    const changes: Record<string, unknown> = { assigned_agent_id: null, assigned_harness_id: null };
+    if (agent) {
+      changes.reserved_for_agent_key = agent.agent_key;
+      changes.reserved_by = 'rework';
+      changes.reserved_until = addMs(ctx.now, this.config.reservationTtlMs);
+    }
+    this.moveTask(ctx, rework, 'task.ready', { changes });
+    return true;
+  }
+
+  /**
+   * A person sends a task whose work did not fit the goal's other work back to its agent: the
+   * button of the question `recordIntegration` raises, with no limit on how often.
+   */
+  sendBackUnintegrated(projectId: string, actor: Actor, taskId: string): TaskView {
+    return this.exec({ name: 'integration.rework', project_id: projectId, actor, params: { taskId } }, (ctx) => {
+      const last = this.q.latestIntegration(projectId, taskId);
+      if (last?.status !== 'conflicted' && last?.status !== 'failed') {
+        throw new FridayError(
+          'invalid_state_transition',
+          `${taskId} has no failed or conflicted integration to send back to its agent`,
+        );
+      }
+      const reason =
+        last.status === 'conflicted'
+          ? `Your verified work collides with what other tasks of the goal changed, in ${last.conflicts.length} file(s): ${last.conflicts.slice(0, 20).join(', ')}. Your folder now holds their work too. Finish the files that hold both versions, then claim done again.`
+          : `Your verified work could not be brought into the goal: ${last.summary ?? 'unknown reason'}. Your folder now holds the goal's other work too. Make it work together, then claim done again.`;
+      if (!this.backToAgentWithin(ctx, projectId, taskId, reason, null)) {
+        const task = this.q.task(projectId, taskId);
+        throw new FridayError(
+          'invalid_state_transition',
+          `${taskId} is ${task.status}; only a completed task of an active goal goes back to its agent`,
+        );
+      }
+      return this.q.task(projectId, taskId);
+    });
   }
 
   // ================================================================ operations (M6c, ADR-0029)
@@ -5996,9 +6048,13 @@ export class FridayState {
     if (!prev.session_ref || prev.agent_id !== run.agent_id || prev.harness_id !== run.harness_id) return null;
     const caps = (this.q.findHarness(run.harness_id)?.capabilities ?? {}) as { resume_session?: unknown };
     if (caps.resume_session !== true) return null;
-    // Only a claim that verification refused: a lost or cancelled session is recovery's to judge.
+    // Only a claim that verification refused, or one it passed whose work then did not fit the
+    // goal's other work (2026-11-18): a lost or cancelled session is recovery's to judge.
     const verification = this.q.latestVerificationForRun(prev.run_id);
-    if (!prev.claim || verification?.status !== 'FAILED') return null;
+    const rework = this.store.readByRef(projectId, 'task', task.task_id, { types: ['task.rework'] }).at(-1);
+    const back = rework?.payload as { transition?: { reason?: string; trigger?: string } } | undefined;
+    const unfit = verification?.status === 'PASSED' && back?.transition?.trigger === 'integration.rework';
+    if (!prev.claim || !verification || (verification.status !== 'FAILED' && !unfit)) return null;
     // The session holds the packet it was given and what it read: only under the policy that packet
     // was compiled under (review M7.1e R02). A changed policy starts a new session with a new packet.
     const now = this.policyVersion?.() ?? null;
@@ -6009,8 +6065,17 @@ export class FridayState {
       )
       .get<{ v: string | null }>(task.task_id, prev.run_id);
     if (then && (then.v ?? null) !== now) return null;
-    const rework = this.store.readByRef(projectId, 'task', task.task_id, { types: ['task.rework'] }).at(-1);
-    const why = (rework?.payload as { transition?: { reason?: string } } | undefined)?.transition?.reason;
+    const why = back?.transition?.reason;
+    if (unfit) {
+      const note = [
+        "Friday's verification passed your work, but it is not in the goal yet: it does not fit what other tasks of the goal changed meanwhile.",
+        why ? `Why: ${why}` : '',
+        'Your worktree now also holds their work. Make yours fit it there, then give your final answer again.',
+      ]
+        .filter(Boolean)
+        .join('\n');
+      return { session: prev.session_ref, note: note.slice(0, 2000) };
+    }
     // Each failed check names its raw output, so a lesson learned from it can say where it comes from (ADR-0038 §3).
     const failed = verification.checks
       .filter((c) => c.status === 'FAILED' || c.status === 'BLOCKED')

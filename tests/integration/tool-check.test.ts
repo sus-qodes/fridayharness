@@ -3,6 +3,8 @@
  * judgment Claude Code's hooks get, for the task its session holds. Where a human decides, one
  * pending approval is recorded and the action passes once it is granted, for one use.
  */
+import { mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import type { TaskStartParams, TaskView } from '@friday/protocol';
 import { FakeClock, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -48,15 +50,15 @@ describe('tool.check', () => {
     const check = (tool: string, action: Record<string, unknown>) =>
       h.client.call('tool.check', { tool, action: action as never });
 
-    // Writes inside the scope pass; outside it, and Friday's protected files, do not.
+    // Writes inside the scope pass; outside it a person is asked for that file (2026-11-18), and
+    // Friday's protected files are refused.
     expect(await check('fileChange', { kind: 'write', paths: ['src/a.ts'] })).toMatchObject({
       decision: 'allow',
       approval_id: null,
     });
-    expect(await check('fileChange', { kind: 'write', paths: ['docs/x.md'] })).toMatchObject({
-      decision: 'deny',
-      rule: 'write.outside_scope',
-    });
+    const outside = await check('fileChange', { kind: 'write', paths: ['docs/x.md'] });
+    expect(outside).toMatchObject({ decision: 'ask', rule: 'write.outside_scope' });
+    expect(outside.approval_id).toMatch(/^apr_/);
     expect((await check('fileChange', { kind: 'write', paths: ['.friday/config.yaml'] })).decision).toBe('deny');
     // A host's absolute path into its checkout is the same file.
     expect(
@@ -394,6 +396,73 @@ describe('an approval reaches the agent that asked (2026-11-18)', () => {
     await new Promise((r) => setTimeout(r, 400));
     expect(td.daemon.state.q.task(pid, task.task_id).status).toBe('WAITING');
     expect(h.received.filter((m) => m.method === 'task.resume')).toHaveLength(1);
+  }, 60_000);
+
+  // An agent stopped at the edge of its task's files (2026-11-18). It was refused and told how to
+  // ask; in the trial it wrote the lint rules into another file than the project's documents name,
+  // and nobody was told. Now the person is asked for that one file, on the agent's behalf.
+  it('asks the person for a file outside the task, allows it for the task once they agree, and takes a no', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const dir = ws().projectDir;
+    const pid = td.project.project_id;
+    const { h, task } = await running(td, 'cx-4', ['src/**']);
+    const edit = (file: string) =>
+      h.client.call('tool.check', { tool: 'Edit', action: { kind: 'write', paths: [file] } as never });
+    const file = 'packages/config/eslint/boundaries.js';
+
+    const first = await edit(file);
+    expect(first).toMatchObject({ decision: 'ask', rule: 'write.outside_scope' });
+    expect(first.reason).toContain(`${file} is outside the files this task may change (src/**)`);
+    // Tried again while it waits: the same card.
+    expect((await edit(file)).approval_id).toBe(first.approval_id);
+    expect(approvals(td)).toMatchObject([
+      { approval_id: first.approval_id, status: 'pending', capability: 'file.write', target: file, reuse: 'task' },
+    ]);
+    expect(approvals(td)[0]?.purpose).not.toContain('friday_request_permission');
+    // The stop is on record for the task, as before.
+    expect(
+      td.daemon.state.store.readByRef(pid, 'task', task.task_id).filter((e) => e.type === 'scope.violation'),
+    ).toHaveLength(2);
+
+    // Allowed: for the rest of the task, not for one edit; the working agent is told.
+    expect((await cli(['--project', dir, 'approve', first.approval_id as string])).code).toBe(0);
+    expect((await inbox(h)).map((m) => m.subject)).toContain('Request approved');
+    expect((await edit(file)).decision).toBe('allow');
+    expect((await edit(file)).decision).toBe('allow');
+    // That file alone: its neighbour is asked about separately.
+    const other = await edit('packages/config/eslint/index.js');
+    expect(other.decision).toBe('ask');
+    expect(other.approval_id).not.toBe(first.approval_id);
+
+    // A no is taken: the agent is told to do without, and the person is not asked again.
+    expect((await cli(['--project', dir, 'reject', other.approval_id as string])).code).toBe(0);
+    const after = await edit('packages/config/eslint/index.js');
+    expect(after).toMatchObject({ decision: 'deny', rule: 'write.outside_scope', approval_id: null });
+    expect(after.reason).toContain('the person said no');
+    expect(approvals(td).filter((a) => a.status === 'pending')).toEqual([]);
+    // What Friday protects is refused outright, as it was: nobody is asked to open it.
+    expect(await edit('.friday/config.yaml')).toMatchObject({ decision: 'deny', approval_id: null });
+    expect(await edit('.env')).toMatchObject({ approval_id: null });
+    expect((await edit('.env')).decision).not.toBe('allow');
+    await h.close();
+  }, 60_000);
+
+  it('still refuses a file the project keeps from agents, or that the agent’s team may not change', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    // A policy file of the project gives the agent's team its files; it applies as soon as it is there.
+    const policies = path.join(ws().projectDir, '.friday', 'policies');
+    mkdirSync(policies, { recursive: true });
+    writeFileSync(path.join(policies, 'teams.yaml'), 'teams:\n  backend:\n    write: ["src/**", "docs/**"]\n');
+    const { h } = await running(td, 'cx-5', ['src/**']);
+    const edit = (file: string) =>
+      h.client.call('tool.check', { tool: 'Edit', action: { kind: 'write', paths: [file] } as never });
+    // Inside the team's files, outside the task's: the person is asked.
+    expect((await edit('docs/notes.md')).decision).toBe('ask');
+    // Outside the team's files too: no approval reaches there, so nobody is asked.
+    const beyond = await edit('infra/deploy.yaml');
+    expect(beyond.decision).toBe('deny');
+    expect(beyond.approval_id).toBeNull();
+    await h.close();
   }, 60_000);
 
   it('closes what an attempt asked when the attempt ends, so no card outlives its agent', async () => {

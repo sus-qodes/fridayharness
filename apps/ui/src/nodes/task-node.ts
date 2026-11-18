@@ -472,7 +472,7 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
         h('span', { class: 'nd-note-label' }, t.waiting_reason === 'blocked' ? 'The agent needs you' : 'Waiting'),
         h('span', { class: 'nd-note-text' }, truncate(cleanText(t.waiting_note), 400)),
       );
-    } else if (t.status === 'READY' && t.delegation_note) {
+    } else if ((t.status === 'READY' || t.status === 'PROPOSED') && t.delegation_note) {
       note = h('div', { class: 'nd-note nd-note-quiet' }, truncate(notStartedText(cleanText(t.delegation_note)), 160));
     }
 

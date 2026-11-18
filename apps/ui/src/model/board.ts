@@ -20,6 +20,7 @@ import type {
   VerificationView,
 } from '@friday/protocol';
 import type { LayoutGroup, LayoutInput, LayoutItem, LayoutPod } from './layout.js';
+import { storyHeight, storyOfGoal } from './story.js';
 
 /** Task statuses that end a task. */
 export const TERMINAL_STATUSES: ReadonlySet<string> = new Set(['COMPLETED', 'CANCELLED', 'ABANDONED']);
@@ -421,7 +422,7 @@ export function taskCardParts(board: Board, task: SnapshotTask, dropped: boolean
   const note =
     task.status === 'WAITING' && task.waiting_note
       ? 'blocked'
-      : task.status === 'READY' && task.delegation_note
+      : (task.status === 'READY' || task.status === 'PROPOSED') && task.delegation_note
         ? 'delegation'
         : null;
   const badges =
@@ -443,8 +444,10 @@ export function taskCardHeight(parts: TaskCardParts): number {
   return h;
 }
 
-export function goalCardHeight(goal: GoalView): number {
-  return NODE_SIZE.goal.h + (goal.constraints.length || goal.inferred_constraints.length ? 26 : 0);
+export function goalCardHeight(goal: GoalView, storyLines = 0): number {
+  return (
+    NODE_SIZE.goal.h + (goal.constraints.length || goal.inferred_constraints.length ? 26 : 0) + storyHeight(storyLines)
+  );
 }
 
 /** The layout input: groups in board order, then the loose tasks, then the pods. */
@@ -467,7 +470,12 @@ export function layoutInputOf(board: Board): LayoutInput {
       const ghost = board.ghosts.get(id) as PlanGhost;
       items.push({ id, ...NODE_SIZE.ghost, deps: ghost.deps });
     }
-    groups.push({ id: g.id, root: { id: g.id, w: NODE_SIZE.goal.w, h: goalCardHeight(g.goal), deps: [] }, items });
+    const story = storyOfGoal(board.snapshot, g.goal.goal_id).length;
+    groups.push({
+      id: g.id,
+      root: { id: g.id, w: NODE_SIZE.goal.w, h: goalCardHeight(g.goal, story), deps: [] },
+      items,
+    });
   }
   if (board.loose.length) {
     groups.push({

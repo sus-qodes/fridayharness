@@ -581,6 +581,7 @@ describe('question cards by kind (plan FD-21)', () => {
             },
           }),
           [`POST /goals/${GOAL}/cancel`]: { goal_id: GOAL },
+          [`POST /tasks/${TASK}/integrate/back`]: { task: { task_id: TASK, status: 'READY' } },
         },
       );
       ctx.store.setState({
@@ -631,16 +632,32 @@ describe('question cards by kind (plan FD-21)', () => {
       card.destroy();
     });
 
-    it('Integrate again and Integrate my repair call integrate, the repair with repaired: true', async () => {
+    it('Try again and I repaired it myself call integrate, the repair with repaired: true', async () => {
       const card = mountIntegration();
       arm(card.el);
-      buttonNamed(card.el, 'Integrate again').click();
+      buttonNamed(card.el, 'Try again').click();
       await flush();
       expect(card.el.textContent).toContain('Integration conflicted');
-      buttonNamed(card.el, 'Integrate my repair').click();
+      buttonNamed(card.el, 'I repaired it myself').click();
       await flush();
       expect(ctx.transport.to('POST', `/tasks/${TASK}/integrate`).map((c) => c.body)).toEqual([{}, { repaired: true }]);
       expect(card.el.textContent).toContain('Integrated');
+      card.destroy();
+    });
+
+    // The way out without a terminal (2026-11-18): the agent that made the work finishes the merge
+    // in its own copy. It is the first button, and the card says what will happen in plain words.
+    it('Let the agent fix it sends the work back to its agent, as the first choice', async () => {
+      const card = mountIntegration();
+      const names = [...card.el.querySelectorAll('.gv-actions button')].map((b) => b.textContent?.trim());
+      expect(names[0]).toBe('Let the agent fix it');
+      expect(card.el.textContent).toContain('both versions marked where they collide');
+      expect(card.el.textContent).not.toContain('commit, then choose');
+      arm(card.el);
+      buttonNamed(card.el, 'Let the agent fix it').click();
+      await flush();
+      expect(ctx.transport.to('POST', `/tasks/${TASK}/integrate/back`).map((c) => c.body)).toEqual([{}]);
+      expect(card.el.textContent).toContain('Sent back to its agent');
       card.destroy();
     });
 

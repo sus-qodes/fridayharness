@@ -1675,6 +1675,22 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     return c.json({ integration: await deps.integration.integrate(task.task_id, HUMAN, { repaired }) });
   });
 
+  // Work that did not fit the goal's other work goes back to the agent that made it, in its own
+  // folder, where Friday merges the goal's work in and leaves what collides marked (2026-11-18).
+  // The person's way out of an integration question without a terminal.
+  app.post(`${P}/tasks/:tid/integrate/back`, allow(...OPERATOR), (c) => {
+    const task = deps.state.q.task(pid, c.req.param('tid'));
+    const last = deps.state.q.latestIntegration(pid, task.task_id);
+    const unfit = last?.status === 'conflicted' || last?.status === 'failed';
+    if (unfit && !deps.state.q.worktreeForTask(task.task_id)) {
+      throw new FridayError(
+        'invalid_request',
+        `${task.task_id} was made in the project folder, so there is no copy of its own for an agent to merge it in`,
+      );
+    }
+    return c.json({ task: deps.state.sendBackUnintegrated(pid, HUMAN, task.task_id) });
+  });
+
   // File reservations (M5c, ADR-0025).
   app.get(`${P}/file-reservations`, allow(...OPERATOR), (c) =>
     c.json({

@@ -1208,8 +1208,27 @@ function integrationBody(kit: Kit): Built {
   const goalId = spec.goalId ?? integration?.goal_id ?? null;
   const root = run?.execution_root ?? null;
 
-  const again = decisionButton('Integrate again', kit, (b) => integrate(kit, b, false), 'btn btn-primary');
-  const repair = decisionButton('Integrate my repair', kit, (b) => integrate(kit, b, true));
+  // The work was made in a copy of its own (it has a branch): its agent can finish the merge there.
+  // That is the first choice; the rest is for a person who repaired it by hand.
+  const ownCopy = Boolean(taskId && run?.branch_ref);
+  const back = decisionButton(
+    'Let the agent fix it',
+    kit,
+    async (b) => {
+      if (!taskId) return;
+      b.disabled = true;
+      const r = await ctx.act(
+        'Send it back to the agent',
+        () => ctx.api.sendBackToAgent(taskId),
+        'Sent back to its agent',
+      );
+      b.disabled = false;
+      if (r) kit.done('Sent back to its agent');
+    },
+    'btn btn-primary',
+  );
+  const again = decisionButton('Try again', kit, (b) => integrate(kit, b, false), ownCopy ? 'btn' : 'btn btn-primary');
+  const repair = decisionButton('I repaired it myself', kit, (b) => integrate(kit, b, true));
   const cancelGoal = decisionButton(
     'Cancel goal',
     kit,
@@ -1288,11 +1307,14 @@ function integrationBody(kit: Kit): Built {
       h(
         'p',
         { class: 'field-hint' },
-        'Repair the task’s branch in its folder, commit, then choose Integrate my repair. Friday never merges into your own branches.',
+        ownCopy
+          ? 'Friday already sent this back to its agent and it still does not fit. The agent can try once more: it gets the other tasks’ work in its own copy, with both versions marked where they collide. Nothing is merged into your own branches.'
+          : 'This work was made in your project folder, so no agent has a copy of its own to merge it in. Repair it there, or cancel the goal. Nothing is merged into your own branches.',
       ),
       h(
         'div',
         { class: 'gv-actions' },
+        ownCopy ? back : null,
         taskId ? again : null,
         taskId ? repair : null,
         openWorktree,
@@ -1300,7 +1322,7 @@ function integrationBody(kit: Kit): Built {
       ),
       cliHints(spec),
     ]),
-    decisions: [again, repair, cancelGoal],
+    decisions: ownCopy ? [back, again, repair, cancelGoal] : [again, repair, cancelGoal],
   };
 }
 

@@ -33,7 +33,6 @@ const EXPECTED_EDGES = new Set<string>([
   'READY>ASSIGNED',
   'ASSIGNED>RUNNING',
   'ASSIGNED>READY',
-  'ASSIGNED>REWORK',
   'RUNNING>WAITING',
   'WAITING>RUNNING',
   'WAITING>READY',
@@ -43,6 +42,8 @@ const EXPECTED_EDGES = new Set<string>([
   'VERIFYING>FAILED',
   'VERIFYING>READY_FOR_VERIFICATION',
   'FAILED>REWORK',
+  // 2026-11-18: verified work that does not fit the goal's other work goes back to its agent.
+  'COMPLETED>REWORK',
   'REWORK>READY',
   'RUNNING>HARNESS_LOST',
   'WAITING>HARNESS_LOST',
@@ -81,10 +82,21 @@ describe('task state machine', () => {
     expect(allowed).toBeGreaterThan(30);
   });
 
-  it('terminal states have no way out', () => {
+  it('terminal states have no way out, but for completed work that is not in its goal yet', () => {
     for (const status of ['COMPLETED', 'CANCELLED', 'ABANDONED'] as TaskStatus[]) {
       expect(isTerminalTaskStatus(status)).toBe(true);
-      for (const to of ALL_STATUSES) expect(taskEdgeExists(status, to)).toBe(false);
+      for (const to of ALL_STATUSES) {
+        expect(taskEdgeExists(status, to), `${status} -> ${to}`).toBe(status === 'COMPLETED' && to === 'REWORK');
+      }
+    }
+    // Only Friday, or a person: never the agent whose work it is, nor the planner's model.
+    for (const actor of ALL_ACTORS) {
+      expect(transitionTask('COMPLETED', { trigger: 'integration.rework', actor }).ok, actor).toBe(
+        actor === 'system' || actor === 'human',
+      );
+    }
+    for (const status of NON_TERMINAL) {
+      expect(transitionTask(status, { trigger: 'integration.rework', actor: 'system' }).ok, status).toBe(false);
     }
   });
 

@@ -136,7 +136,9 @@ describe('restored work continues where it was (review M7.1 R05)', () => {
     const td = await startTestDaemon(ws(), {
       git: true,
       brain: { autoStart: false },
-      editConfig: (y) => y.replace('  checks: []\n', checks).replace(/provider: anthropic(\s+#)/, 'provider: none$1'),
+      // A failed integration stays for a person here (it would go back to its agent first).
+      editConfig: (y) =>
+        `${y.replace('  checks: []\n', checks).replace(/provider: anthropic(\s+#)/, 'provider: none$1')}integration:\n  back_to_agent: 0\n`,
     });
     const A = ws().projectDir;
     for (const [rel, body] of Object.entries({

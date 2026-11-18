@@ -217,6 +217,18 @@ export function globsOverlap(a: readonly string[], b: readonly string[]): boolea
   return false;
 }
 
+/**
+ * Whether two writing tasks may run at the same time (the daemon's `canRunSideBySide`): their
+ * scopes are apart, or each has files of its own beside the ones they share (a router, a texts
+ * file, a changelog). Each then works in a copy of its own, and Friday merges their work.
+ */
+export function canRunSideBySide(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length === 0 || b.length === 0) return false;
+  if (!globsOverlap(a, b)) return true;
+  const own = (x: readonly string[], y: readonly string[]) => x.some((p) => !globsOverlap([p], y));
+  return own(a, b) && own(b, a);
+}
+
 /** Why a glob is not a project-relative POSIX glob, or null. */
 export function scopeGlobProblem(glob: string): string | null {
   if (glob.length === 0) return 'a glob cannot be empty';
@@ -288,12 +300,12 @@ function overlaps(nodes: Map<string, Node>, involving?: ReadonlySet<string>): Dr
       const b = live[j] as Node;
       if (involving && !involving.has(a.id) && !involving.has(b.id)) continue;
       const ordered = before.get(a.id)?.has(b.id) || before.get(b.id)?.has(a.id);
-      if (ordered || !globsOverlap(a.write, b.write)) continue;
+      if (ordered || canRunSideBySide(a.write, b.write)) continue;
       const main = involving && !involving.has(b.id) ? a : b;
       const other = main === a ? b : a;
       issues.push({
         path: main.path,
-        message: `${a.label} and ${b.label} can run at the same time but both write ${a.write.join(', ')} / ${b.write.join(', ')}: add a dependency between them or give them disjoint write scopes`,
+        message: `${a.label} and ${b.label} can run at the same time but would change the same files (${a.write.join(', ')} / ${b.write.join(', ')}): make one depend on the other, or give each files of its own. Two tasks may share a few files (a router, a texts file, a changelog) when each also has its own`,
         ...(other.path ? { related: [other.path] } : {}),
       });
     }

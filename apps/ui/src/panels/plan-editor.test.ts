@@ -314,7 +314,11 @@ describe('plan editor, first plan', () => {
     buttonBy(m.el, 'Propose the plan').click();
     await flush();
     expect(ctx.transport.to('POST', PLANS)).toHaveLength(0);
-    expect(m.el.textContent).toMatch(/can run at the same time but both write backend\/\*\* \/ backend\/db\/\*\*/);
+    expect(m.el.textContent).toMatch(
+      /can run at the same time but would change the same files \(backend\/\*\* \/ backend\/db\/\*\*\)/,
+    );
+    // The way out is said with it: a few shared files are fine when each task has its own.
+    expect(m.el.textContent).toContain('may share a few files');
     expect(m.el.querySelectorAll('.pn-scope.pn-invalid')).toHaveLength(2);
     m.destroy();
   });
