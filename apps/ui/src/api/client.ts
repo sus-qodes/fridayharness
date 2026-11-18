@@ -185,10 +185,11 @@ export interface PolicyView {
     version: string;
     sources: string[];
     /** Each setting a tracked file loosens, with where it comes from. */
-    loosening: { source: string; setting: string; from: string; to: string }[];
-    /** What `policy/trust` must send back; null when nothing loosens. */
+    /** `id` and `trusted` are per setting (2026-11-18); a daemon from before then sends neither. */
+    loosening: { source: string; setting: string; from: string; to: string; id?: string; trusted?: boolean }[];
+    /** The whole list as one name: what `policy/trust` takes to trust all of it; null when nothing loosens. */
     loosening_hash: string | null;
-    /** Whether the loosening above applies (this clone trusted exactly it). */
+    /** Whether every setting above applies here. */
     trusted: boolean;
     [key: string]: unknown;
   };
@@ -555,6 +556,11 @@ export class FridayApi {
 
   trustPolicy(looseningHash: string): Promise<PolicyView> {
     return this.post('/policy/trust', { loosening_hash: looseningHash });
+  }
+
+  /** Trusts single settings on this computer, by their ids: only those, whatever else waits. */
+  trustSettings(ids: string[]): Promise<PolicyView> {
+    return this.post('/policy/trust', { items: ids });
   }
 
   /** Sets a few config.yaml settings (the daemon's `EDITABLE_SETTINGS`); answers those that changed. */

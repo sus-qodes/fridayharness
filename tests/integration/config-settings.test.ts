@@ -307,7 +307,7 @@ describe('what Settings sets besides (2026-11-17)', () => {
     type Policy = {
       policy: {
         autonomy: Record<string, string>;
-        loosening: { source: string; setting: string; from: string; to: string }[];
+        loosening: { source: string; setting: string; from: string; to: string; id: string; trusted: boolean }[];
         loosening_hash: string | null;
         trusted: boolean;
       };
@@ -316,8 +316,8 @@ describe('what Settings sets besides (2026-11-17)', () => {
       td.operator.post<{ changed: string[] }>(P('/config/settings'), { set: s });
     expect((await set({ 'autonomy.package.install': 'auto' })).changed).toEqual(['autonomy.package.install']);
     const asked = await td.operator.get<Policy>(P('/policy'));
-    expect(asked.policy.loosening).toEqual([
-      { source: 'config.yaml', setting: 'autonomy.package.install', from: 'review', to: 'auto' },
+    expect(asked.policy.loosening).toMatchObject([
+      { source: 'config.yaml', setting: 'autonomy.package.install', from: 'review', to: 'auto', trusted: false },
     ]);
     // Asked for, and not in force.
     expect(asked.policy.trusted).toBe(false);
@@ -328,19 +328,58 @@ describe('what Settings sets besides (2026-11-17)', () => {
     expect(trusted.policy.trusted).toBe(true);
     expect(trusted.policy.autonomy['package.install']).toBe('auto');
 
-    // A second kind makes it another list: neither applies until that one is trusted.
+    // A second kind waits for its own trust (2026-11-18): the first stays in force meanwhile. One
+    // hash used to cover the list, so switching a second thing on switched the first off again.
     await set({ 'autonomy.unknown': 'auto' });
     const two = await td.operator.get<Policy>(P('/policy'));
-    expect(two.policy.loosening.map((l) => l.setting)).toEqual(['autonomy.package.install', 'autonomy.unknown']);
+    expect(two.policy.loosening.map((l) => [l.setting, l.trusted])).toEqual([
+      ['autonomy.package.install', true],
+      ['autonomy.unknown', false],
+    ]);
     expect(two.policy.trusted).toBe(false);
-    expect(two.policy.autonomy['package.install'] ?? 'review').toBe('review');
-    // Asking again for one is a tightening, in force at once; what stays on waits for trust again.
+    expect(two.policy.autonomy['package.install']).toBe('auto');
+    expect(two.policy.autonomy.unknown ?? 'review').toBe('review');
+    // Trusted by its own id: that one, and nothing else that might wait.
+    await set({ 'autonomy.process.kill': 'auto' });
+    const three = await td.operator.get<Policy>(P('/policy'));
+    const idOf = (setting: string) => three.policy.loosening.find((l) => l.setting === setting)?.id as string;
+    const one = await td.operator.post<Policy>(P('/policy/trust'), { items: [idOf('autonomy.unknown')] });
+    expect(one.policy.loosening.map((l) => [l.setting, l.trusted])).toEqual([
+      ['autonomy.package.install', true],
+      ['autonomy.process.kill', false],
+      ['autonomy.unknown', true],
+    ]);
+    expect(one.policy.autonomy.unknown).toBe('auto');
+    expect(one.policy.autonomy['process.kill'] ?? 'review').toBe('review');
+    // An id that names nothing the files ask for now trusts nothing, also not what was sent with it.
+    await expect(
+      td.operator.post(P('/policy/trust'), { items: [idOf('autonomy.process.kill'), 'ffffffffffffffff'] }),
+    ).rejects.toThrow(/changed since you looked/);
+    expect((await td.operator.get<Policy>(P('/policy'))).policy.autonomy['process.kill'] ?? 'review').toBe('review');
+    await expect(td.operator.post(P('/policy/trust'), { items: [] })).rejects.toThrow();
+    await expect(td.operator.post(P('/policy/trust'), { items: ['x'], loosening_hash: 'y' })).rejects.toThrow();
+
+    // Asking again for one is a tightening, in force at once; what stays on stays trusted.
     await set({ 'autonomy.unknown': 'review' });
-    const one = await td.operator.get<Policy>(P('/policy'));
-    expect(one.policy.loosening.map((l) => l.setting)).toEqual(['autonomy.package.install']);
-    // The list is the one trusted before: it holds again.
-    expect(one.policy.trusted).toBe(true);
-    expect(one.policy.autonomy['package.install']).toBe('auto');
+    await set({ 'autonomy.process.kill': 'review' });
+    const back = await td.operator.get<Policy>(P('/policy'));
+    expect(back.policy.loosening.map((l) => [l.setting, l.trusted])).toEqual([['autonomy.package.install', true]]);
+    expect(back.policy.trusted).toBe(true);
+    expect(back.policy.autonomy['package.install']).toBe('auto');
+    // Switched off, a setting loses its trust: switched on again it is asked about again.
+    await set({ 'autonomy.unknown': 'auto' });
+    const again = await td.operator.get<Policy>(P('/policy'));
+    expect(again.policy.loosening.find((l) => l.setting === 'autonomy.unknown')?.trusted).toBe(false);
+    expect(again.policy.autonomy.unknown ?? 'review').toBe('review');
+    await set({ 'autonomy.unknown': 'review' });
+    // What this computer trusts is kept by name, in its private folder.
+    const kept = JSON.parse(readFileSync(path.join(td.daemon.privateDir, 'policy-trust.json'), 'utf8')) as {
+      loosening_hash: string | null;
+      items: string[];
+    };
+    expect(kept.items).toEqual([back.policy.loosening[0]?.id]);
+    // Trusted one at a time: no name for the whole list stands beside them.
+    expect(kept.loosening_hash).toBeNull();
 
     // The kinds a page may allow are exactly the ones the policy asks about by default.
     const asksByDefault = Object.entries(DEFAULT_AUTONOMY)

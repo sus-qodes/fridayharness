@@ -2,6 +2,15 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — the trial's fault list, part 4: one question, asked by Friday
+
+In the trial's recording, twenty-four seconds on one Settings page brought up six grey Windows boxes, each listing every setting again, and one "Trust" switched on a setting that had been cancelled a moment before.
+
+- **Friday asks in a window of its own.** The grey Windows message box is gone from approving, trusting, cancelling and landing. The question appears in a small Friday window over the window you clicked in. The keyboard starts on Cancel, and the button that says yes answers a moment late, so a click that was on its way elsewhere decides nothing. It is still the desktop app that writes the question and takes the answer, never the page: a page that asked cannot answer itself. Where that window cannot be opened, the system's box asks, so no question is skipped.
+- **One question for one decision.** Starting an agent from its own dialog, or changing one there, is not asked about a second time; it is only when that gives the agent the whole machine, or raises or removes its spending limit. Halting is asked once, in the Halt dialog. Cancelling a task from the list is asked once. Trusting from Settings → Permissions is asked once.
+- **Trust is per setting.** Switching one thing on asks you to trust that one thing, and nothing else that happens to wait is trusted with it. Switching one off leaves the others in force; before, they stopped applying until you trusted the shorter list again. Settings → Permissions shows each setting as "in force", or with its own "Trust this one".
+- **What stays as strict as it was.** A setting applies on a computer only once the person there has trusted exactly it: the same setting with another value, or set in another file, is asked about again, and so is one that was switched off and on again. A trust given to a whole list before this change keeps working.
+
 ## Unreleased — the trial's fault list, part 3: a question is answered, a small task just starts
 
 In the trial "Explain how menu price revisions work" cost a planner call, a plan with a rationale and six criteria to approve, three minutes of waiting for that approval, then the build, the types, the lint and 565 tests on a change of no file, and ended at "Ready to land" with nothing to land.

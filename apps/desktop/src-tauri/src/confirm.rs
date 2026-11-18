@@ -242,6 +242,21 @@ pub fn approval_dialog(approval: &Value, reuse: &str) -> Result<Option<Dialog>, 
     }))
 }
 
+/// Whether new options let an agent spend more per attempt than its old ones: a limit taken away,
+/// or a higher one. Options that say nothing about a limit change nothing about it.
+fn raises_limit(before: Option<&Value>, after: Option<&Value>) -> bool {
+    let limit = |o: Option<&Value>| o.and_then(|v| v.get("max_budget_usd")).cloned();
+    let Some(new) = limit(after) else { return false };
+    let old = limit(before);
+    match (old.as_ref().and_then(Value::as_f64), new.as_f64()) {
+        // No limit now, where there was one.
+        (Some(_), None) => true,
+        (Some(a), Some(b)) => b > a,
+        // There was none: any limit only lowers what it may spend.
+        (None, _) => false,
+    }
+}
+
 fn options_text(options: Option<&Value>) -> String {
     match options.and_then(Value::as_object) {
         Some(m) if !m.is_empty() => m
@@ -296,6 +311,57 @@ pub fn prepare(
                 })?;
             Ok(Prepared { body: sent, dialog: approval_dialog(&approval, &reuse)? })
         }
+        // Single settings, by their own ids (2026-11-18): a person who switched one thing on is
+        // asked about that one thing, and only it is sent. An id that names no setting of the
+        // project now (the files changed since, or the value did) refuses the whole request.
+        Some(Confirm::Trust) if body.is_some_and(|b| b.get("items").is_some()) => {
+            let ids: Vec<String> = match body.and_then(|b| b.get("items")).and_then(Value::as_array) {
+                Some(a) if !a.is_empty() && a.len() <= 100 => a
+                    .iter()
+                    .map(|v| match v {
+                        Value::String(s) if !s.is_empty() && s.len() <= 64 => Ok(s.clone()),
+                        _ => Err(CmdError::bad_request("items must be setting ids")),
+                    })
+                    .collect::<Result<_, _>>()?,
+                _ => return Err(CmdError::bad_request("items must name at least one setting")),
+            };
+            let policy = get(&format!("{base}policy"))?;
+            let p = policy.get("policy").cloned().unwrap_or(Value::Null);
+            let all = p.get("loosening").and_then(Value::as_array).cloned().unwrap_or_default();
+            let mut lines = Vec::new();
+            for id in &ids {
+                match all.iter().find(|l| field(l, "id") == Some(id.as_str())) {
+                    Some(l) => lines.push(loosening_line(l)),
+                    None => {
+                        return Err(CmdError::shell(
+                            409,
+                            CHANGED,
+                            "changed",
+                            "the project's settings changed since they were shown; look at them again",
+                        ))
+                    }
+                }
+            }
+            let list = lines.join("\n");
+            too_long(&[&list])?;
+            let one = ids.len() == 1;
+            Ok(Prepared {
+                body: json!({ "items": ids }),
+                dialog: Some(Dialog {
+                    title: if one { "Friday: trust this setting?".into() } else { "Friday: trust these settings?".into() },
+                    text: format!(
+                        "A file of this project asks to let Friday or its agents do more than the defaults:\n\n{}\n\nAnyone who can change that file chose {}. {} applies on this computer only once you trust {}; nothing else is trusted by this.\n\nTrust {} on this computer?",
+                        list,
+                        if one { "it" } else { "them" },
+                        if one { "It" } else { "Each" },
+                        if one { "it" } else { "it" },
+                        if one { "exactly this setting" } else { "exactly these settings" },
+                    ),
+                    confirm: if one { "Trust this setting".into() } else { "Trust these settings".into() },
+                    danger: true,
+                }),
+            })
+        }
         Some(Confirm::Trust) => {
             let hash = match body.and_then(|b| b.get("loosening_hash")) {
                 Some(Value::String(h)) if !h.is_empty() && h.len() <= 200 => h.clone(),
@@ -331,15 +397,11 @@ pub fn prepare(
                 }),
             })
         }
-        Some(Confirm::Halt) => Ok(Prepared {
-            body: reason_body(body)?,
-            dialog: Some(Dialog {
-                title: "Friday: halt every agent?".into(),
-                text: "Halting pauses Friday and stops every running attempt. The work in the task folders is kept and the tasks wait, ready to start again; no task is cancelled.\n\nHalt now?".into(),
-                confirm: "Halt".into(),
-                danger: true,
-            }),
-        }),
+        // Halting is asked once, in the Halt dialog of the page, which says what it does and takes
+        // the reason (2026-11-18). The shell asked the same again: two answers for an emergency
+        // stop. Halting only stops and pauses; nothing is cancelled, allowed or merged by it, so
+        // the route keeps its place here (only what it takes is sent) without a second question.
+        Some(Confirm::Halt) => Ok(Prepared { body: reason_body(body)?, dialog: None }),
         Some(Confirm::RecoverCancel) => {
             let tid = checked.param("tid").unwrap_or_default().to_string();
             let detail = get(&format!("{base}tasks/{tid}"))?;
@@ -522,6 +584,12 @@ Set {} aside and land the goal?",
             let role = field(&b, "role");
             let opts = options_text(b.get("options"));
             too_long(&[host.unwrap_or(""), key.unwrap_or(""), role.unwrap_or(""), &opts])?;
+            // The person has just pressed "Start the agent" in a dialog that shows all of this
+            // (2026-11-18): asking the same again was a second question about one decision. Asked
+            // again only where it gives the agent the whole machine.
+            if !danger {
+                return Ok(Prepared { body: b, dialog: None });
+            }
             Ok(Prepared {
                 body: b.clone(),
                 dialog: Some(Dialog {
@@ -551,6 +619,10 @@ Set {} aside and land the goal?",
                 .unwrap_or(Value::Null);
             let profile_danger = crate::routes::asks_for_danger(&profile);
             let opts = options_text(profile.get("options"));
+            // Started again as it was set up and confirmed before: only full access is asked about.
+            if !(profile_danger || danger) {
+                return Ok(Prepared { body: json!({}), dialog: None });
+            }
             Ok(Prepared {
                 body: json!({}),
                 dialog: Some(Dialog {
@@ -607,6 +679,12 @@ Set {} aside and land the goal?",
             let before = options_text(profile.get("options"));
             too_long(&[&key, role.unwrap_or(""), &opts, &before])?;
             let asks_danger = options.is_some_and(crate::routes::asks_for_danger);
+            // A change made in the agent's own dialog is asked about again only where it lets the
+            // agent do or spend more: full access, or a spending limit raised or taken away.
+            let more = raises_limit(profile.get("options"), sent.get("options"));
+            if !(asks_danger || danger || more) {
+                return Ok(Prepared { body: Value::Object(sent), dialog: None });
+            }
             Ok(Prepared {
                 body: Value::Object(sent.clone()),
                 dialog: Some(Dialog {
@@ -811,6 +889,47 @@ mod tests {
     }
 
     #[test]
+    fn trusting_one_setting_asks_about_that_setting_and_sends_only_it() {
+        let get = |path: &str| -> Result<Value, CmdError> {
+            assert!(path.ends_with("/policy"), "{path}");
+            Ok(json!({"policy": {"loosening_hash": "h_all", "trusted": false, "loosening": [
+                {"id": "id_install", "trusted": false, "source": "config.yaml", "setting": "autonomy.package.install", "from": "review", "to": "auto"},
+                {"id": "id_land", "trusted": false, "source": "config.yaml", "setting": "landing.mode", "from": "ask", "to": "goal"},
+                {"id": "id_files", "trusted": true, "source": "config.yaml", "setting": "worktrees.files", "from": "none", "to": ".env"}
+            ]}}))
+        };
+        let body = json!({"items": ["id_install"], "loosening_hash": "h_all", "junk": 1});
+        let (c, what) = checked("policy/trust", Some(&body));
+        assert_eq!(what, Some(Confirm::Trust));
+        let p = prepare(what, &c, PID, Some(&body), &get).unwrap();
+        // Only the ids go on: neither the whole list's name nor anything else of the page's body.
+        assert_eq!(p.body, json!({"items": ["id_install"]}));
+        let d = p.dialog.expect("a dialog");
+        assert_eq!(d.title, "Friday: trust this setting?");
+        assert_eq!(d.confirm, "Trust this setting");
+        assert!(d.text.contains("Agents may install packages without asking"), "{}", d.text);
+        // What else waits is neither shown nor trusted.
+        assert!(!d.text.contains("landing.mode"), "{}", d.text);
+        assert!(!d.text.contains("worktrees.files"), "{}", d.text);
+        assert!(d.text.contains("nothing else is trusted by this"), "{}", d.text);
+        // Two at once are said as two.
+        let two = json!({"items": ["id_install", "id_land"]});
+        let (c, what) = checked("policy/trust", Some(&two));
+        let d = prepare(what, &c, PID, Some(&two), &get).unwrap().dialog.unwrap();
+        assert_eq!(d.title, "Friday: trust these settings?");
+        assert!(d.text.contains("landing.mode: ask → goal"), "{}", d.text);
+        // An id that names nothing the project asks for now refuses all of it; so does a body
+        // of the wrong shape.
+        let gone = json!({"items": ["id_install", "id_old"]});
+        let (c, what) = checked("policy/trust", Some(&gone));
+        assert!(prepare(what, &c, PID, Some(&gone), &get).is_err());
+        for bad in [json!({"items": []}), json!({"items": "id_install"}), json!({"items": [1]}), json!({"items": [""]})] {
+            let (c, what) = checked("policy/trust", Some(&bad));
+            assert!(prepare(what, &c, PID, Some(&bad), &get).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn landing_a_goal_asks_before_a_merge_and_says_what_it_merges_into() {
         let reads = |state: &'static str| {
             move |path: &str| -> Result<Value, CmdError> {
@@ -886,7 +1005,7 @@ mod tests {
     }
 
     #[test]
-    fn halt_cancel_stop_and_starting_agents_always_ask() {
+    fn cancel_stop_and_an_agent_with_full_access_always_ask() {
         let get = |path: &str| -> Result<Value, CmdError> {
             if path.ends_with("/tasks/t1") {
                 Ok(json!({"task": {"summary": "Fix\u{202E} the cart"}}))
@@ -899,7 +1018,15 @@ mod tests {
                 panic!("unexpected read {path}")
             }
         };
-        for rest in ["control/halt", "tasks/t1/cancel", "goals/g1/cancel", "daemon/stop", "agent-processes/codex-1/start"] {
+        // Halting is asked once, by the page's own Halt dialog: the shell sends it on, with only
+        // what the route takes.
+        let halt_body = json!({"reason": "because", "junk": 1});
+        let (c, what) = checked("control/halt", Some(&halt_body));
+        assert_eq!(what, Some(Confirm::Halt));
+        let halt = prepare(what, &c, PID, Some(&halt_body), &get).unwrap();
+        assert!(halt.dialog.is_none());
+        assert_eq!(halt.body, json!({"reason": "because"}));
+        for rest in ["tasks/t1/cancel", "goals/g1/cancel", "daemon/stop", "agent-processes/codex-1/start"] {
             let body = json!({"reason": "because", "junk": 1});
             let (c, what) = checked(rest, Some(&body));
             let p = prepare(what, &c, PID, Some(&body), &get).unwrap();
@@ -958,9 +1085,22 @@ mod tests {
         let (c, what) = checked("agent-processes/claude-1/update", Some(&part));
         let p = prepare(what, &c, PID, Some(&part), &claude).unwrap();
         assert_eq!(p.body, part);
-        let d = p.dialog.expect("a dialog");
+        // It lets the agent do no more than before: saved without a second question (2026-11-18).
+        assert!(p.dialog.is_none());
+        // A higher limit is asked about, with what it was; a lower one is not.
+        let higher = json!({"role": "back\u{202E}end", "autostart": false, "options": {"max_budget_usd": 9}});
+        let (c, what) = checked("agent-processes/claude-1/update", Some(&higher));
+        let d = prepare(what, &c, PID, Some(&higher), &claude).unwrap().dialog.expect("a dialog");
         assert!(d.text.contains("Role: back⟨U+202E⟩end"), "{}", d.text);
-        assert!(d.text.contains("Options: spending limit per attempt: $5\nStarts with Friday: no"), "{}", d.text);
+        assert!(d.text.contains("Options: spending limit per attempt: $9\nStarts with Friday: no"), "{}", d.text);
+        assert!(d.text.contains("Its options until now: spending limit per attempt: $5"), "{}", d.text);
+        let lower = json!({"options": {"max_budget_usd": 2}});
+        let (c, what) = checked("agent-processes/claude-1/update", Some(&lower));
+        assert!(prepare(what, &c, PID, Some(&lower), &claude).unwrap().dialog.is_none());
+        assert!(raises_limit(Some(&json!({"max_budget_usd": 5})), Some(&json!({"max_budget_usd": null}))));
+        assert!(!raises_limit(Some(&json!({})), Some(&json!({"max_budget_usd": 5}))));
+        assert!(!raises_limit(Some(&json!({"max_budget_usd": 5})), Some(&json!({"effort": "high"}))));
+        assert!(!raises_limit(Some(&json!({"max_budget_usd": 5})), None));
         // Full access asked for by a change is said as loudly as at a start.
         let full = json!({"options": {"sandbox": "danger-full-access"}});
         let (c, what) = checked("agent-processes/codex-1/update", Some(&full));
@@ -984,8 +1124,19 @@ mod tests {
         let plain = json!({"host": "codex", "agent_key": "codex-3", "role": "developer"});
         let (c, what) = checked("agent-processes", Some(&plain));
         let p = prepare(what, &c, PID, Some(&plain), &get).unwrap();
-        assert!(p.dialog.unwrap().text.contains("Starts with Friday: yes"));
+        // Started from its own dialog, with no full access asked for: no second question, and
+        // what is sent still says that it starts with Friday.
+        assert!(p.dialog.is_none());
         assert_eq!(p.body["autostart"], json!(true));
+        // An agent started again as it was, without full access, is not asked about either.
+        let quiet = |path: &str| -> Result<Value, CmdError> {
+            assert!(path.ends_with("/agent-processes"), "{path}");
+            Ok(json!({"profiles": [{"agent_key": "claude-1", "host": "claude-code", "role": "developer", "options": {}}]}))
+        };
+        let (c, what) = checked("agent-processes/claude-1/start", None);
+        let p = prepare(what, &c, PID, None, &quiet).unwrap();
+        assert!(p.dialog.is_none());
+        assert_eq!(p.body, json!({}));
     }
 
     #[test]

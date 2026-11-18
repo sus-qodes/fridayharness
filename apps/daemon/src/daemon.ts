@@ -44,7 +44,7 @@ import { IntegrationManager } from './integration.js';
 import { landGoal } from './land.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
 import { OperationManager } from './operations.js';
-import { type EffectivePolicy, loadEffectivePolicy, reloadingPolicy, writePolicyTrust } from './policy.js';
+import { type EffectivePolicy, loadEffectivePolicy, reloadingPolicy, settleTrust, trustSettings } from './policy.js';
 import { RecoveryManager } from './recovery.js';
 import { RoutingService } from './routing.js';
 import { SetupManager } from './setup.js';
@@ -265,6 +265,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   // The project's own policy (ADR-0028): what tracked files tighten applies now, what they loosen
   // only once this clone trusted exactly that.
   let policy = loadEffectivePolicy(project, privateDir);
+  // The trust file follows the policy in force: a setting that is gone loses its trust.
+  settleTrust(privateDir, policy);
   // A fixed port from the tracked config applies once this clone trusts it (plan M9 §5.13).
   const listenPort = policy.daemon_port ?? 0;
 
@@ -329,6 +331,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     onLoad: (p, why) => {
       const turnedOn = !policy.auto_verification && p.auto_verification;
       policy = p;
+      settleTrust(privateDir, p);
       (state.config as { enforcementRequired: StateConfig['enforcementRequired'] }).enforcementRequired =
         p.enforcement_required;
       logger.info('policy reloaded', {
@@ -777,8 +780,9 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     stateDir: path.dirname(path.dirname(privateDir)),
     policy: currentPolicy,
     reloadPolicy: () => ctx.reloadPolicy(),
-    trustPolicy: (hash: string) => {
-      writePolicyTrust(privateDir, hash, 'human');
+    // The whole list as the person was shown it, or the settings they clicked, by id (2026-11-18).
+    trustPolicy: (what: { all: true } | { items: readonly string[] }) => {
+      trustSettings(project, privateDir, what, 'human');
       return ctx.reloadPolicy();
     },
     operations,

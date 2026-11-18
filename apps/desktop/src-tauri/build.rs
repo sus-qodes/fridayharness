@@ -3,6 +3,8 @@
 const COMMANDS: &[&str] = &[
     "friday_request",
     "confirm_and_send",
+    // The confirmation window's answer: given to that window alone (capabilities/confirm.json).
+    "confirm_answer",
     "stream_open",
     "stream_close",
     "project_info",

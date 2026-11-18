@@ -277,9 +277,81 @@ describe('the Settings Hub, Policy and Friday', () => {
     await flush();
     expect(ctx.confirms.at(-1)?.body).toEqual([
       'Agents may push to a remote without asking (autonomy.git.push: manual → auto, .friday/policy.yaml)',
-      expect.stringContaining('exactly this list (hash abc123def4567890)'),
+      expect.stringContaining('records trust in exactly this'),
+    ]);
+    // A daemon that names no setting by itself is asked for the whole list, as it always was.
+    expect(ctx.transport.to('POST', '/policy/trust').map((c) => c.body)).toEqual([
+      { loosening_hash: 'abc123def4567890' },
     ]);
     hub.destroy();
+  });
+
+  it('trusts one setting at a time: each waits with its own button, and what is in force says so (2026-11-18)', async () => {
+    const items = [
+      {
+        id: 'id_install',
+        trusted: true,
+        source: 'config.yaml',
+        setting: 'autonomy.package.install',
+        from: 'review',
+        to: 'auto',
+      },
+      { id: 'id_land', trusted: false, source: 'config.yaml', setting: 'landing.mode', from: 'ask', to: 'goal' },
+      {
+        id: 'id_verify',
+        trusted: false,
+        source: 'config.yaml',
+        setting: 'verification.auto_on_completion',
+        from: 'false',
+        to: 'true',
+      },
+    ];
+    let now = items;
+    const view = () => ({
+      policy: { version: 'v1', loosening: now, loosening_hash: 'h_all', trusted: now.every((l) => l.trusted) },
+    });
+    const ctx = makeContext({
+      answers: {
+        'GET /policy': () => view(),
+        'POST /policy/trust': (c: { body: unknown }) => {
+          const ids = (c.body as { items: string[] }).items;
+          now = now.map((l) => (ids.includes(l.id) ? { ...l, trusted: true } : l));
+          return view();
+        },
+      },
+    });
+    ctx.confirmAnswer = true;
+    const hub = hubAt(ctx, 'policy');
+    await flush();
+    expect(hub.el.textContent).toContain('2 of 3 wait for your trust');
+    // The rows of what the project's files ask for (each names the file it is set in).
+    const asked = (root: Element) =>
+      [...root.querySelectorAll('.pn-list .pn-item')].filter((li) => li.querySelector('.pn-loosening-source'));
+    const rows = asked(hub.el);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]?.textContent).toContain('in force');
+    expect(rows[0]?.querySelector('button')).toBeNull();
+    // One click, one setting: the question names it alone, and only its id is sent.
+    (rows[1]?.querySelector('button') as HTMLButtonElement).click();
+    await flush();
+    expect(ctx.confirms.at(-1)?.title).toBe('Trust this setting on this computer?');
+    expect(ctx.confirms.at(-1)?.body).toHaveLength(2);
+    expect(String(ctx.confirms.at(-1)?.body?.[0])).toContain('landing.mode');
+    expect(ctx.transport.to('POST', '/policy/trust').map((c) => c.body)).toEqual([{ items: ['id_land'] }]);
+    await flush();
+    expect(hub.el.textContent).toContain('1 of 3 wait for your trust');
+    hub.destroy();
+
+    // On the desktop the shell asks, in its own window: the page asks nothing first.
+    const desk = makeContext({ answers: { 'GET /policy': () => view(), 'POST /policy/trust': () => view() } });
+    (desk as { platform: unknown }).platform = { ...desk.platform, kind: 'tauri', desktop: {} };
+    const hub2 = hubAt(desk, 'policy');
+    await flush();
+    (asked(hub2.el).flatMap((li) => [...li.querySelectorAll('button')])[0] as HTMLButtonElement).click();
+    await flush();
+    expect(desk.confirms).toHaveLength(0);
+    expect(desk.transport.to('POST', '/policy/trust').map((c) => c.body)).toEqual([{ items: ['id_verify'] }]);
+    hub2.destroy();
   });
 
   it('says how to start Friday again before stopping it, and follows the worktrees in use', async () => {

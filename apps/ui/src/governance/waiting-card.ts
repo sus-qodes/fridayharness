@@ -99,8 +99,12 @@ export function waitingCard(ctx: AppContext, task: SnapshotTask, opts: WaitingCa
     confirm: { title: string; body: string[]; confirmLabel: string },
   ): Promise<void> => {
     if (busy) return;
-    const ok = await ctx.confirm({ ...confirm, cancelLabel: 'Keep it', danger: true });
-    if (!ok) return;
+    // One question for one decision: the desktop asks about a cancellation in its own window
+    // (`confirm_and_send`), so the page does not ask the same first. Releasing is asked here.
+    if (!(action === 'cancel' && ctx.platform.desktop)) {
+      const ok = await ctx.confirm({ ...confirm, cancelLabel: 'Keep it', danger: true });
+      if (!ok) return;
+    }
     busy = true;
     b.disabled = true;
     const r = await ctx.act(

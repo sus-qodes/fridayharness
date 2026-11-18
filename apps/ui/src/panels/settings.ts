@@ -42,6 +42,10 @@ export interface Loosening {
   setting: string;
   from: string;
   to: string;
+  /** The setting's own name for trust; absent from a daemon that trusts only whole lists. */
+  id?: string;
+  /** Whether this computer trusts it; absent with `id`. */
+  trusted?: boolean;
 }
 
 /** The policy's loosening, its hash and whether this clone trusts it, from either shape the route may answer. */
@@ -55,7 +59,14 @@ export function readLoosening(view: PolicyView | null | undefined): {
   const item = (v: unknown): Loosening => {
     const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
     const s = (x: unknown) => (typeof x === 'string' ? x : x === undefined || x === null ? '' : String(x));
-    return { source: s(o.source), setting: s(o.setting), from: s(o.from), to: s(o.to) };
+    return {
+      source: s(o.source),
+      setting: s(o.setting),
+      from: s(o.from),
+      to: s(o.to),
+      ...(typeof o.id === 'string' && o.id ? { id: o.id } : {}),
+      ...(typeof o.trusted === 'boolean' ? { trusted: o.trusted } : {}),
+    };
   };
   if (Array.isArray(raw)) {
     return {

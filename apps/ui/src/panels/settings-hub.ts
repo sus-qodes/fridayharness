@@ -857,16 +857,28 @@ export function mountSettingsHub(ctx: AppContext): Component {
             h('span', { class: 'pn-loosening-words' }, looseningWords(l) ?? looseningExact(l)),
             looseningWords(l) ? h('span', { class: 'mono muted pn-loosening-exact' }, looseningExact(l)) : null,
             h('span', { class: 'muted pn-loosening-source' }, `set in ${visible(l.source)}`),
+            // Each setting stands on its own (2026-11-18): trusted here, or waiting with its own button.
+            l.trusted === undefined
+              ? null
+              : l.trusted
+                ? badge('in force', 'good')
+                : button('Trust this one', () => void trustPolicy(p.hash as string, [l]), { class: 'btn' }),
           ),
         ),
       );
 
+      const waiting = p.items.filter((l) => l.trusted !== true);
       const trustBtn =
-        p.trusted || !p.hash
+        p.trusted || !p.hash || (p.items.every((l) => l.trusted !== undefined) && waiting.length < 2)
           ? null
-          : button([icon('shield', 14), 'Trust this list'], () => void trustPolicy(p.hash as string, p.items), {
-              class: 'hub-btn primary',
-            });
+          : button(
+              [
+                icon('shield', 14),
+                waiting.length === p.items.length ? 'Trust this list' : `Trust the ${waiting.length} that wait`,
+              ],
+              () => void trustPolicy(p.hash as string, waiting),
+              { class: 'hub-btn primary' },
+            );
 
       replace(
         policyBox,
@@ -876,19 +888,31 @@ export function mountSettingsHub(ctx: AppContext): Component {
           h(
             'div',
             { class: 'text' },
-            h('span', { class: 'title' }, p.trusted ? 'Trusted on this computer' : 'Waiting for your trust'),
+            h(
+              'span',
+              { class: 'title' },
+              p.trusted
+                ? 'Trusted on this computer'
+                : waiting.length < p.items.length
+                  ? `${waiting.length} of ${p.items.length} wait for your trust`
+                  : 'Waiting for your trust',
+            ),
             h(
               'span',
               { class: 'detail', ...(p.hash ? { title: `This list’s fingerprint: ${visible(p.hash)}` } : {}) },
               p.trusted
-                ? 'These apply here. If a file of the project changes the list, Friday asks again.'
-                : 'None of these applies here yet.',
+                ? 'These apply here. A setting that is changed in the project’s files is asked about again.'
+                : waiting.length < p.items.length
+                  ? 'The ones marked “in force” apply here; the others do not yet.'
+                  : 'None of these applies here yet.',
             ),
           ),
-          p.trusted ? badge('trusted', 'good') : badge('not in force', 'warn'),
+          p.trusted
+            ? badge('trusted', 'good')
+            : badge(waiting.length < p.items.length ? 'some wait' : 'not in force', 'warn'),
         ),
         note(
-          'The project’s files ask for these: each lets Friday or an agent do more than it would by default. None applies on this computer until you trust the list as it stands; when a file changes it, Friday asks again.',
+          'The project’s files ask for these: each lets Friday or an agent do more than it would by default. A setting applies on this computer once you trust it, and each is trusted on its own; when a file changes one, Friday asks about that one again.',
         ),
         list,
         trustBtn ? h('div', { style: { marginTop: '12px' } }, trustBtn) : null,
@@ -896,21 +920,28 @@ export function mountSettingsHub(ctx: AppContext): Component {
     }
 
     async function trustPolicy(hash: string, items: ReturnType<typeof readLoosening>['items']) {
-      // The question lists exactly what is trusted, so nothing is trusted unseen.
-      const ok = await ctx.confirm({
-        title: 'Trust these settings on this computer?',
-        body: [
-          ...items.map(looseningLine),
-          `Friday records trust in exactly this list (hash ${visible(hash)}); if policy files change, it asks again.`,
-        ],
-        confirmLabel: 'Trust them',
-        danger: true,
-      });
-      if (!ok) return;
+      // The question lists exactly what is trusted, so nothing is trusted unseen. One question:
+      // the desktop asks in its own window (`confirm_and_send`), a browser asks here.
+      if (!ctx.platform.desktop) {
+        const ok = await ctx.confirm({
+          title: items.length === 1 ? 'Trust this setting on this computer?' : 'Trust these settings on this computer?',
+          body: [
+            ...items.map(looseningLine),
+            'Friday records trust in exactly this; if the project’s files change it, it asks again.',
+          ],
+          confirmLabel: items.length === 1 ? 'Trust it' : 'Trust them',
+          danger: true,
+        });
+        if (!ok) return;
+      }
+      const ids = items.map((l) => l.id).filter((i): i is string => typeof i === 'string');
       const r = await ctx.act(
         'Trust the settings',
-        () => ctx.api.trustPolicy(hash),
-        'Trusted: these settings now apply on this computer',
+        // By their own ids where the daemon gives them; the whole list as one otherwise.
+        () => (ids.length === items.length && ids.length > 0 ? ctx.api.trustSettings(ids) : ctx.api.trustPolicy(hash)),
+        items.length === 1
+          ? 'Trusted: it now applies on this computer'
+          : 'Trusted: these settings now apply on this computer',
       );
       if (r && !td.done) {
         renderPolicyContent(readLoosening(r));

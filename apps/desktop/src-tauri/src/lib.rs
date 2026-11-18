@@ -3,6 +3,7 @@
 //! notifications. The Rust core is the only HTTP client of the daemon on the desktop: the webview
 //! holds no credential (FD-06) and reaches the daemon only through the commands below.
 
+mod ask;
 mod autostart;
 mod confirm;
 mod daemon;
@@ -114,6 +115,10 @@ fn ask(app: &AppHandle, d: &Dialog) -> bool {
 /// to the Studio: a click in the Notch, which stays above every window, opened it behind the Notch's
 /// card, so the person saw a busy cursor, a card that would not close, and no question.
 fn ask_from(app: &AppHandle, from: Option<&WebviewWindow>, d: &Dialog) -> bool {
+    // In Friday's own window (ask.rs); the system's box only when that window cannot be made.
+    if let Some(answer) = ask_in_friday(app, from, d) {
+        return answer;
+    }
     let mut b = app
         .dialog()
         .message(&d.text)
@@ -125,6 +130,106 @@ fn ask_from(app: &AppHandle, from: Option<&WebviewWindow>, d: &Dialog) -> bool {
         b = b.parent(&w);
     }
     b.blocking_show()
+}
+
+/// Asks in Friday's own confirmation window and waits for the answer; None when the window could
+/// not be made (another question is open, or the webview refused), so the caller asks natively.
+/// Never call it on the main thread: it waits.
+fn ask_in_friday(app: &AppHandle, from: Option<&WebviewWindow>, d: &Dialog) -> Option<bool> {
+    let waiting = app.state::<ask::Waiting>();
+    let id = format!(
+        "q{:x}{:x}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|t| t.as_nanos()).unwrap_or(0),
+        std::process::id()
+    );
+    let (tx, rx) = std::sync::mpsc::channel::<bool>();
+    {
+        let mut open = waiting.0.lock().ok()?;
+        if open.is_some() || app.get_webview_window(ask::LABEL).is_some() {
+            return None;
+        }
+        *open = Some((id.clone(), tx.clone()));
+    }
+    let close = |window: Option<&WebviewWindow>| {
+        if let Ok(mut open) = waiting.0.lock() {
+            *open = None;
+        }
+        if let Some(w) = window {
+            let _ = w.destroy();
+        }
+    };
+    let (width, height) = ask::size_for(&d.text);
+    let parent = from.filter(|w| w.is_visible().unwrap_or(false)).cloned().or_else(|| visible_studio(app));
+    let mut b = WebviewWindowBuilder::new(app, ask::LABEL, WebviewUrl::App(ask::PAGE.into()))
+        .title("Friday")
+        .inner_size(width, height)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focused(true)
+        .visible(true)
+        .disable_drag_drop_handler()
+        .additional_browser_args(BROWSER_ARGS)
+        .initialization_script(ask::init_script(&id, d))
+        .on_navigation(ask::navigation_allowed)
+        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+        .on_download(|_, _| false);
+    // Over the Studio when that is where the person clicked; in the middle of the screen for the
+    // Notch, whose own window is a strip at its top.
+    let over = parent.as_ref().filter(|w| w.label() == STUDIO).and_then(|w| {
+        let (pos, size, scale) = (w.outer_position().ok()?, w.outer_size().ok()?, w.scale_factor().ok()?);
+        let x = pos.x as f64 / scale + (size.width as f64 / scale - width) / 2.0;
+        let y = pos.y as f64 / scale + (size.height as f64 / scale - height) / 2.0;
+        Some((x.max(0.0), y.max(0.0)))
+    });
+    b = match over {
+        Some((x, y)) => b.position(x, y),
+        None => b.center(),
+    };
+    if let Some(p) = &parent {
+        b = match b.parent(p) {
+            Ok(b) => b,
+            Err(_) => {
+                close(None);
+                return None;
+            }
+        };
+    }
+    let window = match b.build() {
+        Ok(w) => w,
+        Err(_) => {
+            close(None);
+            return None;
+        }
+    };
+    // Closed by its person, or gone for any reason: a no.
+    let closed = tx.clone();
+    window.on_window_event(move |e| {
+        if matches!(e, WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed) {
+            let _ = closed.send(false);
+        }
+    });
+    let _ = window.set_focus();
+    let answer = rx.recv_timeout(Duration::from_secs(ask::TIMEOUT_SECS)).unwrap_or(false);
+    close(Some(&window));
+    Some(answer)
+}
+
+/// The confirmation window's answer (ask.rs). Only that window is given this command, and it is
+/// asked again here who calls and for which question.
+#[tauri::command]
+fn confirm_answer(app: AppHandle, window: WebviewWindow, id: String, yes: bool) -> Result<(), CmdError> {
+    let waiting = app.state::<ask::Waiting>();
+    let open = waiting.0.lock().map_err(|_| CmdError::bad_request("no question is open"))?;
+    match open.as_ref() {
+        Some((asked, tx)) if ask::accepts(window.label(), Some(asked.as_str()), &id) => {
+            let _ = tx.send(yes);
+            Ok(())
+        }
+        _ => Err(CmdError::bad_request("no such question is open")),
+    }
 }
 
 #[derive(PartialEq)]
@@ -1316,6 +1421,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             friday_request,
             confirm_and_send,
+            confirm_answer,
             stream_open,
             stream_close,
             project_info,
@@ -1349,6 +1455,7 @@ pub fn run() {
             // The state must exist before the first webview does: a warm WebView2 loads the Notch
             // page during `create_windows` below, and its first `notch_rect` invoke lands while
             // setup is still running (LESSON: manage before windows, or a page beat the setup).
+            app.manage(ask::Waiting::default());
             app.manage(AppState {
                 project: RwLock::new(None),
                 install: Mutex::new(None),

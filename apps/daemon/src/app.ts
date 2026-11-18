@@ -110,7 +110,7 @@ export interface AppDeps {
   policy?: () => EffectivePolicy;
   reloadPolicy?: () => EffectivePolicy;
   /** Records this clone's trust in exactly the loosening with this hash, then reloads. */
-  trustPolicy?: (looseningHash: string) => EffectivePolicy;
+  trustPolicy?: (what: { all: true } | { items: readonly string[] }) => EffectivePolicy;
   /** The execution gateway (M6c, ADR-0029). */
   operations?: OperationManager;
   /** Model routing (M7, ADR-0031). */
@@ -1486,9 +1486,31 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.get(`${P}/policy`, allow(...OPERATOR), (c) => c.json({ policy: effective() }));
   app.post(`${P}/policy/reload`, allow(...OPERATOR), (c) => c.json({ policy: deps.reloadPolicy?.() ?? effective() }));
   app.post(`${P}/policy/trust`, allow(...OPERATOR), async (c) => {
-    const body = z.object({ loosening_hash: z.string().min(1).max(64) }).parse(await json(c));
+    // The whole list (`loosening_hash`, as `friday policy trust` sends it), or single settings by
+    // their ids (`items`, 2026-11-18): a person who switched one thing on trusts that one thing.
+    const body = z
+      .union([
+        z.object({ loosening_hash: z.string().min(1).max(64) }).strict(),
+        z.object({ items: z.array(z.string().min(1).max(64)).min(1).max(100) }).strict(),
+      ])
+      .parse(await json(c));
     const now = deps.reloadPolicy?.() ?? effective();
-    // Trust is for exactly what the human was shown: refused when the files changed since.
+    if (!deps.trustPolicy) throw new FridayError('capability_unsupported', 'this daemon cannot record trust');
+    if ('items' in body) {
+      // Trust is for exactly what the human was shown: an id that names no present setting (the
+      // files changed since, or the value did) is refused, and nothing is trusted.
+      const present = new Set(now.loosening.map((l) => l.id));
+      const gone = body.items.filter((i) => !present.has(i));
+      if (gone.length) {
+        throw new FridayError(
+          'invalid_request',
+          'the project settings changed since you looked: that setting is not asked for any more, or not with that value. Look at the list again',
+          { missing: gone },
+        );
+      }
+      return c.json({ policy: deps.trustPolicy({ items: body.items }) });
+    }
+    // Refused when the files changed since.
     if (now.loosening_hash !== body.loosening_hash) {
       throw new FridayError(
         'invalid_request',
@@ -1497,8 +1519,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
           : "nothing in the policy files loosens Friday's defaults; there is nothing to trust",
       );
     }
-    if (!deps.trustPolicy) throw new FridayError('capability_unsupported', 'this daemon cannot record trust');
-    return c.json({ policy: deps.trustPolicy(body.loosening_hash) });
+    return c.json({ policy: deps.trustPolicy({ all: true }) });
   });
 
   // Recovery of lost and failed attempts (M5d, ADR-0026).
