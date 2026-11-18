@@ -137,6 +137,21 @@ describe('desktopPlatform', () => {
     await expect(desktop.openProject()).rejects.toThrow('no picker');
   });
 
+  // The names are the shell's (lib.rs, build.rs): a misspelt one would be refused by its ACL.
+  it('lists the recent projects and opens one by its folder (2026-11-18)', async () => {
+    const list = [{ root: 'C:/RestroSarthi', name: 'RestroSarthi', current: false, running: true, missing: false }];
+    const { desktop, calls } = shell({ recent_projects: () => list, open_recent_project: () => null });
+    expect(await desktop.recentProjects?.()).toEqual(list);
+    await expect(desktop.openRecent?.('C:/RestroSarthi')).resolves.toBeUndefined();
+    expect(calls).toEqual([
+      { cmd: 'recent_projects' },
+      { cmd: 'open_recent_project', args: { root: 'C:/RestroSarthi' } },
+    ]);
+    // Anything but a list is no list.
+    const odd = shell({ recent_projects: () => 'nope' });
+    expect(await odd.desktop.recentProjects?.()).toEqual([]);
+  });
+
   it('sends a test notification and answers whether Windows took it', async () => {
     let taken = true;
     const { desktop, calls } = shell({ notify: () => taken });

@@ -2,6 +2,17 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — the trial's fault list, part 7: screens for people
+
+From the trial: "what is this token last tool… whats the use of user to know this?", a button standing out of a goal card, "no way to come back to this agent screen", and switching projects that looked like the app starting again.
+
+- **Agent cards say who, what and what for.** Each card has the agent's name and job, one sentence for what it is doing ("Working on “Settings screens”", "Waiting for you on …", "Free: it starts a task by itself"), the file it is on, and the model with what it has spent so far. Tokens and how long its last action took are in that line's tooltip. "Reported" and "Unverified" are gone: "Friday watches only" or "Checks not confirmed" is said when it matters, with the explanation in the tooltip, and nothing when Friday checks every action, which is the usual.
+- **Your projects, in one menu.** The project's name opens the projects you opened lately, with "open now", "Friday running" or "folder not found", and "Open another folder…". Choosing one switches in this window and says so.
+- **A way back from the model choices.** "Open the model choices" and "Connect Antigravity" in Start an agent now have a Back button, and what you had typed is there when you come back.
+- **The checks card in plain words.** It is "Your project’s tests", it says they are optional and what Friday still checks without them, and a project with none is told that is fine while it is starting.
+- **Nothing sticks out of a goal card.** Cancelling a goal is a small button with its words in its tooltip, "Change this goal…" is "Change…", and the footer cuts a button short rather than letting it out of the card. The "Agents" label is drawn above the cards.
+- **Messages do not pile up.** The same message said again replaces itself, and three at most stand at once.
+
 ## Unreleased — the trial's fault list, part 6: what you see is true
 
 From the trial: a goal that had landed still said "Ready to land" half an hour later, an agent card counted 14k tokens for $0.98, and a task in the project folder showed 13 changed files for one.

@@ -391,9 +391,40 @@ describe('start agent modal', () => {
     expect(host.value).toBe('claude-code');
     expect(m.el.textContent).toContain('Antigravity is not started here: you open it yourself.');
     buttonBy(m.el, 'Connect Antigravity').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents', tab: 'antigravity' });
+    // With a way back to this dialog (2026-11-18): there was none.
+    expect(ctx.store.select('ui').drawer).toEqual({
+      kind: 'agents',
+      tab: 'antigravity',
+      back: { modal: { kind: 'start-agent', mode: 'resume' }, label: 'Back to Start an agent' },
+    });
     expect(ctx.store.select('ui').modal).toBeNull();
     m.destroy();
+  });
+
+  // "following Open the model choices leaves it with no way to come back to this agent screen" (the
+  // trial, 2026-11-18). What was typed is there again on the way back; a new dialog starts afresh.
+  it('comes back from the model choices with what was typed, and only that once', async () => {
+    const ctx = makeContext({ answers: { 'GET /agent-hosts': HOSTS, 'GET /agent-processes': profiles([]) } });
+    const m = startAgentModal(ctx, { kind: 'start-agent' }, () => undefined);
+    await flush();
+    const key = m.el.querySelector('input.mono') as HTMLInputElement;
+    key.value = 'reviewer-7';
+    key.dispatchEvent(new Event('input', { bubbles: true }));
+    buttonBy(m.el, 'Open the model choices').click();
+    expect(ctx.store.select('ui')).toMatchObject({
+      activeView: 'settings',
+      settingsTab: 'routing',
+      settingsBack: { modal: { kind: 'start-agent', mode: 'resume' }, label: 'Back to Start an agent' },
+    });
+    m.destroy();
+    const back = startAgentModal(ctx, { kind: 'start-agent', mode: 'resume' }, () => undefined);
+    await flush();
+    expect((back.el.querySelector('input.mono') as HTMLInputElement).value).toBe('reviewer-7');
+    back.destroy();
+    const fresh = startAgentModal(ctx, { kind: 'start-agent', mode: 'resume' }, () => undefined);
+    await flush();
+    expect((fresh.el.querySelector('input.mono') as HTMLInputElement).value).not.toBe('reviewer-7');
+    fresh.destroy();
   });
 
   it('links to the model choices in Settings → Models, closing the dialog first', () => {

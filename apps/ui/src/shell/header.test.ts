@@ -86,11 +86,72 @@ describe('header', () => {
     expect(name.tagName).toBe('BUTTON');
     expect(name.textContent).toBe('shop');
     // The folder stays in the tooltip, with what a click does.
-    expect(name.title).toBe('C:/demo/shop. Click to open another project.');
-    expect(name.getAttribute('aria-label')).toBe('shop: open another project');
+    expect(name.title).toBe('C:/demo/shop. Click for your projects.');
+    expect(name.getAttribute('aria-label')).toBe('shop: your projects');
+    // A desktop app without the list of projects: the folder picker, as before.
     name.click();
     await Promise.resolve();
     expect(openProject).toHaveBeenCalledOnce();
+  });
+
+  // Switching projects happens in this window, from a list of the recent ones with their state
+  // (2026-11-18): "it again opened the friday… looks like it reopened" (the trial).
+  it('lists the recent projects with their state, switches to one in this window, and offers another folder', async () => {
+    const ctx = makeContext();
+    const openProject = vi.fn(async () => undefined);
+    const openRecent = vi.fn(async (_root: string) => undefined);
+    const recentProjects = vi.fn(async () => [
+      { root: 'C:/demo/shop', name: 'shop', current: true, running: true, missing: false },
+      { root: 'C:/RestroSarthi', name: 'RestroSarthi', current: false, running: true, missing: false },
+      { root: 'C:/old/thing', name: 'thing', current: false, running: false, missing: true },
+      { root: 'C:/side', name: '<img src=x onerror=alert(1)>', current: false, running: false, missing: false },
+    ]);
+    (ctx as { platform: unknown }).platform = {
+      ...ctx.platform,
+      kind: 'tauri',
+      desktop: { openProject, openRecent, recentProjects },
+    };
+    const header = mountHeader(ctx);
+    mounted.push(header);
+    document.body.append(header.el);
+    const name = header.el.querySelector('.sh-project-name') as HTMLButtonElement;
+    name.click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    const menu = header.el.querySelector('.sh-project-menu') as HTMLElement;
+    expect(menu.hidden).toBe(false);
+    expect(name.getAttribute('aria-expanded')).toBe('true');
+    const rows = [...menu.querySelectorAll('[data-item="project"]')] as HTMLButtonElement[];
+    expect(rows.map((r) => r.textContent)).toEqual([
+      'shopopen now',
+      'RestroSarthiFriday running',
+      'thingfolder not found',
+      '<img src=x onerror=alert(1)>',
+    ]);
+    expect(menu.querySelector('img')).toBeNull();
+    expect(rows[2]?.disabled).toBe(true);
+    expect(rows[1]?.title).toBe('C:/RestroSarthi');
+    // Another project: in this window, said at once.
+    rows[1]?.click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    expect(openRecent).toHaveBeenCalledWith('C:/RestroSarthi');
+    expect(ctx.toasts.at(-1)?.text).toBe('Opening RestroSarthi in this window…');
+    expect(menu.hidden).toBe(true);
+    // The one open now changes nothing; another folder is the picker.
+    name.click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    (menu.querySelector('[data-item="project"]') as HTMLButtonElement).click();
+    expect(openRecent).toHaveBeenCalledOnce();
+    name.click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    (menu.querySelector('[data-item="another"]') as HTMLButtonElement).click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    expect(openProject).toHaveBeenCalledOnce();
+    // Escape closes it and gives the name its focus back.
+    name.click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(menu.hidden).toBe(true);
+    expect(document.activeElement).toBe(name);
   });
 
   it('keeps the address in the state dot’s tooltip, not on the screen', () => {

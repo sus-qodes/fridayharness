@@ -67,6 +67,18 @@ export interface DesktopShortcut {
   note?: string;
 }
 
+/** One project of the project menu, as the desktop app lists it (2026-11-18). */
+export interface RecentProject {
+  root: string;
+  name: string;
+  /** The project this window shows. */
+  current: boolean;
+  /** Its Friday is running: agents may be at work there. */
+  running: boolean;
+  /** Its folder is gone, or is no Friday project any more. */
+  missing: boolean;
+}
+
 export interface DesktopCommands {
   shortcuts(): Promise<DesktopShortcut[]>;
   /** Registers `accel` for the shortcut; answers the new list. */
@@ -79,6 +91,10 @@ export interface DesktopCommands {
    * as soon as the picker is asked for, not when a project was chosen.
    */
   openProject(): Promise<void>;
+  /** The projects opened lately, newest first, with their state; absent from an older desktop app. */
+  recentProjects?(): Promise<RecentProject[]>;
+  /** Opens one of those in this window, as `openProject` does after its picker. */
+  openRecent?(root: string): Promise<void>;
   /**
    * Asks for the provider's key in Windows' own password prompt and stores it (FD-26): only the
    * provider's name passes through the page. True once stored, false when the human cancelled.
@@ -177,8 +193,8 @@ export interface ModalRequest {
   kind: ModalKind;
   /** An approval, escalation, task or goal id, by kind. */
   id?: string;
-  /** Plan editor: a first plan or a revision. */
-  mode?: 'first' | 'revision';
+  /** Plan editor: a first plan or a revision. Start an agent: `resume`, what was typed before it was left. */
+  mode?: 'first' | 'revision' | 'resume';
   /**
    * Plan editor: `proposed` opens it on the plan that waits for a decision, to change it before
    * approving ("Edit before approving", 2026-11-17).
@@ -243,6 +259,7 @@ export function openDrawer(ctx: Pick<AppContext, 'store'>, request: DrawerReques
       activeView: 'settings',
       settingsTab: request.tab,
       drawer: null,
+      settingsBack: request.back ?? null,
     });
     return;
   }

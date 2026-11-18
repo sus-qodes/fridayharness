@@ -91,17 +91,17 @@ export const RISK: Record<string, { label: string; color: `var(--${string})` }> 
   high: { label: 'High risk', color: 'var(--color-crimson)' },
 };
 
-export type EnforcementWord = 'Enforced' | 'Reported' | 'Watched' | 'Unverified';
+export type EnforcementWord = 'Checked by Friday' | 'Friday watches only' | 'Checks not confirmed';
 
 export type EnforcementTone = 'good' | 'info' | 'warn' | 'muted' | 'strong';
 
 /**
- * The enforcement of an agent's session in plain words, one vocabulary for the pod on the canvas
- * and the row in the Agents drawer (review M9k, the only code words that were on the first screen):
- * *Enforced* when Friday's hooks decide what the host may do (L1 enforcing, or an isolated L2
- * profile), *Reported* when the host reports and Friday records but cannot block (L1 reported),
- * *Watched* when Friday only observes (L0), *Unverified* when an L1 session's hooks are degraded or
- * unconfirmed. The level, the status word and what they rest on go in the tooltip.
+ * How far Friday holds an agent's actions, in a person's words (2026-11-18; they were the codes
+ * "Enforced", "Reported", "Watched" and "Unverified", which a person in the trial could not read).
+ * *Checked by Friday*: Friday's hooks decide each action before it happens (L1 enforcing, or an
+ * isolated L2 profile). *Friday watches only*: Friday sees what it did but cannot stop an action
+ * (L1 reported, or L0). *Checks not confirmed*: an L1 session whose hooks Friday has not seen work.
+ * The level and what it rests on stay in the tooltip, for whoever looks for them.
  */
 export function enforcementWords(
   level: string | null | undefined,
@@ -110,30 +110,31 @@ export function enforcementWords(
 ): { label: EnforcementWord; tone: EnforcementTone; title: string } {
   let label: EnforcementWord;
   let tone: EnforcementTone;
+  let say: string;
   let detail: string;
-  if (level === 'L2') {
-    label = 'Enforced';
-    tone = 'strong';
+  if (level === 'L2' || (level === 'L1' && status === 'enforcing')) {
+    label = 'Checked by Friday';
+    tone = level === 'L2' ? 'strong' : 'good';
+    say = 'Friday checks each action of this agent before it happens, and can stop it.';
     detail = status ?? 'isolated';
-  } else if (level === 'L1' && status === 'enforcing') {
-    label = 'Enforced';
-    tone = 'good';
-    detail = status;
   } else if (level === 'L1' && status === 'reported') {
-    label = 'Reported';
+    label = 'Friday watches only';
     tone = 'info';
+    say = "This agent's app tells Friday what it did, but Friday cannot stop an action before it happens.";
     detail = status;
   } else if (level === 'L1') {
-    label = 'Unverified';
+    label = 'Checks not confirmed';
     tone = 'warn';
+    say = 'Friday has not seen its checks work for this agent yet. If this stays, check the agent under Agents.';
     detail = status ?? 'unverified';
   } else {
-    label = 'Watched';
+    label = 'Friday watches only';
     tone = 'muted';
+    say = "Friday sees this agent's work, but does not check its actions as they happen.";
     detail = status ?? 'observed';
   }
   const shown = level === 'L1' || level === 'L2' ? level : 'L0';
-  return { label, tone, title: `Enforcement level ${shown} (${detail})${basis ? `: ${basis}` : ''}` };
+  return { label, tone, title: `${say} (level ${shown}, ${detail}${basis ? `: ${basis}` : ''})` };
 }
 
 /** A task that waits for a human: an approval, a question, or a blocked agent (plan §7.5). */

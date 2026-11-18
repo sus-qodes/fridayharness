@@ -456,16 +456,21 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
       // A goal whose plan runs can be changed (2026-11-17): the planner is asked from a note, or
       // the change is written in the editor; before, nothing on the card led to either.
       goal.status === 'ACTIVE' && g.active && !asked
-        ? button('Change this goal…', () => openModal(ctx, { kind: 'change-goal', id: goal.goal_id }), {
+        ? button('Change…', () => openModal(ctx, { kind: 'change-goal', id: goal.goal_id }), {
             class: 'btn btn-ghost nd-change-goal',
-            title: 'Add, drop or redo tasks: a new version of the plan, reviewed before anything starts',
+            title:
+              'Change this goal: add, drop or redo tasks in a new version of the plan, reviewed before anything starts',
+            ariaLabel: 'Change this goal',
             dataset: { action: 'change-goal' },
           })
         : null,
+      // A small button with its words in the tooltip (2026-11-18): beside "Write the plan" and "Let
+      // Friday plan" its words pushed them out of the card's right edge.
       goal.status === 'OPEN' || goal.status === 'ACTIVE'
-        ? button('Cancel goal…', () => void cancelGoal(), {
-            class: 'btn btn-ghost nd-cancel-goal',
-            title: 'Stop this goal: its unfinished tasks are cancelled, the work already done is kept',
+        ? button(nodeIcon('close', 13), () => void cancelGoal(), {
+            class: 'btn btn-ghost btn-icon nd-cancel-goal',
+            title: 'Cancel this goal: its unfinished tasks are cancelled, the work already done is kept',
+            ariaLabel: 'Cancel this goal',
             dataset: { action: 'cancel-goal' },
           })
         : null,

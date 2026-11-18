@@ -576,6 +576,55 @@
   color: var(--color-white);
 }
 
+/* The project menu, under the project's name (2026-11-18). */
+.sh-project {
+  position: relative;
+}
+
+.sh-project-menu {
+  left: 0;
+  right: auto;
+  min-width: 260px;
+  max-width: 360px;
+}
+
+.sh-pm-item {
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.sh-pm-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sh-pm-state {
+  flex-shrink: 0;
+  font-size: var(--text-caption);
+  color: var(--color-slate-400);
+}
+
+.sh-pm-running {
+  color: var(--color-emerald);
+}
+
+.sh-pm-current {
+  font-weight: var(--weight-semibold);
+}
+
+.sh-pm-note {
+  padding: 6px 10px;
+  font-size: var(--text-caption);
+}
+
+.sh-pm-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-subtle);
+}
+
 .sh-banner-hint {
   font-size: var(--text-caption);
 }

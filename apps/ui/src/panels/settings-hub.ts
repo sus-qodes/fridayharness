@@ -22,7 +22,7 @@ import type { AppContext, Component, DesktopShortcut, NotificationAnswer } from 
 import { builtWords, UI_API, UI_VERSION, versionWords } from '../shell/version.js';
 import type { Prefs } from '../store/state.js';
 import { button, h, replace, setText } from '../ui/dom.js';
-import { usd } from '../ui/format.js';
+import { cleanText, usd } from '../ui/format.js';
 import { type IconName, icon } from '../ui/svg.js';
 import { agentPermissionsCard } from './agent-permissions.js';
 import {
@@ -233,8 +233,31 @@ export function mountSettingsHub(ctx: AppContext): Component {
   heroMascotWrap.append(heroMascot.el);
 
   const heroBanner = h('div', { class: 'hub-hero' }, heroCopy, heroMascotWrap);
+  // The way back to the dialog Settings was opened from (2026-11-18): "Open the model choices" in
+  // Start an agent left the person here with nothing to go back by.
+  const backBar = h('div', { class: 'hub-back', hidden: true });
+  const renderBack = () => {
+    const back = ctx.store.select('ui').settingsBack ?? null;
+    const shown = ctx.store.select('ui').activeView === 'settings' && back;
+    backBar.hidden = !shown;
+    if (!shown || !back) {
+      backBar.replaceChildren();
+      return;
+    }
+    backBar.replaceChildren(
+      button(
+        [icon('chevronLeft', 14), cleanText(back.label)],
+        () => {
+          ctx.store.patch('ui', { settingsBack: null, activeView: 'canvas', modal: { ...back.modal } });
+        },
+        { class: 'btn btn-ghost hub-back-btn', dataset: { action: 'settings-back' } },
+      ),
+    );
+  };
+  td.add(ctx.store.subscribe('ui', renderBack));
+  renderBack();
   const cardsContainer = h('div', { id: 'settings-root', class: 'hub-cards' });
-  const pageContainer = h('div', { class: 'hub-page' }, heroBanner, cardsContainer);
+  const pageContainer = h('div', { class: 'hub-page' }, backBar, heroBanner, cardsContainer);
   const scrollContainer = h('div', { class: 'hub-scroll' }, pageContainer);
   const panel = h('main', { class: 'hub-panel' }, scrollContainer);
 

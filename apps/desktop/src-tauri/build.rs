@@ -13,6 +13,8 @@ const COMMANDS: &[&str] = &[
     "restart_daemon",
     "choose_project_folder",
     "open_another_project",
+    "recent_projects",
+    "open_recent_project",
     "open_project_file",
     "notch_rect",
     "notch_keyboard",

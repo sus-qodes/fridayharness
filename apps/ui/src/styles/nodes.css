@@ -623,6 +623,24 @@
   height: 40px;
   padding: 0 12px;
   border-top: 1px solid var(--border-subtle);
+  /* Nothing leaves the card (2026-11-18): a button that does not fit is cut short, with its words in
+     its tooltip, instead of standing out of the card's right edge. */
+  overflow: hidden;
+}
+
+.nd-goal-foot > * {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.nd-goal-foot > .btn {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nd-goal-foot > .spacer,
+.nd-goal-foot > .btn-icon {
+  flex-shrink: 0;
 }
 
 .nd-integration {
@@ -777,6 +795,16 @@
 }
 
 /* ---- agent pod ------------------------------------------------------------------------------- */
+/* What the agent is doing, in one sentence (2026-11-18). */
+.nd-doing {
+  margin: 4px 0 2px;
+  font-size: var(--text-base);
+  color: var(--color-slate-200);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .nd-pod {
   border-radius: var(--radius-lg);
   border: 1px solid rgba(56, 189, 248, 0.25);

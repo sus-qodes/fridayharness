@@ -19,6 +19,7 @@ import { icon } from '../ui/svg.js';
 import { connectionView } from './connection.js';
 import { type AppContext, type Component, openDrawer } from './context.js';
 import { mountMenu } from './menu.js';
+import { mountProjectMenu, type ProjectMenu } from './project-menu.js';
 
 export interface HeaderCounts {
   running: number;
@@ -58,11 +59,20 @@ export function mountHeader(ctx: AppContext, opts: HeaderOptions = {}): Componen
   // one project for as long as it ran, and another meant Quit and a start from a terminal. A
   // browser's page belongs to the Friday it was opened from, so there the name is only a name.
   const shell = ctx.platform.desktop ?? null;
+  // The project menu (2026-11-18): the recent projects with their state, and another folder. A
+  // desktop app without the list opens the folder picker, as before.
+  let projectMenu: ProjectMenu | null = null;
   const name = shell
-    ? button('', () => void ctx.act('Open another project', () => shell.openProject()), {
-        class: 'sh-project-name sh-project-switch',
-      })
+    ? button(
+        '',
+        () => {
+          if (projectMenu && shell.recentProjects) projectMenu.toggle();
+          else void ctx.act('Open another project', () => shell.openProject());
+        },
+        { class: 'sh-project-name sh-project-switch' },
+      )
     : h('span', { class: 'sh-project-name' });
+  if (shell && name instanceof HTMLButtonElement) projectMenu = mountProjectMenu(ctx, shell, name);
   const dot = h('span', { class: 'sh-dot', aria: { hidden: true } });
   const stateLabel = h('span', { class: 'sh-daemon-label' });
   const daemon = h('div', { class: 'sh-daemon', role: 'status', aria: { live: 'polite' } }, dot, stateLabel);
@@ -163,7 +173,7 @@ export function mountHeader(ctx: AppContext, opts: HeaderOptions = {}): Componen
   const leftZone = h(
     'div',
     { class: 'sh-left-zone' },
-    h('div', { class: 'sh-project-pill' }, h('div', { class: 'sh-project' }, name), daemon),
+    h('div', { class: 'sh-project-pill' }, h('div', { class: 'sh-project' }, name, projectMenu?.el ?? null), daemon),
   );
 
   const centerZone = h('div', { class: 'sh-center-zone' }, viewSwitcher);
@@ -231,11 +241,11 @@ export function mountHeader(ctx: AppContext, opts: HeaderOptions = {}): Componen
     // The folder path is read once in a while, never typed: the tooltip is its place.
     const rootText = board?.project.root ?? '';
     name.title = shell
-      ? `${rootText ? `${visible(rootText)}. ` : ''}Click to open another project.`
+      ? `${rootText ? `${visible(rootText)}. ` : ''}Click for your projects.`
       : rootText
         ? visible(rootText)
         : '';
-    if (shell) name.setAttribute('aria-label', `${projectName}: open another project`);
+    if (shell) name.setAttribute('aria-label', `${projectName}: your projects`);
     renderDaemonTitle();
 
     const counts = headerCounts(board, now);
@@ -291,6 +301,7 @@ export function mountHeader(ctx: AppContext, opts: HeaderOptions = {}): Componen
       if (expiryTimer) clearTimeout(expiryTimer);
       expiryTimer = null;
       more.destroy();
+      projectMenu?.destroy();
       el.remove();
     },
   };

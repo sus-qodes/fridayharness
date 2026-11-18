@@ -16,7 +16,15 @@ import {
   makeTask,
   makeVerification,
 } from '../test/fixtures.js';
-import { createAgentPod, type PodCardModel, podModelName, podUsage, ToolDurations, vendorLabel } from './agent-pod.js';
+import {
+  createAgentPod,
+  doingWords,
+  type PodCardModel,
+  podModelName,
+  podUsage,
+  ToolDurations,
+  vendorLabel,
+} from './agent-pod.js';
 import { actionButton, fingerprint, pills } from './common.js';
 import {
   createGoalNode,
@@ -473,7 +481,10 @@ describe('goal card', () => {
     const ctx = makeContext({ answers: { [`POST /goals/${active.goal_id}/cancel`]: { goal: active } } });
     const node = createGoalNode(ctx, { group: group({ goal: active }) });
     const cancel = node.el.querySelector('[data-action="cancel-goal"]') as HTMLButtonElement;
-    expect(cancel.textContent).toBe('Cancel goal…');
+    // A small button with its words in its tooltip and its name (2026-11-18): its words pushed the
+    // other buttons out of the card.
+    expect(cancel.getAttribute('aria-label')).toBe('Cancel this goal');
+    expect(cancel.title).toContain('Cancel this goal');
     // Saying "Keep it" changes nothing.
     ctx.confirmAnswer = false;
     click(cancel);
@@ -511,7 +522,8 @@ describe('goal card', () => {
     const running = makeGoal({ status: 'ACTIVE' });
     const node = createGoalNode(ctx, { group: group({ goal: running, active: makePlan() }) });
     const change = node.el.querySelector('[data-action="change-goal"]') as HTMLButtonElement;
-    expect(change.textContent).toBe('Change this goal…');
+    expect(change.textContent).toBe('Change…');
+    expect(change.getAttribute('aria-label')).toBe('Change this goal');
     click(change);
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'change-goal', id: running.goal_id });
     // No plan yet (it is written or asked for from the card), a finished goal, a cancelled one.
@@ -812,7 +824,9 @@ describe('agent pod', () => {
     ...extra,
   });
 
-  it('renders vendor, key, enforcement, model, usage and the ribbon with hostile strings visible', () => {
+  // For people (2026-11-18): name, job, what it is doing, what it runs on and has spent. "what is
+  // this token last tool this shit… whats the use of user to know this?" (the trial).
+  it('renders its name, job, what it does, the model and spend, and the file, with hostile strings visible', () => {
     const ctx = makeContext();
     const target = `src/${BIDI}${HOSTILE}${LONG}.ts`;
     const node = createAgentPod(
@@ -823,19 +837,26 @@ describe('agent pod', () => {
     const t = node.el.textContent ?? '';
     expect(t).toContain('Claude Code');
     expect(t).toContain('claude-1');
-    expect(t).toContain('Reported');
+    // How far Friday holds it, in words, said because it is not the usual; the level in the tooltip.
+    expect(t).toContain('Friday watches only');
     expect(t).not.toContain('L1 reported');
-    expect(node.el.querySelector('.badge-info')?.getAttribute('title')).toBe('Enforcement level L1 (reported)');
-    expect(t).toContain('claude-haiku-5-5');
-    expect(t).toContain('$0.18');
-    expect(t).toContain('18k tokens');
-    expect(t).toContain('last tool 1.1 s');
+    expect(node.el.querySelector('.badge-info')?.getAttribute('title')).toContain('(level L1, reported)');
+    expect(node.el.querySelector('[data-role="doing"]')?.textContent).toBe('Working on “Add the subscription API”');
+    const runsOn = node.el.querySelector('[data-role="runs-on"]') as HTMLElement;
+    expect(runsOn.textContent).toBe('Claude Haiku 5.5 · $0.18 so far');
+    // Tokens and the last action's time: there for whoever looks, not on the card.
+    expect(t).not.toContain('tokens');
+    expect(t).not.toContain('last tool');
+    expect(runsOn.title).toContain('18k tokens');
+    expect(runsOn.title).toContain('1.1 s');
     expect(t).toContain('+14 −2');
-    expect(t).toContain('started by Friday');
+    expect(t).toContain('Started by Friday');
     const file = node.el.querySelector('[data-action="diff"]') as HTMLElement;
     expect(file.textContent).toContain('⟨U+202E⟩');
     expect(Array.from(file.textContent ?? '').length).toBeLessThan(80);
-    expect(node.el.querySelector('.nd-tool')?.textContent).toContain('⟨U+200B⟩');
+    // What it does, in a word; the host's own name for the tool in its tooltip, as text.
+    expect(node.el.querySelector('.nd-tool')?.textContent).toBe('Editing');
+    expect(node.el.querySelector('.nd-tool')?.getAttribute('title')).toContain('⟨U+200B⟩');
     click(file);
     expect(ctx.store.select('ui').drawer).toEqual({
       kind: 'diff',
@@ -871,54 +892,78 @@ describe('agent pod', () => {
     const t = node.el.textContent ?? '';
     expect(t).toContain('shadow');
     expect(t).toContain('big-model');
-    expect(t).toContain('(requested)');
-    expect(t).toContain('Watched');
+    expect(t).toContain('(asked for)');
+    expect(t).toContain('Friday watches only');
     expect(t).not.toContain('L0');
-    expect(t).toContain('connected from your editor');
+    expect(t).toContain('Runs in your editor');
     expect(podUsage({ pod: p, activity: null })).toEqual({ cost: '—', tokens: '—' });
     expect(podModelName({ pod: { ...p, run: null }, activity: null })).toBeNull();
     expect(vendorLabel({ harness: null })).toBe('Agent');
   });
 
-  it('says Enforced, Reported, Watched or Unverified, with the level in the tooltip (review M9k)', () => {
+  // "Reported" and "Unverified" were codes a person could not read (the trial, 2026-11-18).
+  it('says how far Friday holds an agent in words, with the level in the tooltip, and only when unusual', () => {
     const basis = `Friday hooks from this session ${HOSTILE}`;
     expect(enforcementWords('L1', 'enforcing', basis)).toEqual({
-      label: 'Enforced',
+      label: 'Checked by Friday',
       tone: 'good',
-      title: `Enforcement level L1 (enforcing): ${basis}`,
+      title: `Friday checks each action of this agent before it happens, and can stop it. (level L1, enforcing: ${basis})`,
     });
-    expect(enforcementWords('L2', null)).toEqual({
-      label: 'Enforced',
-      tone: 'strong',
-      title: 'Enforcement level L2 (isolated)',
-    });
-    expect(enforcementWords('L1', 'reported')).toMatchObject({ label: 'Reported', tone: 'info' });
-    expect(enforcementWords('L1', 'degraded')).toEqual({
-      label: 'Unverified',
+    expect(enforcementWords('L2', null)).toMatchObject({ label: 'Checked by Friday', tone: 'strong' });
+    expect(enforcementWords('L1', 'reported')).toMatchObject({ label: 'Friday watches only', tone: 'info' });
+    expect(enforcementWords('L1', 'degraded')).toMatchObject({
+      label: 'Checks not confirmed',
       tone: 'warn',
-      title: 'Enforcement level L1 (degraded)',
+      title: expect.stringContaining('(level L1, degraded)'),
     });
-    expect(enforcementWords('L1', null)).toMatchObject({
-      label: 'Unverified',
-      title: 'Enforcement level L1 (unverified)',
-    });
-    expect(enforcementWords('L0', 'observed')).toMatchObject({ label: 'Watched', tone: 'muted' });
-    expect(enforcementWords(null, null)).toEqual({
-      label: 'Watched',
-      tone: 'muted',
-      title: 'Enforcement level L0 (observed)',
-    });
-    // On the pod: the word on the badge, the level only in its tooltip; the basis is text.
+    expect(enforcementWords('L1', null).title).toContain('(level L1, unverified)');
+    expect(enforcementWords('L0', 'observed')).toMatchObject({ label: 'Friday watches only', tone: 'muted' });
+    expect(enforcementWords(null, null).title).toContain('(level L0, observed)');
+    // On the card: nothing is said when Friday checks every action, which is the usual.
     const ctx = makeContext();
     const p = pod({
       harness: makeHarness({ enforcement_level: 'L1', enforcement_status: 'enforcing', enforcement_basis: basis }),
     });
     const node = createAgentPod(ctx, model({ pod: p }));
-    const badge = node.el.querySelector('.badge-good') as HTMLElement;
-    expect(badge.textContent).toBe('Enforced');
+    expect(node.el.querySelector('.badge-good')).toBeNull();
+    expect(node.el.textContent).not.toContain('Checked by Friday');
+    // When not, the words are there, with the level and the basis as text in the tooltip.
+    const unsure = createAgentPod(
+      ctx,
+      model({
+        pod: pod({
+          harness: makeHarness({ enforcement_level: 'L1', enforcement_status: 'degraded', enforcement_basis: basis }),
+        }),
+      }),
+    );
+    const badge = unsure.el.querySelector('.badge-warn') as HTMLElement;
+    expect(badge.textContent).toBe('Checks not confirmed');
     expect(badge.title).toContain('L1');
     expect(badge.title).toContain(HOSTILE);
-    expectNoMarkup(node.el);
+    expectNoMarkup(unsure.el);
+  });
+
+  it('says what an agent is doing in one sentence', () => {
+    const agent = (status: string) => makeAgent({ status: status as never });
+    const spawn = makeHarness({ attach_mode: 'spawn' });
+    const editor = makeHarness({ attach_mode: 'attach' });
+    const task = makeTask({ summary: 'Settings screens', status: 'RUNNING' });
+    expect(doingWords({ agent: agent('BUSY'), task, taskId: task.task_id, harness: spawn })).toBe(
+      'Working on “Settings screens”',
+    );
+    expect(
+      doingWords({ agent: agent('BUSY'), task: { ...task, status: 'WAITING' }, taskId: task.task_id, harness: spawn }),
+    ).toBe('Waiting for you on “Settings screens”');
+    expect(doingWords({ agent: agent('AVAILABLE'), task: null, taskId: null, harness: spawn })).toBe(
+      'Free: it starts a task by itself',
+    );
+    expect(doingWords({ agent: agent('AVAILABLE'), task: null, taskId: null, harness: editor })).toBe(
+      'Free: it takes a task when you prompt it',
+    );
+    expect(doingWords({ agent: agent('DISCONNECTED'), task: null, taskId: null, harness: spawn })).toBe(
+      'Not connected',
+    );
+    expect(doingWords({ agent: agent('AVAILABLE'), task: null, taskId: null, harness: null })).toBe('Not connected');
   });
 
   it('measures the last tool from its decision to its completion', () => {

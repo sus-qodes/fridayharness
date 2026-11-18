@@ -4,7 +4,7 @@
  * a test; the shell's shortcuts, restart, start at sign-in and native planner dialogs (FD-26) are
  * offered. The page holds no daemon credential (FD-06).
  */
-import type { DesktopShortcut, Platform } from '../shell/context.js';
+import type { DesktopShortcut, Platform, RecentProject } from '../shell/context.js';
 import { errorOf, type TauriCore } from './tauri-transport.js';
 import { ApiError } from './transport.js';
 
@@ -63,6 +63,13 @@ export function desktopPlatform(
       restart: () => dialog('restart_daemon'),
       openProject: async () => {
         await call<unknown>('open_another_project');
+      },
+      recentProjects: async () => {
+        const got = await call<unknown>('recent_projects');
+        return Array.isArray(got) ? (got as RecentProject[]) : [];
+      },
+      openRecent: async (root: string) => {
+        await call<unknown>('open_recent_project', { root });
       },
       storeKey: (name) => dialog('store_key', { name }),
       allowSpending: (budget, provider) =>

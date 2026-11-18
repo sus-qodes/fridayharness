@@ -79,9 +79,9 @@ export function projectChecksCard(ctx: AppContext, td: Teardown): HTMLElement {
   const el = h(
     'div',
     { class: 'pn-project-checks', dataset: { setup: 'checks' } },
-    h('div', { class: 'pn-qs-title' }, 'The project’s own checks'),
+    h('div', { class: 'pn-qs-title' }, 'Your project’s tests'),
     note(
-      'What Friday runs to verify an agent’s work, besides its own checks that the changes stay in scope, hold no credentials and were run. Without any, no test decides whether the work is right.',
+      'When an agent says it is done, Friday runs these on its work before you see it: your tests, lint or build. They are optional. Without them Friday still checks that the agent changed only the files it was given, left no passwords or keys in them, and finished; whether the code works is then yours to try.',
     ),
     body,
   );
@@ -290,14 +290,14 @@ export function projectChecksCard(ctx: AppContext, td: Teardown): HTMLElement {
         : h(
             'div',
             { class: 'row', dataset: { state: 'none' } },
-            badge('none yet', 'warn'),
-            h('span', null, 'This project has no checks of its own.'),
+            badge('none yet', 'muted'),
+            h('span', null, 'None yet. That is fine for a project just starting: add them when you have tests.'),
           ),
       suggested.length
         ? h(
             'div',
             { class: 'pn-pc-suggested' },
-            h('div', { class: 'field-label' }, 'Found in package.json'),
+            h('div', { class: 'field-label' }, 'Found in your package.json: add the ones you want'),
             h('ul', { class: 'pn-list', dataset: { list: 'suggested' } }, suggested.map(offer)),
             suggested.length > 1
               ? h(
@@ -318,11 +318,11 @@ export function projectChecksCard(ctx: AppContext, td: Teardown): HTMLElement {
         : checks.length
           ? null
           : note(
-              'Friday found no test, lint, type-check or build script in a package.json here. A check can be any command: write it under verification.checks in .friday/config.yaml.',
+              'Friday found no test, lint or build script in a package.json here. A check can be any command your project runs: add it under verification.checks in .friday/config.yaml.',
             ),
       trialSection(checks),
       note(
-        'Checks are kept in .friday/config.yaml, which your team shares: commit the file to share a change. A new check is used from the next time work is checked; nothing restarts.',
+        'They are kept in .friday/config.yaml in your project. A change is used the next time work is checked; nothing restarts. To give your team the same checks, commit that file with your own work: Friday never commits it for you.',
       ),
       h('div', { class: 'pn-actions pn-actions-start' }, openConfig),
     );

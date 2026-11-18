@@ -26,7 +26,14 @@ import type {
   UiSnapshot,
 } from '@friday/protocol';
 import { visible } from '../model/text.js';
-import { type AppContext, type Component, closeModal, type ModalRequest, openDrawer } from '../shell/context.js';
+import {
+  type AppContext,
+  type Component,
+  closeModal,
+  type DrawerRequest,
+  type ModalRequest,
+  openDrawer,
+} from '../shell/context.js';
 import { button, h } from '../ui/dom.js';
 import { truncate } from '../ui/format.js';
 import { icon } from '../ui/svg.js';
@@ -218,6 +225,12 @@ export function signInLine(info: AgentHost | undefined, label: string): string |
   }
 }
 
+/**
+ * What was typed when the dialog was left for the Models page or Antigravity's (2026-11-18): their
+ * Back button opens the dialog again with it. Before, the dialog closed with nothing to come back to.
+ */
+let left: AgentForm | null = null;
+
 export function startAgentModal(
   ctx: AppContext,
   request: ModalRequest,
@@ -234,12 +247,24 @@ export function startAgentModal(
   let hostsFailed = false;
   /** The agent being changed, once read; null while reading, or when it is not remembered. */
   let profile: AgentProfile | null = null;
-  const form = defaultForm(preset ?? 'claude-code', takenKeys(board));
+  const resumed = !editing && request.mode === 'resume' ? left : null;
+  left = null;
+  const form = resumed ? { ...resumed } : defaultForm(preset ?? 'claude-code', takenKeys(board));
   if (editing) form.agent_key = editKey;
+  /** Leaves for another place, keeping what was typed for its Back button. */
+  const leaveFor = (drawer: DrawerRequest) => {
+    left = { ...form };
+    closeModal(ctx);
+    openDrawer(ctx, {
+      ...drawer,
+      back: { modal: { kind: 'start-agent', mode: 'resume' }, label: 'Back to Start an agent' },
+    });
+  };
   /** The key the page chose; replaced when the host changes or the profiles arrive, kept once typed. */
-  let autoKey = form.agent_key;
+  // What came back from before was the person's: the page replaces none of it.
+  let autoKey = resumed ? null : form.agent_key;
   /** The cap's starting choice follows how the host is signed in, until the person chooses. */
-  let limitTouched = editing;
+  let limitTouched = editing || resumed !== null;
   let busy = false;
 
   const hostSelect = select<HostName>(
@@ -282,10 +307,7 @@ export function startAgentModal(
           { class: 'field-hint pn-antigravity-hint' },
           'Antigravity is not started here: you open it yourself. ',
           // A drawer under a dialog takes no input: the dialog closes first (plan §7.4).
-          linkButton('Connect Antigravity', () => {
-            closeModal(ctx);
-            openDrawer(ctx, { kind: 'agents', tab: 'antigravity' });
-          }),
+          linkButton('Connect Antigravity', () => leaveFor({ kind: 'agents', tab: 'antigravity' })),
         ),
   );
 
@@ -605,10 +627,7 @@ export function startAgentModal(
             'There is no model to choose here: Friday picks the model for each task. To use one model for everything, or for one kind of work, open Settings → Models.',
           ),
           // A drawer under a dialog takes no input: the dialog closes first (plan §7.4).
-          linkButton('Open the model choices', () => {
-            closeModal(ctx);
-            openDrawer(ctx, { kind: 'settings', tab: 'routing' });
-          }),
+          linkButton('Open the model choices', () => leaveFor({ kind: 'settings', tab: 'routing' })),
         ),
     serverError,
     h(

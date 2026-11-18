@@ -7,6 +7,7 @@
  * the ribbon opens the task's diff.
  */
 import type { PodModel } from '../model/board.js';
+import { modelName as catalogName } from '../model/models.js';
 import { enforcementWords } from '../model/status.js';
 import { visible } from '../model/text.js';
 import { type AppContext, openDrawer } from '../shell/context.js';
@@ -71,6 +72,41 @@ const VENDOR: Record<string, string> = {
 export function vendorLabel(pod: Pick<PodModel, 'harness'>): string {
   const v = pod.harness?.vendor;
   return v ? (VENDOR[v] ?? pod.harness?.name ?? v) : 'Agent';
+}
+
+/** What an action is, in a word (2026-11-18): it showed the host's tool name ("Edit", "fileChange"). */
+const ACTING: Record<string, string> = {
+  write: 'Editing',
+  read: 'Reading',
+  search: 'Searching',
+  command: 'Running a command',
+  network: 'Fetching from the web',
+  mcp: 'Using a tool',
+  capability: 'Asking for something',
+};
+const DECIDED: Record<string, string> = {
+  ask: 'waits for you',
+  deny: 'stopped by Friday',
+  failed: 'failed',
+};
+
+/** A model's name for people, from the catalog's names ("Claude Opus 5.5"), else its id. */
+const podModelLabel = (id: string) => truncate(visible(catalogName(id)), 40);
+
+/** What the agent is doing, in one sentence. */
+export function doingWords(pod: Pick<PodModel, 'agent' | 'task' | 'taskId' | 'harness'>): string {
+  const task = pod.task ? `“${truncate(cleanText(pod.task.summary), 48)}”` : pod.taskId ? shortId(pod.taskId) : null;
+  const status = pod.agent.status;
+  if (status === 'DISCONNECTED' || status === 'TERMINATED' || !pod.harness) return 'Not connected';
+  if (status === 'UNHEALTHY') return task ? `Not answering, on ${task}` : 'Not answering';
+  if (pod.task?.status === 'WAITING') return `Waiting for you on ${task}`;
+  if (task) return `Working on ${task}`;
+  if (pod.agent.status === 'AVAILABLE' || pod.agent.status === 'REGISTERED') {
+    return pod.harness.attach_mode === 'spawn'
+      ? 'Free: it starts a task by itself'
+      : 'Free: it takes a task when you prompt it';
+  }
+  return 'Free';
 }
 
 /** The model to show: observed by the host, else what Friday routed the run to. */
@@ -154,44 +190,52 @@ export function createAgentPod(ctx: AppContext, initial: PodCardModel): NodeView
       pod.harness?.enforcement_basis,
     );
     const shadow = pod.agent.shadow || !!pod.harness?.shadow;
+    // For people (2026-11-18): its name, its job, what it is doing, and what it runs on and has
+    // spent. Tokens and the last tool's time are in the tooltip of that last line, for whoever looks;
+    // "how far Friday holds it" is said only when it is not the usual.
+    const job = [vendorLabel(pod), pod.agent.role && pod.agent.role !== 'developer' ? pod.agent.role : null]
+      .filter(Boolean)
+      .join(' · ');
+    const spent = usage.cost !== '—' ? `${usage.cost} so far` : null;
+    const runsOn = modelName
+      ? `${podModelLabel(modelName.name)}${modelName.requested ? ' (asked for)' : ''}`
+      : 'model not reported';
     replace(
       body,
       h(
         'div',
         { class: 'nd-head', dataset: { dragHandle: '' } },
         nodeIcon('robot', 15),
-        h('span', { class: 'nd-vendor' }, vendorLabel(pod)),
-        h('span', { class: 'nd-key mono', title: visible(pod.agentKey) }, truncate(visible(pod.agentKey), 28)),
+        h('span', { class: 'nd-key', title: visible(pod.agentKey) }, truncate(visible(pod.agentKey), 28)),
+        h('span', { class: 'nd-vendor muted' }, job),
         h('span', { class: 'spacer' }),
-        badge(enforcement.label, enforcement.tone, enforcement.title),
+        enforcement.label === 'Checked by Friday'
+          ? null
+          : badge(enforcement.label, enforcement.tone, enforcement.title),
         button(nodeIcon('terminal', 13), openTerminal, {
           class: 'btn btn-ghost btn-icon nd-open',
           ariaLabel: `Open the live stream of ${pod.agentKey}`,
-          title: 'Open the live stream',
+          title: 'Open what it is doing, live',
           dataset: { action: 'terminal' },
         }),
       ),
-      h(
-        'div',
-        { class: 'nd-model' },
-        h('span', { class: 'nd-label' }, 'Model'),
-        modelName
-          ? h('span', { class: 'mono', title: visible(modelName.name) }, truncate(visible(modelName.name), 40))
-          : h('span', { class: 'muted' }, '—'),
-        modelName?.requested ? h('span', { class: 'muted' }, ' (requested)') : null,
-      ),
-      h(
-        'div',
-        { class: 'nd-metrics' },
-        h('span', { title: 'Spend reported by the host' }, usage.cost),
-        h('span', { title: 'Tokens reported by the host' }, `${usage.tokens} tokens`),
-        h(
-          'span',
-          { title: 'How long the last tool took' },
-          `last tool ${m.lastToolMs === null ? '—' : duration(m.lastToolMs)}`,
-        ),
-      ),
+      h('div', { class: 'nd-doing', dataset: { role: 'doing' } }, doingWords(pod)),
       ribbon(m, cur),
+      h(
+        'div',
+        {
+          class: 'nd-model muted',
+          dataset: { role: 'runs-on' },
+          title: [
+            modelName ? `Model: ${visible(modelName.name)}` : null,
+            usage.tokens !== '—' ? `${usage.tokens} tokens, the whole prompt and the answers` : null,
+            m.lastToolMs === null ? null : `Its last action took ${duration(m.lastToolMs)}`,
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        },
+        [runsOn, spent].filter(Boolean).join(' · '),
+      ),
     );
     replace(
       foot,
@@ -199,27 +243,18 @@ export function createAgentPod(ctx: AppContext, initial: PodCardModel): NodeView
         'span',
         { class: 'nd-mode' },
         pod.harness?.attach_mode === 'spawn'
-          ? 'started by Friday'
+          ? 'Started by Friday'
           : pod.harness
-            ? 'connected from your editor'
-            : 'not connected',
+            ? 'Runs in your editor'
+            : 'Not connected',
       ),
-      h('span', { class: 'muted' }, `· ${humanize(pod.agent.status)}`),
-      // What it works on, by its name; the id in the tooltip.
-      pod.taskId
-        ? h(
-            'span',
-            { class: 'muted nd-pod-task', title: pod.taskId },
-            `· ${pod.task ? truncate(cleanText(pod.task.summary), 40) : shortId(pod.taskId)}`,
-          )
-        : null,
       h('span', { class: 'spacer' }),
       shadow ? badge('shadow', 'warn', 'Another live session holds this agent key; this one only observes') : null,
     );
     el.dataset.status = pod.agent.status;
     toggleClass(el, 'nd-pod-working', pod.working);
     toggleClass(el, 'nd-pod-offline', pod.agent.status === 'DISCONNECTED' || pod.agent.status === 'UNHEALTHY');
-    el.setAttribute('aria-label', `Agent ${pod.agentKey}, ${humanize(pod.agent.status)}`);
+    el.setAttribute('aria-label', `Agent ${pod.agentKey}: ${doingWords(pod)}`);
   }
 
   function ribbon(m: PodCardModel, cur: ToolActivity | null): HTMLElement {
@@ -247,9 +282,13 @@ export function createAgentPod(ctx: AppContext, initial: PodCardModel): NodeView
         'div',
         { class: 'nd-ribbon-row' },
         nodeIcon(m.pod.working ? 'bolt' : 'dot', 12),
-        h('span', { class: 'nd-tool' }, cur ? truncate(visible(cur.tool), 24) : m.pod.task ? 'idle' : 'no task'),
-        cur && cur.decision !== 'allow'
-          ? h('span', { class: `nd-decision nd-decision-${cur.decision}` }, cur.decision)
+        h(
+          'span',
+          { class: 'nd-tool', title: cur ? visible(cur.tool) : '' },
+          cur ? (ACTING[cur.kind] ?? 'Working') : m.pod.task ? 'Thinking' : 'Nothing to do',
+        ),
+        cur && (cur.decision === 'ask' || cur.decision === 'deny' || cur.decision === 'failed')
+          ? h('span', { class: `nd-decision nd-decision-${cur.decision}` }, DECIDED[cur.decision])
           : null,
         h('span', { class: 'spacer' }),
         taskId

@@ -318,7 +318,7 @@ describe('agents drawer', () => {
     expect(first.querySelector('.pn-agent-key')?.textContent).toBe('claude-1');
     expect(first.textContent).toContain('started by Friday');
     // The pod's words, not the level codes: the same session reads the same one click apart.
-    expect(shownBadges(first)).toEqual(['connected', 'running', 'Reported']);
+    expect(shownBadges(first)).toEqual(['connected', 'running', 'Friday watches only']);
     expect(first.textContent).not.toContain('L1 reported');
     expect(first.querySelector('.badge-info')?.getAttribute('title')).toBe(enforcementWords('L1', 'reported').title);
     expect(first.textContent).toContain('busy');
@@ -338,7 +338,7 @@ describe('agents drawer', () => {
     // state and none of Friday's process controls.
     expect(second.querySelector('.pn-agent-key')?.textContent).toBe('claude-2');
     expect(second.textContent).toContain('connected from VS Code');
-    expect(shownBadges(second)).toEqual(['connected', 'Enforced']);
+    expect(shownBadges(second)).toEqual(['connected', 'Checked by Friday']);
     expect(second.textContent).not.toContain('L1 enforcing');
     expect(second.textContent).toContain('role reviewer');
     expect(second.textContent).toContain('model claude-sonnet-5');
@@ -483,11 +483,9 @@ describe('agents drawer', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(d.el.textContent).toContain('No agent yet');
     ctx.board(makeSnapshot({ harnesses: [makeHarness({ attach_mode: 'attach', enforcement_status: 'enforcing' })] }));
-    expect(d.el.querySelector('.pn-claude')?.textContent).toContain('Enforced');
+    expect(d.el.querySelector('.pn-claude')?.textContent).toContain('Checked by Friday');
     expect(d.el.querySelector('.pn-claude')?.textContent).not.toContain('L1 enforcing');
-    expect(d.el.querySelector('.pn-claude .badge')?.getAttribute('title')).toMatch(
-      /^Enforcement level L1 \(enforcing\)/,
-    );
+    expect(d.el.querySelector('.pn-claude .badge')?.getAttribute('title')).toContain('(level L1, enforcing');
     expect(d.el.textContent).not.toContain('No agent yet');
     d.destroy();
   });

@@ -467,7 +467,8 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
       let el = labelEls.get(l.id);
       if (!el) {
         el = h('div', { class: 'cv-label', aria: { hidden: 'true' } });
-        world.prepend(el);
+        // Above the cards (2026-11-18): drawn first, any card placed or moved over it cut it.
+        world.append(el);
         labelEls.set(l.id, el);
       }
       setText(el, l.text);

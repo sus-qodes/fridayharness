@@ -53,12 +53,16 @@ describe("the project's checks in Settings (2026-11-17)", () => {
     const el = projectChecksCard(ctx, td);
     expect(el.textContent).toContain('Reading the project’s checks');
     await flush();
-    expect(el.querySelector('[data-state="none"]')?.textContent).toContain('This project has no checks of its own.');
+    // None is fine: checks are optional, and the card says so (2026-11-18: "what if some repo dont
+    // have any tests or just in initial phase only").
+    expect(el.querySelector('[data-state="none"]')?.textContent).toContain('That is fine for a project just starting');
+    expect(el.textContent).toContain('They are optional');
+    expect(el.textContent).not.toContain('Without any, no test decides');
     const offered = [...el.querySelectorAll('[data-list="suggested"] li')].map((li) => li.textContent);
     expect(offered).toHaveLength(2);
     expect(offered[0]).toContain('npm run test');
     expect(offered[0]).toContain('runs: vitest run');
-    expect(el.textContent).toContain('which your team shares: commit the file');
+    expect(el.textContent).toContain('commit that file with your own work: Friday never commits it for you');
     td.run();
   });
 
@@ -148,7 +152,7 @@ describe("the project's checks in Settings (2026-11-17)", () => {
     const td = new Teardown();
     const el = projectChecksCard(ctx, td);
     await flush();
-    expect(el.textContent).toContain('Friday found no test, lint, type-check or build script');
+    expect(el.textContent).toContain('Friday found no test, lint or build script');
     buttonBy(el, 'Open config.yaml in VS Code').click();
     expect(opened).toEqual(['C:/demo/shop/.friday/config.yaml']);
     td.run();

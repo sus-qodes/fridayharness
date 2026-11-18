@@ -403,6 +403,68 @@ fn open_another_project(app: AppHandle) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// One project of the project menu (2026-11-18): its name and folder, whether it is the one open,
+/// whether its Friday is running (agents may be at work there), and whether its folder is gone.
+#[derive(Serialize)]
+struct RecentProject {
+    root: String,
+    name: String,
+    current: bool,
+    running: bool,
+    missing: bool,
+}
+
+/// The projects opened lately, newest first, with their state, for the project menu. A project is
+/// switched to in the same window (`switch_project`); this only lists them.
+#[tauri::command]
+async fn recent_projects(app: AppHandle) -> Result<Vec<RecentProject>, CmdError> {
+    let st = state(&app);
+    let list = st.settings.lock().unwrap().recent_projects.clone();
+    let current = st.project.read().unwrap().as_ref().map(|p| p.root.clone());
+    blocking(move || {
+        let mut out = Vec::new();
+        let mut roots = list;
+        if let Some(c) = &current {
+            if !roots.iter().any(|r| same_root(r, c)) {
+                roots.insert(0, c.clone());
+            }
+        }
+        for root in roots {
+            let is_current = current.as_ref().is_some_and(|c| same_root(c, &root));
+            match daemon::open_project(&root) {
+                Ok(Some(p)) => out.push(RecentProject {
+                    root: p.root.to_string_lossy().to_string(),
+                    name: p.name.clone(),
+                    current: is_current,
+                    running: daemon::running(&p).is_some(),
+                    missing: false,
+                }),
+                _ => out.push(RecentProject {
+                    root: root.to_string_lossy().to_string(),
+                    name: root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                    current: is_current,
+                    running: false,
+                    missing: true,
+                }),
+            }
+        }
+        Ok(out)
+    })
+    .await
+}
+
+/// Opens one of the recent projects in this window, as "Open another project…" does after its
+/// folder picker. Only a folder the menu listed: the page names no other folder to the shell.
+#[tauri::command]
+fn open_recent_project(app: AppHandle, root: String) -> Result<(), CmdError> {
+    let dir = PathBuf::from(&root);
+    if !state(&app).settings.lock().unwrap().is_recent(&dir) {
+        return Err(CmdError::shell(400, "DESKTOP-1009", "not_recent", "that folder is not one of your recent projects"));
+    }
+    std::thread::spawn(move || switch_project(&app, Some(dir)));
+    Ok(())
+}
+
 /// Opens the project's config.yaml or the daemon's console log, for the screen shown when Friday
 /// did not start: in VS Code, or without it in Notepad, which every Windows has.
 #[tauri::command]
@@ -854,6 +916,7 @@ fn choose_project(app: &AppHandle, initial: Option<PathBuf>, use_last: bool) -> 
                 let st = state(app);
                 let mut s = st.settings.lock().unwrap();
                 s.last_project = Some(p.root.clone());
+                s.remember(&p.root);
                 let _ = s.save(&st.config_dir);
                 return Some(p);
             }
@@ -1171,13 +1234,17 @@ fn switch_project(app: &AppHandle, initial: Option<PathBuf>) {
     if st.choosing.swap(true, Ordering::SeqCst) {
         return;
     }
-    let remembered = st.settings.lock().unwrap().last_project.clone();
+    let (remembered, recent) = {
+        let s = st.settings.lock().unwrap();
+        (s.last_project.clone(), s.recent_projects.clone())
+    };
     let chosen = choose_project(app, initial, false);
     st.choosing.store(false, Ordering::SeqCst);
     // `choose_project` remembers what it opened; a choice that is not taken is forgotten again.
     let keep_old = || {
         let mut s = st.settings.lock().unwrap();
         s.last_project = remembered.clone();
+        s.recent_projects = recent.clone();
         let _ = s.save(&st.config_dir);
     };
     let Some(new) = chosen else {
@@ -1430,6 +1497,8 @@ pub fn run() {
             restart_daemon,
             choose_project_folder,
             open_another_project,
+            recent_projects,
+            open_recent_project,
             open_project_file,
             notch_rect,
             notch_keyboard,

@@ -3,7 +3,7 @@
  * re-read; `activity` is what the event stream shows between snapshots; `ui` and `prefs` are local.
  */
 import type { UiSnapshot } from '@friday/protocol';
-import type { DrawerRequest, ModalRequest } from '../shell/context.js';
+import type { DrawerBack, DrawerRequest, ModalRequest } from '../shell/context.js';
 import { ObservableStore } from './store.js';
 
 export type Connection = 'starting' | 'signed-out' | 'connecting' | 'live' | 'reconnecting' | 'stopped';
@@ -95,6 +95,11 @@ export type StudioView = 'canvas' | 'settings';
 export interface UiState {
   activeView: StudioView;
   settingsTab?: string;
+  /**
+   * The dialog Settings was opened from (2026-11-18): the page offers a way back to it, as a
+   * drawer's Back button does. Cleared when Settings is left.
+   */
+  settingsBack?: DrawerBack | null;
   selectedTaskId: string | null;
   drawer: DrawerRequest | null;
   modal: ModalRequest | null;

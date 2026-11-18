@@ -17,6 +17,8 @@
     "allow-restart-daemon",
     "allow-choose-project-folder",
     "allow-open-another-project",
+    "allow-recent-projects",
+    "allow-open-recent-project",
     "allow-open-project-file",
     "allow-notch-rect",
     "allow-notch-keyboard",
