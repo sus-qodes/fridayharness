@@ -15,7 +15,15 @@ import type { AppContext, Component } from '../shell/context.js';
 import { button, h, replace, setText, setVar, toggleClass } from '../ui/dom.js';
 import { cleanText, plural, truncate } from '../ui/format.js';
 import { icon, s } from '../ui/svg.js';
-import { itemSignature, type NotchModel, statsText, turnHost, turnPrompt, type WaitingItem } from './derive.js';
+import {
+  attentionWords,
+  itemSignature,
+  type NotchModel,
+  statsText,
+  turnHost,
+  turnPrompt,
+  type WaitingItem,
+} from './derive.js';
 
 /** The cards the Notch shows, built by their own areas. */
 export interface NotchSlots {
@@ -229,6 +237,11 @@ function noticeItem(item: WaitingItem, handlers: ViewHandlers): HTMLElement | nu
     title = 'A goal is ready to land';
     line = truncate(cleanText(item.request), 120);
     door = 'Open the landing';
+  } else if (item.kind === 'stopped' || item.kind === 'asking') {
+    const w = attentionWords(item, turnHost(item.host));
+    title = w.title;
+    line = `${truncate(cleanText(w.line), 200)} · ${truncate(cleanText(item.task.summary), 80)}`;
+    door = 'Open the task';
   } else if (item.kind === 'quiet') {
     title = `${visible(item.agentKey)} has gone quiet`;
     line = `Nothing was reported on this task for a while. Look at ${turnHost(item.host)}: it may be closed, or waiting for you there · ${truncate(cleanText(item.task.summary), 90)}`;

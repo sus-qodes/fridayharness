@@ -20,6 +20,7 @@ import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
 import type { FileCopier } from './copy-files.js';
 import { InFlight } from './in-flight.js';
+import { noteInstall } from './install-broken.js';
 import type { Logger } from './log.js';
 import type { SetupOutcome } from './worktree-setup.js';
 
@@ -234,6 +235,15 @@ export class WorkspaceManager {
       // Dependencies before the agent starts (plan Phase 7): no attempt waits for an install
       // approval mid-run, and what happened is on the run's record.
       const setup = this.opts.setup ? await this.opts.setup(alloc, { task_id: run.task_id, run_id: runId }) : null;
+      // A lockfile the package manager refuses fails this in every folder: the person is asked
+      // once, with a way to have it repaired; an install that passes closes the question.
+      if (setup) {
+        try {
+          noteInstall(state, this.pid, setup, alloc.path, run.task_id);
+        } catch (e) {
+          logger.warn('the failed install could not be said to the person', { message: (e as Error).message });
+        }
+      }
       if (setup && (setup.status === 'failed' || setup.status === 'refused') && this.opts.setupFailure?.() === 'fail') {
         const reason = `its dependencies could not be installed in its worktree (${setup.reason}); fix the install (worktrees.setup in config.yaml, "friday policy trust"), or set worktrees.setup.on_failure to warn`;
         this.#askHuman(run.task_id, reason, { worktree: alloc.path, setup });

@@ -542,7 +542,7 @@ describe('every host, with the daemon', () => {
     const fetch1 = await run(w, 'cursor', 'preToolUse.webfetch');
     expect(decided('cursor', fetch1)).toEqual({
       decision: 'deny',
-      reason: expect.stringMatching(/A human decides this \(approval [a-z]+_[0-9a-z]+\)/),
+      reason: expect.stringMatching(/The person was asked in Friday \(approval [a-z]+_[0-9a-z]+\)/),
     });
     const fetch2 = await run(w, 'cursor', 'preToolUse.webfetch');
     expect(decided('cursor', fetch2).reason).toBe(decided('cursor', fetch1).reason);

@@ -4,6 +4,16 @@ import { runGit } from '@friday/git';
 import { type Actor, FridayError } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
+import {
+  bringBack,
+  type InTheWay,
+  listed,
+  type SetAside,
+  setAsides,
+  type Taken,
+  takeAside,
+  whoseFiles,
+} from './set-aside.js';
 
 /** What landing a goal did, or why it did nothing. */
 export interface LandResult {
@@ -16,6 +26,8 @@ export interface LandResult {
   /** The checkout's HEAD after it. */
   head: string;
   fast_forward: boolean;
+  /** Files that were in the way and were set aside first (`setAside`): where they are kept. */
+  set_aside?: { ref: string; count: number };
 }
 
 /** Where a goal's finished work is: on its goal branch, in the project folder itself, or both. */
@@ -43,6 +55,13 @@ export interface LandPlan {
   /** Commits the goal branch has that the folder's branch does not. */
   commits: number;
   work: GoalWork;
+  /**
+   * Set on a `blocked` plan when what is in the way is uncommitted files the goal changes too
+   * (2026-11-18): Land can set those aside first, and this says how many and whose they are.
+   */
+  in_the_way?: InTheWay;
+  /** Files set aside at an earlier landing of this goal and not put back. */
+  set_aside?: SetAside[];
 }
 
 const MAX_REASON = 600;
@@ -138,6 +157,8 @@ interface Inspection {
   /** The files the merge would write, and the folder's status before it. */
   touched: string[];
   status: Entry[];
+  /** Every file in the way that can be set aside (the plan lists fifty at most). */
+  inTheWay?: string[];
   /**
    * Files the goal changes that the folder already holds, uncommitted, with exactly the goal's
    * content: the work a session did in this folder, which reached the goal branch from here.
@@ -168,7 +189,18 @@ async function inspect(state: FridayState, project: ProjectRef, goalId: string, 
   const work = goalWork(state, pid, goalId);
   const current = await runGit(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { okCodes: [1, 128] });
   const into = current.code === 0 ? current.stdout.trim() : null;
-  const base: LandPlan = { goal_id: goalId, branch, into, state: 'ready', reason: null, files: [], commits: 0, work };
+  const aside = setAsides(state, pid, goalId);
+  const base: LandPlan = {
+    goal_id: goalId,
+    branch,
+    into,
+    state: 'ready',
+    reason: null,
+    files: [],
+    commits: 0,
+    work,
+    ...(aside.length ? { set_aside: aside } : {}),
+  };
   const none = { tip: null, before: null, touched: [], status: [] };
   // `partial`: what the goal has so far, while it is still worked on (landing each task).
   if (goal.status !== 'COMPLETED' && !(partial && goal.status === 'ACTIVE')) {
@@ -243,13 +275,25 @@ async function inspect(state: FridayState, project: ProjectRef, goalId: string, 
   const already: string[] = [];
   const inTheWay: string[] = [];
   for (const file of touched) {
-    if (!status.some((e) => covers(e, file))) continue;
+    const entry = status.find((e) => covers(e, file));
+    if (!entry) continue;
+    // An untracked folder is named whole: a file the goal adds beside what it holds is not in it.
+    if (entry.untracked && entry.path !== file && !existsSync(path.resolve(root, file))) continue;
     if (await sameAsTip(root, tip, file)) already.push(file);
     else inTheWay.push(file);
   }
+  // Files in the way that Land can set aside first, with whose they are as far as the records say.
+  const canSetAside = (b: Inspection, files: string[]): Inspection => ({
+    ...b,
+    plan: { ...b.plan, in_the_way: { count: files.length, ...whoseFiles(state, project, goalId, files) } },
+    inTheWay: files,
+  });
   if (inTheWay.length) {
-    return blocked(
-      'these files have changes that are not committed, and the goal changes them too: commit them or set them aside first',
+    return canSetAside(
+      blocked(
+        'these files have changes that are not committed, and the goal changes them too: commit them or set them aside first',
+        inTheWay,
+      ),
       inTheWay,
     );
   }
@@ -257,8 +301,13 @@ async function inspect(state: FridayState, project: ProjectRef, goalId: string, 
     // Git takes such files over only when the branch just moves forward to the goal.
     const forward = await runGit(root, ['merge-base', '--is-ancestor', before, tip], { okCodes: [1] });
     if (forward.code !== 0) {
-      return blocked(
-        `these files already hold the goal's work without being committed, and ${into} has commits the goal does not have: commit them first, then land the goal`,
+      // They hold what the goal has, so taking them out of the way loses nothing: the merge
+      // writes the same content back, as a commit.
+      return canSetAside(
+        blocked(
+          `these files already hold the goal's work without being committed, and ${into} has commits the goal does not have: commit them first, then land the goal`,
+          already,
+        ),
         already,
       );
     }
@@ -365,17 +414,40 @@ export async function landGoal(
   project: ProjectRef,
   goalId: string,
   actor: Actor,
-  opts: { partial?: boolean } = {},
+  // `setAside`: uncommitted files in the way are kept as a commit and taken out of the way first;
+  // they are written back if the landing then does not happen.
+  opts: { partial?: boolean; setAside?: boolean } = {},
 ): Promise<LandResult> {
   const pid = project.project_id;
   if (landing.has(pid)) {
     throw new FridayError('invalid_state_transition', 'a goal is being landed in this project right now: wait for it');
   }
   landing.add(pid);
+  const root = project.root;
+  let aside: Taken | null = null;
   try {
-    const i = await inspect(state, project, goalId, opts.partial === true);
+    let i = await inspect(state, project, goalId, opts.partial === true);
+    if (opts.setAside && i.plan.state === 'blocked' && i.plan.in_the_way && i.inTheWay?.length && i.before) {
+      const working = i.plan.in_the_way.working;
+      if (working.length) {
+        throw new FridayError(
+          'invalid_request',
+          `${working.join(', ')} ${working.length === 1 ? 'is' : 'are'} working on some of these files in the project folder right now: land the goal when that work is done`,
+          { state: 'blocked', files: i.plan.files, working },
+        );
+      }
+      try {
+        aside = await takeAside(root, goalId, i.inTheWay, i.before);
+      } catch (e) {
+        throw new FridayError(
+          'invalid_request',
+          `the files in the way could not be set aside (${said(e instanceof Error ? e.message : String(e))}). Nothing was changed. A file may be open in another program: close it, then try again`,
+          { state: 'blocked', files: i.plan.files, kind: 'set_aside' },
+        );
+      }
+      i = await inspect(state, project, goalId, opts.partial === true);
+    }
     const { plan } = i;
-    const root = project.root;
     // A goal still worked on is not "landed" yet: the board learns that when its last work lands.
     const whole = state.q.findGoal(pid, goalId)?.status === 'COMPLETED';
     const record = (result: LandResult, before: string | null) => {
@@ -465,7 +537,130 @@ export async function landGoal(
     };
     // An observation refers to agents, harnesses, tasks and runs; the goal is named in the payload.
     record(result, before);
+    if (aside) {
+      const taken = aside;
+      // Kept from here on: the landing happened, and "Put them back" reads this record.
+      aside = null;
+      state.recordObservation(
+        pid,
+        actor,
+        'goal.files_set_aside',
+        {
+          goal_id: goalId,
+          ref: taken.ref,
+          commit: taken.commit,
+          into,
+          count: taken.files.length,
+          files: listed(taken.files),
+        },
+        [],
+      );
+      return { ...result, set_aside: { ref: taken.ref, count: taken.files.length } };
+    }
     return result;
+  } catch (e) {
+    if (aside) await undoAside(state, pid, actor, root, goalId, aside, e);
+    throw e;
+  } finally {
+    landing.delete(pid);
+  }
+}
+
+/**
+ * The landing did not happen after files were set aside for it: they are written back, and the
+ * ref that kept them is removed. One that cannot be written back (open in another program) stays
+ * kept and on record, so "Put them back" can do it later; the refusal says so.
+ */
+async function undoAside(
+  state: FridayState,
+  pid: string,
+  actor: Actor,
+  root: string,
+  goalId: string,
+  aside: Taken,
+  failure: unknown,
+): Promise<void> {
+  const back = await bringBack(root, aside.commit, { onlyUnchanged: false }).catch(() => ({
+    restored: [] as string[],
+    skipped: [] as string[],
+    failed: aside.files,
+  }));
+  if (!back.failed.length) {
+    await runGit(root, ['update-ref', '-d', aside.ref], { okCodes: [1, 128] });
+    return;
+  }
+  state.recordObservation(
+    pid,
+    actor,
+    'goal.files_set_aside',
+    {
+      goal_id: goalId,
+      ref: aside.ref,
+      commit: aside.commit,
+      into: null,
+      count: back.failed.length,
+      files: listed(back.failed),
+    },
+    [],
+  );
+  if (failure instanceof FridayError) {
+    failure.message = `${failure.message} ${back.failed.length === 1 ? 'One file' : `${back.failed.length} files`} that had been set aside could not be written back (${back.failed.slice(0, 5).join(', ')}): Friday keeps the copy, and "Put them back" in the goal's landing writes it again.`;
+  }
+}
+
+/** What putting a goal's set-aside files back did. */
+export interface PutBackResult {
+  goal_id: string;
+  restored: string[];
+  /** Changed in the folder since: left exactly as they are, and still kept. */
+  skipped: string[];
+  /** Could not be written (open in another program): still kept. */
+  failed: string[];
+}
+
+/**
+ * Writes the files set aside at a landing of the goal back into the project folder, uncommitted,
+ * over the landed versions (2026-11-18). A file that was changed in the folder since is left
+ * alone and stays kept. The landed versions stay in the branch's history either way.
+ */
+export async function putSetAsideBack(
+  state: FridayState,
+  project: ProjectRef,
+  goalId: string,
+  actor: Actor,
+): Promise<PutBackResult> {
+  const pid = project.project_id;
+  if (!state.q.findGoal(pid, goalId)) throw new FridayError('goal_not_found', `no goal ${goalId}`);
+  if (landing.has(pid)) {
+    throw new FridayError('invalid_state_transition', 'a goal is being landed in this project right now: wait for it');
+  }
+  const kept = setAsides(state, pid, goalId);
+  if (!kept.length) throw new FridayError('invalid_request', 'nothing of this goal is set aside');
+  landing.add(pid);
+  try {
+    const out: PutBackResult = { goal_id: goalId, restored: [], skipped: [], failed: [] };
+    for (const k of kept) {
+      const there = await runGit(project.root, ['cat-file', '-e', `${k.commit}^{commit}`], { okCodes: [1, 128] });
+      if (there.code !== 0) {
+        throw new FridayError(
+          'invalid_request',
+          `the copy Friday kept (${k.ref}) is no longer in this repository, so the files cannot be put back from it`,
+        );
+      }
+      const back = await bringBack(project.root, k.commit, { onlyUnchanged: true });
+      const left = [...back.skipped, ...back.failed];
+      state.recordObservation(
+        pid,
+        actor,
+        'goal.set_aside_restored',
+        { goal_id: goalId, ref: k.ref, restored: back.restored.length, left: listed(left) },
+        [],
+      );
+      out.restored.push(...back.restored);
+      out.skipped.push(...back.skipped);
+      out.failed.push(...back.failed);
+    }
+    return out;
   } finally {
     landing.delete(pid);
   }

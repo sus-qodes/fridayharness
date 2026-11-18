@@ -4,6 +4,7 @@
  */
 export const PACKAGE_NAME = '@friday/state';
 
+export { approvalKey, sameApprovalTarget } from './approval-target.js';
 export { CommandBus, type CommandContext, type CommandMeta, type CommandOutcome, stableStringify } from './bus.js';
 export { INTENT_LISTS, IntentService, projectIntentHash } from './intent.js';
 export { LearningService } from './learnings.js';

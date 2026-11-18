@@ -141,6 +141,13 @@ export interface WorkspaceRefreshRecord {
 /** How long delegation keeps a task for a session that waits for its person to prompt it. */
 export const TURN_RESERVATION_MS = 2 * 60 * 1000;
 
+/**
+ * What an agent is told while its request waits (2026-11-18). It said "do not retry until it is
+ * granted" and nothing ever said it was granted, so an agent waited on a decision already made.
+ */
+const PENDING_REASON = (approvalId: string): string =>
+  `the person was asked in Friday, under "Waiting for you" (${approvalId}). Go on with whatever else the task needs: you get a message when they decide, and what you asked for passes then. If nothing else is left, end your turn and say you wait for ${approvalId}`;
+
 /** What a `routing_blocked` error carries (review F01). */
 interface RoutingBlock {
   task_id: string;
@@ -730,6 +737,9 @@ const OBSERVATION_TYPES = new Set([
   'setup.failed',
   // A person landed a completed goal's branch into their own branch, from the interface (2026-11-16).
   'goal.landed',
+  // Files in the way of a landing, kept and taken out of it, and written back (2026-11-18).
+  'goal.files_set_aside',
+  'goal.set_aside_restored',
   // A person chose, for one goal, when its work lands; and a landing Friday tried by itself was held.
   'goal.landing_choice',
   'goal.landing_held',
@@ -1049,6 +1059,27 @@ export class FridayState {
    * A human performed a recovery action on a task: its recovery question is answered (plan M9 §5.7),
    * so the Master Brain no longer skips the task and the card goes away.
    */
+  /**
+   * Closes the pending questions of one kind that are about the project itself, not a task or a
+   * goal (2026-11-18): what they asked about is no longer so. Returns how many it closed.
+   */
+  settleProjectQuestions(projectId: string, kind: string, why: string): number {
+    return this.exec({ name: 'escalation.settle', project_id: projectId, actor: SYSTEM, params: { kind } }, (ctx) => {
+      let closed = 0;
+      for (const e of this.q.escalations(projectId, 'pending')) {
+        if (e.kind !== kind || e.task_id || e.goal_id) continue;
+        ctx.emit({
+          type: 'escalation.answered',
+          actor: SYSTEM,
+          payload: { escalation_id: e.escalation_id, answer: `no longer needed: ${why}`, moot: true },
+          refs: [{ kind: 'escalation', id: String(e.escalation_id) }],
+        });
+        closed += 1;
+      }
+      return closed;
+    });
+  }
+
   settleRecoveryQuestions(projectId: string, actor: Actor, taskId: string, action: string): void {
     this.exec({ name: 'escalation.settle', project_id: projectId, actor, params: { taskId, action } }, (ctx) =>
       this.settleQuestions(ctx, taskId, RECOVERY_QUESTIONS, `recovery action ${action} was performed`),
@@ -1634,6 +1665,30 @@ export class FridayState {
   ) {
     if (!run || run.status === 'ENDED' || run.status === 'DECLINED') return;
     this.moveRun(ctx, run, 'ENDED', outcome, { outcome, ended_at: ctx.now, ...extra }, actor);
+    // What the attempt asked and nobody decided ends with it (2026-11-18): a card that stayed
+    // open was answered a minute after its agent had finished, and the click did nothing.
+    for (const approval_id of this.q.pendingApprovalsOfRun(ctx.project_id, run.run_id)) {
+      ctx.emit({
+        type: 'approval.revoked',
+        actor: SYSTEM,
+        payload: { approval_id, note: 'the attempt that asked has ended' },
+        refs: [
+          { kind: 'approval', id: approval_id },
+          { kind: 'task', id: run.task_id },
+        ],
+      });
+    }
+  }
+
+  /** Whether a continue that names this grant already went to the attempt (`submitResult`). */
+  private grantWasSaid(runId: string, approvalId: string): boolean {
+    return Boolean(
+      this.db
+        .prepare(
+          "SELECT 1 AS one FROM outbox_messages WHERE run_id = ? AND method = 'task.resume' AND params_json LIKE ? LIMIT 1",
+        )
+        .get<{ one: number }>(runId, `%${approvalId}%`),
+    );
   }
 
   private moveAgent(
@@ -2761,6 +2816,24 @@ export class FridayState {
           }
           const agent = this.q.agent(caller.agent_id);
           if (agent.status === 'BUSY') this.moveAgent(ctx, agent, 'WAITING');
+          // It stopped to wait for something a person had already approved (2026-11-18): the
+          // session goes on at once with what was granted. Once for each grant, so an agent that
+          // cannot use one is not started again and again.
+          const unused = this.q
+            .unusedGrantsOfRun(projectId, run.run_id, ctx.now)
+            .filter((g) => !this.grantWasSaid(run.run_id, g.approval_id));
+          if (task.status === 'WAITING' && unused.length) {
+            const list = unused
+              .slice(0, 5)
+              .map((g) => `${g.capability}${g.target ? ` ${g.target.slice(0, 300)}` : ''} (${g.approval_id})`)
+              .join('; ');
+            this.queueContinue(
+              ctx,
+              projectId,
+              task,
+              `A human had already approved what you waited for: ${list}. Do exactly that now: it passes. Then go on with the task.`,
+            );
+          }
           return {
             task_status: task.status,
             verification_status: 'NOT_REQUESTED',
@@ -6109,6 +6182,67 @@ export class FridayState {
             risk: verdict.risk,
           };
         }
+        // One need, one card (2026-11-18). The hook asks when the agent tries a command, and the
+        // agent then asks for the same thing itself, often in slightly other words: that made two
+        // cards, and a grant of one did not cover the other. What is already granted is said so,
+        // and what already waits is the request that is answered; the agent's own reason is added
+        // to it, since it is the one a person can judge by.
+        const granted = this.q.usableApproval(projectId, {
+          capability: verdict.capability,
+          target: target ?? '',
+          task_id: p.task_id ?? null,
+          run_id: p.run_id ?? null,
+          agent_id: caller.agent_id,
+          policy_version: verdict.policy_version,
+          now: ctx.now,
+        });
+        // A grant that reaches less far than what is asked now (granted for this attempt, asked
+        // for the task) does not answer it: that is a new question for the person.
+        const reach: Record<string, number> = { once: 0, run: 1, task: 2 };
+        const grantedReach = granted ? (reach[this.q.approvalRow(projectId, granted)?.reuse ?? 'once'] ?? 0) : 0;
+        if (granted && target !== null && grantedReach >= (reach[p.reuse ?? 'once'] ?? 0)) {
+          return {
+            approval_id: granted,
+            status: 'granted' as const,
+            reason: `a human already approved exactly this (${granted}): go ahead with it now`,
+            expires_at: this.q.approvalRow(projectId, granted)?.expires_at ?? null,
+            capability: verdict.capability,
+            risk: verdict.risk,
+          };
+        }
+        const waiting = this.q.pendingApproval(
+          projectId,
+          {
+            capability: verdict.capability,
+            target: target ?? '',
+            task_id: p.task_id ?? null,
+            run_id: p.run_id ?? null,
+            agent_id: caller.agent_id,
+          },
+          ctx.now,
+        );
+        if (waiting && target !== null) {
+          const row = this.q.approvalRow(projectId, waiting.approval_id);
+          const said = p.justification.trim();
+          if (row && said && !(row.purpose ?? '').includes(said.slice(0, 200))) {
+            ctx.emit({
+              type: 'approval.reason_added',
+              payload: {
+                approval_id: waiting.approval_id,
+                purpose: `${said}${row.purpose ? ` (${row.purpose})` : ''}`.slice(0, 1000),
+              },
+              refs: [{ kind: 'approval', id: waiting.approval_id }],
+            });
+          }
+          return {
+            approval_id: waiting.approval_id,
+            status: 'pending' as const,
+            reason: PENDING_REASON(waiting.approval_id),
+            expires_at: waiting.expires_at,
+            capability: verdict.capability,
+            risk: verdict.risk,
+          };
+        }
         const approval_id = this.ids.next('apr');
         const expires_at = addMs(ctx.now, p.ttl_s * 1000);
         ctx.emit({
@@ -6136,7 +6270,7 @@ export class FridayState {
         return {
           approval_id,
           status: 'pending' as const,
-          reason: `waiting for the person to decide it in Friday, under "Waiting for you" (from a terminal: "friday approve ${approval_id}" or "friday reject ${approval_id}")`,
+          reason: PENDING_REASON(approval_id),
           expires_at,
           capability: verdict.capability,
           risk: verdict.risk,
@@ -6235,6 +6369,34 @@ export class FridayState {
     }
     if (!a.task_id || !a.run_id) return;
     const task = this.q.findTask(projectId, a.task_id);
+    // A grant must reach the agent that asked (2026-11-18). An agent that had stopped to wait was
+    // told (below); one still at work was told nothing, and went on believing nobody had answered:
+    // three grants given within seconds, and the attempt ended "blocked" eleven minutes later.
+    if (
+      granted &&
+      a.requested_by_kind === 'agent' &&
+      task?.status === 'RUNNING' &&
+      task.current_run_id === a.run_id &&
+      this.q.findRun(a.run_id)?.status === 'ACTIVE'
+    ) {
+      const agent = this.q.findAgent(a.requested_by_id);
+      if (agent) {
+        this.sendWithin(
+          ctx,
+          projectId,
+          { kind: 'human', actor: ctx.actor },
+          {
+            to: agent.agent_key,
+            mode: 'notification',
+            subject: 'Request approved',
+            content: `A human approved your request to ${what} (${approvalId}).${note ? ` Note: ${note}` : ''} Do exactly that now: it passes. You do not need to ask again or wait.`,
+            task_id: a.task_id,
+            priority: 'high',
+          },
+        );
+      }
+      return;
+    }
     if (task?.status !== 'WAITING' || task.current_run_id !== a.run_id) return;
     const others = this.db
       .prepare(`SELECT COUNT(*) AS n FROM approvals WHERE run_id = ? AND status = 'pending' AND approval_id <> ?
@@ -6425,26 +6587,54 @@ export class FridayState {
         out.expired.push(m.message_id);
         continue;
       }
-      const to = this.q
-        .deliveriesOf(m.message_id)
+      // A question about work that is over is over with it (2026-11-18): the card came half an
+      // hour after its task had been reworked, had passed and was landed, and the reply a person
+      // then typed went to the agent in the middle of another task.
+      const about = m.task_id ? this.q.findTask(projectId, m.task_id) : undefined;
+      if (about && ['COMPLETED', 'CANCELLED', 'ABANDONED'].includes(about.status)) {
+        const open = this.q.deliveriesOf(m.message_id).filter((d) => d.state === 'queued' || d.state === 'delivered');
+        this.exec({ name: 'message.expire', project_id: projectId, actor: LEASE_MANAGER }, (ctx) => {
+          ctx.emit({
+            type: 'communication.expired',
+            payload: {
+              message_id: m.message_id,
+              delivery_ids: open.map((d) => d.delivery_id),
+              reason: 'the task it was about has ended',
+              message_expired: true,
+            },
+            refs: [{ kind: 'message', id: m.message_id }],
+          });
+        });
+        out.expired.push(m.message_id);
+        continue;
+      }
+      const deliveries = this.q.deliveriesOf(m.message_id);
+      const to = deliveries
         .map(
           (d) =>
             d.agent_key ?? (d.recipient_kind === 'agent' ? d.recipient_id : `${d.recipient_kind}:${d.recipient_id}`),
         )
         .join(', ');
       const from = m.sender_key ?? m.sender_kind;
+      // Written for the person who reads it: it named them "human:human", gave two machine
+      // timestamps, cut the quote in the middle of a word, and asked them whether to tell
+      // themselves to reply.
+      const toPerson = deliveries.length > 0 && deliveries.every((d) => d.recipient_kind !== 'agent');
+      const minutes = Math.max(1, Math.round((Date.parse(nowIso) - Date.parse(m.created_at)) / 60_000));
+      const ago =
+        minutes < 90 ? `${minutes} minute${minutes === 1 ? '' : 's'} ago` : `${Math.round(minutes / 60)} hours ago`;
+      const asked = (m.subject ?? m.body).replace(/\s+/g, ' ').trim();
+      const quote = asked.length > 160 ? `${asked.slice(0, 160).replace(/\s+\S*$/, '')}…` : asked;
       // The escalation and the request's marker commit together, so a retry cannot ask twice (R04).
       this.exec({ name: 'message.escalate', project_id: projectId, actor: LEASE_MANAGER }, (ctx) => {
         const escalation_id = this.escalationWithin(ctx, {
           kind: 'unanswered_request',
           goal_id: m.goal_id,
           task_id: m.task_id,
-          question: `${from} is waiting for an answer from ${to} to "${m.subject ?? m.body.slice(0, 120)}" (asked ${m.created_at}, deadline ${m.reply_by}). Answer it yourself, or tell ${to} to reply?`,
-          options: [
-            'answer here: the answer is sent to the waiting agent',
-            `remind the recipient: friday say <agent> "…"`,
-            `tell ${from} not to wait: friday say ${from} "…"`,
-          ],
+          question: toPerson
+            ? `${from} asked you something ${ago} and is still waiting for your answer: "${quote}"`
+            : `${from} asked ${to} something ${ago} and has had no answer: "${quote}". You can answer for ${to} here.`,
+          options: ['Answer here: your answer goes to the agent that is waiting'],
           details: {
             blocked: `${from}${m.task_id ? ` on ${m.task_id}` : ''}`,
             why: `no reply by ${m.reply_by}`,

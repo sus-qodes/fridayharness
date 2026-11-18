@@ -5,6 +5,19 @@
  * Cards open under a resting cursor and next to text fields, so neither a click that was meant for
  * what was there before nor a stray key can decide.
  *
+ * What the rule must not do is lose a press its person meant (2026-11-18: "Approve needed two
+ * clicks", three times in one day). Four things did that, and none of them is another card
+ * arriving under the cursor:
+ *  - the card's own opening animation moved it, which took the pointer away from a person who had
+ *    already moved onto it and then stood still on the button;
+ *  - the person's own scroll inside a long card (a plan to its Approve button) moved it;
+ *  - a move was noticed only at the press, so a shift of ten seconds ago refused it;
+ *  - a press a moment early was dropped, and one with a resting cursor could never succeed.
+ * So: a card that is still appearing keeps its pointer; a scroll by the person keeps it and asks
+ * only for the scroll to settle; the position is read at every move of the pointer; a press that
+ * comes a moment early is kept and acts when the wait is over; and a real press on a card nobody
+ * pointed at counts as pointing from then on, so the next one decides.
+ *
  * The rule itself is a pure reducer (`armReduce`, `isArmed`); `armDecisions` wires it to a card's
  * DOM: pointer and focus listeners, visibility, a position check, and the look of unarmed buttons.
  */
@@ -18,6 +31,24 @@ export const POSITION_TOLERANCE_PX = 4;
 
 /** What unarmed buttons say. */
 export const ARMING_TEXT = 'Ready in a moment';
+
+/** What is said while a press that came a moment early waits to act (see `guard`). */
+export const HELD_TEXT = 'One moment…';
+
+/**
+ * A press this long after the card last changed is its person's answer to what is shown, and is
+ * kept until the card arms. One sooner is the end of a move that began before the card was there
+ * (a hand already on its way to something else), and does nothing.
+ */
+export const HOLD_FROM_MS = 300;
+/** A card moves while it opens (its animation): that is one arrival, not a second one. */
+export const APPEAR_SETTLE_MS = 400;
+/** How long after the person's own scroll a move of the card is theirs. */
+export const OWN_SCROLL_WINDOW_MS = 400;
+/** What is asked after the person's own scroll: that it has come to rest. */
+export const OWN_SCROLL_SETTLE_MS = 150;
+/** How often a card that is still appearing is looked at, so the end of its animation is seen. */
+const APPEAR_POLL_MS = 100;
 
 /** Time and timers, injectable for tests. */
 export interface Clock {
@@ -50,8 +81,11 @@ export interface ArmState {
 export type ArmInput =
   | { type: 'visible'; visible: boolean; now: number }
   | { type: 'content'; key: string; now: number }
-  | { type: 'position'; position: string; now: number }
+  /** `creditMs`: the person moved it themselves (a scroll); this much of the wait is not asked again. */
+  | { type: 'position'; position: string; now: number; creditMs?: number }
   | { type: 'pointer'; now: number }
+  /** A real press (mouse, touch, pen) on a decision of a card nobody had pointed at. */
+  | { type: 'pressed'; now: number }
   | { type: 'focus'; inside: boolean; byUser: boolean; now: number };
 
 export function initialArm(key: string, now: number): ArmState {
@@ -71,9 +105,19 @@ export function armReduce(s: ArmState, input: ArmInput): ArmState {
       // The first measurement is where it appeared, not a move.
       if (s.position === null) return { ...s, position: input.position };
       if (nearby(s.position, input.position)) return s;
+      // Their own scroll: they are still pointing at it, and wait only for it to come to rest.
+      if (input.creditMs !== undefined)
+        return { ...s, position: input.position, changedAt: Math.max(s.changedAt, input.now - input.creditMs) };
+      // Still appearing: the wait counts from where it comes to rest, the pointer stays.
+      if (s.visibleSince !== null && input.now - s.visibleSince <= APPEAR_SETTLE_MS)
+        return { ...s, position: input.position, changedAt: input.now };
       return { ...s, position: input.position, changedAt: input.now, pointer: false };
     case 'pointer':
       return s.pointer ? s : { ...s, pointer: true };
+    case 'pressed':
+      // It decides nothing itself; whoever pressed is here now, and the wait starts at the press.
+      if (s.visibleSince === null || s.pointer || s.focus) return s;
+      return { ...s, pointer: true, changedAt: input.now };
     case 'focus':
       if (!input.inside) return s.focus ? { ...s, focus: false } : s;
       return input.byUser && !s.focus ? { ...s, focus: true } : s;
@@ -140,6 +184,11 @@ export interface ArmingOptions {
 /** How long after a Tab key a focus counts as the user's own move. */
 const USER_FOCUS_WINDOW_MS = 600;
 
+/** A press made with a mouse, a finger or a pen: a key, or code, reports no click count. */
+function realPress(event: Event): boolean {
+  return typeof MouseEvent !== 'undefined' && event instanceof MouseEvent && event.detail > 0;
+}
+
 /** Arms the decision buttons of `root` by the rule above. */
 export function armDecisions(root: HTMLElement, opts: ArmingOptions): ArmingController {
   const clock = opts.clock ?? systemClock;
@@ -150,7 +199,19 @@ export function armDecisions(root: HTMLElement, opts: ArmingOptions): ArmingCont
   let ioVisible: boolean | null = null;
   let lastTabAt = Number.NEGATIVE_INFINITY;
   let lastPointer: { x: number; y: number } | null = null;
+  let lastOwnScrollAt = Number.NEGATIVE_INFINITY;
   let destroyed = false;
+  /**
+   * A press on a decision that came before the card had armed, by a person who had pointed at the
+   * card (2026-11-18). It was dropped without a word: the person pressed Approve, saw "Ready in a
+   * moment" come and go, and had to press again. It is kept, and acts the moment the card arms, if
+   * the card is still the one that was pressed: same content, same place.
+   */
+  let held: { run: () => void; key: string; position: string | null; button: HTMLElement | null } | null = null;
+  const dropHeld = (): void => {
+    held?.button?.classList.remove('gv-held');
+    held = null;
+  };
   const buttons = new Set<HTMLElement>();
   const titles = new WeakMap<HTMLElement, string>();
   const doc = root.ownerDocument;
@@ -166,10 +227,22 @@ export function armDecisions(root: HTMLElement, opts: ArmingOptions): ArmingCont
   const apply = (): void => {
     const next = isArmed(state, clock.now(), delay);
     for (const b of buttons) paint(b, next);
-    if (opts.hint) opts.hint.textContent = next ? '' : ARMING_TEXT;
+    // A press was meant for the card as it was: another content or place is another card, and so
+    // is one that nobody points at any more.
+    if (
+      held &&
+      (held.key !== state.key || held.position !== state.position || armsIn(state, clock.now(), delay) === null)
+    )
+      dropHeld();
+    if (opts.hint) opts.hint.textContent = next ? '' : held ? HELD_TEXT : ARMING_TEXT;
     if (next !== armed) {
       armed = next;
       opts.onChange?.(armed);
+    }
+    if (next && held) {
+      const { run } = held;
+      dropHeld();
+      run();
     }
   };
 
@@ -189,8 +262,12 @@ export function armDecisions(root: HTMLElement, opts: ArmingOptions): ArmingCont
     if (timer !== null) clock.clearTimeout(timer);
     timer = null;
     if (destroyed) return;
-    const wait = armsIn(state, clock.now(), delay);
-    if (wait !== null && wait > 0) timer = clock.setTimeout(onTimer, wait);
+    const now = clock.now();
+    const wait = armsIn(state, now, delay);
+    // While it appears it is looked at often, so the end of its animation is not found at a press.
+    const appearing = state.visibleSince !== null && now - state.visibleSince <= APPEAR_SETTLE_MS;
+    const next = appearing ? Math.min(wait !== null && wait > 0 ? wait : APPEAR_POLL_MS, APPEAR_POLL_MS) : wait;
+    if (next !== null && next > 0) timer = clock.setTimeout(onTimer, next);
   };
 
   const dispatch = (input: ArmInput): void => {
@@ -201,7 +278,15 @@ export function armDecisions(root: HTMLElement, opts: ArmingOptions): ArmingCont
     if (destroyed) return;
     const now = clock.now();
     dispatch({ type: 'visible', visible: visibleNow(), now });
-    if (state.visibleSince !== null) dispatch({ type: 'position', position: positionNow(), now });
+    if (state.visibleSince !== null) {
+      const own = now - lastOwnScrollAt <= OWN_SCROLL_WINDOW_MS;
+      dispatch({
+        type: 'position',
+        position: positionNow(),
+        now,
+        ...(own ? { creditMs: Math.max(0, delay - OWN_SCROLL_SETTLE_MS) } : {}),
+      });
+    }
     apply();
     schedule();
   };
@@ -218,8 +303,25 @@ export function armDecisions(root: HTMLElement, opts: ArmingOptions): ArmingCont
       (typeof e.movementY === 'number' && e.movementY !== 0) ||
       (lastPointer !== null && (lastPointer.x !== e.clientX || lastPointer.y !== e.clientY));
     lastPointer = { x: e.clientX, y: e.clientY };
-    if (!moved || state.pointer) return;
-    dispatch({ type: 'pointer', now: clock.now() });
+    if (!moved || destroyed) return;
+    // Where the card is comes first: a pointer that moves now points at the card as it is now.
+    const now = clock.now();
+    dispatch({ type: 'visible', visible: visibleNow(), now });
+    if (state.visibleSince !== null) dispatch({ type: 'position', position: positionNow(), now });
+    if (!state.pointer) dispatch({ type: 'pointer', now });
+    apply();
+    schedule();
+  };
+
+  /** The person scrolls the card, or what holds it: the move that follows is their own. */
+  const onOwnScroll = (): void => {
+    lastOwnScrollAt = clock.now();
+  };
+
+  const onScroll = (e: Event): void => {
+    const target = e.target as Node | null;
+    // Only a scroll that carries the card with it.
+    if (target && target !== doc && !target.contains(root)) return;
     check();
   };
 
@@ -267,6 +369,9 @@ export function armDecisions(root: HTMLElement, opts: ArmingOptions): ArmingCont
   root.addEventListener('focusout', onFocusOut as EventListener);
   doc.addEventListener('keydown', onDocKey as EventListener, true);
   doc.addEventListener('visibilitychange', onVisibility);
+  root.addEventListener('wheel', onOwnScroll, { passive: true });
+  root.addEventListener('touchmove', onOwnScroll, { passive: true });
+  doc.addEventListener('scroll', onScroll, { capture: true, passive: true });
 
   let io: IntersectionObserver | null = null;
   if (typeof IntersectionObserver !== 'undefined') {
@@ -304,6 +409,29 @@ export function armDecisions(root: HTMLElement, opts: ArmingOptions): ArmingCont
         check();
         if (!armed) {
           event.preventDefault();
+          const now = clock.now();
+          const wait = armsIn(state, now, delay);
+          if (wait === null) {
+            // Nobody pointed at the card (it appeared under a resting cursor): the press was meant
+            // for what was there before, and decides nothing. A real press is its person being
+            // here, though: the wait starts now, and their next press decides. A key does not
+            // count (a card that takes the focus stands next to text being typed).
+            if (realPress(event)) {
+              dispatch({ type: 'pressed', now });
+              apply();
+              schedule();
+            }
+            return;
+          }
+          // Too soon after the card changed to be an answer to it.
+          if (wait > Math.max(0, delay - HOLD_FROM_MS)) return;
+          // Only the short wait is missing: the press is kept and acts when it is over.
+          dropHeld();
+          const button = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+          button?.classList.add('gv-held');
+          held = { run: () => fn(event), key: state.key, position: state.position, button };
+          apply();
+          schedule();
           return;
         }
         fn(event);
@@ -312,6 +440,7 @@ export function armDecisions(root: HTMLElement, opts: ArmingOptions): ArmingCont
     check,
     destroy(): void {
       destroyed = true;
+      dropHeld();
       if (timer !== null) clock.clearTimeout(timer);
       if (initial !== null) clock.clearTimeout(initial);
       timer = null;
@@ -323,6 +452,9 @@ export function armDecisions(root: HTMLElement, opts: ArmingOptions): ArmingCont
       root.removeEventListener('focusout', onFocusOut as EventListener);
       doc.removeEventListener('keydown', onDocKey as EventListener, true);
       doc.removeEventListener('visibilitychange', onVisibility);
+      root.removeEventListener('wheel', onOwnScroll);
+      root.removeEventListener('touchmove', onOwnScroll);
+      doc.removeEventListener('scroll', onScroll, { capture: true });
       buttons.clear();
     },
   };

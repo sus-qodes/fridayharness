@@ -103,15 +103,20 @@ export class Dispatcher {
     switch (event.type) {
       case 'policy.evaluated':
         this.#tool(event, p, now);
+        // Its host asks its person: the waiting list says so; what follows a stop or a question clears it.
+        if (p.decision === 'ask' || this.#hasAttention(str(p.task_id))) return true;
         break;
       case 'agent.event':
         this.#agentEvent(event, p, now);
+        if (this.#hasAttention(str(p.task_id))) return true;
         break;
       case 'run.paths_observed':
         this.#paths(p, now);
         break;
       case 'agent.turn_ended':
         this.#log(this.#agentKeyOf(event), { at: now, sequence: event.sequence, stream: 'info', text: 'turn ended' });
+        // An agent its person runs stopped in the middle of a task: the board says so (2026-11-18).
+        if (str(p.task_id)) return true;
         break;
       case 'scope.violation':
       case 'ownership.conflict':
@@ -231,6 +236,12 @@ export class Dispatcher {
         break;
     }
     return isDomainEvent(event.type);
+  }
+
+  /** Whether the board shows this task's agent as stopped or asking (`SnapshotTask.attention`). */
+  #hasAttention(taskId: string | null | undefined): boolean {
+    if (!taskId) return false;
+    return Boolean(this.store.select('board')?.tasks.find((t) => t.task_id === taskId)?.attention);
   }
 
   /** A reaction started by the interface itself (an approval decided here). */

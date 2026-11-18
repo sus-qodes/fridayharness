@@ -178,6 +178,8 @@ function buildBody(kit: Kit): Built {
       return checksBody(kit);
     case 'folder':
       return folderBody(kit);
+    case 'install':
+      return installBody(kit);
     case 'brain':
       return brainBody(kit);
   }
@@ -980,6 +982,90 @@ function checksBody(kit: Kit): Built {
       taskId ? h('div', { class: 'gv-actions' }, open, rework, cancel) : null,
     ]),
     decisions: [rework, cancel],
+  };
+}
+
+// ---- install_broken: every new task folder fails its install (2026-11-18)
+
+/** What the repair goal asks for: the lockfile, and nothing else. */
+export function repairRequest(lockfile: string): string {
+  return `Repair ${lockfile} so that a clean install (npm ci) works again: bring it in step with package.json by running npm install, and change nothing else. Check with "npm ci --dry-run --ignore-scripts".`;
+}
+
+/**
+ * The project's lockfile no longer matches its `package.json`, so the install every task folder
+ * starts with fails. In the trial only the agents were told, four times in one goal; each then
+ * installed by itself. The card says it once, in a person's words, and leads with the way out:
+ * **Have an agent repair it** starts a goal for exactly that file. "Not now" is remembered for
+ * this state of the package list.
+ */
+function installBody(kit: Kit): Built {
+  const { ctx, e } = kit;
+  const d = (e.details ?? {}) as { lockfile?: unknown; missing?: unknown };
+  const lockfile = typeof d.lockfile === 'string' && d.lockfile.trim() ? d.lockfile : 'package-lock.json';
+  const missing = Array.isArray(d.missing) ? d.missing.filter((m): m is string => typeof m === 'string') : [];
+  const repair = decisionButton(
+    'Have an agent repair it',
+    kit,
+    async (b) => {
+      b.disabled = true;
+      const plan = ctx.store.select('board')?.brain?.planner_available ?? false;
+      const goal = await ctx.act('Start the repair', () =>
+        ctx.api.createGoal({
+          request: repairRequest(lockfile),
+          constraints: [],
+          outcomes: [],
+          priority: 'normal',
+          plan,
+        }),
+      );
+      if (!goal) {
+        b.disabled = false;
+        return;
+      }
+      // The goal exists whatever follows: the question is closed with what was done.
+      await ctx.act('Close the question', () =>
+        ctx.api.answer(e.escalation_id, `An agent was asked to repair it (goal ${goal.goal_id}).`),
+      );
+      ctx.refresh();
+      if (!plan && goal.goal_id) openModal(ctx, { kind: 'plan-editor', id: goal.goal_id, mode: 'first' });
+      kit.done(
+        plan
+          ? 'A goal to repair it was started: approve its plan when it is ready'
+          : 'A goal to repair it was created: write its one task in the editor',
+      );
+    },
+    'btn btn-primary',
+  );
+  const skip = decisionButton('Not now', kit, async (b) => {
+    b.disabled = true;
+    const r = await ctx.act('Close the question', () => ctx.api.answer(e.escalation_id, 'Not now.'));
+    b.disabled = false;
+    if (r) kit.done('Left as it is. Friday asks again only when the package list changes');
+  });
+  return {
+    body: present([
+      h(
+        'p',
+        { class: 'gv-question-text' },
+        `Every task starts by installing this project’s packages in a folder of its own, and that install now fails: ${truncate(cleanText(lockfile), 120)} does not match package.json.`,
+      ),
+      missing.length
+        ? h(
+            'p',
+            { class: 'gv-why' },
+            h('span', { class: 'gv-k' }, 'npm said: '),
+            decisionText(truncate(missing.join('; '), 500)),
+          )
+        : null,
+      h(
+        'p',
+        { class: 'field-hint' },
+        'Each agent then installs by itself, in its own way, which costs minutes on every task, or fails. An agent can repair the file in one small goal; nothing else is changed.',
+      ),
+      h('div', { class: 'gv-actions' }, repair, skip),
+    ]),
+    decisions: [repair, skip],
   };
 }
 

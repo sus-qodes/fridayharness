@@ -51,6 +51,8 @@ pub enum Confirm {
     CancelGoal,
     /// `goals/{gid}/land`: merges the goal's branch into the person's own branch.
     LandGoal,
+    /// `goals/{gid}/land/set-aside`: the same, after files in the way were set aside.
+    LandGoalAside,
     StopDaemon,
     LaunchAgent,
     StartAgent,
@@ -146,6 +148,10 @@ pub static ROUTES: &[Route] = &[
     post("goals"),
     confirm("goals/{gid}/cancel", Confirm::CancelGoal),
     confirm("goals/{gid}/land", Confirm::LandGoal),
+    // Uncommitted files in the way are kept and taken out of the way first, then it lands.
+    confirm("goals/{gid}/land/set-aside", Confirm::LandGoalAside),
+    // The files set aside at a landing, written back into the folder (never over a changed file).
+    post("goals/{gid}/set-aside/restore"),
     post("goals/{gid}/replan"),
     // When this goal's finished work is put into the project: the tick on the plan's Approve.
     post("goals/{gid}/landing"),
@@ -787,6 +793,7 @@ mod tests {
             p("tasks/task_1/cancel"),
             p("goals/goal_1/cancel"),
             p("goals/goal_1/land"),
+            p("goals/goal_1/land/set-aside"),
             p("daemon/stop"),
             p("agent-processes"),
             p("agent-processes/claude-1/start"),

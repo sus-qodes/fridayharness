@@ -26,6 +26,13 @@ import {
   selectChecks,
   summarizeOutcome,
 } from '@friday/verification';
+import {
+  CLEAN_INSTALL_ARGS,
+  CLEAN_INSTALL_COMMAND,
+  CLEAN_INSTALL_TIMEOUT_MS,
+  judgeCleanInstall,
+  lockRoots,
+} from './clean-install.js';
 import type { DaemonContext } from './daemon.js';
 import { runCheckInProfile } from './execution.js';
 
@@ -364,6 +371,65 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
         },
         true,
       );
+    }
+
+    // 3a. The files that list the project's packages changed: a clean install must still work
+    // (2026-11-18, `clean-install.ts`). The checks below run where the packages are already
+    // installed, so a lockfile `npm ci` refuses passed every one of them and landed.
+    const listed = changes.filter((c) => c.change !== 'deleted').map((c) => c.path);
+    for (const at of lockRoots(root, listed)) {
+      const cwd = at.dir ? path.resolve(root, at.dir) : root;
+      const outcome = await runCheckInProfile(
+        ctx.profile(),
+        {
+          name: 'friday.clean_install',
+          command: CLEAN_INSTALL_COMMAND,
+          args: CLEAN_INSTALL_ARGS,
+          root,
+          cwd,
+          env: { CI: 'true' },
+          timeoutMs: CLEAN_INSTALL_TIMEOUT_MS,
+        },
+        ctx.groups,
+      );
+      const judged = judgeCleanInstall(outcome, at);
+      const artifact =
+        judged.verdict === 'ok'
+          ? null
+          : state.artifacts?.storeText(
+              pid,
+              'verification',
+              `$ ${CLEAN_INSTALL_COMMAND} ${CLEAN_INSTALL_ARGS.join(' ')}\n(in ${cwd})\n${outcome.output}`,
+            );
+      const where = at.dir ? `${at.dir}/${at.lockfile}` : at.lockfile;
+      record(
+        {
+          name: 'friday.clean_install',
+          kind: 'install',
+          origin: 'friday',
+          // What npm could not judge is a warning on a passed check: the work is not failed for it.
+          status: judged.verdict === 'out_of_step' ? 'FAILED' : 'PASSED',
+          exit_code: outcome.exit_code,
+          artifact_ref: artifact ? `artifact:${artifact.artifact_id}` : null,
+          summary: judged.summary,
+          duration_ms: outcome.duration_ms,
+          details:
+            judged.verdict === 'ok'
+              ? null
+              : {
+                  findings: [
+                    {
+                      rule: judged.verdict === 'out_of_step' ? 'install.lockfile_out_of_step' : 'install.not_checked',
+                      severity: judged.verdict === 'out_of_step' ? 'fail' : 'warn',
+                      message: judged.summary,
+                      paths: [where],
+                    },
+                  ] as VerificationFinding[],
+                },
+        },
+        true,
+      );
+      logger.info('clean install checked', { task_id: taskId, lockfile: where, verdict: judged.verdict });
     }
 
     // 4. The configured checks for this kind of task, in the checkout it worked in.

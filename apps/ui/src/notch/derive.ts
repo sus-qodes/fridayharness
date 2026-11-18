@@ -57,6 +57,39 @@ export type WaitingItem =
    * not take the task away by itself; the person looks, or gives it to another agent (2026-11-17).
    */
   | { kind: 'quiet'; key: string; id: string; taskId: string; task: SnapshotTask; agentKey: string; host: string }
+  /**
+   * An agent its person runs stopped in the middle of its task (2026-11-18): its turn ended and
+   * nothing followed. It waits for its person in its own window, or its host failed (no capacity
+   * on its servers, a used-up quota: `error`). Friday showed the task as running and said nothing;
+   * the person found out by looking at the other window.
+   */
+  | {
+      kind: 'stopped';
+      key: string;
+      id: string;
+      taskId: string;
+      task: SnapshotTask;
+      agentKey: string;
+      host: string;
+      reason: string | null;
+      error: string | null;
+    }
+  /**
+   * A rule of Friday's made that agent's host ask its person in its own window ("Run this
+   * command?"), and Friday, whose rule it is, showed nothing (2026-11-18).
+   */
+  | {
+      kind: 'asking';
+      key: string;
+      id: string;
+      taskId: string;
+      task: SnapshotTask;
+      agentKey: string;
+      host: string;
+      tool: string | null;
+      target: string | null;
+      rule: string | null;
+    }
   /** A completed goal whose branch a person has not landed yet; `id` is the goal's. */
   | { kind: 'land'; key: string; id: string; taskId: null; goalId: string; request: string }
   /** An agent's message the human has not replied to (a request, or one the sender blocks on). */
@@ -146,6 +179,50 @@ export function turnPrompt(host: string): string {
 /** After this long with nothing reported, a running task of an agent its person runs is theirs to look at. */
 export const QUIET_MS = 15 * 60_000;
 
+/**
+ * A turn that ended without an error is said after this long with nothing following: an agent
+ * whose person answers it at once, or that Friday holds to report its progress, goes on within it.
+ */
+export const STOPPED_GRACE_MS = 20_000;
+
+/** What a host's error means for its person, in a few words; null when it is none of the known ones. */
+export function stopWords(error: string | null): 'quota' | 'busy' | null {
+  if (!error) return null;
+  if (/quota|usage limit|limit reached|resets? in \d/i.test(error)) return 'quota';
+  if (/capacity|unavailable|\b503\b|high traffic|overloaded|try again/i.test(error)) return 'busy';
+  return null;
+}
+
+/** Running tasks whose agent, one its person runs, stopped or asks in its own window (`SnapshotTask.attention`). */
+function toAttention(board: UiSnapshot, now: number): WaitingItem[] {
+  const hosts = new Map(board.harnesses.map((x) => [x.harness_id, x]));
+  const out: WaitingItem[] = [];
+  for (const t of board.tasks) {
+    const a = t.attention;
+    if (!a || t.status !== 'RUNNING' || !t.agent_key) continue;
+    const agent = board.agents.find((x) => x.agent_key === t.agent_key);
+    const host = agent?.harness_id ? hosts.get(agent.harness_id) : undefined;
+    if (!host || host.attach_mode === 'spawn') continue;
+    const base = { id: t.task_id, taskId: t.task_id, task: t, agentKey: t.agent_key, host: host.vendor };
+    if (a.kind === 'asking') {
+      out.push({
+        kind: 'asking',
+        key: `asking:${t.task_id}:${a.at}`,
+        ...base,
+        tool: a.tool ?? null,
+        target: a.target ?? null,
+        rule: a.rule ?? null,
+      });
+      continue;
+    }
+    const error = a.error ?? null;
+    // An error is said at once; a turn that just ended may be about to go on.
+    if (!error && now - time(a.at) < STOPPED_GRACE_MS) continue;
+    out.push({ kind: 'stopped', key: `stopped:${t.task_id}:${a.at}`, ...base, reason: a.reason ?? null, error });
+  }
+  return out;
+}
+
 /** Running tasks of agents their person runs that have reported nothing for `QUIET_MS` (see the `quiet` kind). */
 function toQuiet(board: UiSnapshot, now: number): WaitingItem[] {
   const hosts = new Map(board.harnesses.map((x) => [x.harness_id, x]));
@@ -154,6 +231,8 @@ function toQuiet(board: UiSnapshot, now: number): WaitingItem[] {
     if (t.status !== 'RUNNING' || !t.agent_key) continue;
     const last = Math.max(time(t.updated_at), time(t.started_at));
     if (!last || now - last < QUIET_MS) continue;
+    // Said already, and better: it stopped, or it asks in its own window.
+    if (t.attention) continue;
     const agent = board.agents.find((a) => a.agent_key === t.agent_key);
     const host = agent?.harness_id ? hosts.get(agent.harness_id) : undefined;
     // An agent Friday starts is watched by its adapter and by recovery.
@@ -264,6 +343,7 @@ export function waitingItems(board: UiSnapshot | null, now: number): WaitingItem
       (t): WaitingItem => ({ kind: 'waiting', key: `waiting:${t.task_id}`, id: t.task_id, taskId: t.task_id, task: t }),
     ),
     ...toTurn(board),
+    ...toAttention(board, now),
     ...toQuiet(board, now),
     ...proposedPlans(board),
     ...toVerify(board, now),
@@ -303,6 +383,8 @@ const WAITING_WORDS: Record<WaitingKind, [one: string, many: string]> = {
   waiting: ['blocked agent', 'blocked agents'],
   turn: ['task for an agent you run', 'tasks for an agent you run'],
   quiet: ['agent that has gone quiet', 'agents that have gone quiet'],
+  stopped: ['agent that has stopped', 'agents that have stopped'],
+  asking: ['agent asking you in its window', 'agents asking you in their windows'],
   plan: ['proposed plan', 'proposed plans'],
   verify: ['task to verify', 'tasks to verify'],
   land: ['goal to land', 'goals to land'],
@@ -315,6 +397,8 @@ const WAITING_ORDER: readonly WaitingKind[] = [
   'approval',
   'question',
   'waiting',
+  'asking',
+  'stopped',
   'turn',
   'quiet',
   'plan',
@@ -401,6 +485,10 @@ export function itemSignature(item: WaitingItem): string {
     case 'turn':
     case 'quiet':
       return [item.key, item.agentKey, item.host, item.task.summary].join('\u0000');
+    case 'stopped':
+      return [item.key, item.agentKey, item.host, item.reason, item.error].join('\u0000');
+    case 'asking':
+      return [item.key, item.agentKey, item.host, item.tool, item.target].join('\u0000');
     case 'land':
       return item.key;
     case 'message': {
@@ -442,7 +530,9 @@ export function studioTarget(item: WaitingItem | null, activeTaskId: string | nu
   if (item?.kind === 'verify') return { task_id: item.taskId, panel: 'verify', id: item.taskId };
   if (item?.kind === 'land') return { panel: 'land', id: item.goalId };
   // The task itself: its inspector is where it is given to another agent.
-  if (item?.kind === 'turn' || item?.kind === 'quiet') return { task_id: item.taskId };
+  if (item?.kind === 'turn' || item?.kind === 'quiet' || item?.kind === 'stopped' || item?.kind === 'asking') {
+    return { task_id: item.taskId };
+  }
   // The delivery too: with two open messages the drawer opens on this one, as the rail's row does.
   if (item?.kind === 'message') return { panel: 'inbox', id: item.id };
   if (item?.kind === 'memory') return { panel: 'memory', tab: 'review' };
@@ -603,5 +693,48 @@ export function buildModel(state: Readonly<RootState>, fsm: IslandSnapshot, now:
     muted: state.prefs.muted,
     running: runningCount(board),
     celebration: fsm.greeting === 'celebrate' ? completedGoal(board) : null,
+  };
+}
+
+/**
+ * An agent its person runs that stopped, or asks in its own window, in words (2026-11-18): one
+ * wording for the waiting list, the Notch and the notification.
+ */
+export function attentionWords(
+  item: Extract<WaitingItem, { kind: 'stopped' | 'asking' }>,
+  hostName: string,
+): { title: string; line: string } {
+  if (item.kind === 'asking') {
+    const what = item.target ? `“${item.target}”` : (item.tool ?? 'a step');
+    return {
+      title: `${hostName} is asking you something`,
+      line: `It wants to run ${what} and a rule of Friday’s makes it ask you first. Answer in ${hostName}’s own window.`,
+    };
+  }
+  const why = stopWords(item.error);
+  if (why === 'quota') {
+    return {
+      title: `${hostName} is out of quota`,
+      line: `It stopped in the middle of this task. ${item.error ?? ''} Open the task and give it to another agent, or go on in ${hostName} once it can.`.replace(
+        /\s+/g,
+        ' ',
+      ),
+    };
+  }
+  if (why === 'busy') {
+    return {
+      title: `${hostName} stopped: its servers are busy`,
+      line: `It stopped in the middle of this task. Type “continue” in ${hostName} in a minute, or open the task and give it to another agent.`,
+    };
+  }
+  if (item.error) {
+    return {
+      title: `${hostName} stopped on an error`,
+      line: `${item.error} Type “continue” in ${hostName}, or open the task and give it to another agent.`,
+    };
+  }
+  return {
+    title: `${hostName} has stopped`,
+    line: `It is not working on this task now: it may be waiting for you in its own window. Answer it there or type “continue”, or open the task and give it to another agent.`,
   };
 }

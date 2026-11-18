@@ -48,6 +48,8 @@ export const DESKTOP_CONFIRMED: readonly { method: 'POST'; path: RegExp }[] = [
   { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/tasks\/[^/?]+\/cancel$/ },
   { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/goals\/[^/?]+\/cancel$/ },
   { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/goals\/[^/?]+\/land$/ },
+  // The same merge, after the uncommitted files in its way were kept and taken out of it.
+  { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/goals\/[^/?]+\/land\/set-aside$/ },
   { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/daemon\/stop$/ },
   { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/agent-processes$/ },
   { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/agent-processes\/[^/?]+\/start$/ },

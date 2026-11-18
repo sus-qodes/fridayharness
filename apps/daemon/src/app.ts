@@ -56,7 +56,7 @@ import { countMatches, listFiles } from './files.js';
 import { bothVersions, FOLDER_CONFLICT, keptFiles, putBack, syncFolder, takeTheirs, tipBlob } from './folder-sync.js';
 import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
 import type { IntegrationManager } from './integration.js';
-import { landGoal, landPlan } from './land.js';
+import { landGoal, landPlan, putSetAsideBack } from './land.js';
 import type { Logger } from './log.js';
 import type { OperationManager } from './operations.js';
 import type { EffectivePolicy } from './policy.js';
@@ -409,6 +409,15 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   // (`confirm_and_send`); landing is git's merge, all or nothing.
   app.post(`${P}/goals/:gid/land`, allow(...OPERATOR), async (c) =>
     c.json(await landGoal(state, project, c.req.param('gid'), humanOf(c))),
+  );
+  // The same, when uncommitted files of the folder are in the way (2026-11-18): they are kept as
+  // a commit and taken out of the way first, and written back if the landing does not happen.
+  app.post(`${P}/goals/:gid/land/set-aside`, allow(...OPERATOR), async (c) =>
+    c.json(await landGoal(state, project, c.req.param('gid'), humanOf(c), { setAside: true })),
+  );
+  // The files set aside at a landing of the goal, written back into the folder, uncommitted.
+  app.post(`${P}/goals/:gid/set-aside/restore`, allow(...OPERATOR), async (c) =>
+    c.json(await putSetAsideBack(state, project, c.req.param('gid'), humanOf(c))),
   );
   // A file the person changed in the project folder that the goal's finished work changes too
   // (2026-11-17): what is in the way for a task now, with both versions; the person's choice for one

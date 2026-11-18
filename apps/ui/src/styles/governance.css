@@ -1047,3 +1047,12 @@
   grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
+
+/* A press that came a moment before the card armed is kept, and shows that it was taken (2026-11-18). */
+.gv-held,
+.gv-held.gv-unarmed {
+  opacity: 1;
+  cursor: progress;
+  outline: 2px solid rgba(34, 211, 238, 0.7);
+  outline-offset: 2px;
+}

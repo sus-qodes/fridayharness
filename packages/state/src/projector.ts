@@ -630,6 +630,12 @@ export class StateProjector implements Projector {
           .prepare("UPDATE approvals SET status = 'revoked', note = ? WHERE approval_id = ?")
           .run(opt(p.note), str(p.approval_id));
         return;
+      // The agent's own words for a request the hook had already made (2026-11-18): one card, both reasons.
+      case 'approval.reason_added':
+        this.db
+          .prepare('UPDATE approvals SET purpose = ? WHERE approval_id = ?')
+          .run(opt(p.purpose), str(p.approval_id));
+        return;
       case 'escalation.requested': {
         const x = p.escalation as Payload;
         this.db

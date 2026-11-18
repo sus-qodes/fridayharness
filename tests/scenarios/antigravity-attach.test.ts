@@ -397,3 +397,75 @@ describe('a conversation that outlives its session (2026-11-17)', () => {
     expect(live()).toHaveLength(1);
   }, 120_000);
 });
+
+describe('an Antigravity session that stops, or asks in its own window (2026-11-18)', () => {
+  it('is shown on the board as stopped, with the error of its host, and as asking, until it goes on', async () => {
+    const { root } = materializeFixtureShop(path.join(ws().root, 'shop'));
+    const friday = (...args: string[]) => cli(['--project', root, ...args]);
+    const configured = await friday('harness', 'config', 'antigravity', '--agent', 'dev-1');
+    expect(configured.code, configured.stderr).toBe(0);
+    await deterministicGit(root, { startEpoch: 1_767_300_000 }).commitAll('Friday for Antigravity');
+    const daemon = await createDaemon({
+      projectRoot: root,
+      stateDir: ws().stateDir,
+      tickMs: 0,
+      pollIntervalMs: 25,
+      logToFile: true,
+      extensions: [claudeCodeHooks()],
+      brain: { autoStart: false },
+    });
+    ws().track({ close: () => daemon.close('test cleanup') });
+    const td = wrap(daemon);
+    const task = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: "Add a 'Running the tests' section to README.md",
+      kind: 'docs',
+      role: 'documentation',
+      description: "Add a short section named 'Running the tests' to README.md that names node --test.",
+      acceptance_criteria: ["README.md has a 'Running the tests' section that names node --test"],
+      scope: { write: ['README.md', 'package.json'], read: ['README.md'] },
+      assign_agent_key: 'dev-1',
+    });
+    type Board = { tasks: { task_id: string; attention?: Record<string, unknown> | null }[] };
+    const attention = async () =>
+      (await td.operator.get<Board>(td.operator.projectPath('/ui/snapshot'))).tasks.find(
+        (t) => t.task_id === task.task_id,
+      )?.attention ?? null;
+
+    const ag = await antigravitySession(root);
+    await ag.hook('SessionStart');
+    const claim = await ag.friday('friday_task_claim', { next: true });
+    expect(claim.ok, claim.text).toBe(true);
+    const readme = path.join(root, 'README.md');
+    expect((await ag.tool('read_file', { Path: readme })).decision).toBe('allow');
+    // While it works, nothing is said of it.
+    expect(await attention()).toBeNull();
+
+    // A rule of Friday's makes its host ask its person: the question is in Antigravity's window,
+    // and Friday, whose rule it is, now says so too.
+    const install = { id: 'call_install', name: 'run_command', args: { CommandLine: 'npm install', Cwd: root } };
+    const pre = await ag.hook('PreToolUse', { toolCall: install, stepIdx: 90 });
+    // Antigravity's own word for it: its person is asked every time.
+    expect(pre.decision).toBe('force_ask');
+    expect(await attention()).toMatchObject({ kind: 'asking', target: 'npm install' });
+    // The person answers there and the command runs: it works again.
+    await ag.hook('PostToolUse', { toolCall: install, stepIdx: 90 });
+    expect(await attention()).toBeNull();
+
+    // Its host fails (a used-up quota) and the turn ends: Friday showed the task as running.
+    await ag.hook('Stop', {
+      executionNum: 1,
+      terminationReason: 'error',
+      error: 'Individual quota reached. Please upgrade your subscription. Resets in 165h29m45s.',
+      fullyIdle: true,
+    });
+    expect(await attention()).toMatchObject({
+      kind: 'stopped',
+      reason: 'error',
+      error: expect.stringContaining('Individual quota reached'),
+    });
+    expect(daemon.state.q.task(td.project.project_id, task.task_id).status).toBe('RUNNING');
+    // It goes on (the person typed "continue" there): the board says nothing of it again.
+    expect((await ag.tool('read_file', { Path: readme })).decision).toBe('allow');
+    expect(await attention()).toBeNull();
+  }, 120_000);
+});

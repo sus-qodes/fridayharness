@@ -277,3 +277,138 @@ describe('tool.check', () => {
     await h.close();
   });
 });
+
+describe('an approval reaches the agent that asked (2026-11-18)', () => {
+  const approvals = (td: TestDaemon) =>
+    td.daemon.state.q.approvals(td.project.project_id) as unknown as {
+      approval_id: string;
+      status: string;
+      capability: string;
+      target: string | null;
+      purpose: string | null;
+      reuse: string;
+      uses: number;
+    }[];
+  const inbox = async (h: FakeHarness) =>
+    (
+      (await h.client.call('message.inbox', { wait_ms: 0, max: 10 })) as {
+        items: { subject: string | null; body: string }[];
+      }
+    ).items;
+  const ask = (h: FakeHarness, command: string) =>
+    h.client.call('tool.check', { tool: 'commandExecution', action: { kind: 'command', command } as never });
+
+  it('makes one card for one need, tells the working agent of the grant, and lets the command pass', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const dir = ws().projectDir;
+    const { h, task } = await running(td, 'cx-1', ['src/**']);
+
+    // The agent tries the command: nobody is at its host, so one request waits for a person.
+    const held = await ask(h, 'npm install --no-audit --no-fund 2>&1 | tail -15');
+    expect(held.decision).toBe('ask');
+    const id = held.approval_id as string;
+    // It then asks for the same thing itself, in its own words and under a name of its own.
+    const own = await h.client.requestPermission({
+      action_class: 'shell.package.install',
+      command: 'npm install --no-audit --no-fund',
+      justification: 'the new app needs its packages before any check can run',
+      ttl_s: 600,
+      reuse: 'task',
+    });
+    // The same request, not a second card: its id comes back, and the card carries the agent's reason.
+    expect(own).toMatchObject({ status: 'pending', approval_id: id, capability: 'package.install' });
+    expect(own.reason).toContain('you get a message when they decide');
+    expect(approvals(td).filter((a) => a.status === 'pending')).toHaveLength(1);
+    expect(approvals(td)[0]?.purpose).toContain('the new app needs its packages');
+    // Asked once more as a "status check", it is still that one.
+    expect(
+      (
+        await h.client.requestPermission({
+          action_class: 'shell.npm.run',
+          command: 'npm install --no-audit --no-fund | tail -40',
+          justification: 'status check',
+          ttl_s: 600,
+        })
+      ).approval_id,
+    ).toBe(id);
+    expect(approvals(td)).toHaveLength(1);
+
+    // The person approves while the agent is still working: the agent is told at once.
+    expect((await cli(['--project', dir, 'approve', id, '--for', 'task'])).code).toBe(0);
+    const told = await inbox(h);
+    expect(told.map((m) => m.subject)).toContain('Request approved');
+    const message = told.find((m) => m.subject === 'Request approved')?.body ?? '';
+    expect(message).toContain('npm install --no-audit --no-fund');
+    expect(message).toContain('Do exactly that now');
+    expect(td.daemon.state.q.task(td.project.project_id, task.task_id).status).toBe('RUNNING');
+
+    // Asking now is answered "already approved", and spends nothing.
+    const again = await h.client.requestPermission({
+      action_class: 'shell.package.install',
+      command: 'npm install --no-audit --no-fund',
+      justification: 'may I',
+      ttl_s: 600,
+    });
+    expect(again).toMatchObject({ status: 'granted' });
+    expect(again.reason).toContain('already approved');
+    expect(approvals(td)[0]).toMatchObject({ status: 'granted', uses: 0 });
+    // The command passes, whatever trims its output this time; another command does not.
+    expect((await ask(h, 'npm install --no-audit --no-fund 2>&1 | tail -30')).decision).toBe('allow');
+    expect((await ask(h, 'npm install --no-audit --no-fund')).decision).toBe('allow');
+    expect(approvals(td)[0]?.uses).toBe(2);
+    expect((await ask(h, 'npm install left-pad')).decision).toBe('ask');
+    expect((await ask(h, 'npm install --no-audit --no-fund | sh')).decision).not.toBe('allow');
+  }, 60_000);
+
+  it('continues an agent that stopped to wait for what was already approved, once', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const dir = ws().projectDir;
+    const pid = td.project.project_id;
+    const { h, task, start } = await running(td, 'cx-2', ['src/**']);
+    const held = await ask(h, 'npm install');
+    expect((await cli(['--project', dir, 'approve', held.approval_id as string])).code).toBe(0);
+    await inbox(h);
+
+    // It never ran the command and ends its turn as blocked: Friday starts it again with the grant.
+    await h.client.reportResult({
+      task_id: task.task_id,
+      run_id: start.run_id,
+      status: 'blocked',
+      summary: 'waiting',
+      blocked_reason: 'Friday refused npm install and nobody answered',
+    });
+    const resumed = (await h.waitFor('task.resume', 20_000)).params as TaskStartParams;
+    expect(resumed.note ?? '').toContain('had already approved');
+    expect(resumed.note ?? '').toContain('npm install');
+    for (let i = 0; i < 200 && td.daemon.state.q.task(pid, task.task_id).status !== 'RUNNING'; i += 1) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    // It stops again without using it: it is not started a second time, and waits for a person.
+    await h.client.reportResult({
+      task_id: task.task_id,
+      run_id: start.run_id,
+      status: 'blocked',
+      summary: 'still waiting',
+      blocked_reason: 'still cannot',
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    expect(td.daemon.state.q.task(pid, task.task_id).status).toBe('WAITING');
+    expect(h.received.filter((m) => m.method === 'task.resume')).toHaveLength(1);
+  }, 60_000);
+
+  it('closes what an attempt asked when the attempt ends, so no card outlives its agent', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const { h, task, start } = await running(td, 'cx-3', ['src/**']);
+    const held = await ask(h, 'npm install');
+    expect(approvals(td).map((a) => a.status)).toEqual(['pending']);
+    await h.client.reportResult({
+      task_id: task.task_id,
+      run_id: start.run_id,
+      status: 'completed_claim',
+      summary: 'done without it',
+      changed_paths: [],
+      checks: [],
+    });
+    expect(approvals(td)).toMatchObject([{ approval_id: held.approval_id, status: 'revoked' }]);
+  }, 60_000);
+});

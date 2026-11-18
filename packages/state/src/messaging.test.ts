@@ -444,7 +444,12 @@ describe('timeouts, backpressure and offline recipients (M3b)', () => {
     expect(state.tick(PROJECT).messages_escalated).toEqual([req.message_id]);
     expect(state.tick(PROJECT).messages_escalated).toEqual([]);
     const esc = state.q.escalations(PROJECT, 'pending').find((e) => e.kind === 'unanswered_request');
-    expect(esc?.question).toContain('fe-1 is waiting for an answer from be-1 to "currency"');
+    // Written for the person who reads it (2026-11-18): who asked whom, how long ago, the question.
+    expect(esc?.question).toBe(
+      'fe-1 asked be-1 something 10 minutes ago and has had no answer: "currency". You can answer for be-1 here.',
+    );
+    expect(esc?.question).not.toMatch(/\d{4}-\d{2}-\d{2}T|deadline|friday say/);
+    expect(JSON.stringify(esc ?? {})).not.toContain('friday say');
     expect(state.q.message(req.message_id).status).toBe('open');
     state.answerEscalation(PROJECT, human, String(esc?.escalation_id), 'Yes, with ISO-4217 codes.');
     expect(state.q.message(req.message_id)).toMatchObject({ status: 'settled', settled_reason: 'replied' });
@@ -487,5 +492,39 @@ describe('timeouts, backpressure and offline recipients (M3b)', () => {
     expect(state.q.brainCursor(PROJECT)).toBe(7);
     expect(state.q.consumerCursor(PROJECT, 'audit-export')).toBe(3);
     expect(state.q.consumerCursor(PROJECT, 'unknown')).toBe(0);
+  });
+
+  it('asks a person in their own words when the question was for them, and drops one whose task has ended (2026-11-18)', () => {
+    const be = agent('be-1', 'backend');
+    const fe = agent('fe-1', 'frontend');
+    const api = work(be, 'backend');
+    const ui = work(fe, 'frontend', [api.task_id]);
+    // A question to the person, about a task that is still going.
+    const live = send(be, 'human', {
+      content: 'The login work is written. To run the checks I need the install approved, please.',
+      blocking: true,
+      reply_within_s: 600,
+      task_id: api.task_id,
+    });
+    // A question about a task that ends before anybody answers.
+    const stale = send(fe, 'human', {
+      content: 'May I change the colour tokens?',
+      blocking: true,
+      reply_within_s: 600,
+      task_id: ui.task_id,
+    });
+    state.cancelTask(PROJECT, human, ui.task_id, 'not needed');
+    clock.advance(600_001);
+    state.heartbeat(PROJECT, be.harness_id);
+    const tick = state.tick(PROJECT);
+    expect(tick.messages_escalated).toEqual([live.message_id]);
+    expect(tick.messages_expired).toEqual([stale.message_id]);
+    const asked = state.q.escalations(PROJECT, 'pending').filter((e) => e.kind === 'unanswered_request');
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.question).toBe(
+      'be-1 asked you something 10 minutes ago and is still waiting for your answer: "The login work is written. To run the checks I need the install approved, please."',
+    );
+    expect(asked[0]?.question).not.toContain('human:');
+    expect(state.q.message(stale.message_id).status).toBe('expired');
   });
 });

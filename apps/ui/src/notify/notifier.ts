@@ -19,7 +19,7 @@
 import type { SnapshotInboxItem, SnapshotTask, UiSnapshot } from '@friday/protocol';
 import { capabilityWords } from '../model/capability-words.js';
 import { visible } from '../model/text.js';
-import { nextExpiryIn, turnHost, turnPrompt, waitingItems } from '../notch/derive.js';
+import { attentionWords, nextExpiryIn, turnHost, turnPrompt, waitingItems } from '../notch/derive.js';
 import { realTimers, type TimerApi } from '../notch/island-fsm.js';
 import { type AppContext, type DrawerRequest, openDrawer } from '../shell/context.js';
 import type { Connection } from '../store/state.js';
@@ -169,6 +169,11 @@ export function diffNotices(memory: NoticeMemory, board: UiSnapshot, now: number
         body: `${item.task.agent_key ? `${short(item.task.agent_key, 40)}: ` : ''}${short(item.task.summary)}`,
         taskId: item.taskId,
       });
+    } else if (item.kind === 'stopped' || item.kind === 'asking') {
+      if (memory.seen.has(item.key)) continue;
+      memory.seen.add(item.key);
+      const w = attentionWords(item, turnHost(item.host));
+      notices.push({ key: item.key, title: w.title, body: short(w.line), taskId: item.taskId });
     } else if (item.kind === 'quiet') {
       if (memory.seen.has(item.key)) continue;
       memory.seen.add(item.key);

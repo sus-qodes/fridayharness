@@ -418,7 +418,7 @@ pub fn prepare(
                 }),
             })
         }
-        Some(Confirm::LandGoal) => {
+        Some(Confirm::LandGoal) | Some(Confirm::LandGoalAside) => {
             let gid = checked.param("gid").unwrap_or_default().to_string();
             let detail = get(&format!("{base}goals/{gid}"))?;
             let goal = detail.get("goal").cloned().unwrap_or(Value::Null);
@@ -429,7 +429,16 @@ pub fn prepare(
             // person's in progress, work that is already in the folder), is sent without a dialog,
             // since it changes nothing in the folder.
             let plan = get(&format!("{base}goals/{gid}/land"))?;
-            if field(&plan, "state") != Some("ready") {
+            // Files in the way that the landing sets aside first (2026-11-18): asked about with
+            // their number. Only on the route that does it, and only when the daemon says they
+            // can be set aside; a plan that is ready is the ordinary merge, asked as one.
+            let in_the_way = plan
+                .get("in_the_way")
+                .filter(|_| what == Some(Confirm::LandGoalAside) && field(&plan, "state") == Some("blocked"))
+                .and_then(|w| w.get("count"))
+                .and_then(Value::as_u64)
+                .filter(|n| *n > 0);
+            if field(&plan, "state") != Some("ready") && in_the_way.is_none() {
                 return Ok(Prepared { body: json!({}), dialog: None });
             }
             let into = field(&plan, "into").unwrap_or("your branch").to_string();
@@ -438,6 +447,42 @@ pub fn prepare(
             let commits = diff.get("commits_ahead").and_then(Value::as_array).map_or(0, Vec::len);
             let files = diff.get("files").and_then(Value::as_array).map_or(0, Vec::len);
             too_long(&[text.unwrap_or(""), &branch, &into])?;
+            if let Some(n) = in_the_way {
+                let (files_word, they, them) = if n == 1 { ("file", "it is", "it") } else { ("files", "they are", "them") };
+                return Ok(Prepared {
+                    body: json!({}),
+                    dialog: Some(Dialog {
+                        title: "Friday: set files aside and land this goal?".into(),
+                        text: format!(
+                            "Goal {}: {}
+
+{} {} in your project folder {} changed without being committed, and this goal changes {} too.
+
+Friday keeps a copy of {} exactly as {} now, puts the folder back to your last commit for {}, and then merges {} into {}. Afterwards you can put your copy back from this goal's landing.
+
+If git cannot merge cleanly, your {} {} written back and nothing is changed.
+
+Set {} aside and land the goal?",
+                            visible(&gid),
+                            shown(text),
+                            n,
+                            files_word,
+                            if n == 1 { "is" } else { "are" },
+                            them,
+                            them,
+                            they,
+                            them,
+                            visible(&branch),
+                            visible(&into),
+                            files_word,
+                            if n == 1 { "is" } else { "are" },
+                            them,
+                        ),
+                        confirm: "Set aside and land".into(),
+                        danger: false,
+                    }),
+                });
+            }
             Ok(Prepared {
                 // The land route takes nothing: what it merges is the goal's own branch.
                 body: json!({}),
@@ -797,6 +842,43 @@ mod tests {
             assert!(p.dialog.is_none(), "{state}");
             assert_eq!(p.body, json!({}), "{state}");
         }
+        // Files in the way: the route that sets them aside asks with their number; the plain
+        // landing route asks nothing about a plan that is blocked, as before.
+        let aside_reads = |state: &'static str, count: u64| {
+            move |path: &str| -> Result<Value, CmdError> {
+                if path.ends_with("/goals/g1") {
+                    Ok(json!({"goal": {"objective": "Discount codes"}}))
+                } else if path.ends_with("/goals/g1/land") {
+                    Ok(json!({"state": state, "into": "main", "in_the_way": {"count": count, "left": count, "left_by": ["antigravity-1"], "working": []}}))
+                } else if path.ends_with("/goals/g1/diff?stat=1") {
+                    Ok(json!({"branch": "friday/goal-g1", "commits_ahead": [{"sha": "a"}], "files": [{"path": "README.md"}]}))
+                } else {
+                    panic!("unexpected read {path}")
+                }
+            }
+        };
+        let (ca, aside) = checked("goals/g1/land/set-aside", Some(&body));
+        assert_eq!(aside, Some(Confirm::LandGoalAside));
+        let p = prepare(aside, &ca, PID, Some(&body), &aside_reads("blocked", 32)).unwrap();
+        assert_eq!(p.body, json!({}));
+        let d = p.dialog.expect("a dialog about the files");
+        assert!(d.text.contains("32 files in your project folder are changed without being committed"), "{}", d.text);
+        assert!(d.text.contains("merges friday/goal-g1 into main"), "{}", d.text);
+        assert!(d.text.contains("your files are written back and nothing is changed"), "{}", d.text);
+        assert_eq!(d.confirm, "Set aside and land");
+        let one = prepare(aside, &ca, PID, Some(&body), &aside_reads("blocked", 1)).unwrap().dialog.unwrap();
+        assert!(one.text.contains("1 file in your project folder is changed"), "{}", one.text);
+        assert!(one.text.contains("Set it aside and land the goal?"), "{}", one.text);
+        // A plan that became ready meanwhile is the ordinary merge, and is asked as one.
+        let ready = prepare(aside, &ca, PID, Some(&body), &aside_reads("ready", 0)).unwrap().dialog.unwrap();
+        assert_eq!(ready.confirm, "Land the goal");
+        // The plain route never sets anything aside, whatever the plan says.
+        let plain = prepare(what, &c, PID, Some(&body), &aside_reads("blocked", 32)).unwrap();
+        assert!(plain.dialog.is_none());
+        // Blocked by something else (no files to set aside): nothing is asked, the daemon refuses.
+        let p = prepare(aside, &ca, PID, Some(&body), &reads("blocked")).unwrap();
+        assert!(p.dialog.is_none());
+        assert!(crate::routes::for_request("POST", &format!("{PREFIX}{PID}/goals/g1/land/set-aside"), None, PID, 4310).is_err());
         // Only confirm_and_send sends the merge; the plan is an ordinary read.
         assert!(crate::routes::for_request("POST", &format!("{PREFIX}{PID}/goals/g1/land"), None, PID, 4310).is_err());
         assert!(crate::routes::for_request("GET", &format!("{PREFIX}{PID}/goals/g1/land"), None, PID, 4310).is_ok());

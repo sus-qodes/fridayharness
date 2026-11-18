@@ -7,8 +7,11 @@ import { GitRoot, type SourceIdentity } from '@friday/git';
 import {
   type Autonomy,
   type Capability,
+  CLASS_CAPABILITY,
   type CommandClass,
   capabilityOf,
+  classifyCommand,
+  DEFAULT_RISK,
   evaluateCapability,
   mcpLevel,
   type ProjectPolicy,
@@ -460,6 +463,81 @@ function requestCapability(deps: RpcDeps, c: Caller, p: ParsedParamsOf<'permissi
     : task?.current_run_id
       ? state.q.findRun(task.current_run_id)
       : undefined;
+  // A request to run a command is the hook's own question, asked ahead (2026-11-18). Agents name
+  // the class in words of their own ("shell.npm.run", "shell.package.install"), which no rule knew:
+  // each such request went to a person as an unknown capability, under a name the hook never looks
+  // for, so even granted it unlocked nothing and stood beside the hook's own card for the same
+  // command. It is now judged as the command it is, by the judge the hook uses.
+  if (p.command && !p.resource && deps.judgeTool && task && task.current_run_id === (run?.run_id ?? null)) {
+    const agent = state.q.findAgent(c.agent_id);
+    const { result, approval_id } = deps.judgeTool({
+      harness: state.q.harness(c.harness_id),
+      agent: agent ? { agent_id: agent.agent_id, role: agent.role } : undefined,
+      action: { tool: 'Bash', kind: 'command', command: p.command },
+      actor: { kind: 'agent', id: c.agent_id },
+      askHuman: true,
+      request: { justification: p.justification, reuse: p.reuse, ttl_s: p.ttl_s },
+    });
+    const capabilityName = result.grant?.capability ?? result.relied_on?.[0]?.capability ?? p.action_class;
+    const row = approval_id ? state.q.approvalRow(pid, approval_id) : undefined;
+    const risk = (row?.risk as 'low' | 'medium' | 'high' | undefined) ?? 'medium';
+    if (result.decision === 'allow') {
+      return {
+        approval_id: null,
+        status: 'granted' as const,
+        reason:
+          result.rule === 'command.approved'
+            ? 'a human already approved exactly this: run it now'
+            : `no approval needed: ${result.reason} Run it now`,
+        expires_at: null,
+        capability: capabilityName,
+        risk,
+      };
+    }
+    if (result.decision === 'ask' && approval_id) {
+      return {
+        approval_id,
+        status: 'pending' as const,
+        reason: `the person was asked in Friday, under "Waiting for you" (${approval_id}). Go on with whatever else the task needs: you get a message when they decide, and the command passes then. If nothing else is left, end your turn and say you wait for ${approval_id}`,
+        expires_at: row?.expires_at ?? null,
+        capability: capabilityName,
+        risk,
+      };
+    }
+    // A class that always needs a person's explicit word (a push): the hook refuses it and says
+    // to ask, so asking must make the request the hook then finds, not answer with the refusal.
+    const effectiveNow = deps.policy?.();
+    const cls = result.command_class as CommandClass | undefined;
+    if (
+      cls &&
+      result.rule === `command.${cls}` &&
+      classifyCommand(
+        p.command,
+        effectiveNow?.autonomy ?? (project.config.autonomy as Partial<Record<CommandClass, Autonomy>>),
+      ).autonomy === 'manual'
+    ) {
+      return state.requestPermission(
+        pid,
+        c,
+        { ...p, task_id: task.task_id, run_id: run?.run_id },
+        {
+          capability: CLASS_CAPABILITY[cls],
+          decision: 'review',
+          risk: effectiveNow?.risk?.[CLASS_CAPABILITY[cls]] ?? DEFAULT_RISK[CLASS_CAPABILITY[cls]] ?? 'high',
+          reason: `${cls} commands need a person's explicit approval`,
+          policy_version: effectiveNow?.version ?? policyVersion(project.config),
+        },
+      );
+    }
+    return {
+      approval_id: null,
+      status: 'denied' as const,
+      reason: result.reason,
+      expires_at: null,
+      capability: capabilityName,
+      risk,
+    };
+  }
   const capability = capabilityOf(p.action_class);
   const effective = deps.policy?.();
   const version = effective?.version ?? policyVersion(project.config);

@@ -10,6 +10,12 @@
  * into by name; what is in the way, with the files, when something is; that the goal is on that
  * branch already; or that its work was made in the project folder itself (sessions attached from
  * an editor), where there is nothing to land and the person reviews and commits it.
+ *
+ * Files in the way (2026-11-18). "Commit them or set them aside first" was all a person was told
+ * when the folder held uncommitted changes to files the goal changes, and the app had nothing to
+ * do it with: in the trial the files were an agent's leftovers, not the person's. The dialog now
+ * says whose they are as far as Friday knows, and "Set them aside and land" keeps a copy of each,
+ * clears the way and lands; "Put them back" is offered here afterwards.
  */
 import type { GoalDiff, GoalSummary, LandPlanView } from '@friday/protocol';
 import { pruneWorktrees } from '../dock/commands.js';
@@ -40,6 +46,22 @@ export function goalBranch(goalId: string): string {
 
 /** How many of a plan's files the dialog lists before "and N more". */
 const FILES_SHOWN = 12;
+
+type InTheWay = NonNullable<LandPlanView['in_the_way']>;
+
+const filesWord = (n: number): string => (n === 1 ? '1 file' : `${n} files`);
+
+/** Whose the files in the way are, as far as Friday's records say. */
+export function whoseWords(w: InTheWay): string {
+  const who = w.left_by.map((k) => visible(k)).join(' and ') || 'An agent';
+  if (w.left >= w.count && w.left > 0) {
+    return `${who} left ${w.count === 1 ? 'it' : 'them'} in your folder while working on this goal. That work was finished elsewhere, so the goal already has the finished ${w.count === 1 ? 'version' : 'versions'}.`;
+  }
+  if (w.left > 0) {
+    return `${who} left ${w.left} of them in your folder while working on this goal. The rest may be changes of your own.`;
+  }
+  return `${w.count === 1 ? 'It' : 'They'} may be ${w.count === 1 ? 'a change' : 'changes'} of your own.`;
+}
 
 export function landModal(
   ctx: AppContext,
@@ -105,14 +127,15 @@ export function landModal(
     );
   }
 
-  /** The files of a plan (in the way, or to commit), as a short list. */
-  function fileList(files: string[]): HTMLElement | null {
+  /** The files of a plan (in the way, or to commit), as a short list; `total` when the plan lists only some. */
+  function fileList(files: string[], total = files.length): HTMLElement | null {
     if (!files.length) return null;
+    const more = Math.max(total, files.length) - Math.min(files.length, FILES_SHOWN);
     return h(
       'ul',
       { class: 'pn-list', dataset: { role: 'land-files' } },
       files.slice(0, FILES_SHOWN).map((f) => h('li', { class: 'pn-item' }, pathText(f, 'pn-grow'))),
-      files.length > FILES_SHOWN ? h('li', { class: 'pn-item muted' }, `and ${files.length - FILES_SHOWN} more`) : null,
+      more > 0 ? h('li', { class: 'pn-item muted' }, `and ${more} more`) : null,
     );
   }
 
@@ -122,30 +145,46 @@ export function landModal(
   /** The branch Land merges into, as the plan read it. */
   const into = () => (plan?.into ? visible(plan.into) : 'my branch');
 
-  /** Lands the goal into the branch the project folder has checked out, after a confirmation. */
-  async function landNow() {
+  /**
+   * Lands the goal into the branch the project folder has checked out, after a confirmation.
+   * `aside`: the uncommitted files in its way are kept and taken out of the way first.
+   */
+  async function landNow(aside = false) {
     if (landing) return;
     // Nothing is asked when nothing would merge (the goal is on that branch already).
     const merges = plan?.state !== 'landed';
+    const n = plan?.in_the_way?.count ?? 0;
     // The desktop shows its own dialog for this route (`confirm_and_send`); a browser asks here.
     if (merges && !ctx.platform.desktop) {
-      const ok = await ctx.confirm({
-        title: 'Land this goal?',
-        body: [
-          `This merges ${visible(branch)} into ${into()}, the branch your project folder has checked out, as "git merge" there would.`,
-          'If git cannot merge cleanly, nothing is changed and Friday says why.',
-        ],
-        confirmLabel: 'Land the goal',
-      });
+      const ok = await ctx.confirm(
+        aside
+          ? {
+              title: 'Set the files aside and land this goal?',
+              body: [
+                `Friday keeps a copy of ${filesWord(n)} exactly as ${n === 1 ? 'it is' : 'they are'} now, puts the folder back to your last commit for ${n === 1 ? 'it' : 'them'}, and then merges ${visible(branch)} into ${into()}.`,
+                'Afterwards you can put your copy back from here. If git cannot merge cleanly, your files are written back and nothing is changed.',
+              ],
+              confirmLabel: 'Set aside and land',
+            }
+          : {
+              title: 'Land this goal?',
+              body: [
+                `This merges ${visible(branch)} into ${into()}, the branch your project folder has checked out, as "git merge" there would.`,
+                'If git cannot merge cleanly, nothing is changed and Friday says why.',
+              ],
+              confirmLabel: 'Land the goal',
+            },
+      );
       if (!ok) return;
     }
     landing = true;
     landError.hidden = true;
+    backNote.hidden = true;
     renderLand();
     const r = await actWithError(
       ctx,
       'Land the goal',
-      () => ctx.api.landGoal(goalId),
+      () => (aside ? ctx.api.landGoalAside(goalId) : ctx.api.landGoal(goalId)),
       (e) => {
         landError.hidden = false;
         landError.textContent = plain(e.message, 1000);
@@ -153,13 +192,87 @@ export function landModal(
       (x) =>
         x.status === 'already'
           ? `Nothing to land: ${x.into} already has this goal's work`
-          : `Landed into ${x.into}${x.fast_forward ? ' (fast-forward)' : ''}`,
+          : `Landed into ${x.into}${x.fast_forward ? ' (fast-forward)' : ''}${x.set_aside ? `. ${filesWord(x.set_aside.count)} set aside` : ''}`,
     );
     landing = false;
     if (td.done) return;
     if (r) ctx.refresh();
     // What Land would do now: landed, or what the refusal named.
     await readPlan();
+  }
+
+  /** What putting the set-aside files back did, said under the button. */
+  const backNote = h('div', { class: 'pn-land-blocked', role: 'status', hidden: true });
+  let showAside = false;
+
+  /** Writes the files set aside at the landing back into the folder, over the landed versions. */
+  async function putBack() {
+    if (landing) return;
+    const n = (plan?.set_aside ?? []).reduce((sum, s) => sum + s.count, 0);
+    const ok = await ctx.confirm({
+      title: 'Put the set-aside files back?',
+      body: [
+        `This writes your ${n === 1 ? 'copy of 1 file' : `copies of ${n} files`} over the landed ${n === 1 ? 'version' : 'versions'} in your project folder, as changes that are not committed.`,
+        'A file that was changed since the landing is left as it is. The landed versions stay in your branch’s history either way.',
+      ],
+      confirmLabel: 'Put them back',
+    });
+    if (!ok) return;
+    landing = true;
+    landError.hidden = true;
+    backNote.hidden = true;
+    renderLand();
+    const r = await actWithError(
+      ctx,
+      'Put the files back',
+      () => ctx.api.putSetAsideBack(goalId),
+      (e) => {
+        landError.hidden = false;
+        landError.textContent = plain(e.message, 1000);
+      },
+      (x) => `Put back ${filesWord(x.restored.length)}`,
+    );
+    landing = false;
+    if (td.done) return;
+    if (r) {
+      const left = [...r.skipped, ...r.failed];
+      if (left.length) {
+        backNote.hidden = false;
+        backNote.textContent = plain(
+          `${filesWord(left.length)} ${left.length === 1 ? 'was' : 'were'} left as ${left.length === 1 ? 'it is' : 'they are'} (changed since the landing, or open in another program): ${left.slice(0, 8).join(', ')}${left.length > 8 ? ', …' : ''}. Friday still keeps your ${left.length === 1 ? 'copy' : 'copies'}.`,
+          900,
+        );
+      }
+      ctx.refresh();
+    }
+    await readPlan();
+  }
+
+  /** What was set aside at a landing of this goal and can be put back; null when nothing is. */
+  function asideBox(): HTMLElement | null {
+    const kept = plan?.set_aside ?? [];
+    if (!kept.length) return null;
+    const n = kept.reduce((sum, s) => sum + s.count, 0);
+    const files = kept.flatMap((s) => s.files);
+    const at = kept[kept.length - 1]?.at;
+    return h(
+      'div',
+      { class: 'pn-land-aside', dataset: { role: 'land-aside' } },
+      note(
+        `${filesWord(n)} ${n === 1 ? 'was' : 'were'} set aside when this goal landed${at ? ` (${timeAgo(at, ctx.now())})` : ''}. Your folder has the goal’s ${n === 1 ? 'version' : 'versions'} now, and Friday keeps your ${n === 1 ? 'copy' : 'copies'}.`,
+      ),
+      h(
+        'div',
+        { class: 'pn-actions pn-actions-start' },
+        button('Put them back', () => void putBack(), { class: 'btn', disabled: landing }),
+        linkButton(showAside ? 'Hide the files' : 'Show the files', () => {
+          showAside = !showAside;
+          renderLand();
+        }),
+      ),
+      showAside ? fileList(files, n) : null,
+      backNote,
+    );
   }
 
   function renderLand() {
@@ -194,6 +307,7 @@ export function landModal(
               { class: 'pn-actions pn-actions-start' },
               button('Mark as landed', () => void landNow(), { class: 'btn', disabled: landing }),
             ),
+        asideBox(),
         // What is left once the work is on your branch (2026-11-17): the folders of the finished
         // tasks. Nothing offered to remove them here; it was a command in the palette.
         h(
@@ -225,6 +339,39 @@ export function landModal(
             : null,
           again,
         ),
+      ];
+    } else if (plan.state === 'blocked' && plan.in_the_way) {
+      // Uncommitted files the goal changes too: Friday can take them out of the way itself.
+      const w = plan.in_the_way;
+      const busy = w.working.length > 0;
+      body = [
+        h(
+          'div',
+          { class: 'pn-land-blocked', role: 'status' },
+          `${filesWord(w.count)} in your project folder ${w.count === 1 ? 'has changes that were' : 'have changes that were'} never committed, and this goal changes ${w.count === 1 ? 'the same file' : 'the same files'}. Landing would overwrite ${w.count === 1 ? 'it' : 'them'}, so it waits.`,
+        ),
+        fileList(plan.files, w.count),
+        note(
+          busy
+            ? `${w.working.map((k) => visible(k)).join(' and ')} ${w.working.length === 1 ? 'is' : 'are'} working on some of them in your folder right now. Land the goal when that work is done.`
+            : whoseWords(w),
+        ),
+        h(
+          'div',
+          { class: 'pn-actions pn-actions-start' },
+          button(`Set ${w.count === 1 ? 'it' : 'them'} aside and land into ${into()}`, () => void landNow(true), {
+            class: 'btn btn-primary',
+            disabled: landing || busy,
+            title: 'Keep a copy of these files, clear the way and land the goal',
+          }),
+          again,
+        ),
+        busy
+          ? null
+          : note(
+              `Friday keeps a copy of ${w.count === 1 ? 'the file' : 'each file'} exactly as it is now, puts the folder back to your last commit for ${w.count === 1 ? 'it' : 'them'}, and lands the goal. You can put your ${w.count === 1 ? 'copy' : 'copies'} back afterwards, right here. If the landing fails, ${w.count === 1 ? 'it is' : 'they are'} written back and nothing changes.`,
+            ),
+        asideBox(),
       ];
     } else if (plan.state === 'blocked' || plan.state === 'not_completed') {
       body = [

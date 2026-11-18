@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LET_AGENT_DECIDE } from '../model/escalations.js';
 import { makeContext, type TestContext } from '../test/context.js';
 import { makeAgent, makeEscalation, makeRun, makeSnapshot, makeTask } from '../test/fixtures.js';
-import { questionCard } from './question-card.js';
+import { questionCard, repairRequest } from './question-card.js';
 
 const HOSTILE = '<img src=x onerror=alert(1)>';
 const LONG = 'z'.repeat(5000);
@@ -740,6 +740,90 @@ describe('question cards by kind (plan FD-21)', () => {
         { path: 'src/a.ts' },
       ]);
       expect(card.el.textContent).toContain('Yours is back in place.');
+      card.destroy();
+    });
+  });
+
+  describe('a lockfile no new task folder can install from (2026-11-18)', () => {
+    const broken = (over: Partial<EscalationView> = {}) =>
+      makeEscalation({
+        kind: 'install_broken',
+        task_id: null,
+        goal_id: null,
+        requested_by_kind: 'system',
+        requested_by_id: 'friday',
+        question:
+          "This project's packages cannot be installed in a new task folder: package-lock.json does not match package.json. Have an agent repair package-lock.json?",
+        options: ['have an agent repair it', 'not now'],
+        details: {
+          key: 'abc',
+          lockfile: 'package-lock.json',
+          missing: ['Missing: @emnapi/core@1.11.2 from lock file', `Missing: x${HOSTILE} from lock file`],
+          evidence: ['install: npm ci --prefer-offline'],
+        },
+        ...over,
+      });
+    const GOALS = 'POST /goals';
+
+    it('says it once in plain words, with what npm said, and leads with the repair', () => {
+      const card = mount(broken());
+      expect(card.el.querySelector('.gv-card-title')?.textContent).toBe(
+        'New task folders cannot install this project’s packages',
+      );
+      expect(card.el.textContent).toContain('that install now fails: package-lock.json does not match package.json');
+      expect(card.el.textContent).toContain('npm said: Missing: @emnapi/core@1.11.2 from lock file');
+      expect(card.el.textContent).toContain('costs minutes on every task');
+      const names = [...card.el.querySelectorAll('.gv-actions button')].map((b) => b.textContent?.trim());
+      expect(names).toEqual(['Have an agent repair it', 'Not now', 'Later']);
+      expect(buttonNamed(card.el, 'Have an agent repair it').classList.contains('btn-primary')).toBe(true);
+      // Nothing to type, and no instruction for a terminal.
+      expect(card.el.querySelector('textarea')).toBeNull();
+      expect(card.el.textContent).not.toContain('friday ');
+      expect(card.el.querySelector('img')).toBeNull();
+      card.destroy();
+    });
+
+    it('"Have an agent repair it" starts a goal for that file only, and closes the question', async () => {
+      const card = mount(broken(), {}, { [GOALS]: { goal_id: 'goal_repair' } });
+      arm(card.el);
+      buttonNamed(card.el, 'Have an agent repair it').click();
+      await flush();
+      const made = ctx.transport.to('POST', '/goals').map((c) => c.body as { request: string; plan: boolean });
+      expect(made).toHaveLength(1);
+      expect(made[0]?.request).toBe(repairRequest('package-lock.json'));
+      expect(made[0]?.request).toContain('change nothing else');
+      expect(made[0]?.plan).toBe(true);
+      expect(answers(ctx)).toEqual(['An agent was asked to repair it (goal goal_repair).']);
+      expect(card.el.textContent).toContain('A goal to repair it was started');
+      card.destroy();
+    });
+
+    it('a goal that could not be created leaves the question open', async () => {
+      const card = mount(
+        broken(),
+        {},
+        {
+          [GOALS]: () => {
+            throw new Error('the daemon is busy');
+          },
+        },
+      );
+      arm(card.el);
+      buttonNamed(card.el, 'Have an agent repair it').click();
+      await flush();
+      expect(answers(ctx)).toEqual([]);
+      expect(buttonNamed(card.el, 'Have an agent repair it').disabled).toBe(false);
+      card.destroy();
+    });
+
+    it('"Not now" closes it without starting anything', async () => {
+      const card = mount(broken(), {}, { [GOALS]: { goal_id: 'goal_repair' } });
+      arm(card.el);
+      buttonNamed(card.el, 'Not now').click();
+      await flush();
+      expect(ctx.transport.to('POST', '/goals')).toHaveLength(0);
+      expect(answers(ctx)).toEqual(['Not now.']);
+      expect(card.el.textContent).toContain('Friday asks again only when the package list changes');
       card.destroy();
     });
   });

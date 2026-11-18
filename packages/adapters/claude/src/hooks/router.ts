@@ -31,6 +31,8 @@ interface HookBody {
     /** Stop: false where the host says the turn ended other than by the agent (a human's stop, an error). */
     stop_completed?: boolean | null;
     stop_reason?: string | null;
+    /** Stop: the host's error text for a turn that ended on one. */
+    stop_error?: string | null;
   };
 }
 
@@ -297,7 +299,9 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           if (result.decision === 'ask' && cannotAsk) {
             return reply({
               decision: 'deny',
-              reason: `${result.reason}. A human decides this${approval_id ? ` (approval ${approval_id})` : ''}: it is declined until then. Do not try it another way; if you cannot finish without it, end as blocked and say so.`,
+              // It said "declined… end as blocked", and nothing ever said "granted" (2026-11-18):
+              // an agent whose three requests were all approved within seconds ended blocked.
+              reason: `${result.reason} The person was asked in Friday${approval_id ? ` (approval ${approval_id})` : ''}. Do not try it another way. Go on with whatever else the task needs: you get a message when they decide, and this same command passes then. If nothing else is left, end your turn and say you wait for ${approval_id ?? 'that approval'}.`,
             });
           }
           if (result.decision === 'allow') {
@@ -376,7 +380,17 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
             pid,
             actor,
             'agent.turn_ended',
-            { harness_id: harness?.harness_id ?? null, task_id: task?.task_id ?? null },
+            {
+              harness_id: harness?.harness_id ?? null,
+              task_id: task?.task_id ?? null,
+              // Why it ended, where the host says (2026-11-18): an agent its person runs stopped on
+              // "no capacity" and then on a used-up quota, and Friday went on showing it as running.
+              ...(body.host?.stop_reason ? { reason: String(body.host.stop_reason).slice(0, 80) } : {}),
+              ...(typeof body.host?.stop_completed === 'boolean' ? { completed: body.host.stop_completed } : {}),
+              ...(body.host?.stop_error
+                ? { error: state.redactor.redactString(String(body.host.stop_error)).value.slice(0, 400) }
+                : {}),
+            },
             refs(task),
           );
           // A spawned session's end is its adapter's to report.

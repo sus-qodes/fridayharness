@@ -226,6 +226,20 @@ export interface UsageView {
   at: string;
 }
 
+/** See `SnapshotTask.attention`. */
+export interface TaskAttention {
+  kind: 'stopped' | 'asking';
+  at: string;
+  /** `stopped`: the host's word for how the turn ended (`model_stop`, `error`, …); null when it does not say. */
+  reason?: string | null;
+  /** `stopped`: the host's error text, credentials removed. */
+  error?: string | null;
+  /** `asking`: the tool and what it would act on, and Friday's rule in words. */
+  tool?: string | null;
+  target?: string | null;
+  rule?: string | null;
+}
+
 /** A task as the board shows it. */
 export type SnapshotTask = TaskView & {
   agent_key: string | null;
@@ -233,6 +247,14 @@ export type SnapshotTask = TaskView & {
   waiting_note: string | null;
   /** READY: why delegation left it waiting ("no agent is available …"). */
   delegation_note: string | null;
+  /**
+   * RUNNING, held by an agent its person runs (Antigravity, Claude Code in an editor): what that
+   * agent last did when it is not working (2026-11-18). `stopped`: its turn ended and nothing
+   * followed (it waits for its person there, or its host failed: `reason`, `error`). `asking`: a
+   * rule of Friday's made its host ask the person in its own window (`tool`, `target`). Absent
+   * while it works. Friday showed such a task as running, with nothing waiting for the person.
+   */
+  attention?: TaskAttention | null;
   /**
    * Tool calls its agents' hosts reported finished for it, completed or failed (`agent.event`
    * `tool.completed` and `tool.failed`), over every attempt. A call Friday refused never ran and
@@ -288,6 +310,31 @@ export interface LandPlanView {
   files: string[];
   commits: number;
   work: 'branch' | 'folder' | 'mixed';
+  /**
+   * Set on a `blocked` plan when what is in the way is uncommitted files the goal changes too
+   * (2026-11-18): Land can set those aside first (`POST …/goals/:gid/land/set-aside`).
+   */
+  in_the_way?: {
+    /** All of them (`files` lists fifty at most). */
+    count: number;
+    /** How many an agent's ended attempt at this goal left in the folder, and whose attempt. */
+    left: number;
+    left_by: string[];
+    /** Agents working on some of them in the folder right now: they are not set aside meanwhile. */
+    working: string[];
+  };
+  /** Files set aside at an earlier landing of this goal and not put back. */
+  set_aside?: { ref: string; commit: string; count: number; files: string[]; into: string | null; at: string }[];
+}
+
+/** `POST …/goals/:gid/set-aside/restore`: what putting the set-aside files back did. */
+export interface PutBackView {
+  goal_id: string;
+  restored: string[];
+  /** Changed in the folder since: left as they are, and still kept. */
+  skipped: string[];
+  /** Could not be written (open in another program): still kept. */
+  failed: string[];
 }
 
 /** An inbox item without its body (loaded when opened), with a short preview. */

@@ -163,6 +163,7 @@ export const antigravity: HostModule = {
       // `continuationActive` as `stop_hook_active`) is a decision to take, not a correction to make.
       stop_completed: e === 'Stop' ? str(raw.terminationReason) === 'model_stop' : null,
       stop_reason: e === 'Stop' ? str(raw.terminationReason) : null,
+      stop_error: e === 'Stop' ? str(raw.error) : null,
       reason: null,
       error: failed ? str(raw.error) : null,
       judging: 'full',

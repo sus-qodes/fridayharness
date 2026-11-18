@@ -1021,6 +1021,14 @@
 .pn-land-cleanup {
   margin-top: 8px;
 }
+/* Files set aside at a landing, with the way back (2026-11-18). */
+.pn-land-aside {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 6px;
+}
 
 /* ---- "Put finished work into my project": one choice of three (2026-11-17) --------------------- */
 

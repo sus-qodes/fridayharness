@@ -129,11 +129,18 @@ interface Attempt {
   verdict: { valid: true } | { valid: false; why: string } | null;
   /** The turn's first input was sent. */
   started: boolean;
+  /** The uuid of the message the turn was started with, and whether the host has taken it (its echo). */
+  openingId?: string;
+  openingTaken: boolean;
   stopping: boolean;
   done: boolean;
   /** The spending cap this attempt's session runs with, and whether it is the agent's own. */
   budget?: { cap_usd: number; own: boolean };
 }
+
+/** What a person reads when a session ended its turn with no answer at all. */
+const NO_ANSWER =
+  'It ended its turn without doing or saying anything, so nothing is claimed as done. Continue it, or give the task to another agent.';
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
 /** What `system/init` lists, by name: a string, or an object with a `name`. */
@@ -445,6 +452,7 @@ export class ClaudeSpawnAdapter {
       lastText: '',
       verdict: null,
       started: false,
+      openingTaken: false,
       stopping: false,
       done: false,
       // The agent's own cap is the one that applies unless the task's is smaller: Friday ends an
@@ -466,7 +474,8 @@ export class ClaudeSpawnAdapter {
             firstTaskMessage(p, instructions.contract);
     const start = () => {
       try {
-        this.#send(attempt, opening());
+        attempt.openingTaken = false;
+        attempt.openingId = this.#send(attempt, opening());
         attempt.started = true;
         return true;
       } catch (e) {
@@ -635,6 +644,11 @@ export class ClaudeSpawnAdapter {
       this.#initialised(a, m);
       return;
     }
+    if (m.type === 'user' && typeof m.uuid === 'string' && m.uuid === a.openingId) {
+      // The host took the message the turn was started with: what it answers from here is the turn's.
+      a.openingTaken = true;
+      return;
+    }
     if (m.type === 'user' && typeof m.uuid === 'string' && a.relayed.has(m.uuid)) {
       // Claude Code echoed a message it took: it reached the session.
       const id = a.relayed.get(m.uuid) as string;
@@ -653,7 +667,28 @@ export class ClaudeSpawnAdapter {
       if (text) a.lastText = text;
       return;
     }
-    if (m.type === 'result') void this.#finish(a, m);
+    if (m.type === 'result') {
+      // A resumed session first answers what it had queued itself (a background command of the
+      // process before it, reported as "didn't finish"): a turn of its own with no model call and
+      // nothing said, before it takes the message it was resumed with. That empty result was read
+      // as the task's final answer: a session a person had just continued was recorded as a
+      // completion claim "done", three seconds later, with every check still to fail (2.1.306,
+      // 2026-11-18). A result is the turn's only once the host took the turn's message; an error
+      // is never waited out.
+      if (
+        m.subtype === 'success' &&
+        m.is_error !== true &&
+        a.openingId !== undefined &&
+        !a.openingTaken &&
+        num(m.num_turns) === 0 &&
+        m.structured_output === undefined &&
+        !str(m.result)
+      ) {
+        this.#log(`${a.taskId}: an empty result before the turn's message was taken is not the turn's; waiting`);
+        return;
+      }
+      void this.#finish(a, m);
+    }
   }
 
   /**
@@ -743,7 +778,15 @@ export class ClaudeSpawnAdapter {
     const spent = { events: [{ event_type: 'host.usage', data: hostUsage(m) }], stop: () => stopped };
     if (m.subtype === 'success' && m.is_error !== true) {
       const final = parseFinal(m.structured_output ?? str(m.result) ?? a.lastText, a.lastText);
-      if (final.status === 'blocked') {
+      // A turn that answered nothing claims nothing: it is said to a person, never taken as "done".
+      const silent = m.structured_output === undefined && !str(m.result) && !a.lastText.trim();
+      if (silent) {
+        void reports.report(
+          'result',
+          { ...ids, status: 'blocked', summary: 'ended without an answer', blocked_reason: NO_ANSWER },
+          spent,
+        );
+      } else if (final.status === 'blocked') {
         void reports.report(
           'result',
           {

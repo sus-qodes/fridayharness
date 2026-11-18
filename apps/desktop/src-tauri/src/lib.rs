@@ -107,13 +107,21 @@ fn visible_studio(app: &AppHandle) -> Option<WebviewWindow> {
 
 /// A native two-button dialog; true when confirmed. Never call it on the main thread.
 fn ask(app: &AppHandle, d: &Dialog) -> bool {
+    ask_from(app, None, d)
+}
+
+/// The same dialog, shown over the window the person clicked in (2026-11-18). It was always attached
+/// to the Studio: a click in the Notch, which stays above every window, opened it behind the Notch's
+/// card, so the person saw a busy cursor, a card that would not close, and no question.
+fn ask_from(app: &AppHandle, from: Option<&WebviewWindow>, d: &Dialog) -> bool {
     let mut b = app
         .dialog()
         .message(&d.text)
         .title(&d.title)
         .kind(if d.danger { MessageDialogKind::Warning } else { MessageDialogKind::Info })
         .buttons(MessageDialogButtons::OkCancelCustom(d.confirm.clone(), "Cancel".into()));
-    if let Some(w) = visible_studio(app) {
+    let clicked = from.filter(|w| w.is_visible().unwrap_or(false)).cloned();
+    if let Some(w) = clicked.or_else(|| visible_studio(app)) {
         b = b.parent(&w);
     }
     b.blocking_show()
@@ -180,7 +188,13 @@ async fn friday_request(
 /// Sends an action the page may not send by itself, after Rust decided on and showed its native
 /// dialog (confirm.rs).
 #[tauri::command]
-async fn confirm_and_send(app: AppHandle, method: String, path: String, body: Option<Value>) -> Result<Value, CmdError> {
+async fn confirm_and_send(
+    app: AppHandle,
+    window: WebviewWindow,
+    method: String,
+    path: String,
+    body: Option<Value>,
+) -> Result<Value, CmdError> {
     let project = current_project(&app)?;
     blocking(move || {
         let discovery = daemon::read_discovery(&project)?;
@@ -188,7 +202,7 @@ async fn confirm_and_send(app: AppHandle, method: String, path: String, body: Op
         let get = |raw: &str| proxy::send(&project, Gate::Shell, &request("GET", raw, None, Duration::from_secs(60)));
         let prepared = confirm::prepare(what, &checked, &project.id, body.as_ref(), &get)?;
         if let Some(dialog) = &prepared.dialog {
-            if !ask(&app, dialog) {
+            if !ask_from(&app, Some(&window), dialog) {
                 return Err(confirm::cancelled_error());
             }
         }
@@ -199,6 +213,8 @@ async fn confirm_and_send(app: AppHandle, method: String, path: String, body: Op
             // Longer than the daemon gives the merge itself (land.ts, 120 s), so a slow hook or a
             // large checkout never reads here as an error while the merge still finishes.
             Some(routes::Confirm::LandGoal) => Duration::from_secs(180),
+            // The same merge, after the files in the way were kept and taken out of it.
+            Some(routes::Confirm::LandGoalAside) => Duration::from_secs(300),
             _ => Duration::from_secs(30),
         };
         proxy::send(&project, Gate::Confirmed, &request(&method, &path, Some(&prepared.body), timeout))

@@ -12,6 +12,8 @@ import type {
   SnapshotInboxItem,
   SnapshotList,
   SnapshotTask,
+  TaskAttention,
+  TaskView,
   UiSnapshot,
   UsageView,
   VerificationView,
@@ -179,6 +181,7 @@ export function buildUiSnapshot(deps: {
     agent_key: agentKey(t.assigned_agent_id),
     waiting_note: t.status === 'WAITING' ? latestReason(state, pid, t.task_id, 'task.waiting') : null,
     delegation_note: t.status === 'READY' ? delegationNote(state, t.task_id) : null,
+    attention: attentionOf(state, pid, t),
     tool_calls: toolCalls.get(t.task_id) ?? 0,
   }));
 
@@ -346,6 +349,42 @@ function latestReason(state: FridayState, pid: string, taskId: string, type: str
   const e = state.store.readByRef(pid, 'task', taskId, { types: [type], limit: 1, desc: true })[0];
   const reason = (e?.payload as { transition?: { reason?: unknown } } | undefined)?.transition?.reason;
   return typeof reason === 'string' && reason ? reason.slice(0, 1000) : null;
+}
+
+/**
+ * What a running task's agent last did, when that agent is one its person runs and it is not at
+ * work (`SnapshotTask.attention`): the newest of its turn ending, a tool call Friday judged and a
+ * tool call that finished. A turn that ended last: it stopped. A call Friday answered "ask" last:
+ * its host is asking the person in its own window. Anything else: it works.
+ */
+function attentionOf(state: FridayState, pid: string, t: TaskView): TaskAttention | null {
+  if (t.status !== 'RUNNING' || !t.current_run_id) return null;
+  const run = state.q.findRun(t.current_run_id);
+  const h = run ? state.q.findHarness(run.harness_id) : undefined;
+  // An agent Friday starts is watched by its adapter: its turns and its questions are Friday's own.
+  if (!h || h.attach_mode === 'spawn') return null;
+  const e = state.store.readByRef(pid, 'task', t.task_id, {
+    types: ['agent.turn_ended', 'policy.evaluated', 'agent.event', 'run.paths_observed'],
+    limit: 1,
+    desc: true,
+  })[0];
+  if (!e || (run?.accepted_at && e.occurred_at < run.accepted_at)) return null;
+  const p = (e.payload ?? {}) as Record<string, unknown>;
+  const text = (v: unknown, max: number) => (typeof v === 'string' && v ? v.slice(0, max) : null);
+  if (e.type === 'agent.turn_ended') {
+    return { kind: 'stopped', at: e.occurred_at, reason: text(p.reason, 80), error: text(p.error, 400) };
+  }
+  if (e.type === 'policy.evaluated' && p.decision === 'ask') {
+    const targets = Array.isArray(p.targets) ? p.targets.filter((x): x is string => typeof x === 'string') : [];
+    return {
+      kind: 'asking',
+      at: e.occurred_at,
+      tool: text(p.tool, 80),
+      target: text(targets[0], 400),
+      rule: text(p.reason, 300),
+    };
+  }
+  return null;
 }
 
 /** Why delegation left a READY task waiting: its latest decision when nobody took it. */

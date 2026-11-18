@@ -16,7 +16,14 @@ import type { SnapshotInboxItem, UiSnapshot } from '@friday/protocol';
 import { capabilityWords } from '../model/capability-words.js';
 import { classifyEscalation } from '../model/escalations.js';
 import { visible } from '../model/text.js';
-import { itemSignature, turnHost, turnPrompt, type WaitingItem, waitingItems } from '../notch/derive.js';
+import {
+  attentionWords,
+  itemSignature,
+  turnHost,
+  turnPrompt,
+  type WaitingItem,
+  waitingItems,
+} from '../notch/derive.js';
 import { type AppContext, type Component, openDrawer, openModal } from '../shell/context.js';
 import { button, h, replace, setText } from '../ui/dom.js';
 import { cleanText, plural, truncate } from '../ui/format.js';
@@ -64,6 +71,8 @@ const ICONS: Record<TrayItem['kind'], IconName> = {
   waiting: 'hourglass',
   turn: 'hourglass',
   quiet: 'hourglass',
+  stopped: 'stop',
+  asking: 'question',
   plan: 'goal',
   verify: 'check',
   land: 'branch',
@@ -76,6 +85,8 @@ const ICONS: Record<TrayItem['kind'], IconName> = {
 const OPENS_PLACE = new Set<TrayItem['kind']>([
   'turn',
   'quiet',
+  'stopped',
+  'asking',
   'plan',
   'verify',
   'land',
@@ -151,6 +162,14 @@ export function mountDecisionsTray(
           label: `${visible(item.task.agent_key ?? 'An agent')} waits`,
           sub: truncate(cleanText(item.task.waiting_note ?? item.task.summary), 110),
         };
+      case 'stopped':
+      case 'asking': {
+        const w = attentionWords(item, turnHost(item.host));
+        return {
+          label: w.title,
+          sub: `${truncate(cleanText(w.line), 150)} · ${truncate(cleanText(item.task.summary), 70)}`,
+        };
+      }
       case 'quiet':
         return {
           label: `${visible(item.agentKey)} has gone quiet`,
@@ -218,7 +237,7 @@ export function mountDecisionsTray(
 
   /** Where a row without a card is decided. */
   const openPlace = (item: TrayItem): void => {
-    if (item.kind === 'turn' || item.kind === 'quiet') {
+    if (item.kind === 'turn' || item.kind === 'quiet' || item.kind === 'stopped' || item.kind === 'asking') {
       ctx.store.patch('ui', { selectedTaskId: item.taskId });
       openDrawer(ctx, { kind: 'inspector', id: item.taskId });
     } else if (item.kind === 'plan') openModal(ctx, { kind: 'plan-review', id: item.goalId });

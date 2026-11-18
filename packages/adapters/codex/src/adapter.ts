@@ -772,7 +772,20 @@ export class CodexAdapter {
     const spent = { ...this.#spent(a), stop: () => stopped };
     if (turn.status === 'completed') {
       const final = parseFinal(a.lastMessage);
-      if (final.status === 'blocked') {
+      // A turn that answered nothing claims nothing: it is said to a person, never taken as "done".
+      if (!String(a.lastMessage ?? '').trim()) {
+        void reports.report(
+          'result',
+          {
+            ...ids,
+            status: 'blocked',
+            summary: 'ended without an answer',
+            blocked_reason:
+              'It ended its turn without doing or saying anything, so nothing is claimed as done. Continue it, or give the task to another agent.',
+          },
+          spent,
+        );
+      } else if (final.status === 'blocked') {
         void reports.report(
           'result',
           {

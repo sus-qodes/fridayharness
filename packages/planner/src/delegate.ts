@@ -193,13 +193,20 @@ export function delegate(
   // its higher score in hand, while Codex was idle.
   const waits = new Map(candidates.map((c) => [c.agent_id, c.waits_for_person === true]));
   const selfStarting = (s: CandidateScore) => (waits.get(s.agent_id) ? 0 : 1);
+  /** Its role is the task's, or one of the two is the generalist: not another speciality. */
+  const fits = (s: CandidateScore) => (s.parts.capability_fit > 0.2 ? 1 : 0);
   const scores = candidates
     .map((c) => scoreCandidate(task, c))
     .sort(
       (a, b) =>
         Number(b.eligible) - Number(a.eligible) ||
-        selfStarting(b) - selfStarting(a) ||
+        // The role the plan names comes first (2026-11-18): starting by itself decided before it,
+        // so a frontend task went to a backend agent while a frontend agent was connected.
         ofRole(b) - ofRole(a) ||
+        // Nor does it outweigh fitting at all: an agent of another speciality (a backend agent for
+        // a frontend task) comes after any agent that fits, also one that waits for its person.
+        fits(b) - fits(a) ||
+        selfStarting(b) - selfStarting(a) ||
         cheapness(a) - cheapness(b) ||
         b.total - a.total ||
         a.agent_key.localeCompare(b.agent_key),

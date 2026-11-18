@@ -1307,9 +1307,197 @@ describe('landing a completed goal', () => {
         (es) => es.length >= 1,
         'the held landing on record',
       );
-      expect(String((held[0]?.payload as { reason?: string }).reason)).toContain('not committed');
+      expect(String((held[0]?.payload as { reason?: string } | undefined)?.reason)).toContain('not committed');
       expect(await head()).toBe(before);
       expect(text('src/a.mjs')).toBe('export const a = 3; // mine\n');
+    });
+  });
+
+  describe('files in the way, set aside (2026-11-18)', () => {
+    interface WithAside {
+      state: string;
+      files: string[];
+      in_the_way?: { count: number; left: number; left_by: string[]; working: string[] };
+      set_aside?: { ref: string; commit: string; count: number; files: string[] }[];
+    }
+    const planOf = (td: TestDaemon, goalId: string) =>
+      td.operator.get<WithAside>(td.operator.projectPath(`/goals/${goalId}/land`));
+    const landAside = (td: TestDaemon, goalId: string) =>
+      td.operator.post<{ status: string; set_aside?: { ref: string; count: number } }>(
+        td.operator.projectPath(`/goals/${goalId}/land/set-aside`),
+        {},
+      );
+    const putBack = (td: TestDaemon, goalId: string) =>
+      td.operator.post<{ restored: string[]; skipped: string[]; failed: string[] }>(
+        td.operator.projectPath(`/goals/${goalId}/set-aside/restore`),
+        {},
+      );
+    const status = async () => (await runGit(ws().projectDir, ['status', '--porcelain'])).stdout;
+    const asideRefs = async () =>
+      (await runGit(ws().projectDir, ['for-each-ref', '--format=%(refname)', 'refs/friday/set-aside/'])).stdout
+        .split('\n')
+        .filter(Boolean);
+    const events = (td: TestDaemon, type: string) =>
+      td.daemon.state.store.readSince(td.project.project_id, 0, { types: [type], limit: 100 });
+
+    /** A completed goal that changes `src/a.mjs` and adds `src/c.mjs`. */
+    async function goalOfTwoFiles(td: TestDaemon) {
+      const { goalId, ids } = await goalWith(td, [
+        { key: 'a-and-c', summary: 'Raise a, add c', write: ['src/a.mjs', 'src/c.mjs'] },
+      ]);
+      const id = ids['a-and-c'] as string;
+      await work(td, 'be-1', id, { 'src/a.mjs': 'export const a = 2;\n', 'src/c.mjs': 'export const c = 1;\n' });
+      await integrationOf(td, id);
+      await runOnce(td);
+      return goalId;
+    }
+
+    it('keeps a copy of each, clears the way and lands; "put them back" writes them over what was not changed since', async () => {
+      const td = await project();
+      const goalId = await goalOfTwoFiles(td);
+      const MINE = 'export const a = 3; // mine\n';
+      const SCRATCH = '// my scratch file\n';
+      writeFileSync(file('src/a.mjs'), MINE);
+      writeFileSync(file('src/c.mjs'), SCRATCH);
+      // An edit of the person's own elsewhere is not in the way, and is not touched.
+      writeFileSync(file('src/b.mjs'), 'export const b = 1; // mine too\n');
+
+      const blocked = await planOf(td, goalId);
+      expect(blocked).toMatchObject({ state: 'blocked', files: ['src/a.mjs', 'src/c.mjs'] });
+      // Nobody but the person worked in this folder: Friday claims no agent left them.
+      expect(blocked.in_the_way).toEqual({ count: 2, left: 0, left_by: [], working: [] });
+      // The plain landing still refuses, and changes nothing.
+      await expect(land(td, goalId)).rejects.toThrow(/not committed, and the goal changes them too/);
+      expect(text('src/a.mjs')).toBe(MINE);
+
+      const landed = await landAside(td, goalId);
+      expect(landed).toMatchObject({ status: 'landed', set_aside: { count: 2 } });
+      expect(text('src/a.mjs')).toBe('export const a = 2;\n');
+      expect(text('src/c.mjs')).toBe('export const c = 1;\n');
+      expect(text('src/b.mjs')).toBe('export const b = 1; // mine too\n');
+      expect(await status()).toBe(' M src/b.mjs\n');
+      // The copies are a commit under a ref of Friday's own, byte for byte.
+      const ref = landed.set_aside?.ref as string;
+      expect(ref).toBe(`refs/friday/set-aside/${goalId}/landing`);
+      expect((await git(['show', `${ref}:src/a.mjs`])).trim()).toBe(MINE.trim());
+      expect((await git(['show', `${ref}:src/c.mjs`])).trim()).toBe(SCRATCH.trim());
+      // No stash and no branch of the person's was made for it.
+      expect((await git(['stash', 'list'])).trim()).toBe('');
+
+      const after = await planOf(td, goalId);
+      expect(after.state).toBe('landed');
+      expect(after.set_aside).toMatchObject([{ ref, count: 2, files: ['src/a.mjs', 'src/c.mjs'] }]);
+
+      // The person changed one of the landed files since: it is left alone, and its copy stays kept.
+      writeFileSync(file('src/c.mjs'), 'export const c = 1; // edited since\n');
+      const first = await putBack(td, goalId);
+      expect(first).toMatchObject({ restored: ['src/a.mjs'], skipped: ['src/c.mjs'], failed: [] });
+      expect(text('src/a.mjs')).toBe(MINE);
+      expect(text('src/c.mjs')).toBe('export const c = 1; // edited since\n');
+      // Written back as changes that are not committed, with nothing staged.
+      expect(await status()).toBe(' M src/a.mjs\n M src/b.mjs\n M src/c.mjs\n');
+      expect((await planOf(td, goalId)).set_aside).toMatchObject([{ ref, count: 1, files: ['src/c.mjs'] }]);
+
+      // Once that file is as landed again, the rest goes back too, and nothing is left to offer.
+      await git(['checkout', '--', 'src/c.mjs']);
+      const second = await putBack(td, goalId);
+      expect(second.skipped).toEqual([]);
+      expect(second.restored.sort()).toEqual(['src/a.mjs', 'src/c.mjs']);
+      expect(text('src/c.mjs')).toBe(SCRATCH);
+      expect((await planOf(td, goalId)).set_aside).toBeUndefined();
+      await expect(putBack(td, goalId)).rejects.toThrow(/nothing of this goal is set aside/);
+      // The copy itself is never deleted by putting it back.
+      expect(await asideRefs()).toEqual([ref]);
+    });
+
+    it('writes every file back when the landing does not happen after all, and keeps no trace', async () => {
+      const td = await project();
+      const goalId = await completedGoal(td);
+      // The person committed another value for the same line, and is editing the file again.
+      await ownCommit('src/a.mjs', 'export const a = 5;\n', 'my own a');
+      const MINE = 'export const a = 6; // still editing\n';
+      writeFileSync(file('src/a.mjs'), MINE);
+      const before = await head();
+      expect((await planOf(td, goalId)).in_the_way).toMatchObject({ count: 1 });
+
+      await expect(landAside(td, goalId)).rejects.toThrow(/change the same lines.*Nothing was changed/s);
+      expect(await head()).toBe(before);
+      expect(text('src/a.mjs')).toBe(MINE);
+      expect(await status()).toBe(' M src/a.mjs\n');
+      expect(await asideRefs()).toEqual([]);
+      expect(events(td, 'goal.files_set_aside')).toHaveLength(0);
+      expect((await planOf(td, goalId)).set_aside).toBeUndefined();
+    });
+
+    it("says they are what an agent's ended attempt left, keeps all of that attempt's files for the next one, and lands over them", async () => {
+      const td = await project(CHECKS, {}, L0);
+      const pid = td.project.project_id;
+      // A change of the person's own, in the task's files, from before any agent worked there.
+      mkdirSync(file('src/extra'), { recursive: true });
+      writeFileSync(file('src/extra/mine.mjs'), '// my own notes\n');
+      await new Promise((r) => setTimeout(r, 30));
+      const { goalId, ids } = await goalWith(td, [
+        { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs', 'src/extra/**'], assign_to: 'antigravity-1' },
+      ]);
+      const taskId = ids['raise-a'] as string;
+      const editor = await folderSession(td);
+      const claimed = (await editor.claim({ next: true })) as { run_id: string };
+      const HALF = 'export const a = 2; // half done\n';
+      writeFileSync(file('src/a.mjs'), HALF);
+      // A command of the agent wrote this one: no hook saw it.
+      writeFileSync(file('src/extra/notes.mjs'), '// half-done notes\n');
+      const agent = td.daemon.state.q.agentByKey(pid, 'antigravity-1');
+      td.daemon.state.observePaths(pid, { kind: 'agent', id: String(agent?.agent_id) }, claimed.run_id, ['src/a.mjs']);
+      await editor.disconnect().catch(() => undefined);
+      const recovered = await td.operator.post<{ preserved_ref: string | null }>(
+        td.operator.projectPath(`/tasks/${taskId}/recover`),
+        { action: 'reassign', reason: 'it ran out of quota' },
+      );
+      // Everything the attempt wrote is kept, seen by a hook or not; the person's earlier file is not.
+      const kept = (await git(['diff', '--name-only', `${recovered.preserved_ref}^`, String(recovered.preserved_ref)]))
+        .trim()
+        .split('\n');
+      expect(kept).toEqual(['src/a.mjs', 'src/extra/notes.mjs']);
+
+      // The next agent finishes from it in a folder of its own.
+      const next = await begin(td, 'be-1', taskId);
+      expect(readFileSync(path.join(next.start.working_directory, 'src/extra/notes.mjs'), 'utf8')).toContain(
+        'half-done',
+      );
+      expect(existsSync(path.join(next.start.working_directory, 'src/extra/mine.mjs'))).toBe(false);
+      await finish(td, next, { 'src/a.mjs': 'export const a = 2;\n', 'src/extra/notes.mjs': '// notes\n' });
+      await integrationOf(td, taskId);
+      await runOnce(td);
+
+      // The first agent's files are still in the project folder, in the way of landing.
+      const blocked = await planOf(td, goalId);
+      expect(blocked).toMatchObject({ state: 'blocked', files: ['src/a.mjs', 'src/extra/notes.mjs'] });
+      expect(blocked.in_the_way).toEqual({ count: 2, left: 2, left_by: ['antigravity-1'], working: [] });
+
+      expect(await landAside(td, goalId)).toMatchObject({ status: 'landed', set_aside: { count: 2 } });
+      expect(text('src/a.mjs')).toBe('export const a = 2;\n');
+      expect(text('src/extra/notes.mjs')).toBe('// notes\n');
+      // The person's own file was never part of it.
+      expect(text('src/extra/mine.mjs')).toBe('// my own notes\n');
+      expect(await status()).toBe('?? src/extra/mine.mjs\n');
+    });
+
+    it('never takes files from under an agent that is working on them in the folder', async () => {
+      const td = await project(CHECKS, {}, L0);
+      const goalId = await completedGoal(td);
+      // Another goal's task, taken by a session in the project folder, covers the same file.
+      const other = await goalWith(td, [
+        { key: 'again', summary: 'Raise a again', write: ['src/a.mjs'], assign_to: 'antigravity-1' },
+      ]);
+      const editor = await folderSession(td);
+      await editor.claim({ task_id: other.ids.again as string });
+      const EDITING = 'export const a = 9; // being edited\n';
+      writeFileSync(file('src/a.mjs'), EDITING);
+      const p = await planOf(td, goalId);
+      expect(p.in_the_way).toMatchObject({ count: 1, working: ['antigravity-1'] });
+      await expect(landAside(td, goalId)).rejects.toThrow(/antigravity-1 is working on some of these files/);
+      expect(text('src/a.mjs')).toBe(EDITING);
+      expect(await asideRefs()).toEqual([]);
     });
   });
 
@@ -1546,4 +1734,156 @@ describe('trying the checks on the untouched project (2026-11-18)', () => {
       ['lint', true],
     ]);
   }, 180_000);
+});
+
+describe('a lockfile a clean install refuses (2026-11-18)', () => {
+  const npm = spawnSync('npm', ['--version'], { shell: true, encoding: 'utf8' });
+  const lockOnly = (cwd: string) =>
+    spawnSync('npm', ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'], {
+      cwd,
+      shell: true,
+      encoding: 'utf8',
+    });
+  const WITH_TINY = '{"name":"shop","private":true,"dependencies":{"tiny":"file:vendor/tiny"}}\n';
+  const WITH_BOTH =
+    '{"name":"shop","private":true,"dependencies":{"small":"file:vendor/small","tiny":"file:vendor/tiny"}}\n';
+
+  it.skipIf(npm.status !== 0)(
+    'is said to the person once when it is already in the project, and the question closes when the install works again',
+    async () => {
+      const td = await project(CHECKS, {
+        'package.json': WITH_TINY,
+        'vendor/tiny/package.json': '{"name":"tiny","version":"1.0.0"}\n',
+        'vendor/small/package.json': '{"name":"small","version":"1.0.0"}\n',
+        '.gitignore': 'node_modules/\n',
+      });
+      const dir = ws().projectDir;
+      expect(lockOnly(dir).status).toBe(0);
+      // The person's own commit left the lockfile behind the manifest.
+      writeFileSync(path.join(dir, 'package.json'), WITH_BOTH);
+      await deterministicGit(dir, { startEpoch: 1_767_225_800 }).commitAll('add small, forget the lockfile');
+      const pid = td.project.project_id;
+      const asked = () =>
+        td.daemon.state.q.escalations(pid).filter((e) => e.kind === 'install_broken') as {
+          status: string;
+          question: string;
+          answer: string | null;
+          details_json: string;
+        }[];
+      const setupOf = (taskId: string) =>
+        td.daemon.state.latestWorktreeSetup(pid, taskId)?.setup as { status: string } | undefined;
+
+      const { ids } = await goalWith(td, [
+        { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+        { key: 'raise-b', summary: 'Lower b', write: ['src/b.mjs'] },
+      ]);
+      const first = await begin(td, 'be-1', ids['raise-a'] as string);
+      expect(setupOf(first.taskId)?.status).toBe('failed');
+      const one = asked();
+      expect(one).toHaveLength(1);
+      expect(one[0]?.status).toBe('pending');
+      expect(one[0]?.question).toContain('package-lock.json does not match package.json');
+      const details = JSON.parse(String(one[0]?.details_json)) as { lockfile: string; missing: string[] };
+      expect(details.lockfile).toBe('package-lock.json');
+      expect(details.missing.join(' ')).toMatch(/Missing: small@/);
+
+      // The next folder fails the same way: it is not asked a second time.
+      const second = await begin(td, 'be-2', ids['raise-b'] as string);
+      expect(setupOf(second.taskId)?.status).toBe('failed');
+      expect(asked()).toHaveLength(1);
+      await first.fake.close();
+      await second.fake.close();
+
+      // The lockfile is written again and committed: the next folder installs, and the question closes.
+      expect(lockOnly(dir).status).toBe(0);
+      await deterministicGit(dir, { startEpoch: 1_767_226_800 }).commitAll('lockfile in step');
+      const later = await goalWith(td, [{ key: 'add-c', summary: 'Add c', write: ['src/c.mjs'] }]);
+      const third = await begin(td, 'be-1', later.ids['add-c'] as string);
+      expect(setupOf(third.taskId)?.status).toBe('passed');
+      const closed = asked();
+      expect(closed).toHaveLength(1);
+      expect(closed[0]?.status).toBe('answered');
+      expect(closed[0]?.answer).toContain('the packages install again');
+      await third.fake.close();
+    },
+    360_000,
+  );
+
+  it.skipIf(npm.status !== 0)(
+    'fails the task that left it, though every check of the project passes, and passes once it is written again',
+    async () => {
+      const td = await project(CHECKS, {
+        'package.json': WITH_TINY,
+        'vendor/tiny/package.json': '{"name":"tiny","version":"1.0.0"}\n',
+        'vendor/small/package.json': '{"name":"small","version":"1.0.0"}\n',
+        '.gitignore': 'node_modules/\n',
+      });
+      const dir = ws().projectDir;
+      const made = lockOnly(dir);
+      expect(made.status, made.stderr).toBe(0);
+      await deterministicGit(dir, { startEpoch: 1_767_225_800 }).commitAll('lockfile');
+      const verify = (taskId: string) =>
+        td.operator.post<{ task: TaskView; verification: VerificationView }>(
+          td.operator.projectPath(`/tasks/${taskId}/verify`),
+          {},
+          { timeoutMs: 240_000 },
+        );
+      const claim = async (w: Awaited<ReturnType<typeof begin>>, paths: string[]) => {
+        await w.fake.client.reportResult({
+          task_id: w.taskId,
+          run_id: w.start.run_id,
+          status: 'completed_claim',
+          summary: `changed ${paths.join(', ')}`,
+          changed_paths: paths,
+          checks: [],
+        });
+        await w.fake.close();
+      };
+      const installCheck = (v: VerificationView) => v.checks.find((c) => c.name === 'friday.clean_install');
+
+      // A task that changes no package list is not asked about installs at all.
+      const plain = await goalWith(td, [{ key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] }]);
+      const a = await begin(td, 'be-1', plain.ids['raise-a'] as string);
+      writeFileSync(path.join(a.start.working_directory, 'src/a.mjs'), 'export const a = 2;\n');
+      await claim(a, ['src/a.mjs']);
+      const quiet = await verify(a.taskId);
+      expect(quiet.task.status, JSON.stringify(quiet.verification.checks)).toBe('COMPLETED');
+      expect(installCheck(quiet.verification)).toBeUndefined();
+
+      // The agent adds a package to package.json and never writes the lockfile again.
+      const { ids } = await goalWith(td, [
+        { key: 'add-small', summary: 'Use the small package', write: ['package.json', 'package-lock.json'] },
+      ]);
+      const taskId = ids['add-small'] as string;
+      const w = await begin(td, 'be-2', taskId);
+      const wt = w.start.working_directory;
+      writeFileSync(path.join(wt, 'package.json'), WITH_BOTH);
+      await claim(w, ['package.json']);
+      const refused = await verify(taskId);
+      const failed = installCheck(refused.verification);
+      // The project's own tests pass: only the clean install tells.
+      expect(refused.verification.checks.find((c) => c.name === 'tests')?.status).toBe('PASSED');
+      expect(failed).toMatchObject({ status: 'FAILED', origin: 'friday', required: true });
+      expect(failed?.summary).toContain('package-lock.json does not match package.json');
+      expect(failed?.summary).toContain('Run "npm install"');
+      expect(failed?.artifact_ref).toMatch(/^artifact:/);
+      expect(refused.task.status).not.toBe('COMPLETED');
+      // Nothing was installed by asking.
+      expect(existsSync(path.join(wt, 'node_modules', 'small'))).toBe(false);
+
+      // The lockfile is written again in the same folder: the same question now passes.
+      const fixed = lockOnly(wt);
+      expect(fixed.status, fixed.stderr).toBe(0);
+      await td.operator.post(td.operator.projectPath(`/tasks/${taskId}/rework`), {
+        reason: 'write the lockfile again',
+      });
+      const again = await begin(td, 'be-2', taskId);
+      await claim(again, ['package.json', 'package-lock.json']);
+      const passed = await verify(taskId);
+      expect(installCheck(passed.verification)).toMatchObject({ status: 'PASSED' });
+      expect(installCheck(passed.verification)?.summary).toBe('a clean install (npm ci) works with package-lock.json');
+      expect(passed.task.status, JSON.stringify(passed.verification.checks)).toBe('COMPLETED');
+    },
+    360_000,
+  );
 });

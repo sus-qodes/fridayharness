@@ -17,6 +17,7 @@ export type QuestionCardKind =
   | 'setup'
   | 'checks'
   | 'folder'
+  | 'install'
   | 'brain';
 
 /** A button a question card offers. */
@@ -51,6 +52,8 @@ export type QuestionAction =
   | 'rework-task'
   /** `POST tasks/:tid/setup`: run the install of the task's folder again. */
   | 'install-again'
+  /** `POST goals`: a goal that repairs the project's lockfile, and nothing else. */
+  | 'repair-install'
   /** Settings → Planner. */
   | 'planner-settings';
 
@@ -101,6 +104,7 @@ const TITLES: Record<string, string> = {
   integration_failed: 'Integration failed',
   unanswered_request: 'An agent waits for an answer',
   setup_failed: "A task's dependencies were not installed",
+  install_broken: 'New task folders cannot install this project’s packages',
   check_not_run: 'A check could not be run on this computer',
   folder_conflict: 'You and an agent changed the same file',
   repeated_verification_failures: 'A task keeps failing verification',
@@ -150,6 +154,8 @@ export function cardKindOf(kind: string | null): QuestionCardKind {
   if (kind === 'unanswered_request') return 'unanswered';
   // The Master Brain's too, but it is not answered by revising the plan: the install is run again.
   if (kind === 'setup_failed') return 'setup';
+  // The project's lockfile, not a task: an agent repairs it in a goal of its own.
+  if (kind === 'install_broken') return 'install';
   if (kind === 'check_not_run') return 'checks';
   if (kind === 'folder_conflict') return 'folder';
   // Every other kind is the Master Brain's, or one this interface does not know yet: it is
@@ -190,6 +196,9 @@ export function classifyEscalation(e: EscalationView, env: { plannerAvailable: b
       break;
     case 'checks':
       if (taskId) actions.push('rework-task', 'cancel-task');
+      break;
+    case 'install':
+      actions.push('repair-install');
       break;
     case 'brain':
       if (goalId) actions.push(env.plannerAvailable ? 'revise-note' : 'write-revision');

@@ -28,6 +28,7 @@ import {
   type VerificationView,
   type WorktreeView,
 } from '@friday/protocol';
+import { sameApprovalTarget } from './approval-target.js';
 import type { IntentSnapshot } from './intent.js';
 import {
   type AgentRow,
@@ -782,22 +783,72 @@ export class Queries {
     use: { capability: string; target: string; task_id: string | null; run_id: string | null; agent_id: string },
     nowIso: string,
   ): { approval_id: string; expires_at: string | null } | undefined {
+    // The same need asked again in other words (a different `| tail -N`) is the same question.
     return this.db
       .prepare(
-        `SELECT approval_id, expires_at FROM approvals WHERE project_id = ? AND capability = ? AND target = ?
+        `SELECT approval_id, expires_at, target FROM approvals WHERE project_id = ? AND capability = ?
            AND status = 'pending' AND requested_by_kind = 'agent' AND requested_by_id = ?
            AND task_id IS ? AND run_id IS ? AND (expires_at IS NULL OR expires_at > ?)
-         ORDER BY created_at DESC LIMIT 1`,
+         ORDER BY created_at DESC`,
       )
-      .get<{ approval_id: string; expires_at: string | null }>(
+      .all<{ approval_id: string; expires_at: string | null; target: string | null }>(
         projectId,
         use.capability,
-        use.target,
         use.agent_id,
         use.task_id,
         use.run_id,
         nowIso,
-      );
+      )
+      .find((a) => sameApprovalTarget(a.target, use.target));
+  }
+
+  /**
+   * Grants of an attempt that nothing has used yet (2026-11-18): what an agent that stopped to wait
+   * was given while it worked, and never heard of. Oldest first.
+   */
+  unusedGrantsOfRun(
+    projectId: string,
+    runId: string,
+    nowIso: string,
+  ): { approval_id: string; capability: string; target: string | null; reuse: string }[] {
+    return this.db
+      .prepare(
+        `SELECT approval_id, capability, target, reuse FROM approvals WHERE project_id = ? AND run_id = ?
+           AND status = 'granted' AND uses = 0 AND requested_by_kind = 'agent'
+           AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at, approval_id`,
+      )
+      .all<{ approval_id: string; capability: string; target: string | null; reuse: string }>(projectId, runId, nowIso);
+  }
+
+  /** Requests of an attempt nobody has decided: they end with the attempt. */
+  pendingApprovalsOfRun(projectId: string, runId: string): string[] {
+    return this.db
+      .prepare("SELECT approval_id FROM approvals WHERE project_id = ? AND run_id = ? AND status = 'pending'")
+      .all<{ approval_id: string }>(projectId, runId)
+      .map((a) => a.approval_id);
+  }
+
+  /** One approval as the request for it reads it back. */
+  approvalRow(
+    projectId: string,
+    approvalId: string,
+  ):
+    | {
+        approval_id: string;
+        status: string;
+        capability: string;
+        target: string | null;
+        purpose: string | null;
+        risk: string | null;
+        expires_at: string | null;
+        reuse: string;
+      }
+    | undefined {
+    return this.db
+      .prepare(
+        'SELECT approval_id, status, capability, target, purpose, risk, expires_at, reuse FROM approvals WHERE approval_id = ? AND project_id = ?',
+      )
+      .get(approvalId, projectId);
   }
 
   /** File reservations of the project, oldest first (ADR-0025). */
@@ -880,8 +931,8 @@ export class Queries {
   ): string | undefined {
     const rows = this.db
       .prepare(
-        `SELECT approval_id, task_id, run_id, requested_by_kind, requested_by_id, reuse, policy_version FROM approvals
-         WHERE project_id = ? AND capability = ? AND target = ? AND status = 'granted'
+        `SELECT approval_id, task_id, run_id, requested_by_kind, requested_by_id, reuse, policy_version, target FROM approvals
+         WHERE project_id = ? AND capability = ? AND status = 'granted'
            AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at, approval_id`,
       )
       .all<{
@@ -892,7 +943,10 @@ export class Queries {
         requested_by_id: string;
         reuse: string;
         policy_version: string | null;
-      }>(projectId, use.capability, use.target, use.now);
+        target: string | null;
+      }>(projectId, use.capability, use.now)
+      // The command as it was approved, whatever trims its output this time (`approvalKey`).
+      .filter((a) => sameApprovalTarget(a.target, use.target));
     // When several grants cover a use, the narrowest is spent first and broader ones are kept.
     const reach: Record<string, number> = { once: 0, run: 1, task: 2 };
     rows.sort((x, y) => (reach[x.reuse] ?? 0) - (reach[y.reuse] ?? 0));

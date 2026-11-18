@@ -16,6 +16,7 @@ import {
 } from '../test/fixtures.js';
 import {
   activeTask,
+  attentionWords,
   awaitsReply,
   buildModel,
   checksLine,
@@ -29,8 +30,10 @@ import {
   projectName,
   QUIET_MS,
   runningCount,
+  STOPPED_GRACE_MS,
   statsText,
   statusSentence,
+  stopWords,
   studioTarget,
   taskTag,
   turnHost,
@@ -560,5 +563,82 @@ describe('gone quiet: a running task of an agent its person runs (2026-11-17)', 
   it('is not listed while it reports, nor for an agent Friday starts', () => {
     expect(waitingItems(board('attach', justNow), NOW)).toEqual([]);
     expect(waitingItems(board('spawn', longAgo), NOW)).toEqual([]);
+  });
+});
+
+describe('an agent its person runs that stopped, or asks in its own window (2026-11-18)', () => {
+  const NOW = Date.parse('2026-11-18T07:02:30.000Z');
+  const board = (attention: Record<string, unknown> | null, attach: 'attach' | 'spawn' = 'attach') =>
+    makeSnapshot({
+      harnesses: [makeHarness({ harness_id: 'h_ag', vendor: 'antigravity', attach_mode: attach })],
+      agents: [makeAgent({ agent_key: 'antigravity-1', harness_id: 'h_ag' })],
+      tasks: [
+        makeTask({
+          task_id: 't1',
+          status: 'RUNNING',
+          agent_key: 'antigravity-1',
+          started_at: '2026-11-18T06:55:11.000Z',
+          updated_at: '2026-11-18T06:55:11.000Z',
+          summary: 'Scaffold the owner app',
+          attention: attention as never,
+        }),
+      ],
+    });
+
+  it('says at once that it stopped on an error of its host, and what the error means', () => {
+    const items = waitingItems(
+      board({
+        kind: 'stopped',
+        at: '2026-11-18T07:02:04.000Z',
+        reason: 'error',
+        error: 'Individual quota reached. Resets in 165h29m45s.',
+      }),
+      NOW,
+    );
+    expect(items.map((i) => i.kind)).toEqual(['stopped']);
+    const item = items[0] as Extract<(typeof items)[number], { kind: 'stopped' }>;
+    expect(stopWords(item.error)).toBe('quota');
+    const w = attentionWords(item, 'Antigravity');
+    expect(w.title).toBe('Antigravity is out of quota');
+    expect(w.line).toContain('Resets in 165h29m45s');
+    expect(w.line).toContain('give it to another agent');
+    expect(studioTarget(item, null)).toEqual({ task_id: 't1' });
+    expect(statusSentence(board({ kind: 'stopped', at: '2026-11-18T07:02:04.000Z', error: 'x' }), NOW)).toContain(
+      '1 agent that has stopped',
+    );
+    // Its servers being busy is another thing to do.
+    expect(stopWords('UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-high')).toBe('busy');
+    expect(stopWords('something else broke')).toBeNull();
+  });
+
+  it('waits a moment for a turn that ended without an error, says it once, and never for an agent Friday starts', () => {
+    const justNow = new Date(NOW - 5_000).toISOString();
+    const earlier = new Date(NOW - STOPPED_GRACE_MS - 1_000).toISOString();
+    expect(waitingItems(board({ kind: 'stopped', at: justNow }), NOW)).toEqual([]);
+    const items = waitingItems(board({ kind: 'stopped', at: earlier }), NOW);
+    expect(items.map((i) => i.kind)).toEqual(['stopped']);
+    expect(attentionWords(items[0] as never, 'Antigravity').line).toContain('waiting for you in its own window');
+    // Twenty minutes on it is still said once: not also as "gone quiet".
+    const late = waitingItems(board({ kind: 'stopped', at: earlier }), NOW + 20 * 60_000);
+    expect(late.map((i) => i.kind)).toEqual(['stopped']);
+    expect(waitingItems(board({ kind: 'stopped', at: earlier }, 'spawn'), NOW)).toEqual([]);
+  });
+
+  it('says that its host asks the person in its own window, for a rule of Friday', () => {
+    const items = waitingItems(
+      board({
+        kind: 'asking',
+        at: '2026-11-18T07:09:00.000Z',
+        tool: 'Bash',
+        target: 'npm install',
+        rule: 'package.install commands need a human decision.',
+      }),
+      NOW,
+    );
+    expect(items.map((i) => i.kind)).toEqual(['asking']);
+    const w = attentionWords(items[0] as never, 'Antigravity');
+    expect(w.title).toBe('Antigravity is asking you something');
+    expect(w.line).toContain('“npm install”');
+    expect(w.line).toContain('own window');
   });
 });

@@ -140,8 +140,12 @@ describe('bound approvals', () => {
   it('a run grant stays with its attempt, a task grant reaches later ones; both end with a policy change, expiry or revocation', () => {
     const a = agentOnTask(1);
     const run = ask(a, 'run');
-    const task = ask(a, 'task');
+    // Asked again while it waits, it is the same request (one need, one card, 2026-11-18).
+    expect(ask(a, 'task')).toBe(run);
     state.decideApproval(PROJECT, human, run, true);
+    // Granted for the attempt only, the wider question for the whole task is a new one.
+    const task = ask(a, 'task');
+    expect(task).not.toBe(run);
     state.decideApproval(PROJECT, human, task, true, { ttl_s: 60 });
     expect(use(a)).toBe(run);
     state.useApprovals(PROJECT, human, [{ approval_id: run, tool: 'Bash', target: 'git push' }]);

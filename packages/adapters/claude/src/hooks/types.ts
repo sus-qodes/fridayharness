@@ -235,6 +235,11 @@ export interface NormalizedHook {
   stop_completed: boolean | null;
   /** Stop: how the host says the turn ended, in its own words (Cursor's `status`, Antigravity's `terminationReason`). */
   stop_reason: string | null;
+  /**
+   * Stop: the error the host gives for a turn that ended on one (Antigravity's `error`: no capacity
+   * on its servers, a used-up quota). What a person needs to read when their agent stops by itself.
+   */
+  stop_error?: string | null;
   /** SessionEnd: why the session ended. */
   reason: string | null;
   /** PostToolUseFailure: the host's error text. */

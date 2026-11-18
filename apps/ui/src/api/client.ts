@@ -34,6 +34,7 @@ import type {
   LivePlanVersion,
   MessageView,
   ModelEvidenceView,
+  PutBackView,
   RecoveryAssessment,
   RoutingPinView,
   RunView,
@@ -65,6 +66,8 @@ export interface LandResult {
   into: string;
   head: string;
   fast_forward: boolean;
+  /** Files that were in the way and were set aside first: how many, and under which ref they are kept. */
+  set_aside?: { ref: string; count: number };
 }
 
 export interface TaskDetail {
@@ -646,6 +649,16 @@ export class FridayApi {
   landGoal(goalId: string): Promise<LandResult> {
     // Longer than the daemon gives the merge itself (120 s), so its own answer is what arrives.
     return this.post(`/goals/${encodeURIComponent(goalId)}/land`, {}, { timeoutMs: 180_000 });
+  }
+
+  /** Lands the goal after setting aside the uncommitted files in its way (kept, and put back if it fails). */
+  landGoalAside(goalId: string): Promise<LandResult> {
+    return this.post(`/goals/${encodeURIComponent(goalId)}/land/set-aside`, {}, { timeoutMs: 300_000 });
+  }
+
+  /** Writes the files set aside at a landing of the goal back into the project folder. */
+  putSetAsideBack(goalId: string): Promise<PutBackView> {
+    return this.post(`/goals/${encodeURIComponent(goalId)}/set-aside/restore`, {}, { timeoutMs: 120_000 });
   }
 
   /** What landing would do now: the branch it lands into, or what is in the way. Changes nothing. */
