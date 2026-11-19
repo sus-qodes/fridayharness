@@ -527,13 +527,13 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
         const after = await git.identity();
         const afterContent = await git.contentTree();
         if (after.version !== before.version || afterContent.head !== content.head) {
-          reason = `the code changed while it was verified (${before.version} became ${after.version}); verify it again`;
+          reason = 'the code changed while it was being checked; check it again';
         } else if (afterContent.tree !== content.tree) {
           const paths = await changedBetween(git.root, content.tree, afterContent.tree).catch(() => []);
-          reason = `the code changed while it was verified (${paths.slice(0, 5).join(', ') || 'its files'} changed); verify it again`;
+          reason = `the code changed while it was being checked (${paths.slice(0, 5).join(', ') || 'its files'} changed); check it again`;
         }
       } catch (e) {
-        reason = `git could not read the checkout after the checks: ${(e as Error).message}; verify it again`;
+        reason = `git could not read the task's files after the checks: ${(e as Error).message}; check it again`;
       }
       if (reason) {
         logger.warn('verification interrupted', { task_id: taskId, reason });
@@ -589,8 +589,8 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     const now = ctx.policy().version;
     const reason =
       now !== policy.version
-        ? `the project's policy changed while the work was verified (${policy.version.slice(0, 12)} became ${now.slice(0, 12)}); verify it again under the new one`
-        : 'an approval this verification relied on changed while the work was verified; verify it again';
+        ? 'the project’s rules changed while the work was being checked; check it again under the new ones'
+        : 'something you allowed, which these checks relied on, changed while the work was being checked; check it again';
     logger.warn('verification interrupted', { task_id: taskId, reason });
     const interrupted = state.interruptVerification(pid, actor, verification_id, reason);
     return { task: interrupted, verification: state.q.verification(verification_id) };
@@ -622,9 +622,9 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     ...(advisoryFailed ? [`${advisoryFailed} advisory check(s) failed`] : []),
     ...(warnings ? [`${warnings} warning(s)`] : []),
     ...(configured.length === 0
-      ? ["no project checks are configured; Friday's scope and credential checks ran"]
+      ? ["your project has no checks of its own set; Friday checked that only the task's files changed and that no passwords or keys were added"]
       : checks.length === 0
-        ? [`no configured check applies to ${task.kind} tasks`]
+        ? [`none of your project's checks is for ${task.kind} tasks`]
         : []),
   ];
   // The outcome counts with others judged by the same checks (review F15).

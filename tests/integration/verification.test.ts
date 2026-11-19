@@ -206,7 +206,7 @@ describe('verification at a recorded revision of the task checkout', () => {
     const d = await verify(td, docs.task.task_id);
     expect(d.task.status).toBe('COMPLETED');
     expect(d.verification.checks.map((c) => c.name)).toEqual(['friday.diff', 'friday.secrets']);
-    expect(d.verification.summary).toContain('no configured check applies to docs tasks');
+    expect(d.verification.summary).toContain("none of your project's checks is for docs tasks");
   });
 
   it('sets aside build and cache output that running the code left behind, instead of judging it against the scope', async () => {
@@ -243,7 +243,7 @@ describe('verification at a recorded revision of the task checkout', () => {
     const moved = await verify(td, chore.task.task_id);
     expect(moved.task.status).toBe('READY_FOR_VERIFICATION');
     expect(moved.verification.status).toBe('CANCELLED');
-    expect(moved.verification.summary).toContain('interrupted: the code changed while it was verified');
+    expect(moved.verification.summary).toContain('interrupted: the code changed while it was being checked; check it again');
     // Verified again, the check finds the file it writes already there: the revision holds.
     expect((await verify(td, chore.task.task_id)).task.status).toBe('COMPLETED');
 
@@ -408,7 +408,7 @@ describe('verification at a recorded revision of the task checkout', () => {
     await td.operator.post(td.operator.projectPath('/policy/reload'), {});
     const v4 = await running;
     expect(v4.task.status).toBe('READY_FOR_VERIFICATION');
-    expect(v4.verification.summary).toContain("the project's policy changed while the work was verified");
+    expect(v4.verification.summary).toContain('the project’s rules changed while the work was being checked; check it again under the new ones');
   });
 
   it('decides under the authority current when it records the verdict, also after its last git reads (review M7.1 R03)', async () => {
@@ -453,11 +453,11 @@ describe('verification at a recorded revision of the task checkout', () => {
     const one = await claimWork(td, { agent: 'be-1', files: { 'src/shared.mjs': 'export const shared = 2;\n' } });
     const v1 = await late('identity', 'src/shared.mjs', one.task.task_id);
     expect(v1.task.status).toBe('READY_FOR_VERIFICATION');
-    expect(v1.verification.summary).toContain("the project's policy changed while the work was verified");
+    expect(v1.verification.summary).toContain('the project’s rules changed while the work was being checked; check it again under the new ones');
     const two = await claimWork(td, { agent: 'be-2', files: { 'src/other.mjs': 'export const other = 2;\n' } });
     const v2 = await late('contentTree', 'src/other.mjs', two.task.task_id);
     expect(v2.task.status).toBe('READY_FOR_VERIFICATION');
-    expect(v2.verification.summary).toContain("the project's policy changed while the work was verified");
+    expect(v2.verification.summary).toContain('the project’s rules changed while the work was being checked; check it again under the new ones');
 
     // Verified again, the work is judged by the policy now in force.
     const again = await verify(td, one.task.task_id);

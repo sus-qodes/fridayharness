@@ -182,7 +182,7 @@ describe('verification without project checks', () => {
       {},
     );
     expect(r.task.status).toBe('COMPLETED');
-    expect(r.verification.summary).toContain('no project checks are configured');
+    expect(r.verification.summary).toContain('your project has no checks of its own set');
     expect(r.verification.checks.map((c) => c.name)).toEqual(['friday.diff', 'friday.secrets']);
   });
 

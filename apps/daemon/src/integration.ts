@@ -491,7 +491,10 @@ export class IntegrationManager {
         await moveRef(project.root, ref, start, null);
         goalHead = start;
       }
-      const repair = opts.repaired ? ' (a repair by a human)' : '';
+      const repair = opts.repaired ? ' (your repair)' : '';
+      // The summaries a person reads on the task page, in their words (2026-11-19): no branch names,
+      // commit ids, "fast-forward" or "revision"; the branch and commits are shown beside them.
+      const noCheck = 'none of your project’s checks is for this kind of task';
 
       // 3. Already there, a fast-forward, or a merge.
       if (await isAncestor(project.root, taskCommit, goalHead)) {
@@ -502,7 +505,7 @@ export class IntegrationManager {
             task_commit: taskCommit,
             base_commit: goalHead,
             merged_commit: goalHead,
-            summary: `already contained in ${branch}`,
+            summary: 'already in the goal’s work',
           });
         }
         // After a failed attempt, the goal branch reached the work some other way (a human resolved
@@ -520,7 +523,7 @@ export class IntegrationManager {
           base_commit: goalHead,
           merged_commit: goalHead,
           checks: outcome.results,
-          summary: `contained in ${branch}, where it was resolved after the failed attempt; ${outcome.ran ? `${outcome.results.length} check(s) passed on it` : 'no configured check applies to this kind of task'}`,
+          summary: `already in the goal’s work, put right there after the failed try; ${outcome.ran ? `${outcome.results.length} check(s) passed on it` : noCheck}`,
         });
       }
       if (await isAncestor(project.root, goalHead, taskCommit)) {
@@ -532,7 +535,7 @@ export class IntegrationManager {
             task_commit: taskCommit,
             base_commit: goalHead,
             merged_commit: taskCommit,
-            summary: `fast-forward: ${branch} now points at the verified commit`,
+            summary: 'merged into the goal: nothing else had changed there, so it went in as it was checked',
           });
         }
         // A repair is new content: its checks run before the goal branch moves to it.
@@ -555,7 +558,7 @@ export class IntegrationManager {
           base_commit: goalHead,
           merged_commit: taskCommit,
           checks: outcome.results,
-          summary: `fast-forward${repair}: ${outcome.ran ? `${outcome.results.length} check(s) passed on it` : 'no configured check applies to this kind of task'}`,
+          summary: `merged into the goal${repair}, as it was: ${outcome.ran ? `${outcome.results.length} check(s) passed on it` : noCheck}`,
         });
       }
       // Where this task and the goal's other tasks only added lines at the same place of a file
@@ -576,7 +579,7 @@ export class IntegrationManager {
             task_commit: taskCommit,
             base_commit: goalHead,
             conflicts: files,
-            summary: `${files.length} file(s) conflict with ${branch}`,
+            summary: `${files.length} file(s) clash with other work of the goal`,
           },
           canGoBack
             ? `Your verified work collides with what other tasks of this goal changed meanwhile, in ${files.length} file(s): ${files.slice(0, 20).join(', ')}${files.length > 20 ? ` and ${files.length - 20} more` : ''}. Keep what both sides meant.`
@@ -625,8 +628,8 @@ export class IntegrationManager {
         checks: outcome.results,
         summary: `${
           outcome.ran
-            ? `${outcome.results.length} check(s) passed on the merged revision${repair}`
-            : `merged${repair}; no configured check applies to this kind of task`
+            ? `merged into the goal${repair}; ${outcome.results.length} check(s) passed on it merged with the goal’s other work`
+            : `merged into the goal${repair}; ${noCheck}`
         }${joined}`,
       });
     } catch (e) {
@@ -707,9 +710,9 @@ export class IntegrationManager {
     const lacking = await this.opts.files?.(dir, { task_id: task.task_id, goal_id: goalId });
     const unprepared = [
       dependencies && (dependencies.status === 'failed' || dependencies.status === 'refused')
-        ? `; the project's dependencies were not installed in Friday's checkout of it (${dependencies.reason}), which may be why`
+        ? `; the project's packages were not installed in Friday's own copy of it (${dependencies.reason}), which may be why`
         : '',
-      lacking ? `; Friday's checkout of it lacks a file the project lists for its copies, which may be why` : '',
+      lacking ? `; Friday's own copy of it lacks a file the project lists for its copies, which may be why` : '',
     ].join('');
     let failed = 0;
     let ranOut = 0;
@@ -754,7 +757,7 @@ export class IntegrationManager {
         ran: true,
         problem: {
           checks: results,
-          summary: `the checks changed ${altered.slice(0, 5).join(', ')}${altered.length > 5 ? ` and ${altered.length - 5} more` : ''} in the merged revision ${commit.slice(0, 12)}, so what passed is not what would land; ${branch} was not moved`,
+          summary: `the checks changed ${altered.slice(0, 5).join(', ')}${altered.length > 5 ? ` and ${altered.length - 5} more` : ''} once merged with the goal’s other work, so what passed is not what would land; the goal was not changed`,
         },
       };
     }
@@ -772,8 +775,8 @@ export class IntegrationManager {
           // them: a busy computer is not the work (2026-11-19).
           summary:
             ranOut === failed
-              ? `${failed} required check(s) ran out of time on the merged revision ${commit.slice(0, 12)}, also on a second try with twice the time${unprepared}; ${branch} was not moved. Give ${failed === 1 ? 'it' : 'them'} more time in Settings → Checks, then try again`
-              : `${failed} required check(s) failed on the merged revision ${commit.slice(0, 12)}${unprepared}; ${branch} was not moved`,
+              ? `${failed} required check(s) ran out of time once merged with the goal’s other work, also on a second try with twice the time${unprepared}; the goal was not changed. Give ${failed === 1 ? 'it' : 'them'} more time in Settings → Checks, then try again`
+              : `${failed} required check(s) failed once merged with the goal’s other work${unprepared}; the goal was not changed`,
           ...(unprepared || ranOut === failed ? {} : { unfit: names.slice(0, 1200) }),
         },
       };

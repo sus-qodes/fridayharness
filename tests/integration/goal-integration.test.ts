@@ -197,7 +197,8 @@ describe('goal branches', () => {
       base_commit: mainHead,
       checks: [],
     });
-    expect(one.summary).toContain('fast-forward');
+    // In a person's words (2026-11-19): no "fast-forward", branch or commit id.
+    expect(one.summary).toBe('merged into the goal: nothing else had changed there, so it went in as it was checked');
     const branch = `friday/goal-${goalId}`;
     expect((await git(['rev-parse', branch])).trim()).toBe(one.merged_commit);
     expect((await git(['show', `${branch}:src/a.mjs`])).trim()).toBe('export const a = 2;');
@@ -677,7 +678,8 @@ describe('agents at work at the same time (2026-11-18)', () => {
     await finish(td, w, { 'src/mode.mjs': 'export const mode = "a and b";\n' });
     const done = await nthIntegration(td, lower, 2);
     expect(done, done.summary ?? '').toMatchObject({ status: 'integrated' });
-    expect(done.summary).toContain('fast-forward');
+    expect(done.summary).toMatch(/^merged into the goal\b/);
+    expect(done.summary).not.toMatch(/fast-forward|friday\/goal-|[0-9a-f]{12}/);
     expect(lf((await runGit(ws().projectDir, ['show', `${branch}:src/mode.mjs`])).stdout)).toBe(
       'export const mode = "a and b";\n',
     );
@@ -750,7 +752,7 @@ describe('agents at work at the same time (2026-11-18)', () => {
     const failed = await integrationOf(td, raiseB);
     expect(failed.status).toBe('failed');
     expect(failed.summary).toMatch(
-      /^1 required check\(s\) ran out of time on the merged revision [0-9a-f]{12}, also on a second try with twice the time/,
+      /^1 required check\(s\) ran out of time once merged with the goal’s other work, also on a second try with twice the time/,
     );
     expect(failed.summary).toContain('more time in Settings → Checks');
     expect(failed.checks?.[0]?.summary).toBe('ran out of time twice: stopped at its 2 s limit, then at 3 s');
