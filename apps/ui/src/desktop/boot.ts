@@ -23,7 +23,14 @@ import { desktopPlatform } from '../platform/desktop-platform.js';
 import { type TauriCore, TauriTransport } from '../platform/tauri-transport.js';
 import { errorDetail } from '../shell/act.js';
 import { createAppContext, createShellServices, mountShell } from '../shell/app.js';
-import { type AppContext, type DrawerKind, type ModalKind, openDrawer, openModal } from '../shell/context.js';
+import {
+  type AppContext,
+  type DrawerKind,
+  type ModalKind,
+  openDrawer,
+  openModal,
+  type Toast,
+} from '../shell/context.js';
 import { productMark } from '../shell/mark.js';
 import { loadPrefs, startPrefsSync, watchPrefs } from '../store/prefs.js';
 import { createStore, type FridayStore } from '../store/state.js';
@@ -47,6 +54,35 @@ export type DaemonState = 'starting' | 'ready' | 'stopping' | 'stopped' | 'faile
 export interface DaemonStatus {
   state: DaemonState;
   message?: string;
+  /**
+   * Friday was updated while its service ran, and work in progress kept the app from restarting it
+   * (2026-11-19): it restarts by itself once the work is done.
+   */
+  outdated?: boolean;
+}
+
+/** The shell's last word on the daemon, as `untilReady` read it, per shell. */
+const lastStatus = new WeakMap<DesktopEnv, DaemonStatus>();
+
+/** The message an outdated service gets in the Studio, and the one once it runs the new version. */
+export function updateNotice(
+  status: Pick<DaemonStatus, 'state' | 'outdated'>,
+  was: boolean,
+  restart: (() => void) | null,
+): Toast | null {
+  if (status.state !== 'ready') return null;
+  if (status.outdated) {
+    return {
+      kind: 'info',
+      key: 'friday-updated',
+      text: 'Friday was updated',
+      detail:
+        'Agents are at work, so Friday still runs the version from before. It restarts with the new one by itself once they are done.',
+      timeoutMs: 0,
+      ...(restart ? { action: { label: 'Restart now', run: restart } } : {}),
+    };
+  }
+  return was ? { kind: 'success', key: 'friday-updated', text: 'Friday now runs the new version' } : null;
 }
 
 /** The shell, as the page sees it; injectable for tests. */
@@ -213,6 +249,7 @@ export async function untilReady(env: DesktopEnv, root: HTMLElement | null): Pro
     } catch (e) {
       status = { state: 'failed', message: e instanceof Error ? e.message : String(e) };
     }
+    lastStatus.set(env, status);
     if (status.state === 'ready') {
       try {
         return await env.core.invoke<ProjectInfo>('project_info');
@@ -321,10 +358,25 @@ export const STOPPED_HERE =
  * stream gave up reconnecting.
  */
 async function followDaemon(env: DesktopEnv, run: Running): Promise<() => void> {
-  return env.listen<DaemonStatus>('daemon-status', (s) => {
+  let outdated = false;
+  const restart = () => {
+    const shell = run.ctx.platform.desktop;
+    if (shell) void run.ctx.act('Restart Friday', () => shell.restart());
+  };
+  const tell = (s: DaemonStatus) => {
+    const notice = updateNotice(s, outdated, restart);
+    if (s.state === 'ready') outdated = Boolean(s.outdated);
+    if (notice) run.services.toasts.show(notice);
+  };
+  const stop = await env.listen<DaemonStatus>('daemon-status', (s) => {
     if (s.state === 'ready') void run.engine.retry();
     else if (s.state === 'stopped' || s.state === 'failed') run.engine.daemonGone();
+    tell(s);
   });
+  // What the shell said before this window listened (an update noticed at the app's start).
+  const now = lastStatus.get(env);
+  if (now) tell(now);
+  return stop;
 }
 
 /**

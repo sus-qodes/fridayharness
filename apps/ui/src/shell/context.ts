@@ -25,6 +25,8 @@ export interface Toast {
   timeoutMs?: number;
   /** A newer toast with the same key replaces the one still shown (pause, then resume). */
   key?: string;
+  /** One button that does what the message offers (2026-11-19); the message leaves when it is pressed. */
+  action?: { label: string; run: () => void };
 }
 
 export interface ConfirmOptions {

@@ -123,6 +123,23 @@ export function buildProgram(): Command {
       );
     });
 
+  // A folder that is not under git, or has no commit: git started and the first version saved
+  // (2026-11-19). The desktop app offers it when Friday is set up in such a folder.
+  program
+    .command('git-start')
+    .description(
+      "start git in the project folder if needed and save its files as the first version (secrets and tools' folders left out)",
+    )
+    .action(async () => {
+      const root = path.resolve(g().project ?? process.cwd());
+      const { startGit } = await import('./start-git.js');
+      const r = startGit(root);
+      out(g(), r, () =>
+        [r.message, ...(r.secrets.length ? [`Left out, they hold secrets: ${r.secrets.join(', ')}`] : [])].join('\n'),
+      );
+      if (!['started', 'saved', 'already'].includes(r.status)) process.exitCode = 1;
+    });
+
   program
     .command('init')
     .description('create .friday/config.yaml and .friday/.gitignore in the current repository')

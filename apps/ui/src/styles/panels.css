@@ -1207,6 +1207,7 @@
   align-items: center;
   gap: 6px;
   color: var(--dim);
+  white-space: nowrap;
 }
 
 .pn-pc-limit {

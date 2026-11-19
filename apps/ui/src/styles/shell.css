@@ -1050,6 +1050,13 @@
   overflow-wrap: anywhere;
 }
 
+/* The one thing a message offers to do (2026-11-19). */
+.sh-toast-action {
+  margin-top: 8px;
+  padding: 3px 10px;
+  font-size: var(--text-sm);
+}
+
 .sh-toast-detail {
   max-height: 8.5em;
   margin-top: 2px;

@@ -85,6 +85,23 @@ describe('toasts (plan §7.1)', () => {
     expect(host.count()).toBe(0);
   });
 
+  it('carries one button that does what it offers, and leaves when it is pressed (2026-11-19)', () => {
+    let pressed = 0;
+    host.show({
+      kind: 'info',
+      text: 'Friday was updated',
+      timeoutMs: 0,
+      action: { label: 'Restart now', run: () => pressed++ },
+    });
+    const action = host.el.querySelector<HTMLButtonElement>('.sh-toast-action');
+    expect(action?.textContent).toBe('Restart now');
+    action?.click();
+    expect(pressed).toBe(1);
+    expect(host.count()).toBe(0);
+    host.show({ kind: 'info', text: 'Plain' });
+    expect(host.el.querySelector('.sh-toast-action')).toBeNull();
+  });
+
   it('stays while the pointer is on it and leaves a moment after', () => {
     host.show({ kind: 'info', text: 'Read me' });
     const t = host.el.querySelector('.sh-toast') as HTMLElement;

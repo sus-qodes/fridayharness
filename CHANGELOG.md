@@ -2,6 +2,12 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — the trial's fault list, part 9: after an update, and a folder without git
+
+- **An update reaches the running Friday.** Installing a new Friday left the project's service running the code it had started with until somebody restarted it. The app now notices: when nothing is at work it restarts the service with the new version by itself; when agents are working or a plan is being written, a message says "Friday was updated" with **Restart now**, and the service restarts by itself as soon as the work is done.
+- **A folder that is not under git gets a way forward.** Setting up Friday in such a folder, or in one with no saved version yet, now offers **Save a first version**: Friday starts git there if needed and saves the files as they are. Folders that tools make are left out by a `.gitignore` Friday writes only when there is none; files with passwords or keys (`.env`, key files) are never saved, whatever `.gitignore` says, and stay on the computer. A folder far too big to be the project's own files is refused with its biggest folders named, and nothing changes. When git does not know the person's name, the first version is saved under the computer's user, as git itself would, and that is said. Git not installed: the app says so with its download page. Before, the person was told to run `git init` and make a first commit in a terminal. `friday git-start` does the same from a terminal.
+- **Messages can carry a button**, and "Time limit" in Settings → Checks stays on one line.
+
 ## Unreleased — the trial's fault list, part 8: words, commits, time limits
 
 From the trial: a lint check that took 116 s of its 120 s while another agent worked, a merge commit titled "Integrate task_1rsz5wbks9145nqfgnkqa1k4pg: …", an agent that changed the project's eslint.config.js to get past Friday's own files, and "Ready for verification", "Rework", "Agent lost", "Reach of the grant".

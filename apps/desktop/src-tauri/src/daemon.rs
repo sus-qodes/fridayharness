@@ -13,7 +13,7 @@ use std::io::{Read, Write};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -314,6 +314,85 @@ pub fn running(p: &Project) -> Option<Discovery> {
     }
     let h = health(p, &d)?;
     (h.project_id == p.id && h.instance_id == d.instance_id).then_some(d)
+}
+
+// ---- an update while Friday runs (2026-11-19) -----------------------------------------------------
+//
+// Installing a new Friday left the project's daemon running the code it had started with: the app
+// connected to it as it was, and what the update fixed was not there until somebody restarted it.
+
+/// When the running daemon started: it writes `daemon.json` once, as it starts.
+pub fn started_at(p: &Project) -> Option<SystemTime> {
+    fs::metadata(p.private_dir.join("daemon.json")).ok()?.modified().ok()
+}
+
+/// The newest built code file of the copy of Friday `install` runs: its CLI, its daemon and the
+/// packages they load (`<home>\apps\{cli,daemon}\dist`, `<home>\packages\**\dist`).
+pub fn code_built_at(install: &Install) -> Option<SystemTime> {
+    let home = install.cli.ancestors().nth(4)?;
+    let mut dists = vec![home.join("apps").join("daemon").join("dist"), home.join("apps").join("cli").join("dist")];
+    for group in [home.join("packages"), home.join("packages").join("adapters")] {
+        if let Ok(entries) = fs::read_dir(&group) {
+            dists.extend(entries.flatten().map(|e| e.path().join("dist")).filter(|d| d.is_dir()));
+        }
+    }
+    let mut newest = None;
+    let mut seen = 0usize;
+    for d in &dists {
+        newest_code(d, 0, &mut newest, &mut seen);
+    }
+    newest
+}
+
+fn newest_code(dir: &Path, depth: usize, newest: &mut Option<SystemTime>, seen: &mut usize) {
+    if depth > 4 || *seen > 50_000 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let Ok(kind) = e.file_type() else { continue };
+        let path = e.path();
+        if kind.is_dir() {
+            newest_code(&path, depth + 1, newest, seen);
+            continue;
+        }
+        if !matches!(path.extension().and_then(OsStr::to_str), Some("js" | "mjs" | "cjs")) {
+            continue;
+        }
+        *seen += 1;
+        if let Ok(at) = e.metadata().and_then(|m| m.modified()) {
+            if newest.map_or(true, |n| at > n) {
+                *newest = Some(at);
+            }
+        }
+    }
+}
+
+/// Whether a daemon that started at `started` runs older code than was built at `built`. Two
+/// seconds of slack: the daemon writes `daemon.json` after it has loaded its code. Unknown is not
+/// outdated.
+pub fn outdated(started: Option<SystemTime>, built: Option<SystemTime>) -> bool {
+    match (started, built) {
+        (Some(s), Some(b)) => b > s + Duration::from_secs(2),
+        _ => false,
+    }
+}
+
+/// What a restart would interrupt, read from the board (`ui/snapshot`): tasks being started,
+/// worked on, waiting on the person, done and waiting to be checked, or being checked, and plans
+/// being written.
+pub fn work_in_progress(snapshot: &Value) -> usize {
+    const BUSY: [&str; 5] = ["ASSIGNED", "RUNNING", "WAITING", "READY_FOR_VERIFICATION", "VERIFYING"];
+    let tasks = snapshot
+        .get("tasks")
+        .and_then(Value::as_array)
+        .map(|t| t.iter().filter(|x| x.get("status").and_then(Value::as_str).is_some_and(|s| BUSY.contains(&s))).count())
+        .unwrap_or(0);
+    // A plan job that waits (for the person to allow spending) loses nothing: it is asked again.
+    let plans = snapshot.get("brain_jobs").and_then(Value::as_array).map_or(0, |jobs| {
+        jobs.iter().filter(|j| matches!(j.get("status").and_then(Value::as_str), Some("calling" | "pending"))).count()
+    });
+    tasks + plans
 }
 
 // ---- Friday's install ---------------------------------------------------------------------------
@@ -664,6 +743,53 @@ mod tests {
         assert_eq!(project_key(ID, r"c:\users\example\projects\shop"), format!("{ID}-678fba09"));
         assert_eq!(project_key(ID, "D:\\Work\\Ünïcode Café\\ΣΟΦΙΑΣ"), format!("{ID}-230edec9"));
         assert_eq!(project_key(ID, r"\\server\share\repo"), format!("{ID}-3bf6ff06"));
+    }
+
+    // An update while Friday runs (2026-11-19): the daemon kept the code it started with.
+    #[test]
+    fn a_daemon_older_than_the_code_it_runs_is_outdated_and_unknown_is_not() {
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        assert!(outdated(Some(t), Some(t + Duration::from_secs(60))));
+        // Built while it was loading, or before it started: not outdated.
+        assert!(!outdated(Some(t), Some(t + Duration::from_secs(1))));
+        assert!(!outdated(Some(t), Some(t - Duration::from_secs(3600))));
+        assert!(!outdated(None, Some(t)));
+        assert!(!outdated(Some(t), None));
+    }
+
+    #[test]
+    fn the_newest_built_code_file_of_an_install_is_found_and_nothing_else_counts() {
+        let home = std::env::temp_dir().join(format!("friday-built-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        let file = |rel: &str| {
+            let p = home.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, "x").unwrap();
+            p
+        };
+        let cli = file(r"apps\cli\bin\friday.mjs");
+        let install = Install { node: PathBuf::from("node.exe"), cli, from_file: false };
+        assert_eq!(code_built_at(&install), None);
+        let daemon = file(r"apps\daemon\dist\index.js");
+        let deep = file(r"packages\adapters\claude\dist\hooks\entry.js");
+        let _ = file(r"packages\sdk\dist\index.d.ts");
+        let newest = [daemon, deep].iter().filter_map(|p| fs::metadata(p).and_then(|m| m.modified()).ok()).max();
+        assert_eq!(code_built_at(&install), newest);
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn work_a_restart_would_interrupt_is_counted_from_the_board() {
+        let board = serde_json::json!({
+            "tasks": [
+                { "status": "RUNNING" }, { "status": "WAITING" }, { "status": "VERIFYING" },
+                { "status": "COMPLETED" }, { "status": "READY" }, { "status": "FAILED" }
+            ],
+            "brain_jobs": [{ "status": "calling" }, { "status": "waiting" }]
+        });
+        assert_eq!(work_in_progress(&board), 4);
+        assert_eq!(work_in_progress(&serde_json::json!({ "tasks": [{ "status": "COMPLETED" }], "brain_jobs": [] })), 0);
+        assert_eq!(work_in_progress(&serde_json::json!({})), 0);
     }
 
     #[test]

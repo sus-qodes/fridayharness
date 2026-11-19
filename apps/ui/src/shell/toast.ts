@@ -81,6 +81,16 @@ export function createToastHost(): ToastHost {
         { class: 'sh-toast-body' },
         h('div', { class: 'sh-toast-text' }, text),
         detail ? h('div', { class: 'sh-toast-detail mono' }, detail) : null,
+        t.action
+          ? button(
+              truncate(cleanText(String(t.action.label)), 40),
+              () => {
+                remove(s);
+                t.action?.run();
+              },
+              { class: 'btn sh-toast-action' },
+            )
+          : null,
       ),
     );
     const s: Shown = {

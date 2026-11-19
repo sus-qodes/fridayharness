@@ -17,6 +17,7 @@ import {
   studioLink,
   trayState,
   untilReady,
+  updateNotice,
 } from './boot.js';
 
 const INFO = {
@@ -229,6 +230,43 @@ describe('a Friday that stopped while the Studio is open', () => {
     start.click();
     await settle();
     expect(shell.calls.some((c) => c.cmd === 'restart_daemon')).toBe(true);
+  });
+});
+
+// An update while Friday runs (2026-11-19): the service kept the code it started with.
+describe('Friday updated while agents work', () => {
+  it('says so with a way to restart now, and says when the new version runs', async () => {
+    const shell = fakeShell([{ state: 'ready', outdated: true }]);
+    const root = document.createElement('div');
+    document.body.append(root);
+    await bootDesktopStudio(root, shell.env);
+    await settle();
+    const toast = [...root.querySelectorAll('.sh-toast')].find((t) => t.textContent?.includes('Friday was updated'));
+    expect(toast?.textContent).toContain('It restarts with the new one by itself once they are done');
+    const now = toast?.querySelector('.sh-toast-action') as HTMLButtonElement;
+    expect(now.textContent).toBe('Restart now');
+    now.click();
+    await settle();
+    expect(shell.calls.some((c) => c.cmd === 'restart_daemon')).toBe(true);
+    // The shell restarted it (by the button, or by itself once idle).
+    shell.emit('daemon-status', { state: 'ready' });
+    await settle();
+    expect(root.textContent).toContain('Friday now runs the new version');
+    expect(root.textContent).not.toContain('Friday was updated');
+  });
+
+  it('is said only while the service is ready and outdated', () => {
+    const restart = () => undefined;
+    expect(updateNotice({ state: 'ready', outdated: true }, false, restart)).toMatchObject({
+      kind: 'info',
+      key: 'friday-updated',
+      timeoutMs: 0,
+      action: { label: 'Restart now' },
+    });
+    expect(updateNotice({ state: 'ready', outdated: true }, false, null)).not.toHaveProperty('action');
+    expect(updateNotice({ state: 'ready' }, true, restart)).toMatchObject({ kind: 'success', key: 'friday-updated' });
+    expect(updateNotice({ state: 'ready' }, false, restart)).toBeNull();
+    expect(updateNotice({ state: 'starting', outdated: true }, false, restart)).toBeNull();
   });
 });
 

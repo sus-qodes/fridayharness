@@ -50,7 +50,7 @@ export const DESKTOP_MISSING =
 export const DESKTOP_WINDOWS_ONLY = 'The desktop app runs on Windows only.';
 
 export function notRepositoryMessage(dir: string): string {
-  return `${dir} is not a git repository; make it one first, then start again: git init`;
+  return `${dir} is not a git repository; Friday can make it one, with your files as its first version (secrets and tools' folders left out): friday git-start (or git init), then start again`;
 }
 
 function realpath(p: string): string {

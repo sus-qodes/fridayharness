@@ -51,6 +51,10 @@ pub struct DaemonStatus {
     pub state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Friday was updated while this daemon ran, and work kept it from restarting with the new
+    /// code (2026-11-19): the page offers to restart it, and it restarts by itself once idle.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub outdated: bool,
 }
 
 pub struct AppState {
@@ -72,6 +76,8 @@ pub struct AppState {
     stopping: AtomicBool,
     /// A project is being chosen (the folder picker and its dialogs): one at a time.
     choosing: AtomicBool,
+    /// The running daemon is older than Friday's code on disk, and work kept it from restarting.
+    outdated: AtomicBool,
 }
 
 fn state(app: &AppHandle) -> tauri::State<'_, AppState> {
@@ -875,7 +881,8 @@ fn set_autostart(enabled: bool) -> Result<bool, CmdError> {
 // ---- lifecycle -----------------------------------------------------------------------------------
 
 fn set_status(app: &AppHandle, state_name: &'static str, message: Option<String>) {
-    let status = DaemonStatus { state: state_name, message };
+    let outdated = state_name == "ready" && state(app).outdated.load(Ordering::SeqCst);
+    let status = DaemonStatus { state: state_name, message, outdated };
     *state(app).status.lock().unwrap() = status.clone();
     let line = match state_name {
         "ready" => None,
@@ -945,13 +952,16 @@ fn set_up_here(app: &AppHandle, dir: &std::path::Path) -> bool {
     let Some(install) = ensure_install(app) else { return false };
     match daemon::run_cli(&install, Some(dir), &["init", "--json"], None, Duration::from_secs(60)) {
         Ok(out) if out.code == Some(0) => {
-            let mut text = format!(
+            // A folder with no saved version in git is offered one (2026-11-19, G2): it was told to
+            // run `git init` and make a first commit, in a terminal.
+            if !daemon::has_commit(dir) {
+                offer_first_version(app, &install, dir);
+                return true;
+            }
+            let text = format!(
                 "Friday is set up in {}.\n\nCommit these two files so everyone who works on the project shares its settings:\n  .friday/config.yaml\n  .friday/.gitignore",
                 visible(&dir.to_string_lossy())
             );
-            if !daemon::has_commit(dir) {
-                text.push_str("\n\nThis repository has no commit yet: every agent would work in the main checkout. Make a first commit before you start agents.");
-            }
             tell(app, "Friday: set up", &text, MessageDialogKind::Info);
             true
         }
@@ -965,6 +975,96 @@ fn set_up_here(app: &AppHandle, dir: &std::path::Path) -> bool {
             false
         }
     }
+}
+
+/// Where Git for Windows is downloaded.
+const GIT_DOWNLOAD: &str = "https://git-scm.com/download/win";
+
+/// Offers a folder without a saved version in git its first one: `friday git-start` starts git if
+/// needed and saves the files as they are, leaving out what tools make and files with secrets.
+fn offer_first_version(app: &AppHandle, install: &daemon::Install, dir: &std::path::Path) {
+    let text = format!(
+        "Friday is set up in {}, but the folder has no saved version in git yet.\n\nFriday works best with one: each agent then works in its own copy of the project, and every change can be undone.\n\nFriday can do it now: it starts git here if needed and saves your files as they are as the first version. Folders that tools make (like node_modules) and files with passwords or keys (like .env) are left out. Nothing leaves this computer.",
+        visible(&dir.to_string_lossy())
+    );
+    let choice = ask3(app, "Friday: save a first version?", &text, "Save a first version", "Not now", MessageDialogKind::Info);
+    if choice != Choice::First {
+        tell(
+            app,
+            "Friday: set up",
+            "Friday is set up. Until the folder has a saved version in git, agents work in it directly, one at a time. Choose the folder again to save one.",
+            MessageDialogKind::Info,
+        );
+        return;
+    }
+    let answer = daemon::run_cli(install, Some(dir), &["git-start", "--json"], None, Duration::from_secs(600));
+    let (text, no_git) = match answer {
+        Ok(out) => first_version_words(out.json().as_ref(), &out.stderr),
+        Err(e) => (visible(&e), false),
+    };
+    if no_git {
+        let open = ask3(app, "Friday: Git is not installed", &text, "Open the download page", "Close", MessageDialogKind::Warning);
+        if open == Choice::First {
+            platform_windows::shell_open(GIT_DOWNLOAD);
+        }
+        return;
+    }
+    tell(app, "Friday: first version", &text, MessageDialogKind::Info);
+}
+
+/// What `friday git-start --json` did, in a person's words; and whether Git is missing.
+fn first_version_words(v: Option<&Value>, stderr: &str) -> (String, bool) {
+    let Some(v) = v else {
+        let line = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("Friday could not save a first version.");
+        return (visible(line), false);
+    };
+    let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let status = s("status");
+    let mut text = visible(&s("message"));
+    match status.as_str() {
+        "started" | "saved" => {
+            let secrets: Vec<String> = v
+                .get("secrets")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).take(10).map(visible).collect())
+                .unwrap_or_default();
+            if !secrets.is_empty() {
+                text.push_str(&format!("\n\nLeft out, they hold secrets (they stay on this computer): {}", secrets.join(", ")));
+            }
+            if v.get("ignore_written").and_then(Value::as_bool) == Some(true) {
+                text.push_str("\n\nFriday wrote a .gitignore that lists the folders tools make, so they are never saved.");
+            }
+            if let Some(id) = v.get("identity").filter(|i| !i.is_null()) {
+                let get = |k: &str| visible(id.get(k).and_then(Value::as_str).unwrap_or(""));
+                text.push_str(&format!(
+                    "\n\nGit did not know your name yet, so this project's versions are saved as {} <{}>. You can change it in VS Code's or git's settings.",
+                    get("name"),
+                    get("email")
+                ));
+            }
+            text.push_str("\n\nAgents now work in copies of their own.");
+        }
+        "too_big" => {
+            let big: Vec<String> = v
+                .get("big")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|b| {
+                            let p = b.get("path").and_then(Value::as_str)?;
+                            let mb = b.get("bytes").and_then(Value::as_f64).unwrap_or(0.0) / 1_048_576.0;
+                            Some(format!("  {}  {:.0} MB", visible(p), mb))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !big.is_empty() {
+                text.push_str(&format!("\n\nThe biggest folders:\n{}", big.join("\n")));
+            }
+        }
+        _ => {}
+    }
+    (text, status == "no_git")
 }
 
 /// Keeps the install found for this run, after making `install.json` name it (`friday setup`, when
@@ -1048,8 +1148,20 @@ fn ensure_daemon(app: &AppHandle) {
             let st = state(app);
             let _one = st.lifecycle.lock().unwrap();
             st.stopping.store(false, Ordering::SeqCst);
+            st.outdated.store(false, Ordering::SeqCst);
             if daemon::running(&project).is_some() {
-                Ok(())
+                // Started before Friday was updated (2026-11-19): restarted now when nothing would
+                // be interrupted, else said, and restarted by the watchdog once the work is done.
+                if daemon::outdated(daemon::started_at(&project), daemon::code_built_at(&install)) {
+                    if work_in_progress(&project) == Some(0) {
+                        restart_updated(app, &project, &install)
+                    } else {
+                        st.outdated.store(true, Ordering::SeqCst);
+                        Ok(())
+                    }
+                } else {
+                    Ok(())
+                }
             } else {
                 set_status(app, "starting", None);
                 daemon::start(&project, &install).map(|_| ())
@@ -1079,6 +1191,35 @@ fn ensure_daemon(app: &AppHandle) {
             }
         }
     }
+}
+
+/// What a restart of the project's daemon would interrupt (`daemon::work_in_progress`); `None`
+/// when the board could not be read, which counts as busy.
+fn work_in_progress(project: &daemon::Project) -> Option<usize> {
+    let raw = format!("{}{}/ui/snapshot", routes::PREFIX, project.id);
+    proxy::send(project, Gate::Shell, &request("GET", &raw, None, Duration::from_secs(15)))
+        .ok()
+        .map(|v| daemon::work_in_progress(&v))
+}
+
+/// Stops a daemon that runs older code and starts the one now on disk; called under `lifecycle`.
+fn restart_updated(
+    app: &AppHandle,
+    project: &daemon::Project,
+    install: &daemon::Install,
+) -> Result<(), daemon::StartFailure> {
+    let st = state(app);
+    st.stopping.store(true, Ordering::SeqCst);
+    set_status(app, "starting", Some("Friday was updated: starting the new version".into()));
+    st.streams.close_all();
+    let stopped = daemon::stop(project);
+    st.stopping.store(false, Ordering::SeqCst);
+    if stopped.is_err() {
+        // It kept running: the old one serves until it can be restarted.
+        st.outdated.store(true, Ordering::SeqCst);
+        return Ok(());
+    }
+    daemon::start(project, install).map(|_| ())
 }
 
 /// What the Studio shows when Friday did not start: the shell's own words and the last thing the
@@ -1163,18 +1304,46 @@ fn restart_friday(app: &AppHandle) -> Result<(), CmdError> {
 
 /// Notices a daemon that went away without this app stopping it.
 fn spawn_watchdog(app: AppHandle) {
-    let _ = std::thread::Builder::new().name("friday-watchdog".into()).spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(3));
-        let st = state(&app);
-        if st.status.lock().unwrap().state != "ready" || st.stopping.load(Ordering::SeqCst) {
-            continue;
-        }
-        let Ok(p) = current_project(&app) else { continue };
-        let alive = daemon::read_discovery(&p).is_ok_and(|d| platform_windows::pid_alive(d.pid));
-        if !alive {
-            set_status(&app, "stopped", Some("Friday stopped. Use Restart Friday in the tray to start it again.".into()));
+    let _ = std::thread::Builder::new().name("friday-watchdog".into()).spawn(move || {
+        let mut ticks: u32 = 0;
+        loop {
+            std::thread::sleep(Duration::from_secs(3));
+            ticks = ticks.wrapping_add(1);
+            let st = state(&app);
+            if st.status.lock().unwrap().state != "ready" || st.stopping.load(Ordering::SeqCst) {
+                continue;
+            }
+            let Ok(p) = current_project(&app) else { continue };
+            let alive = daemon::read_discovery(&p).is_ok_and(|d| platform_windows::pid_alive(d.pid));
+            if !alive {
+                set_status(&app, "stopped", Some("Friday stopped. Use Restart Friday in the tray to start it again.".into()));
+                continue;
+            }
+            // A daemon left on old code because work was in progress: restarted with the new one
+            // as soon as nothing would be interrupted, looked at every 30 seconds (2026-11-19).
+            if ticks % 10 == 0 && st.outdated.load(Ordering::SeqCst) && work_in_progress(&p) == Some(0) {
+                restart_when_idle(&app, &p);
+            }
         }
     });
+}
+
+/// The watchdog's restart of an outdated daemon, one lifecycle step like any other.
+fn restart_when_idle(app: &AppHandle, project: &daemon::Project) {
+    let Some(install) = state(app).install.lock().unwrap().clone() else { return };
+    let result = {
+        let st = state(app);
+        let _one = st.lifecycle.lock().unwrap();
+        // Looked at again under the lock: a restart from the page may have been first.
+        if !st.outdated.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        restart_updated(app, project, &install)
+    };
+    match result {
+        Ok(()) => set_status(app, "ready", None),
+        Err(f) => set_status(app, "failed", Some(failure_line(&f))),
+    }
 }
 
 /// Opens a project and starts its Friday. `show` opens the Studio (a launch by hand; a start at
@@ -1528,7 +1697,7 @@ pub fn run() {
             app.manage(AppState {
                 project: RwLock::new(None),
                 install: Mutex::new(None),
-                status: Mutex::new(DaemonStatus { state: "starting", message: None }),
+                status: Mutex::new(DaemonStatus { state: "starting", message: None, outdated: false }),
                 island: island.clone(),
                 streams: Arc::new(events::Streams::default()),
                 shortcuts: shortcuts::Shortcuts::default(),
@@ -1541,6 +1710,7 @@ pub fn run() {
                 muted: AtomicBool::new(false),
                 stopping: AtomicBool::new(false),
                 choosing: AtomicBool::new(false),
+                outdated: AtomicBool::new(false),
             });
             create_windows(app)?;
             let handle = app.handle().clone();
@@ -1599,6 +1769,34 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A folder with no saved version in git (2026-11-19, G2): what Friday did, in words.
+    #[test]
+    fn the_first_version_is_told_with_what_was_left_out_and_under_which_name() {
+        let saved = serde_json::json!({
+            "status": "started", "message": "4 files saved as the first version.", "files": 4,
+            "secrets": ["config/server.pem"], "ignore_written": true,
+            "identity": { "name": "rahul", "email": "rahul@desk" }, "big": []
+        });
+        let (text, no_git) = first_version_words(Some(&saved), "");
+        assert!(!no_git);
+        assert!(text.starts_with("4 files saved as the first version."));
+        assert!(text.contains("they hold secrets (they stay on this computer): config/server.pem"));
+        assert!(text.contains("Friday wrote a .gitignore"));
+        assert!(text.contains("saved as rahul <rahul@desk>"));
+        let big = serde_json::json!({
+            "status": "too_big", "message": "30000 files, 900 MB: … Nothing was changed.",
+            "big": [{ "path": "vendor/", "bytes": 734_003_200 }]
+        });
+        let (text, _) = first_version_words(Some(&big), "");
+        assert!(text.contains("The biggest folders:\n  vendor/  700 MB"));
+        assert!(!text.contains("copies of their own"));
+        let (text, no_git) = first_version_words(Some(&serde_json::json!({ "status": "no_git", "message": "Git is not installed" })), "");
+        assert!(no_git);
+        assert_eq!(text, "Git is not installed");
+        let (text, _) = first_version_words(None, "\nerror: boom\n");
+        assert_eq!(text, "error: boom");
+    }
 
     #[test]
     fn navigation_stays_on_the_bundled_pages() {
