@@ -120,6 +120,23 @@ The installer is a per-user NSIS setup, `Friday Desktop_0.1.0_x64-setup.exe` (1.
 
    It takes about 3 minutes after a release build, and writes `target\release\bundle\nsis\Friday Desktop_0.1.0_x64-setup.exe`. The NSIS bundler downloads NSIS per user on first use. The generated script, `target\release\nsis\x64\installer.nsi`, shows the install folder (`$LOCALAPPDATA\${PRODUCTNAME}`) and the mode (`currentUser`); read it before handing an installer out after any change to `Tauri.toml`.
 
+   That installer holds the app alone: it runs the Friday of the checkout it was built from, so it is for this computer.
+
+### The installer for other computers
+
+A computer that never had Friday's source needs the installer that carries Friday itself (2026-11-19):
+
+```powershell
+# TERMINAL, in the repository: Friday's own copy, made from the install archive and tried
+pnpm pack:desktop
+# TERMINAL, in apps\desktop\src-tauri, with the route 2 variables set
+$env:FRIDAY_RELEASE = "1"; cargo tauri build --config Tauri.release.toml; Remove-Item Env:FRIDAY_RELEASE
+```
+
+`pnpm pack:desktop` (`scripts/release/desktop.mjs`) makes the install archive as `pnpm pack:release` does and proves it installs and starts, installs it into `target\friday-bundle`, leaves out the compiled SQLite add-on (a running Friday keeps it locked, so an update could not replace it; Friday uses the SQLite built into Node.js), and starts Friday from the result once. `Tauri.release.toml` puts that folder beside the app as `friday\`, and `FRIDAY_RELEASE=1` keeps the build machine's checkout out of the app (`build.rs`), so that copy is the one it runs. The installer is about 11 MB, 60 MB installed.
+
+Node.js 22.18 or newer and Git are not carried: the agents' hooks run `node` by its name in every project, and a person without either is sent to its download page by the app. Installing a newer one over a running Friday works: the app restarts the project's Friday with the new code once nothing is at work.
+
 ## Running
 
 ```powershell
@@ -129,10 +146,10 @@ C:\friday\apps\desktop\src-tauri\target\release\friday-desktop.exe --project C:\
 
 At start the shell:
 
-1. opens the project: `--project`, else the last one (in `%APPDATA%\dev.friday.desktop\desktop.json`), else a folder picker. A folder without `.friday\config.yaml` offers **Set up Friday here** (`node <cli> --project <dir> init --json`), then lists the two files to commit and warns when the repository has no commit;
-2. finds Friday: `FRIDAY_HOME` (a checkout), then the checkout it was built from, then `%LOCALAPPDATA%\Friday\install.json` (`friday setup`), then asks for the folder. It then runs `node <cli> setup --json`, once, when `install.json` is missing or broken, or when Friday was found in a folder and the file's `cli_entry` or `mcp_server_entry` names another copy (paths compared by real path, without case): the coding tools a person opens themselves start the Friday that file names, so it is kept on the copy the app runs. A start that opens no project does the same when Friday is found without asking. A copy found through `install.json` itself is left as it is, and so is the file when the app's copy has no MCP server launcher;
+1. opens the project: `--project`, else the last one (in `%APPDATA%\dev.friday.desktop\desktop.json`), else a folder picker. A folder without `.friday\config.yaml` offers **Set up Friday here** (`node <cli> --project <dir> init --json`), then lists the two files to commit; a folder with no saved version in git is offered **Save a first version** instead (`git-start --json`: git started if needed, secrets and tools' folders left out);
+2. finds Friday: `FRIDAY_HOME` (a checkout), then the checkout it was built from, then the copy the installer for other computers put beside it (`friday\node_modules\friday`), then `%LOCALAPPDATA%\Friday\install.json` (`friday setup`), then asks for the folder; without Node.js it says so, with its download page. It then runs `node <cli> setup --json`, once, when `install.json` is missing or broken, or when Friday was found in a folder and the file's `cli_entry` or `mcp_server_entry` names another copy (paths compared by real path, without case): the coding tools a person opens themselves start the Friday that file names, so it is kept on the copy the app runs. A start that opens no project does the same when Friday is found without asking. A copy found through `install.json` itself is left as it is, and so is the file when the app's copy has no MCP server launcher;
 3. finds the private folder exactly as `packages/sdk/src/discovery.ts` does: `<FRIDAY_STATE_DIR or %LOCALAPPDATA%\Friday>\projects\<project_id>-<first 8 hex of sha256(lower-cased real path of the main worktree)>`;
-4. starts the daemon when none answers: `node <cli> --project <root> run`, hidden (`CREATE_NO_WINDOW`), its output in `<root>\.friday\logs\daemon-console.log`; ready when `daemon.json` names the child's pid and `/health` answers for this project and instance (30 s). If it stops early, a dialog shows the last lines of the log and offers **Run checks** (`doctor --json`) or **Start again**, and the Studio shows the shell's words with the last line the daemon wrote, **Start Friday**, **Open config.yaml** and **Open the log**.
+4. starts the daemon when none answers: `node <cli> --project <root> run`, hidden (`CREATE_NO_WINDOW`), its output in `<root>\.friday\logs\daemon-console.log`; ready when `daemon.json` names the child's pid and `/health` answers for this project and instance (30 s). If it stops early, a dialog shows the last lines of the log and offers **Run checks** (`doctor --json`) or **Start again**, and the Studio shows the shell's words with the last line the daemon wrote, **Start Friday**, **Open config.yaml** and **Open the log**. A daemon that answers but started before Friday's code on disk was built (an update) is restarted with the new code when no task is in progress and no plan is being written; otherwise the Studio says "Friday was updated" with **Restart now**, and the watchdog restarts it once the work is done.
 
 A folder picker that was cancelled leaves `no_project`: the Studio then offers **Choose a project folder…** (`choose_project_folder`). A daemon that stops while the Studio is open shows on the Studio's strip at once, with **Start Friday** (`restart_daemon`).
 

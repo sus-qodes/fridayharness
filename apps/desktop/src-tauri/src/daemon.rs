@@ -450,10 +450,21 @@ fn read_install_file(state: &Path) -> Option<InstallFile> {
 }
 
 /// The folders Friday is looked for in before `install.json`: `FRIDAY_HOME` (a Friday checkout),
-/// then the checkout this app was built from.
+/// then the checkout this app was built from (a developer's build only: the installer for other
+/// computers is built without it), then the copy the installer put beside this app. A copy left
+/// beside a developer's build so never runs in place of the code being worked on.
 fn own_homes() -> Vec<PathBuf> {
     let built_from = option_env!("FRIDAY_BUILD_HOME").map(PathBuf::from);
-    env_path("FRIDAY_HOME").map(PathBuf::from).into_iter().chain(built_from).collect()
+    let beside = std::env::current_exe().ok().and_then(|exe| exe.parent().and_then(bundled_home));
+    env_path("FRIDAY_HOME").map(PathBuf::from).into_iter().chain(built_from).chain(beside).collect()
+}
+
+/// The copy of Friday the installer carries (2026-11-19, G3), in the app's own folder:
+/// `<app folder>\friday\node_modules\friday`, laid out as a checkout (`scripts/release/desktop.mjs`).
+/// On a computer that never had Friday's source, it is the only one there is.
+pub fn bundled_home(app_dir: &Path) -> Option<PathBuf> {
+    let home = app_dir.join("friday").join("node_modules").join("friday");
+    cli_in(&home).map(|_| home)
 }
 
 /// Friday's own program, and whether `install.json` is where it was found: the first of `homes`
@@ -743,6 +754,26 @@ mod tests {
         assert_eq!(project_key(ID, r"c:\users\example\projects\shop"), format!("{ID}-678fba09"));
         assert_eq!(project_key(ID, "D:\\Work\\Ünïcode Café\\ΣΟΦΙΑΣ"), format!("{ID}-230edec9"));
         assert_eq!(project_key(ID, r"\\server\share\repo"), format!("{ID}-3bf6ff06"));
+    }
+
+    // An installer for other computers (2026-11-19, G3): Friday's copy beside the app.
+    #[test]
+    fn the_copy_beside_the_app_is_found_where_the_installer_puts_it() {
+        let app = std::env::temp_dir().join(format!("friday-beside-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&app);
+        assert_eq!(bundled_home(&app), None);
+        let home = app.join("friday").join("node_modules").join("friday");
+        let cli = home.join("apps").join("cli").join("bin").join("friday.mjs");
+        fs::create_dir_all(cli.parent().unwrap()).unwrap();
+        fs::write(&cli, "x").unwrap();
+        assert_eq!(bundled_home(&app), Some(home.clone()));
+        // It holds the CLI where a checkout does, so the rest (the MCP server beside it, the
+        // version stamp of its code) is found the same way.
+        let found = find_cli(&[home.clone(), PathBuf::from(r"C:\nowhere")], None, None);
+        assert_eq!(found, Some((cli.clone(), false)));
+        let install = Install { node: PathBuf::from("node.exe"), cli, from_file: false };
+        assert_eq!(install.cli.ancestors().nth(4), Some(home.as_path()));
+        let _ = fs::remove_dir_all(&app);
     }
 
     // An update while Friday runs (2026-11-19): the daemon kept the code it started with.

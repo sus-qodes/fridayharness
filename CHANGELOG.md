@@ -2,6 +2,12 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — the trial's fault list, part 10: an installer for other computers
+
+- **The installer can carry Friday itself.** `pnpm pack:desktop` makes Friday's own copy from the install archive (proving the archive installs and starts, and starting Friday from the copy once), and `cargo tauri build --config Tauri.release.toml` with `FRIDAY_RELEASE=1` makes an installer of about 11 MB that puts it beside the app. The app runs that copy on a computer that never had Friday's source; before, it asked where Friday was installed. A developer's build still runs the checkout it was built from, even with a copy left beside it.
+- **Node.js and Git are asked for, with their download pages.** They are not carried: the agents' hooks run `node` by its name in every project. A computer without Node.js is told to install 22.18 or newer, with **Open the download page**; one with too old a Node.js is told which version it has.
+- **Nothing in the copy is locked while Friday runs.** The compiled SQLite add-on is left out, and Friday uses the SQLite built into Node.js, so a newer installer can replace every file of a running Friday; the app then restarts it with the new code once nothing is at work.
+
 ## Unreleased — the trial's fault list, part 9: after an update, and a folder without git
 
 - **An update reaches the running Friday.** Installing a new Friday left the project's service running the code it had started with until somebody restarted it. The app now notices: when nothing is at work it restarts the service with the new version by itself; when agents are working or a plan is being written, a message says "Friday was updated" with **Restart now**, and the service restarts by itself as soon as the work is done.

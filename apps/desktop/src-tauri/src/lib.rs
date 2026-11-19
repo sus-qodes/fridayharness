@@ -979,6 +979,8 @@ fn set_up_here(app: &AppHandle, dir: &std::path::Path) -> bool {
 
 /// Where Git for Windows is downloaded.
 const GIT_DOWNLOAD: &str = "https://git-scm.com/download/win";
+/// Where Node.js is downloaded.
+const NODE_DOWNLOAD: &str = "https://nodejs.org/en/download";
 
 /// Offers a folder without a saved version in git its first one: `friday git-start` starts git if
 /// needed and saves the files as they are, leaving out what tools make and files with secrets.
@@ -1106,17 +1108,22 @@ fn ensure_install(app: &AppHandle) -> Option<daemon::Install> {
         // Friday's own program is there and Node.js is not: another folder would change nothing.
         // It asked for the folder again each time, and never named Node.js (2026-11-17).
         if let (Some(_), None) = daemon::find_parts(chosen.as_deref()) {
-            let again = ask(
+            // With its download page (2026-11-19): a computer set up from the installer alone has
+            // Friday and needs Node.js, which the agents' hooks run by name in each project.
+            match ask3(
                 app,
-                &Dialog {
-                    title: "Friday: Node.js is needed".into(),
-                    text: "Friday runs on Node.js, and none was found on this computer.\n\nInstall Node.js 22 or newer from nodejs.org (the installer's defaults are fine), then choose Look again.".into(),
-                    confirm: "Look again".into(),
-                    danger: false,
-                },
-            );
-            if !again {
-                return None;
+                "Friday: Node.js is needed",
+                "Friday runs on Node.js, and none was found on this computer.\n\nInstall Node.js 22.18 or newer (the LTS version from nodejs.org; the installer's defaults are fine), then choose Look again.",
+                "Open the download page",
+                "Look again",
+                MessageDialogKind::Warning,
+            ) {
+                Choice::First => {
+                    platform_windows::shell_open(NODE_DOWNLOAD);
+                    // Asked again once it is installed: the dialog comes back with Look again.
+                }
+                Choice::Second => {}
+                Choice::Cancel => return None,
             }
             continue;
         }

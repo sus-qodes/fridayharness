@@ -34,9 +34,14 @@ const COMMANDS: &[&str] = &[
 fn main() {
     // The Friday checkout this app is built from (apps/desktop/src-tauri -> the repository root):
     // the second place, after FRIDAY_HOME, where the app looks for Friday's CLI.
+    // Not in the installer for other computers (FRIDAY_RELEASE=1, 2026-11-19): it carries its own
+    // copy of Friday, and the build machine's folder means nothing elsewhere.
+    println!("cargo:rerun-if-env-changed=FRIDAY_RELEASE");
     let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    if let Some(home) = manifest.ancestors().nth(3) {
-        println!("cargo:rustc-env=FRIDAY_BUILD_HOME={}", home.display());
+    if std::env::var("FRIDAY_RELEASE").map_or(true, |v| v != "1") {
+        if let Some(home) = manifest.ancestors().nth(3) {
+            println!("cargo:rustc-env=FRIDAY_BUILD_HOME={}", home.display());
+        }
     }
     let windows = std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "windows");
     let mut attributes =
