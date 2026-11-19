@@ -87,7 +87,7 @@ describe('readiness evidence (ADR-0035 §1)', () => {
       dispatchable: false,
       blocking: { stage: 'detected', status: 'missing' },
     });
-    expect(after.reason).toContain('no session is connected and no doctor check has seen it');
+    expect(after.reason).toContain('no session of it is connected, and no setup check has looked for it');
   });
 
   it('a completion claim shows the host and model signed in for seven days, renewed by each claim', () => {

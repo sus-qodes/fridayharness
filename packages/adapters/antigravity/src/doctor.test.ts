@@ -73,10 +73,12 @@ describe('friday harness doctor antigravity', () => {
       'ag.binary': 'ok',
       'ag.spawn': 'info',
       'ag.hook': 'ok',
+      'ag.hook-shim': 'ok',
       'ag.launcher': 'ok',
       'ag.hooks': 'ok',
       'ag.mcp-json': 'ok',
       'ag.agents-md': 'ok',
+      'ag.skill': 'ok',
       'ag.install': 'ok',
       'ag.secrets': 'ok',
       'ag.daemon': 'warn',
@@ -195,6 +197,54 @@ describe('friday harness doctor antigravity', () => {
     const r = await doctor();
     expect(statuses(r)['ag.hook']).toBe('fail');
     expect(r.achieved).toBe('L0 observed');
+  });
+
+  it('warns when the Antigravity you open yourself would start another copy of Friday', async () => {
+    initProject();
+    attach();
+    // install.json as another copy's "friday setup" left it; nothing names an entry by hand.
+    const old = path.join(ws().root, 'old-friday');
+    const oldEntry = path.join(old, 'packages', 'mcp-server', 'bin', 'friday-mcp.mjs');
+    mkdirSync(path.dirname(oldEntry), { recursive: true });
+    writeFileSync(oldEntry, '');
+    const record = (entry: string) =>
+      writeFileSync(
+        path.join(ws().stateDir, 'install.json'),
+        JSON.stringify({ mcp_server_entry: entry, written_at: '2026-10-31T12:00:00.000Z' }),
+      );
+    const recorded = (extra: { ownMcpEntry?: string } = {}) =>
+      antigravityDoctor(loadProject(ws().projectDir), {
+        found: cli('1.4.2'),
+        env: { FRIDAY_STATE_DIR: ws().stateDir, PATH: '' },
+        skipMcp: true,
+        ...extra,
+      });
+
+    record(oldEntry);
+    const other = await recorded();
+    expect(check(other, 'ag.install')).toEqual({
+      id: 'ag.install',
+      status: 'warn',
+      message: `Apps you open yourself start another copy of Friday (${old}, set up on 31 October 2026), not this one. Open the Friday desktop app once, or run friday setup, to switch them to this copy.`,
+    });
+    // Only that check differs: every other one, and the level, are as with this copy's entry.
+    const { 'ag.install': _other, ...rest } = statuses(other);
+    const { 'ag.install': _same, ...usual } = statuses(await doctor());
+    expect(rest).toEqual(usual);
+    expect(other.achieved).toBe('L1 unverified');
+
+    // Read by the copy the file names, the check says what it always said.
+    expect(check(await recorded({ ownMcpEntry: oldEntry }), 'ag.install')).toEqual({
+      id: 'ag.install',
+      status: 'ok',
+      message: `MCP server entry: ${oldEntry}`,
+    });
+    record(ENTRY);
+    expect(check(await recorded(), 'ag.install')).toEqual({
+      id: 'ag.install',
+      status: 'ok',
+      message: `MCP server entry: ${ENTRY}`,
+    });
   });
 
   it('starts the friday MCP server through the committed launcher', async () => {

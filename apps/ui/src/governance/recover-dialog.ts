@@ -6,19 +6,23 @@
  */
 import type { RecoveryAssessment } from '@friday/protocol';
 import type { RecoveryActionName } from '../api/client.js';
+import { statusLook, WAITING_REASON } from '../model/status.js';
 import { visible } from '../model/text.js';
 import type { AppContext, Component, ModalRequest } from '../shell/context.js';
 import { button, h, replace, setText } from '../ui/dom.js';
-import { cleanText, plural } from '../ui/format.js';
+import { cleanText, humanize, plural } from '../ui/format.js';
 import { ARMING_TEXT, armDecisions, type Clock } from './arming.js';
 import { errorText, nextId, taskLine } from './common.js';
 
 export const RECOVERY_ACTIONS: Record<string, { label: string; explain: string }> = {
   reconnect: { label: 'Wait for the session', explain: 'The agent’s session may still come back and resume.' },
   reassign: { label: 'Reassign', explain: 'Give the task to another agent; it continues from the preserved work.' },
-  restart: { label: 'Restart', explain: 'Start a new attempt; the earlier work is preserved first.' },
-  rebind: { label: 'Rebind', explain: 'Attach the task to the agent’s new session.' },
-  needs_human: { label: 'Ask a human', explain: 'Leave the task waiting with a question for a person.' },
+  restart: { label: 'Restart', explain: 'Start a new try; the earlier work is kept first.' },
+  rebind: {
+    label: 'Continue in its new session',
+    explain: 'The agent came back in a new session: the task goes on there.',
+  },
+  needs_human: { label: 'Leave it for me', explain: 'The task waits, with a question for you in “Waiting for you”.' },
   cancel: { label: 'Cancel the task', explain: 'The task does not run again; its work stays preserved.' },
 };
 
@@ -101,7 +105,12 @@ export function recoverDialog(
         'div',
         { class: 'gv-meta-row' },
         h('dt', null, 'Status'),
-        h('dd', null, `${a.task_status}${a.waiting_reason ? ` (${a.waiting_reason})` : ''}`),
+        // As the board says it, not as the daemon's constants.
+        h(
+          'dd',
+          { title: `${a.task_status}${a.waiting_reason ? ` (${a.waiting_reason})` : ''}` },
+          `${statusLook(a.task_status).label}${a.waiting_reason ? ` (${WAITING_REASON[a.waiting_reason] ?? humanize(a.waiting_reason)})` : ''}`,
+        ),
       ),
       h('div', { class: 'gv-meta-row' }, h('dt', null, 'Attempts'), h('dd', null, String(a.attempts))),
       a.harness
@@ -112,7 +121,7 @@ export function recoverDialog(
             h(
               'dd',
               null,
-              `${visible(a.harness.agent_key ?? a.harness.harness_id)} · ${a.harness.status}`,
+              `${visible(a.harness.agent_key ?? a.harness.harness_id)} · ${humanize(a.harness.status).toLowerCase()}`,
               a.harness.process_alive === false ? ' · its process has ended' : '',
             ),
           )
@@ -121,7 +130,7 @@ export function recoverDialog(
         ? h(
             'div',
             { class: 'gv-meta-row' },
-            h('dt', null, 'Worktree'),
+            h('dt', null, 'Task folder'),
             h(
               'dd',
               { class: 'mono' },
@@ -173,6 +182,7 @@ export function recoverDialog(
       content,
       facts,
       a.missing_code ? h('p', { class: 'hidden-warning' }, cleanText(a.missing_code)) : null,
+      folderGone(a),
       a.preserved.length
         ? h(
             'p',
@@ -185,6 +195,43 @@ export function recoverDialog(
       options,
     );
     arming.check();
+  };
+
+  /**
+   * The task's folder was deleted (by hand, by a clean-up tool): its committed work is still on the
+   * task's branch, and the folder is made again from it (2026-11-17). That was a terminal command,
+   * and until it ran the task could be neither verified nor finished.
+   */
+  const folderGone = (a: RecoveryAssessment): HTMLElement | null => {
+    if (!a.worktree || a.worktree.exists || a.worktree.elsewhere) return null;
+    const again = button(
+      'Create the folder again',
+      () => {
+        again.disabled = true;
+        void ctx
+          .act(
+            'Create the task folder again',
+            () => ctx.api.createWorktree(taskId),
+            'The task folder is back, from the task’s branch',
+          )
+          .then((r) => {
+            if (disposed) return;
+            again.disabled = false;
+            if (r) load();
+          });
+      },
+      { class: 'btn btn-primary' },
+    );
+    return h(
+      'div',
+      { class: 'gv-folder-gone', role: 'status' },
+      h(
+        'p',
+        { class: 'hidden-warning' },
+        'The task’s folder is gone. What the agent committed is still on the task’s branch; changes it had not committed are lost.',
+      ),
+      h('div', { class: 'gv-actions' }, again),
+    );
   };
 
   const load = (): void => {

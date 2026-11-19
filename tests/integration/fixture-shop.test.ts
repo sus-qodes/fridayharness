@@ -17,7 +17,7 @@ const ws = useTestWorkspace();
  * HEAD of the default fixture. It changes only when the fixture's files change; update it then
  * (CI asserts the same value on Windows and Linux).
  */
-const FIXTURE_SHOP_HEAD = 'ac52520e6ff8349754e9292c39533ebf85a48d6d';
+const FIXTURE_SHOP_HEAD = '5fe9ee4259d5e0d4c4e970557caf80f802f6c024';
 
 const git = (cwd: string, args: string[]) =>
   execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();

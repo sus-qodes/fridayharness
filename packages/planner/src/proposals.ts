@@ -26,6 +26,7 @@ export function taskInput(t: PlanTaskDraft): PlanTaskInput {
     priority: t.priority,
     risk_level: t.risk_level,
     note: null,
+    assign_to: t.assign_to ?? null,
   };
 }
 

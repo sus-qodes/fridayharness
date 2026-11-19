@@ -20,6 +20,7 @@
     "check:portability": "node scripts/check-portability.mjs",
     "check:portability:local": "node scripts/check-portability.mjs --working-tree",
     "pack:release": "node scripts/release/pack.mjs",
+    "pack:desktop": "node scripts/release/desktop.mjs",
     "clean": "node scripts/clean.mjs"
   },
   "devDependencies": {

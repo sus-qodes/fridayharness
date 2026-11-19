@@ -3,10 +3,12 @@
  * row saying whether Friday started it or it attached in VS Code, whether it is connected now, its
  * process state, enforcement and model, with Stop, Start again, Forget and Output as they apply
  * (processes and remembered profiles read again every 3 s while the drawer is open; the connected
- * sessions from the board); the "Claude Code in VS Code" card; and the installed hosts, shown only
- * while none is found (the Start dialog's Host field shows them otherwise). The routing pins live in
- * Settings → Routing: a request for them opens Settings there.
+ * sessions from the board); the "Claude Code in VS Code" card; the "Antigravity" card, which connects
+ * a host Friday may not start itself; and the installed hosts, shown only while none is found (the
+ * Start dialog's Host field shows them otherwise). The routing pins live in Settings → Routing: a
+ * request for them opens Settings there.
  */
+
 import type {
   AgentHost,
   AgentProcess,
@@ -17,11 +19,20 @@ import type {
 } from '@friday/protocol';
 import { enforcementWords } from '../model/status.js';
 import { visible } from '../model/text.js';
-import { type AppContext, type Component, type DrawerRequest, openDrawer, openModal } from '../shell/context.js';
+import {
+  type AppContext,
+  type Component,
+  closeDrawer,
+  type DrawerRequest,
+  openDrawer,
+  openModal,
+} from '../shell/context.js';
 import { button, h, replace } from '../ui/dom.js';
 import { humanize, timeAgo } from '../ui/format.js';
 import { icon } from '../ui/svg.js';
+import { ANTIGRAVITY_ATTACH_NOTE } from './antigravity-setup.js';
 import { actWithError, badge, errorOf, note, panel, pathText, plain, Teardown } from './common.js';
+import { hostBlocksNotice } from './host-blocks.js';
 
 export const PROCESS_POLL_MS = 3000;
 
@@ -113,21 +124,34 @@ export function rowStatus(row: Pick<AgentRow, 'process'>): {
 function optionsText(o: Record<string, unknown> | undefined): string {
   if (!o) return '';
   const parts: string[] = [];
-  for (const [k, v] of Object.entries(o))
+  for (const [k, v] of Object.entries(o)) {
+    // The cap per attempt in words: an amount, or none by a person's choice or a subscription's sign-in.
+    if (k === 'max_budget_usd') {
+      if (v === null) parts.push('no spending limit per try');
+      else if (typeof v === 'number') parts.push(`stops a try at $${v}`);
+      continue;
+    }
     if (v !== undefined && v !== null && v !== '') parts.push(`${k.replaceAll('_', ' ')} ${String(v)}`);
+  }
   return parts.join(' · ');
 }
 
-const HOST_LABEL: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex' };
+const HOST_LABEL: Record<string, string> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  antigravity: 'Antigravity',
+};
 
-/** The "Claude Code in VS Code" status from the connected harnesses (plan §7.7). */
-export function claudeCodeStatus(harnesses: readonly HarnessEntry[]): {
+export interface AttachedStatus {
   connected: boolean;
   hooksSeen: boolean;
   harness: HarnessEntry | null;
-} {
+}
+
+/** The status of a host that joins by attaching (its MCP server and hooks), from the connected harnesses. */
+function attachedStatus(harnesses: readonly HarnessEntry[], vendor: string): AttachedStatus {
   const attached = harnesses.filter(
-    (x) => x.vendor === 'claude-code' && x.attach_mode === 'attach' && x.status !== 'TERMINATED',
+    (x) => x.vendor === vendor && x.attach_mode === 'attach' && x.status !== 'TERMINATED',
   );
   const harness = attached.find((x) => x.status !== 'DISCONNECTED') ?? attached[0] ?? null;
   const status = harness?.enforcement_status ?? null;
@@ -136,6 +160,21 @@ export function claudeCodeStatus(harnesses: readonly HarnessEntry[]): {
     hooksSeen: status === 'enforcing' || status === 'degraded' || status === 'unverified',
     harness,
   };
+}
+
+/** The "Claude Code in VS Code" status from the connected harnesses (plan §7.7). */
+export function claudeCodeStatus(harnesses: readonly HarnessEntry[]): AttachedStatus {
+  return attachedStatus(harnesses, 'claude-code');
+}
+
+/** The "Antigravity" status: a session the person opened on this project themselves. */
+export function antigravityStatus(harnesses: readonly HarnessEntry[]): AttachedStatus {
+  return attachedStatus(harnesses, 'antigravity');
+}
+
+/** Where a session the person started themselves runs, for the row's "attached in …". */
+export function attachedPlace(host: string): string {
+  return host === 'antigravity' ? 'Antigravity' : 'VS Code';
 }
 
 interface RowView {
@@ -241,6 +280,16 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
     const output = h('details', { class: 'pn-output' }, h('summary', null, 'Output'), log);
     const stop = button([icon('stop', 14), 'Stop'], () => void act('stop'), { class: 'btn' });
     const again = button([icon('play', 14), 'Start again'], () => void act('start'), { class: 'btn' });
+    // A remembered agent's role, options and autostart are changed in place: closes this drawer
+    // first, since a dialog over a drawer leaves the drawer without input.
+    const editBtn = button(
+      [icon('file', 14), 'Edit'],
+      () => {
+        closeDrawer(ctx);
+        openModal(ctx, { kind: 'edit-agent', id: row.agent_key });
+      },
+      { class: 'btn btn-ghost', title: 'Change this agent’s role, options or whether it starts with Friday' },
+    );
     const forget = button([icon('close', 14), 'Forget'], () => void act('forget'), { class: 'btn btn-ghost' });
     const el = h(
       'li',
@@ -257,6 +306,7 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
         h('span', { class: 'spacer' }),
         stop,
         again,
+        editBtn,
         forget,
       ),
       meta,
@@ -285,6 +335,26 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
           danger: true,
         });
         if (!ok) return;
+      }
+      // Stopping an agent in the middle of a task ended its attempt without a word (2026-11-17):
+      // asked first, with what it is working on. An idle agent stops as before, with no question.
+      if (what === 'stop') {
+        const busy = ctx.store
+          .select('board')
+          ?.tasks.find((t) => t.agent_key === k && (t.status === 'RUNNING' || t.status === 'ASSIGNED'));
+        if (busy) {
+          const ok = await ctx.confirm({
+            title: `Stop ${visible(k)} while it is working?`,
+            body: [
+              `It is working on “${plain(busy.summary, 160)}”.`,
+              'This try ends. The work so far is kept, and the task waits for a decision in “Waiting for you”: give it to another agent, or start it again.',
+            ],
+            confirmLabel: 'Stop the agent',
+            cancelLabel: 'Let it work',
+            danger: true,
+          });
+          if (!ok) return;
+        }
       }
       const label =
         what === 'stop' ? 'Stop the agent' : what === 'start' ? 'Start the agent again' : 'Forget the agent';
@@ -322,7 +392,8 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
       const x = row.harness;
       const fridayRow = !!p || !!row.profile;
       keyEl.textContent = visible(row.agent_key || '—');
-      originEl.textContent = row.origin === 'attached' ? 'attached in VS Code' : 'started by Friday';
+      originEl.textContent =
+        row.origin === 'attached' ? `connected from ${attachedPlace(row.host)}` : 'started by Friday';
       const connected = isConnected(x);
       connEl.className = `badge badge-${connected ? 'good' : 'muted'}`;
       connEl.textContent = connected ? 'connected' : 'not connected';
@@ -346,10 +417,8 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
         row.role ? `role ${plain(row.role, 32)}` : '',
         x ? (x.observed_model ? `model ${plain(x.observed_model, 80)}` : 'model not reported') : '',
         x && connected ? humanize(x.status).toLowerCase() : '',
-        p?.pid ? `pid ${p.pid}` : '',
         p?.started_at ? `started ${timeAgo(p.started_at, ctx.now())}` : '',
         p?.ended_at ? `ended ${timeAgo(p.ended_at, ctx.now())}` : '',
-        p && p.exit_code !== null ? `exit code ${p.exit_code}` : '',
         fridayRow
           ? row.profile
             ? row.profile.autostart
@@ -357,9 +426,17 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
               : 'started by hand'
             : 'not remembered'
           : '',
-        p?.shadow || x?.shadow ? 'shadow: another session holds this key' : '',
+        p?.shadow || x?.shadow
+          ? row.host === 'antigravity'
+            ? 'another app is connected under this name, so this one cannot take tasks: connect Antigravity again (below) to give it its own name'
+            : 'another session is connected under this name, so this one cannot take tasks'
+          : '',
       ].filter(Boolean);
       meta.textContent = plain(parts.join(' · '), 600);
+      // The process id and the exit code are in the tooltip: a person reads the line above.
+      meta.title = [p?.pid ? `process ${p.pid}` : '', p && p.exit_code !== null ? `exit code ${p.exit_code}` : '']
+        .filter(Boolean)
+        .join(' · ');
       opts.textContent = plain(
         optionsText((p?.options ?? row.profile?.options) as Record<string, unknown> | undefined),
         300,
@@ -368,6 +445,8 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
       basis.textContent = x?.enforcement_basis ? plain(x.enforcement_basis, 300) : '';
       basis.hidden = !basis.textContent;
       const live = isLive(p);
+      // Only an agent Friday remembers has something to change.
+      editBtn.hidden = !row.profile;
       stop.hidden = !live;
       stop.disabled = p?.status === 'stopping';
       again.hidden = live || !row.profile;
@@ -388,7 +467,7 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
       listState.hidden = rows.length > 0;
       listState.textContent = rows.length
         ? ''
-        : 'No agent yet. Start one above, or set up Claude Code in VS Code below.';
+        : 'No agent yet. Start one above, or connect Claude Code in VS Code or Antigravity below.';
     }
     const seen = new Set<string>();
     for (const row of rows) {
@@ -447,11 +526,15 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
         { class: 'pn-kv' },
         h('dt', null, 'Configured'),
         h('dd', null, st.harness ? 'yes: it connected' : 'not seen yet (Set up previews it)'),
-        h('dt', null, 'MCP connected'),
+        h('dt', { title: 'Its MCP server reached Friday' }, 'Connected to Friday'),
         h('dd', null, st.connected ? 'yes' : 'no'),
-        h('dt', null, 'Hooks seen'),
-        h('dd', null, st.hooksSeen ? 'yes' : st.harness ? 'not yet: they show with its first tool call' : 'no'),
-        h('dt', null, 'Enforcement'),
+        h('dt', { title: 'Its hooks report each tool call to Friday' }, 'Friday sees what it does'),
+        h(
+          'dd',
+          null,
+          st.hooksSeen ? 'yes' : st.harness ? 'not yet: it shows with the first thing the agent does' : 'no',
+        ),
+        h('dt', null, 'What Friday can stop'),
         h('dd', null, b ? badge(b.label, b.tone, b.title) : '—'),
       ),
       h(
@@ -464,13 +547,58 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
     );
   }
 
+  // ---- Antigravity: it only attaches (its terms keep a personal account to the Antigravity the
+  // person runs themselves), so this card connects it and says why there is no Start button.
+  const antigravityBox = h('div', { class: 'pn-antigravity' });
+  function renderAntigravity() {
+    const st = antigravityStatus(ctx.store.select('board')?.harnesses ?? []);
+    const b = st.harness
+      ? enforcementWords(st.harness.enforcement_level, st.harness.enforcement_status, st.harness.enforcement_basis)
+      : null;
+    replace(
+      antigravityBox,
+      h(
+        'dl',
+        { class: 'pn-kv' },
+        h('dt', null, 'Configured'),
+        h('dd', null, st.harness ? 'yes: it connected' : 'not seen yet (Connect previews it)'),
+        h('dt', { title: 'Its MCP server reached Friday' }, 'Connected to Friday'),
+        h('dd', null, st.connected ? 'yes' : 'no'),
+        h('dt', { title: 'Its hooks report each tool call to Friday' }, 'Friday sees what it does'),
+        h(
+          'dd',
+          null,
+          st.hooksSeen ? 'yes' : st.harness ? 'not yet: it shows with the first thing the agent does' : 'no',
+        ),
+        h('dt', null, 'What Friday can stop'),
+        h('dd', null, b ? badge(b.label, b.tone, b.title) : '—'),
+      ),
+      h(
+        'div',
+        { class: 'pn-actions pn-actions-start' },
+        button([icon('gear', 14), 'Connect'], () => openModal(ctx, { kind: 'antigravity-setup' }), {
+          class: 'btn btn-primary',
+        }),
+      ),
+    );
+  }
+
   // ---- the drawer
   const claudeSection = h(
     'section',
     { class: 'pn-section pn-card' },
     h('h3', { class: 'section-title' }, 'Claude Code in VS Code'),
-    note('Claude Code running in your editor joins Friday through its MCP server and hooks.'),
+    note(
+      'Claude Code running in your editor works through Friday once it is connected: it takes its tasks from Friday, and Friday sees and checks what it does.',
+    ),
     claudeBox,
+  );
+  const antigravitySection = h(
+    'section',
+    { class: 'pn-section pn-card' },
+    h('h3', { class: 'section-title' }, 'Antigravity'),
+    note(`Antigravity works through Friday once it is connected (experimental). ${ANTIGRAVITY_ATTACH_NOTE}`),
+    antigravityBox,
   );
 
   const el = panel(
@@ -482,17 +610,22 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
         class: 'btn btn-primary',
       }),
     ),
+    // What keeps a host out of work now (not signed in, a limit), with the way back.
+    hostBlocksNotice(ctx, td),
     hostsSection,
     h('section', { class: 'pn-section' }, h('h3', { class: 'section-title' }, 'Agents'), listState, list),
     claudeSection,
+    antigravitySection,
   );
 
   renderRows();
   renderClaude();
+  renderAntigravity();
   td.add(
     ctx.store.subscribe('board', () => {
       renderRows();
       renderClaude();
+      renderAntigravity();
     }),
   );
   void loadHosts();
@@ -500,10 +633,10 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
   const timer = setInterval(() => void loadProcesses(), PROCESS_POLL_MS);
   td.add(() => clearInterval(timer));
 
-  if (request.tab === 'claude') {
+  const card = request.tab === 'claude' ? claudeSection : request.tab === 'antigravity' ? antigravitySection : null;
+  if (card) {
     queueMicrotask(() => {
-      if (!td.done && typeof claudeSection.scrollIntoView === 'function')
-        claudeSection.scrollIntoView({ block: 'start' });
+      if (!td.done && typeof card.scrollIntoView === 'function') card.scrollIntoView({ block: 'start' });
     });
   }
 

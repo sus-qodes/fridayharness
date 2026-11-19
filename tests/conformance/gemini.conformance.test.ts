@@ -265,7 +265,7 @@ describe('harness conformance: Gemini CLI in spawn mode, what is particular to i
     const before = h.entries().filter((e) => e.hook === 'BeforeTool');
     expect(before.every((e) => e.ran === 1)).toBe(true);
     expect(String(h.entries().find((e) => e.tool === 'run_shell_command' && e.decision)?.reason)).toMatch(
-      /^Friday: .*A human decides this \(approval apr_/,
+      /^Friday: .*The person was asked in Friday \(approval apr_/,
     );
     expect(existsSync(path.join(root, 'src', 'ok.txt'))).toBe(true);
     expect(readFileSync(path.join(root, '.gemini', 'settings.json'), 'utf8')).toContain('hook.mjs gemini BeforeTool');

@@ -12,15 +12,22 @@ import {
   type ModelResponse,
   OpenAICompatiblePlannerModel,
   type PlannerModel,
+  priceEntry,
 } from '@friday/planner';
-import type { CostClass, TaskView } from '@friday/protocol';
+import { type CostClass, FridayError, type TaskView } from '@friday/protocol';
 import {
+  choosePlanner,
+  choosePlannerModel,
   hasSecret,
   type MasterBrainConfig,
+  type PlannerChoice,
   type ProjectRef,
+  plannerChoice,
+  plannerModelChoice,
   providerApproval,
   providerEndpoint,
   resolveSecret,
+  revokeProvider,
   stateDir,
 } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
@@ -138,11 +145,38 @@ export interface BrainStatus {
   spent_today_usd: number;
   cursor: number;
   head: number;
+  /** This machine's choice of planner, the project's, and the one that counts (see `BrainStatusView`). */
+  choice: { here: string | null; project: string; wanted: string };
+  /** This machine's choice of the planner's model, the project's, and whether a choice here applies. */
+  model_choice: { here: string | null; project: string; applies: boolean };
+  /** What planning through Claude Code needs, read now. */
+  claude_code: { found: boolean; allowed: boolean; approved: boolean; project_budget_usd: number };
+  /** config.yaml asks for plans to start without approval, in force (`auto_approve`) or not yet trusted. */
+  auto_approve_requested: boolean;
+  /**
+   * What the running planner may spend a day: `provider`, whose spending it is; `approved`, this
+   * machine allowed it; `yours_usd`, the limit this machine set with that (null: the project's);
+   * `project_usd`, the project's own, read when Friday started. The lower of the two holds.
+   */
+  spending: { provider: string; approved: boolean; yours_usd: number | null; project_usd: number };
 }
 
 export interface BrainHandle {
   brain: MasterBrain;
   status(): BrainStatus;
+  /** Sets this machine's own choice of planner, or with null hands it back to the project's. */
+  choosePlanner(provider: PlannerChoice | null): void;
+  /**
+   * Sets the model this machine's planner uses, or with null hands it back to the project's
+   * `master_brain.model`. Refused for a model Friday has no price for: a call it cannot count
+   * against the spending limit is one it does not make. Applies from the next planning call.
+   */
+  choosePlannerModel(model: string | null): void;
+  /**
+   * Takes back this machine's approval to spend on a provider (the running planner's when none is
+   * named); answers whether there was one. Read at each planning call: it holds from the next.
+   */
+  denySpending(provider?: 'anthropic' | 'claude-code'): boolean;
 }
 
 /**
@@ -169,8 +203,14 @@ export function createMasterBrain(input: {
   ) => { fit: number; cost: number; cost_class?: CostClass | null; blocked?: string } | null;
 }): BrainHandle {
   const { state, project, env, logger } = input;
-  /** The provider Friday started with (restart-only). */
-  const started = project.config.master_brain;
+  /**
+   * The provider Friday started with (restart-only): this machine's own choice when it made one
+   * (`friday`'s private `planner.json`), else `master_brain.provider` of config.yaml.
+   */
+  const chosenAtStart = input.model === undefined ? plannerChoice(project, env) : null;
+  const started = chosenAtStart
+    ? { ...project.config.master_brain, provider: chosenAtStart }
+    : project.config.master_brain;
   /** `master_brain` as config.yaml has it now: `project.config` is replaced when the file is read again. */
   const current = () => project.config.master_brain;
   const providerName = started.provider === 'none' ? 'none' : started.provider;
@@ -250,7 +290,12 @@ export function createMasterBrain(input: {
       onKey: (key) => state.redactor.addSecret(key),
     });
   }
+  // The model this machine chose for its planner (2026-11-17), where the planner is one a person
+  // pays for from their own account: through Claude Code or an Anthropic key. Read at each call.
+  const ownModelApplies = started.provider === 'anthropic' || started.provider === 'claude-code';
+  let modelHere = input.model === undefined ? plannerModelChoice(project, env) : null;
   const modelId = () => {
+    if (modelHere && ownModelApplies) return modelHere;
     const m = current().model;
     // A local server has no default model: `auto` stays as written, and the status says what to set.
     return m !== 'auto' || local ? m : started.provider === 'fake' ? 'fake-planner' : DEFAULT_PLANNER_MODEL;
@@ -277,11 +322,44 @@ export function createMasterBrain(input: {
     dailyBudgetUsd: provider.daily_budget_usd,
     ...(provider.prices ? { prices: provider.prices } : {}),
   };
+  // Through Claude Code the login is Claude Code's own (a key or a subscription): no key of Friday's.
+  const viaClaudeCode = started.provider === 'claude-code';
+  /** The key a remote planner of Friday's own needs, and where it is. */
+  const keyState = (): BrainStatus['key'] => {
+    const remote = model?.remote ?? false;
+    return !remote || viaClaudeCode
+      ? 'not needed'
+      : hasSecret('anthropic', env)
+        ? 'stored'
+        : env.ANTHROPIC_API_KEY?.trim()
+          ? 'environment'
+          : 'missing';
+  };
+  /**
+   * Why the planner cannot plan now, or null: no model, no consent for remote calls, no key, a
+   * local model not named. One answer for the status the interface shows and for the Master
+   * Brain's own decisions, so "not ready" on the screen is "no planner" in what Friday does.
+   */
+  const whyUnavailable = (): string | null => {
+    const remote = model?.remote ?? false;
+    const consent = remotePolicy();
+    return (
+      reason ??
+      (remote && !consent.allowRemote
+        ? (consent.refusal ?? 'remote calls are off')
+        : keyState() === 'missing'
+          ? 'no Anthropic API key: run "friday secrets set anthropic"'
+          : local && model && current().model === 'auto'
+            ? LOCAL_MODEL_UNSET
+            : null)
+    );
+  };
   const brain = new MasterBrain({
     state,
     projectId: project.project_id,
     model,
     ...(reason ? { plannerUnavailable: reason } : {}),
+    plannerReady: whyUnavailable,
     settings,
     remotePolicy,
     projectContext: () =>
@@ -303,34 +381,30 @@ export function createMasterBrain(input: {
 
   return {
     brain,
+    choosePlanner: (provider) => choosePlanner(project, provider, env),
+    denySpending: (name) =>
+      revokeProvider(project, name ?? (providerName === 'claude-code' ? 'claude-code' : 'anthropic'), env),
+    choosePlannerModel: (chosen) => {
+      if (chosen !== null && !priceEntry(chosen, provider.prices)) {
+        throw new FridayError(
+          'invalid_request',
+          `Friday has no price for ${chosen}, so it could not count a plan against the spending limit; choose a model it knows, or add its price under providers.${providerName}.prices`,
+        );
+      }
+      choosePlannerModel(project, chosen, env);
+      modelHere = chosen;
+    },
     status: () => {
       const pid = project.project_id;
       const remote = model?.remote ?? false;
-      // Through Claude Code the login is Claude Code's own (a key or a subscription): no key of Friday's.
-      const viaClaudeCode = started.provider === 'claude-code';
-      const stored = hasSecret('anthropic', env);
-      const key: BrainStatus['key'] =
-        !remote || viaClaudeCode
-          ? 'not needed'
-          : stored
-            ? 'stored'
-            : env.ANTHROPIC_API_KEY?.trim()
-              ? 'environment'
-              : 'missing';
+      const key = keyState();
       const dayStart = `${state.clock.now().slice(0, 10)}T00:00:00.000Z`;
       const consent = remotePolicy();
-      const unavailable =
-        reason ??
-        (remote && !consent.allowRemote
-          ? (consent.refusal ?? 'remote calls are off')
-          : key === 'missing'
-            ? 'no Anthropic API key: run "friday secrets set anthropic"'
-            : local && model && current().model === 'auto'
-              ? LOCAL_MODEL_UNSET
-              : null);
+      const unavailable = whyUnavailable();
       return {
         provider: model?.provider ?? started.provider,
         model: modelId(),
+        model_choice: { here: modelHere, project: current().model, applies: ownModelApplies },
         remote,
         allow_remote: provider.allow_remote,
         approved_here: Boolean(providerApproval(project, providerName === 'none' ? 'anthropic' : providerName, env)),
@@ -340,7 +414,8 @@ export function createMasterBrain(input: {
         key,
         planner_available: !unavailable,
         reason: unavailable,
-        auto_approve: current().auto_approve,
+        // What is in force: the setting, once this clone trusts it (it is a loosening).
+        auto_approve: settings.autoApprove,
         escalate_after_failures: current().escalate_after_failures,
         max_replans: current().max_replans,
         // No budget holds a model that costs nothing: only remote calls have one (ADR-0015 §4).
@@ -348,6 +423,28 @@ export function createMasterBrain(input: {
         spent_today_usd: model ? state.q.modelSpend(pid, model.provider, dayStart) : 0,
         cursor: state.q.brainCursor(pid),
         head: state.store.head(pid),
+        choice: (() => {
+          const here = plannerChoice(project, env);
+          const ofProject = project.config.master_brain.provider;
+          return { here, project: ofProject, wanted: here ?? ofProject };
+        })(),
+        claude_code: {
+          found: Boolean(input.claudeCode ?? env.CLAUDE_CODE_BIN?.trim()),
+          allowed: project.config.providers['claude-code']?.allow_remote === true,
+          approved: Boolean(providerApproval(project, 'claude-code', env)),
+          project_budget_usd: project.config.providers['claude-code']?.daily_budget_usd ?? 5,
+        },
+        auto_approve_requested: current().auto_approve === true,
+        spending: (() => {
+          const name = providerName === 'claude-code' ? 'claude-code' : 'anthropic';
+          const approval = providerApproval(project, name, env);
+          return {
+            provider: name,
+            approved: Boolean(approval),
+            yours_usd: approval?.daily_budget_usd ?? null,
+            project_usd: provider.daily_budget_usd,
+          };
+        })(),
       };
     },
   };

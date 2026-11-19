@@ -167,6 +167,39 @@ export interface BrainStatusView {
   spent_today_usd: number;
   cursor: number;
   head: number;
+  /**
+   * How planning is chosen (2026-11-17); absent from an older daemon. `here`: this machine's own
+   * choice, or null; `project`: `master_brain.provider` of config.yaml; `wanted`: the one of the two
+   * that counts. The planner runs `provider`, which it read when Friday started: while `wanted`
+   * differs, a restart is needed.
+   */
+  choice?: { here: string | null; project: string; wanted: string };
+  /**
+   * The planner's model (2026-11-17); absent from an older daemon. `here`: the model this machine
+   * chose, or null; `project`: `master_brain.model` as config.yaml has it (`auto` is Friday's
+   * default); `applies`: the planner is one a person pays for from their own account (through
+   * Claude Code or an Anthropic key), so a choice made here is the one used. `model` is what runs.
+   */
+  model_choice?: { here: string | null; project: string; applies: boolean };
+  /**
+   * What planning through Claude Code needs, read now; absent from an older daemon. `found`:
+   * Friday knows where Claude Code is (looked for when Friday started); `allowed`: the project
+   * allows it (`providers.claude-code.allow_remote`); `approved`: this machine approved its
+   * spending; `project_budget_usd`: the project's own daily limit, which a person's cannot exceed.
+   */
+  claude_code?: { found: boolean; allowed: boolean; approved: boolean; project_budget_usd: number };
+  /**
+   * config.yaml asks for plans to start without a person's approval (2026-11-17); absent from an
+   * older daemon. With `auto_approve` false, this clone has not trusted it yet.
+   */
+  auto_approve_requested?: boolean;
+  /**
+   * What the running planner may spend a day (2026-11-17); absent from an older daemon.
+   * `provider`: whose spending it is (`anthropic` or `claude-code`); `approved`: this machine
+   * allowed it; `yours_usd`: the limit this machine set with that (null: the project's);
+   * `project_usd`: the project's own. The lower of the two holds (`daily_budget_usd`).
+   */
+  spending?: { provider: string; approved: boolean; yours_usd: number | null; project_usd: number };
 }
 
 /** An open Master Brain job; `calling` while a model request is in flight (the mascot thinks). */
@@ -188,18 +221,82 @@ export type HarnessEntry = HarnessView & {
 /** The last usage a host reported for a run (Claude Code in spawn mode reports it). */
 export interface UsageView {
   cost_usd: number | null;
+  /**
+   * The whole prompt the model read, the cached part included, counted the same way for every
+   * host (`promptTokens`, 2026-11-18); before, Claude Code's figure left the cache out.
+   */
   input_tokens: number | null;
   output_tokens: number | null;
   at: string;
 }
 
+/** See `SnapshotTask.attention`. */
+export interface TaskAttention {
+  kind: 'stopped' | 'asking';
+  at: string;
+  /** `stopped`: the host's word for how the turn ended (`model_stop`, `error`, …); null when it does not say. */
+  reason?: string | null;
+  /** `stopped`: the host's error text, credentials removed. */
+  error?: string | null;
+  /** `asking`: the tool and what it would act on, and Friday's rule in words. */
+  tool?: string | null;
+  target?: string | null;
+  rule?: string | null;
+}
+
+/**
+ * Why a task that has not started is not at work (2026-11-18): what it waits for, in words for a
+ * person, and which kind of wait it is. Only `your_turn` is ended by the person prompting an agent
+ * in its own window; the waiting list says "Your turn" for that one alone.
+ */
+export interface TaskWaits {
+  code:
+    | 'dependencies'
+    | 'paused'
+    | 'question'
+    | 'agent_away'
+    | 'agent_busy'
+    | 'your_turn'
+    | 'shared_files'
+    | 'own_copy'
+    | 'no_agent'
+    | 'other';
+  /** Reads after "Not started yet: ". */
+  text: string;
+}
+
+/** Why a task went to its agent and runs on its model, in a person's words (2026-11-18). */
+export interface TaskWhy {
+  agent_key: string | null;
+  /** "the best fit of the free agents", "you gave it this task"; null when not on record. */
+  agent: string | null;
+  model: string | null;
+  /** "you chose it for every task (Settings → Models)", "Friday's choice for this kind of work". */
+  model_reason: string | null;
+}
+
 /** A task as the board shows it. */
 export type SnapshotTask = TaskView & {
+  /** Why its agent and model, once it has had an attempt; absent from a daemon before 2026-11-18. */
+  why?: TaskWhy | null;
   agent_key: string | null;
   /** WAITING: the reason of its latest `task.waiting` (what the agent needs). */
   waiting_note: string | null;
-  /** READY: why delegation left it waiting ("no agent is available …"). */
+  /**
+   * PROPOSED or READY: why it is not at work, in words for a person (`TaskWaits.text`), from the
+   * state as it is now. Null when it is about to start.
+   */
   delegation_note: string | null;
+  /** The kind of wait `delegation_note` describes; absent from a daemon before 2026-11-18. */
+  waits_for?: TaskWaits['code'] | null;
+  /**
+   * RUNNING, held by an agent its person runs (Antigravity, Claude Code in an editor): what that
+   * agent last did when it is not working (2026-11-18). `stopped`: its turn ended and nothing
+   * followed (it waits for its person there, or its host failed: `reason`, `error`). `asking`: a
+   * rule of Friday's made its host ask the person in its own window (`tool`, `target`). Absent
+   * while it works. Friday showed such a task as running, with nothing waiting for the person.
+   */
+  attention?: TaskAttention | null;
   /**
    * Tool calls its agents' hosts reported finished for it, completed or failed (`agent.event`
    * `tool.completed` and `tool.failed`), over every attempt. A call Friday refused never ran and
@@ -213,6 +310,98 @@ export interface GoalProgressView {
   /** Every task of the goal except cancelled and abandoned ones. */
   total: number;
   completed: number;
+}
+
+/**
+ * A completed goal's way into the person's branch (2026-11-17). `work`: where its tasks worked:
+ * `branch` (on `friday/goal-<id>`, which Land merges), `folder` (in the project folder itself:
+ * sessions attached from an editor, or worktrees off; nothing to land, the person commits), or
+ * `mixed`. `landed`: the landing a person made from the interface, else null.
+ */
+/** Where a question a person asked stands (a goal of mode `ask`, 2026-11-18). */
+export interface AnswerView {
+  goal_id: string;
+  question: string;
+  /**
+   * `waiting`: no agent has taken it yet. `answering`: one is at work. `ready`: the answer is
+   * here. `failed`: the attempt ended without one. `cancelled`.
+   */
+  state: 'waiting' | 'answering' | 'ready' | 'failed' | 'cancelled';
+  task_id: string | null;
+  agent_key: string | null;
+  /** One sentence about the answer, as the agent put it. */
+  summary: string | null;
+  /** The beginning of the answer, for lists and notices. */
+  preview: string | null;
+  /** The whole answer: on `GET …/goals/:gid/answer` only, never on the board. */
+  answer?: string | null;
+  note: string | null;
+  at: string | null;
+  /** Whether the person opened it. */
+  read: boolean;
+}
+
+export interface GoalLandingView {
+  work: 'branch' | 'folder' | 'mixed';
+  landed: { into: string; at: string } | null;
+}
+
+/**
+ * What keeps a host, or one of its models, from being given work now (2026-11-17), from the
+ * readiness evidence: `sign_in`, the host said it is not signed in, which stays until a person says
+ * it is (or starts its agent again); `benched`, it failed in a way that passes (a rate or usage
+ * limit, a crash), and is tried again after `until`.
+ */
+export interface HostBlockView {
+  host: string;
+  model: string | null;
+  kind: 'sign_in' | 'benched';
+  /** What the host said, shortened, without credentials. */
+  detail: string | null;
+  since: string;
+  until: string | null;
+}
+
+/** `GET …/goals/:gid/land`: what Land would do now; it changes nothing. */
+export interface LandPlanView {
+  goal_id: string;
+  branch: string;
+  /** The branch the project folder has checked out; null on a detached HEAD. */
+  into: string | null;
+  state: 'ready' | 'landed' | 'in_folder' | 'blocked' | 'not_completed';
+  /** Why not `ready`, in words a person can act on. */
+  reason: string | null;
+  /** The files in the way (`blocked`), or the folder's uncommitted files (`in_folder`); 50 at most. */
+  files: string[];
+  commits: number;
+  work: 'branch' | 'folder' | 'mixed';
+  /**
+   * Set on a `blocked` plan when what is in the way is uncommitted files the goal changes too
+   * (2026-11-18): Land can set those aside first (`POST …/goals/:gid/land/set-aside`).
+   */
+  in_the_way?: {
+    /** All of them (`files` lists fifty at most). */
+    count: number;
+    /** How many an agent's ended attempt at this goal left in the folder, and whose attempt. */
+    left: number;
+    left_by: string[];
+    /** Agents working on some of them in the folder right now: they are not set aside meanwhile. */
+    working: string[];
+  };
+  /** Files set aside at an earlier landing of this goal and not put back. */
+  set_aside?: { ref: string; commit: string; count: number; files: string[]; into: string | null; at: string }[];
+  /** Agents at work in the project folder now, on a plan that would merge (2026-11-18). */
+  busy?: string[];
+}
+
+/** `POST …/goals/:gid/set-aside/restore`: what putting the set-aside files back did. */
+export interface PutBackView {
+  goal_id: string;
+  restored: string[];
+  /** Changed in the folder since: left as they are, and still kept. */
+  skipped: string[];
+  /** Could not be written (open in another program): still kept. */
+  failed: string[];
 }
 
 /** An inbox item without its body (loaded when opened), with a short preview. */
@@ -266,7 +455,22 @@ export interface UiSnapshot {
    */
   config: { loaded_hash: string; current_hash: string | null; changes?: ConfigChanges };
   control: ControlState;
-  verification: { checks: { name: string; kind: string; required: boolean }[]; auto_on_completion: boolean };
+  /**
+   * When finished work is put into the project (`landing.mode`): `mode` is what is in force on this
+   * computer, `requested` what config.yaml asks for (not yet trusted when they differ). Absent from
+   * an older daemon.
+   */
+  landing?: { mode: 'ask' | 'goal' | 'task'; requested: 'ask' | 'goal' | 'task' };
+  verification: {
+    checks: { name: string; kind: string; required: boolean }[];
+    /** Automatic verification is in force: asked for in config.yaml and trusted on this clone. */
+    auto_on_completion: boolean;
+    /**
+     * config.yaml asks for it (`verification.auto_on_completion: true`), in force or not: with
+     * `auto_on_completion` false, this clone has not trusted it yet. Absent from an older daemon.
+     */
+    auto_requested?: boolean;
+  };
   counts: Record<string, number>;
   goals: GoalView[];
   /**
@@ -274,6 +478,12 @@ export interface UiSnapshot {
    * more than a day ago, or past the list's cap).
    */
   goal_progress: Record<string, GoalProgressView>;
+  /** What keeps hosts out of work now (a failed sign-in, a bench). Absent from an older daemon. */
+  host_blocks?: HostBlockView[];
+  /** Per completed goal: where its work is, and whether a person landed it. Absent from an older daemon. */
+  goal_landing?: Record<string, GoalLandingView>;
+  /** Per goal that is a question: where its answer stands. Absent from an older daemon. */
+  answers?: Record<string, AnswerView>;
   plans: Record<string, { active: LivePlanVersion | null; proposed: LivePlanVersion | null }>;
   tasks: SnapshotTask[];
   runs: Record<string, RunView>;
@@ -359,6 +569,13 @@ export interface AgentHost {
   supported: boolean;
   path: string | null;
   reason: string | null;
+  /**
+   * How the host is signed in on this machine, read from its files and the environment, never by
+   * starting it (2026-11-17): `subscription` (nothing is charged per attempt), `api_key` (use is
+   * charged), `signed_in` (Friday cannot tell which), `none` (no sign-in found), `unknown` (kept
+   * where Friday does not look). Absent for a host Friday does not read it of, and from an older daemon.
+   */
+  sign_in?: 'subscription' | 'api_key' | 'signed_in' | 'none' | 'unknown';
 }
 
 /** Options per host; routing chooses the model, among `models` when they are given. */
@@ -369,8 +586,12 @@ export interface AgentOptions {
   cost_class?: 'free' | 'cheap' | 'standard';
   /** Claude Code and Codex: the only models routing may run for this agent (plan M13.3). */
   models?: string[];
-  /** Claude Code: a spending cap per attempt (default 1). */
-  max_budget_usd?: number;
+  /**
+   * Claude Code: a spending cap per attempt, in dollars; null for none. Left out, Friday decides
+   * when the agent starts (2026-11-17): none for a subscription's sign-in, which is not charged
+   * per attempt, else 5. (It was 1 for everyone, which stopped larger tasks half way.)
+   */
+  max_budget_usd?: number | null;
   /** Codex. */
   sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access';
   windows_sandbox?: string;
@@ -417,6 +638,26 @@ export interface AgentProcessesView {
 }
 
 /** One file `harness config claude-code` writes (plan §5.10). */
+/**
+ * Where a task could run if a person gave it to an agent now (`GET routing/explain/:tid`, 2026-11-17):
+ * one per connected agent that may take work, for the "Run it on …" buttons of a task routing does
+ * not let start.
+ */
+export interface RoutingOfferView {
+  agent_key: string;
+  /** The agent's host (`claude-code`, `codex`, `antigravity`, …). */
+  host: string;
+  /** `spawn`: Friday starts the work there. `attach`: the person takes it in their own session. */
+  attach_mode: string;
+  /** Not working on something else now. */
+  free: boolean;
+  /** It would not start there even so (a hard constraint, a host that is not ready). */
+  blocked: boolean;
+  /** The model it would run; null for the agent's own. */
+  model: string | null;
+  reason: string;
+}
+
 export interface ClaudeSetupChange {
   path: string;
   action: string;
@@ -434,8 +675,40 @@ export interface ClaudeSetupPlan {
 
 export interface ClaudeSetupResult {
   plan: ClaudeSetupPlan;
-  /** `harness doctor claude-code --json`. */
-  doctor: { level?: string; checks?: { id: string; status: string; detail?: string }[]; [key: string]: unknown } | null;
+  /** `harness doctor claude-code --quick --json`, or `{ error }` when it gave no answer. */
+  doctor: {
+    achieved?: string;
+    checks?: { id: string; status: string; message?: string; fix?: string }[];
+    error?: string;
+    [key: string]: unknown;
+  } | null;
+}
+
+/**
+ * What `harness config antigravity` would change or changed. Antigravity only attaches: the person
+ * opens it on the project themselves, so there is nothing here that starts it.
+ */
+export interface AntigravitySetupPlan {
+  agent_key: string;
+  applied: boolean;
+  changes: ClaudeSetupChange[];
+  /** What Friday found on this machine; null when it did not look. */
+  antigravity: {
+    cli: { binary: string; version: string | null } | null;
+    app: { binary: string; version: string | null } | null;
+    hook_level: string;
+  } | null;
+}
+
+export interface AntigravitySetupResult {
+  plan: AntigravitySetupPlan;
+  /** `harness doctor antigravity --quick --json`, or `{ error }` when it gave no answer. */
+  doctor: {
+    achieved?: string;
+    checks?: { id: string; status: string; message?: string; fix?: string }[];
+    error?: string;
+    [key: string]: unknown;
+  } | null;
 }
 
 /** `GET …/files?dir=`: one level of the tracked files (plan §5.11). */

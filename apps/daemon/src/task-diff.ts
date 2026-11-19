@@ -278,6 +278,27 @@ async function committedFiles(c: Collector, root: string, base: string, head: st
   return true;
 }
 
+const sameFolder = (a: string, b: string) =>
+  process.platform === 'win32'
+    ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
+    : path.resolve(a) === path.resolve(b);
+
+/** The files a run in the shared project folder was seen changing, or named in its claim, folded on Windows. */
+function ownPaths(run: { observed_paths: string[]; claim?: unknown }, root: string): Set<string> {
+  const claim = run.claim as { changed_paths?: unknown } | null | undefined;
+  const claimed = Array.isArray(claim?.changed_paths)
+    ? claim.changed_paths.filter((p): p is string => typeof p === 'string' && p.length > 0)
+    : [];
+  const rel = (p: string) =>
+    (path.isAbsolute(p) ? path.relative(root, p) : p)
+      .split(path.sep)
+      .join('/')
+      .replaceAll('\\', '/')
+      .replace(/^\.\//, '');
+  const fold = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
+  return new Set([...(run.observed_paths ?? []), ...claimed].map(rel).map(fold));
+}
+
 export async function taskDiff(
   state: FridayState,
   project: ProjectRef,
@@ -302,7 +323,24 @@ export async function taskDiff(
       const git = await GitRoot.open(root);
       const base = run.base_commit ?? (await git.refs()).head;
       if (base) {
-        const { changes, base_found } = await git.changesSince(base);
+        const since = await git.changesSince(base);
+        const { base_found } = since;
+        // In the project folder, only this task's own changes (2026-11-18), as its checks count
+        // them: those its agent was seen making or named in its claim. A task there showed "13 files,
+        // +3509" for one changed file: Friday's own setup files and the person's edits were counted.
+        const shared = sameFolder(root, project.root);
+        const mine = shared ? ownPaths(run, root) : null;
+        const fold = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
+        const changes = mine
+          ? since.changes.filter(
+              (x) => mine.has(fold(x.path)) || (x.origPath !== undefined && mine.has(fold(x.origPath))),
+            )
+          : since.changes;
+        if (mine && since.changes.length > changes.length) {
+          notes.push(
+            `${since.changes.length - changes.length} other change(s) in the project folder are not this task's and are left out`,
+          );
+        }
         if (base_found) {
           const counts = stat
             ? parseNumstat(

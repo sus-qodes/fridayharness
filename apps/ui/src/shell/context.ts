@@ -19,12 +19,14 @@ export type ToastKind = 'info' | 'success' | 'warn' | 'error';
 export interface Toast {
   kind: ToastKind;
   text: string;
-  /** A second line: the error code and message, or what happens next. */
+  /** A second line: what went wrong (with Friday's code for it last), or what happens next. */
   detail?: string;
   /** Default 5 s; 0 keeps it until dismissed. */
   timeoutMs?: number;
   /** A newer toast with the same key replaces the one still shown (pause, then resume). */
   key?: string;
+  /** One button that does what the message offers (2026-11-19); the message leaves when it is pressed. */
+  action?: { label: string; run: () => void };
 }
 
 export interface ConfirmOptions {
@@ -67,6 +69,18 @@ export interface DesktopShortcut {
   note?: string;
 }
 
+/** One project of the project menu, as the desktop app lists it (2026-11-18). */
+export interface RecentProject {
+  root: string;
+  name: string;
+  /** The project this window shows. */
+  current: boolean;
+  /** Its Friday is running: agents may be at work there. */
+  running: boolean;
+  /** Its folder is gone, or is no Friday project any more. */
+  missing: boolean;
+}
+
 export interface DesktopCommands {
   shortcuts(): Promise<DesktopShortcut[]>;
   /** Registers `accel` for the shortcut; answers the new list. */
@@ -74,12 +88,26 @@ export interface DesktopCommands {
   /** Stops Friday and starts it again (the shell asks natively first); false when the human cancelled. */
   restart(): Promise<boolean>;
   /**
+   * "Open another project…" (2026-11-17): the shell shows its folder picker and, when a project is
+   * chosen, makes it the app's project; both windows then load again (`project-changed`). Resolves
+   * as soon as the picker is asked for, not when a project was chosen.
+   */
+  openProject(): Promise<void>;
+  /** The projects opened lately, newest first, with their state; absent from an older desktop app. */
+  recentProjects?(): Promise<RecentProject[]>;
+  /** Opens one of those in this window, as `openProject` does after its picker. */
+  openRecent?(root: string): Promise<void>;
+  /**
    * Asks for the provider's key in Windows' own password prompt and stores it (FD-26): only the
    * provider's name passes through the page. True once stored, false when the human cancelled.
    */
   storeKey(name: string): Promise<boolean>;
   /** Lets this clone spend at most `budget` dollars a day, after a native confirmation; false when cancelled. */
-  allowSpending(budget: number): Promise<boolean>;
+  /**
+   * Lets this clone spend on the Master Brain's plans, after the shell's own dialog: through a
+   * stored key (`anthropic`, the default) or the installed Claude Code's sign-in (`claude-code`).
+   */
+  allowSpending(budget: number, provider?: 'anthropic' | 'claude-code'): Promise<boolean>;
   /** Whether the desktop app starts when the user signs in to Windows (plan §8.3). */
   autostart(): Promise<boolean>;
   /** Turns starting at sign-in on or off; answers whether it is on now. */
@@ -149,8 +177,17 @@ export type ModalKind =
   | 'recover'
   | 'land'
   | 'claude-setup'
+  | 'antigravity-setup'
   | 'start-agent'
+  /** A remembered agent's role, options and autostart, changed in the Start dialog; `id` is its key. */
+  | 'edit-agent'
+  /** A task stopped at its agent's spending limit: a higher limit, and the task continues; `id` is the task. */
+  | 'raise-limit'
+  /** A goal whose plan runs: what should be different, for the planner or the editor; `id` is the goal. */
+  | 'change-goal'
   | 'plan-review'
+  /** The answer to a question a person asked; `id` is the goal. */
+  | 'answer'
   | 'feedback';
 
 /** What a modal is opened for (the store's `ui.modal`). */
@@ -158,8 +195,13 @@ export interface ModalRequest {
   kind: ModalKind;
   /** An approval, escalation, task or goal id, by kind. */
   id?: string;
-  /** Plan editor: a first plan or a revision. */
-  mode?: 'first' | 'revision';
+  /** Plan editor: a first plan or a revision. Start an agent: `resume`, what was typed before it was left. */
+  mode?: 'first' | 'revision' | 'resume';
+  /**
+   * Plan editor: `proposed` opens it on the plan that waits for a decision, to change it before
+   * approving ("Edit before approving", 2026-11-17).
+   */
+  seed?: 'proposed';
 }
 
 export type DrawerFactory = (ctx: AppContext, request: DrawerRequest) => Component & { title: string };
@@ -209,17 +251,24 @@ export class Registry {
   }
 }
 
-/** Opens a drawer (replacing the open one). Settings also switches activeView to settings. */
+/**
+ * Opens a drawer (replacing the open one). Settings is a view, not a drawer: kind `settings` shows
+ * it at the page `tab` names, and closes the drawer that was open, which would lie hidden behind it.
+ */
 export function openDrawer(ctx: Pick<AppContext, 'store'>, request: DrawerRequest): void {
   if (request.kind === 'settings') {
     ctx.store.patch('ui', {
       activeView: 'settings',
       settingsTab: request.tab,
-      drawer: request,
+      drawer: null,
+      settingsBack: request.back ?? null,
     });
     return;
   }
-  ctx.store.patch('ui', { drawer: request });
+  // A drawer belongs to the board: opened while Settings is showing (the header's Messages, a
+  // search result, a notice), it was built behind the Settings view, where nobody saw it
+  // (2026-11-17). Opening one shows the board again.
+  ctx.store.patch('ui', { drawer: request, activeView: 'canvas' });
 }
 
 export function closeDrawer(ctx: Pick<AppContext, 'store'>): void {

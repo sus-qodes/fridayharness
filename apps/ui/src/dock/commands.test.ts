@@ -53,6 +53,31 @@ describe('core commands', () => {
     for (const c of coreCommands()) expect(c.show === undefined || c.show === 'typed').toBe(true);
   });
 
+  it('offers "Open another project…" in the desktop app only, and asks the shell for its folder picker', async () => {
+    const ctx = setup();
+    // A browser's page belongs to the Friday it was opened from.
+    expect(available(ctx)).not.toContain('open-project');
+    let asked = 0;
+    (ctx as { platform: unknown }).platform = {
+      ...ctx.platform,
+      kind: 'tauri',
+      desktop: {
+        openProject: async () => {
+          asked += 1;
+        },
+      },
+    };
+    expect(available(ctx)).toContain('open-project');
+    await run(ctx, 'open-project');
+    expect(asked).toBe(1);
+    // A shell that refuses says so, as any act does.
+    (ctx.platform.desktop as { openProject: () => Promise<void> }).openProject = async () => {
+      throw new Error('the folder picker could not be opened');
+    };
+    await run(ctx, 'open-project');
+    expect(ctx.toasts.at(-1)).toMatchObject({ kind: 'error', detail: 'the folder picker could not be opened' });
+  });
+
   it('offers pause while running and resume only while paused', () => {
     const ctx = setup();
     expect(available(ctx)).toContain('pause');
@@ -93,13 +118,15 @@ describe('core commands', () => {
     });
     await run(ctx, 'pause');
     expect(ctx.transport.to('POST', '/control/pause')).toHaveLength(1);
-    expect(ctx.toasts.at(-1)?.text).toMatch(/Friday is paused.*Stop sent to 1 attempt.*preserved/);
+    expect(ctx.toasts.at(-1)?.text).toMatch(
+      /Friday is paused.*Friday asked 1 agent it cannot hold in place to stop.*kept/,
+    );
     expect(ctx.refreshes).toBe(1);
     ctx.board(makeSnapshot({ control: PAUSED, harnesses: [makeHarness({ attach_mode: 'attach' })] }));
     await run(ctx, 'resume');
     expect(ctx.transport.to('POST', '/control/resume')).toHaveLength(1);
     expect(ctx.toasts.at(-1)?.text).toBe(
-      'Friday runs again. Sessions attached in VS Code need a prompt there to continue.',
+      'Friday runs again. Agents connected from VS Code continue when you prompt them there.',
     );
   });
 
@@ -165,7 +192,7 @@ describe('core commands', () => {
     });
     await run(ctx, 'prune-worktrees');
     const t = ctx.toasts.at(-1);
-    expect(t?.text).toBe('Removed 2 clean worktrees; kept 1');
+    expect(t?.text).toBe('Removed 2 finished task folders; kept 1');
     expect(t?.detail).toBe('Removed C:/wt/a\nRemoved C:/wt/b\nKept C:/wt/c: 3 uncommitted changes');
     expect(t?.timeoutMs).toBe(0);
   });
@@ -186,7 +213,10 @@ describe('core commands', () => {
 
 describe('pruneToast', () => {
   it('says when there was nothing to prune', () => {
-    expect(pruneToast({ removed: [], kept: [] })).toEqual({ kind: 'info', text: 'No released worktree to prune' });
+    expect(pruneToast({ removed: [], kept: [] })).toEqual({
+      kind: 'info',
+      text: 'No finished task folder to clean up',
+    });
   });
 
   it('caps the list and counts the rest', () => {

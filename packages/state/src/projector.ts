@@ -159,6 +159,11 @@ export class StateProjector implements Projector {
             "UPDATE task_runs SET execution_root = ?, base_commit = ?, branch_ref = ?, workspace = 'ready' WHERE run_id = ?",
           )
           .run(str(p.execution_root), opt(p.base_commit), opt(p.branch_ref), str(p.run_id));
+        if (p.worktree_id) {
+          this.db
+            .prepare('UPDATE worktrees SET base_commit = ?, updated_at = ? WHERE worktree_id = ?')
+            .run(opt(p.base_commit), e.occurred_at, str(p.worktree_id));
+        }
         return;
       case 'run.rebound':
         // The run's work now lives in a worktree of this clone (review M7.1 R05).
@@ -624,6 +629,12 @@ export class StateProjector implements Projector {
         this.db
           .prepare("UPDATE approvals SET status = 'revoked', note = ? WHERE approval_id = ?")
           .run(opt(p.note), str(p.approval_id));
+        return;
+      // The agent's own words for a request the hook had already made (2026-11-18): one card, both reasons.
+      case 'approval.reason_added':
+        this.db
+          .prepare('UPDATE approvals SET purpose = ? WHERE approval_id = ?')
+          .run(opt(p.purpose), str(p.approval_id));
         return;
       case 'escalation.requested': {
         const x = p.escalation as Payload;
@@ -1115,8 +1126,8 @@ export class StateProjector implements Projector {
     this.db
       .prepare(
         `INSERT INTO goals (goal_id, project_id, request, objective, constraints_json, outcomes_json,
-           non_goals_json, definition_of_done_json, priority, status, created_by_kind, created_by_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
+           non_goals_json, definition_of_done_json, priority, status, created_by_kind, created_by_id, created_at, updated_at, mode)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?)`,
       )
       .run(
         str(g.goal_id),
@@ -1132,6 +1143,7 @@ export class StateProjector implements Projector {
         str(by.id),
         e.occurred_at,
         e.occurred_at,
+        g.mode === 'do' || g.mode === 'ask' ? g.mode : 'plan',
       );
   }
 
@@ -1288,8 +1300,8 @@ export class StateProjector implements Projector {
       );
     const insert = this.db.prepare(
       `INSERT INTO plan_tasks (plan_id, version, key, project_id, position, change, task_id, kind, summary, description,
-         acceptance_criteria_json, depends_on_json, scope_json, role, priority, risk_level, note)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         acceptance_criteria_json, depends_on_json, scope_json, role, priority, risk_level, note, assign_to)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     ((plan.tasks as Payload[] | undefined) ?? []).forEach((t, i) => {
       insert.run(
@@ -1310,6 +1322,7 @@ export class StateProjector implements Projector {
         str(t.priority),
         str(t.risk_level),
         opt(t.note),
+        opt(t.assign_to),
       );
     });
   }

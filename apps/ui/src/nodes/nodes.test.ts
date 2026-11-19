@@ -16,7 +16,15 @@ import {
   makeTask,
   makeVerification,
 } from '../test/fixtures.js';
-import { createAgentPod, type PodCardModel, podModelName, podUsage, ToolDurations, vendorLabel } from './agent-pod.js';
+import {
+  createAgentPod,
+  doingWords,
+  type PodCardModel,
+  podModelName,
+  podUsage,
+  ToolDurations,
+  vendorLabel,
+} from './agent-pod.js';
 import { actionButton, fingerprint, pills } from './common.js';
 import {
   createGoalNode,
@@ -126,7 +134,8 @@ describe('task card', () => {
     const note = el.querySelector('.nd-note') as HTMLElement;
     expect(note.textContent).toContain('The agent needs you');
     expect(note.textContent).not.toContain(BIDI);
-    expect(el.querySelector('.nd-status')?.textContent).toContain('blocked: needs you');
+    // One set of status words (2026-11-19): a task that waits for the person says so first.
+    expect(el.querySelector('.nd-status')?.textContent).toBe('Needs you· the agent is stuck');
     expect(el.dataset.status).toBe('WAITING');
     expect(el.getAttribute('role')).toBe('group');
     expect(el.tabIndex).toBe(0);
@@ -174,15 +183,16 @@ describe('task card', () => {
     const ctx = makeContext();
     const node = createTaskNode(ctx, taskModel({ tool_calls: 12 }));
     const tools = node.el.querySelector('.nd-tools') as HTMLElement;
-    expect(tools.textContent).toBe('12 tools');
-    expect(tools.title).toContain('Tool calls');
-    expect(tools.title).toContain('every attempt');
+    // In a person's words (2026-11-19): actions and tries, not tool calls and attempts.
+    expect(tools.textContent).toBe('12 actions');
+    expect(tools.title).toContain('Actions the agent finished');
+    expect(tools.title).toContain('every try');
     node.update(taskModel({ tool_calls: 13 }));
-    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('13 tools');
+    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('13 actions');
     node.update(taskModel({ tool_calls: 1 }));
-    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('1 tool');
+    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('1 action');
     node.update(taskModel({ tool_calls: 0 }));
-    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('0 tools');
+    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('0 actions');
   });
 
   it('shows "—" until the line counts answer, then updates in place', () => {
@@ -207,7 +217,7 @@ describe('task card', () => {
     const lost = createTaskNode(ctx, taskModel({ status: 'HARNESS_LOST' }));
     expect(lost.el.style.getPropertyValue('--nd-status')).toBe('var(--color-amber)');
     expect(statusColor('RUNNING')).toBe('var(--status-running)');
-    expect(lost.el.textContent).toContain('Agent lost');
+    expect(lost.el.textContent).toContain('Agent stopped');
   });
 
   it('offers the actions each state allows', () => {
@@ -406,6 +416,54 @@ describe('goal card', () => {
     expect(node.el.querySelector('[data-action="land"]')).toBeNull();
   });
 
+  // Who finished, who works on what, what waits and why: on the goal's own card (2026-11-18).
+  it('tells the goal’s story in a few lines, what needs the person first, and keeps it up to date', () => {
+    const goal = makeGoal({ status: 'ACTIVE' });
+    const tasks = [
+      makeTask({
+        task_id: 't1',
+        goal_id: goal.goal_id,
+        summary: 'Wizard screens',
+        status: 'RUNNING',
+        agent_key: 'claude-1',
+      }),
+      makeTask({
+        task_id: 't2',
+        goal_id: goal.goal_id,
+        summary: `Settings ${HOSTILE}`,
+        status: 'PROPOSED',
+        delegation_note: 'waits for “Wizard screens” (claude-1 is working on it)',
+        waits_for: 'dependencies',
+      }),
+    ];
+    const ctx = makeContext({ snapshot: makeSnapshot({ goals: [goal], tasks }) });
+    const g = group({ goal, progress: { completed: 0, total: 2 }, taskIds: ['t1', 't2'] });
+    const node = createGoalNode(ctx, { group: g });
+    expectNoMarkup(node.el);
+    const lines = () => [...node.el.querySelectorAll('.nd-story-line')];
+    expect(lines().map((l) => l.querySelector('.nd-story-text')?.textContent)).toEqual([
+      'claude-1 is working on “Wizard screens”',
+      `“Settings ${HOSTILE}” waits for “Wizard screens” (claude-1 is working on it)`,
+    ]);
+    expect(lines().map((l) => l.className)).toEqual(['nd-story-line nd-story-work', 'nd-story-line nd-story-wait']);
+    // Said in words for whoever does not see the mark.
+    expect(lines()[0]?.querySelector('.visually-hidden')?.textContent).toBe('At work: ');
+    // The first task is finished and the agent asks for something on the second.
+    ctx.store.setState({
+      board: makeSnapshot({
+        goals: [goal],
+        tasks: [
+          { ...(tasks[0] as SnapshotTask), status: 'COMPLETED' },
+          { ...(tasks[1] as SnapshotTask), status: 'WAITING', waiting_reason: 'blocked', agent_key: 'codex-1' },
+        ],
+      }),
+    });
+    node.update({ group: { ...g, progress: { completed: 1, total: 2 } } });
+    expect(lines().map((l) => l.className)).toEqual(['nd-story-line nd-story-you', 'nd-story-line nd-story-done']);
+    expect(lines()[0]?.textContent).toContain('codex-1 needs you');
+    node.destroy();
+  });
+
   it('offers "Ready to land" once completed and shows the integration state', () => {
     const ctx = makeContext();
     const g = group({
@@ -414,10 +472,124 @@ describe('goal card', () => {
       proposed: makePlan({ version: 2, status: 'PROPOSED' }),
     });
     const node = createGoalNode(ctx, { group: g });
-    expect(node.el.textContent).toContain('2 integrated · 1 conflicted');
+    expect(node.el.textContent).toContain('2 merged · 1 clashes with other work');
     expect(node.el.textContent).toContain('v2 proposed');
     click(node.el.querySelector('[data-action="land"]'));
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'land', id: g.goal.goal_id });
+  });
+
+  it('cancels an open or running goal from the card, after asking; a finished one has nothing to cancel', async () => {
+    const active = makeGoal({ status: 'ACTIVE' });
+    const ctx = makeContext({ answers: { [`POST /goals/${active.goal_id}/cancel`]: { goal: active } } });
+    const node = createGoalNode(ctx, { group: group({ goal: active }) });
+    const cancel = node.el.querySelector('[data-action="cancel-goal"]') as HTMLButtonElement;
+    // A small button with its words in its tooltip and its name (2026-11-18): its words pushed the
+    // other buttons out of the card.
+    expect(cancel.getAttribute('aria-label')).toBe('Cancel this goal');
+    expect(cancel.title).toContain('Cancel this goal');
+    // Saying "Keep it" changes nothing.
+    ctx.confirmAnswer = false;
+    click(cancel);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ctx.confirms[0]?.title).toBe('Cancel this goal?');
+    expect([ctx.confirms[0]?.body].flat().join(' ')).toContain('The work already done is kept');
+    expect(ctx.transport.to('POST', `/goals/${active.goal_id}/cancel`)).toHaveLength(0);
+    ctx.confirmAnswer = true;
+    click(cancel);
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    expect(ctx.transport.to('POST', `/goals/${active.goal_id}/cancel`)[0]?.body).toEqual({
+      reason: 'cancelled from the board',
+    });
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Goal cancelled' });
+    expect(ctx.refreshes).toBe(1);
+
+    // The desktop asks in its own dialog: the page does not ask a second time.
+    const desktop = makeContext();
+    (desktop as { platform: unknown }).platform = { ...desktop.platform, kind: 'tauri', desktop: {} };
+    const onDesktop = createGoalNode(desktop, { group: group({ goal: makeGoal({ status: 'OPEN' }) }) });
+    click(onDesktop.el.querySelector('[data-action="cancel-goal"]'));
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    expect(desktop.confirms).toHaveLength(0);
+    expect(desktop.transport.calls.filter((c) => c.method === 'POST')).toHaveLength(1);
+
+    for (const status of ['COMPLETED', 'CANCELLED'] as const) {
+      const done = createGoalNode(makeContext(), { group: group({ goal: makeGoal({ status }) }) });
+      expect(done.el.querySelector('[data-action="cancel-goal"]')).toBeNull();
+    }
+  });
+
+  it('offers to change a goal whose plan runs, and nothing to change before a plan or after the end', () => {
+    const ctx = makeContext();
+    const running = makeGoal({ status: 'ACTIVE' });
+    const node = createGoalNode(ctx, { group: group({ goal: running, active: makePlan() }) });
+    const change = node.el.querySelector('[data-action="change-goal"]') as HTMLButtonElement;
+    expect(change.textContent).toBe('Change…');
+    expect(change.getAttribute('aria-label')).toBe('Change this goal');
+    click(change);
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'change-goal', id: running.goal_id });
+    // No plan yet (it is written or asked for from the card), a finished goal, a cancelled one.
+    for (const g of [
+      group({ goal: makeGoal({ status: 'OPEN' }), active: null }),
+      group({ goal: makeGoal({ status: 'ACTIVE' }), active: null }),
+      group({ goal: makeGoal({ status: 'COMPLETED' }), active: makePlan() }),
+      group({ goal: makeGoal({ status: 'CANCELLED' }), active: makePlan() }),
+    ]) {
+      const other = createGoalNode(makeContext(), { group: g });
+      expect(other.el.querySelector('[data-action="change-goal"]'), g.goal.status).toBeNull();
+    }
+  });
+
+  it('says where a completed goal landed, or that its work is already in the folder', () => {
+    const done = makeGoal({ status: 'COMPLETED' });
+    const label = (landing: NonNullable<UiSnapshot['goal_landing']>[string] | undefined) => {
+      const ctx = makeContext({
+        snapshot: makeSnapshot({ goals: [done], ...(landing ? { goal_landing: { [done.goal_id]: landing } } : {}) }),
+      });
+      const node = createGoalNode(ctx, { group: group({ goal: done }) });
+      const b = node.el.querySelector('[data-action="land"]') as HTMLButtonElement;
+      click(b);
+      // Each opens the same dialog, which says what there is to do.
+      expect(ctx.store.select('ui').modal).toEqual({ kind: 'land', id: done.goal_id });
+      return b.textContent;
+    };
+    // An older daemon, or a goal not landed yet.
+    expect(label(undefined)).toBe('Ready to land');
+    expect(label({ work: 'branch', landed: null })).toBe('Ready to land');
+    expect(label({ work: 'mixed', landed: null })).toBe('Ready to land');
+    expect(label({ work: 'folder', landed: null })).toBe('Review and commit');
+    expect(label({ work: 'branch', landed: { into: 'main', at: '2026-11-17T10:00:00.000Z' } })).toBe(
+      'Landed into main',
+    );
+    // A hostile branch name is text, cut short.
+    const hostile = label({ work: 'branch', landed: { into: `x${BIDI}${LONG}`, at: '2026-11-17T10:00:00.000Z' } });
+    expect(hostile).not.toContain(BIDI);
+    expect((hostile ?? '').length).toBeLessThan(60);
+  });
+
+  // In the trial a goal landed at 05:39 and its card still said "Ready to land" at 06:06: the card
+  // redrew only when something it watched changed, and the landing was not among them (2026-11-18).
+  it('turns "Ready to land" into "Landed into …" as soon as the board learns of the landing', () => {
+    const done = makeGoal({ status: 'COMPLETED' });
+    const ctx = makeContext({
+      snapshot: makeSnapshot({ goals: [done], goal_landing: { [done.goal_id]: { work: 'branch', landed: null } } }),
+    });
+    const g = group({ goal: done });
+    const node = createGoalNode(ctx, { group: g });
+    const text = () => node.el.querySelector('[data-action="land"]')?.textContent;
+    expect(text()).toBe('Ready to land');
+    ctx.store.setState({
+      board: makeSnapshot({
+        goals: [done],
+        goal_landing: {
+          [done.goal_id]: { work: 'branch', landed: { into: 's03-menu', at: '2026-11-18T05:39:00.000Z' } },
+        },
+      }),
+    });
+    // The same model, as the canvas hands it on every snapshot.
+    node.update({ group: g });
+    expect(text()).toBe('Landed into s03-menu');
+    node.destroy();
   });
 
   describe('what Friday did (plan M12.7)', () => {
@@ -448,15 +620,15 @@ describe('goal card', () => {
         hosts: { attempts: 2, reported: 2, tokens: 184_321, tokens_reporters: 2, cost_usd: 0.42, cost_reporters: 2 },
       });
       expect(goalSummaryLine(s)).toBe(
-        '3 of 3 tasks verified · 1 claim refused by the checks, reworked · 2 actions held for you · 1 session recovered · hosts reported 184k tokens, $0.42 (2 of 2 attempts)',
+        '3 of 3 tasks passed their checks · 1 sent back by the checks, redone · you were asked 2 times · 1 agent stopped midway, picked up again · agents used 184k tokens, $0.42 (from 2 of 2 tries)',
       );
       expect(goalSummaryRows(s)).toEqual([
-        { label: 'Tasks verified', value: '3 of 3' },
-        { label: 'Claims refused by the checks', value: '1, reworked' },
-        { label: 'Actions held for you', value: '2' },
-        { label: 'Actions refused by policy', value: 'none' },
-        { label: 'Sessions lost', value: '1, recovered' },
-        { label: 'Hosts reported', value: '184k tokens, $0.42 (2 of 2 attempts)' },
+        { label: 'Tasks that passed their checks', value: '3 of 3' },
+        { label: 'Work the checks sent back', value: '1, redone' },
+        { label: 'Times an agent asked you', value: '2' },
+        { label: 'Actions Friday stopped', value: 'none' },
+        { label: 'Agents that stopped midway', value: '1, picked up again' },
+        { label: 'What the agents used', value: '184k tokens, $0.42 (from 2 of 2 tries)' },
       ]);
       // Fewer reworked or recovered than refused or lost, and a planning cost.
       expect(
@@ -471,7 +643,7 @@ describe('goal card', () => {
           }),
         ),
       ).toBe(
-        '1 of 4 tasks verified · 2 claims refused by the checks, 1 reworked · 1 action refused by policy · 1 of 2 sessions recovered · Friday planned in 2 calls, $0.03',
+        '1 of 4 tasks passed their checks · 2 sent back by the checks, 1 redone · Friday stopped 1 action · 2 agents stopped midway, 1 picked up again · Friday planned in 2 calls, $0.03',
       );
     });
 
@@ -480,16 +652,19 @@ describe('goal card', () => {
       const none = summary({
         hosts: { attempts: 3, reported: 0, tokens: null, tokens_reporters: 0, cost_usd: null, cost_reporters: 0 },
       });
-      expect(goalSummaryLine(none)).toBe('1 of 4 tasks verified');
-      expect(goalSummaryRows(none)).toContainEqual({ label: 'Hosts reported', value: 'nothing (0 of 3 attempts)' });
+      expect(goalSummaryLine(none)).toBe('1 of 4 tasks passed their checks');
+      expect(goalSummaryRows(none)).toContainEqual({
+        label: 'What the agents used',
+        value: 'not reported (from 0 of 3 tries)',
+      });
       // One of three counted tokens and named no cost.
       expect(
         hostsWords({ attempts: 3, reported: 1, tokens: 1234, tokens_reporters: 1, cost_usd: null, cost_reporters: 0 }),
-      ).toBe('1.2k tokens (1 of 3 attempts)');
+      ).toBe('1.2k tokens (from 1 of 3 tries)');
       // Both counted tokens, one named a cost.
       expect(
         hostsWords({ attempts: 2, reported: 2, tokens: 5000, tokens_reporters: 2, cost_usd: 0.1, cost_reporters: 1 }),
-      ).toBe('5.0k tokens (2 of 2 attempts), $0.10 (1 of 2 attempts)');
+      ).toBe('5.0k tokens (from 2 of 2 tries), $0.10 (from 1 of 2 tries)');
       // A goal without work has no line and no rows.
       const idle = summary({ tasks: { total: 0, verified: 0 } });
       expect(goalSummaryLine(idle)).toBeNull();
@@ -504,8 +679,8 @@ describe('goal card', () => {
       expect(line(node.el).hidden).toBe(true);
       await flush();
       expect(line(node.el).hidden).toBe(false);
-      expect(line(node.el).textContent).toBe('1 of 4 tasks verified · 1 claim refused by the checks, reworked');
-      expect(line(node.el).title).toContain('Actions refused by policy: none');
+      expect(line(node.el).textContent).toBe('1 of 4 tasks passed their checks · 1 sent back by the checks, redone');
+      expect(line(node.el).title).toContain('Actions Friday stopped: none');
       expect(line(node.el).title).not.toContain('tokens');
       expectNoMarkup(node.el);
       // The same board again reads nothing new.
@@ -592,7 +767,7 @@ describe('goal card', () => {
         }),
       });
       const node = createGoalNode(ctx, { group: unplanned() });
-      expect(node.el.textContent).toContain('Master Brain planning');
+      expect(node.el.textContent).toContain('Friday is planning');
       expect(actionOf(node.el, 'brain-plan')).toBeNull();
       expect(actionOf(node.el, 'write-plan')).not.toBeNull();
     });
@@ -624,7 +799,9 @@ describe('goal card', () => {
     expect(progressPercent({ completed: 0, total: 0 })).toBe(0);
     expect(progressPercent({ completed: 2, total: 3 })).toBe(67);
     expect(integrationText({ integrated: 0, conflicted: 0, failed: 0, not_needed: 0 })).toBeNull();
-    expect(integrationText({ integrated: 0, conflicted: 0, failed: 2, not_needed: 1 })).toBe('2 failed · 1 not needed');
+    expect(integrationText({ integrated: 0, conflicted: 0, failed: 2, not_needed: 1 })).toBe(
+      '2 could not merge · 1 had nothing to merge',
+    );
   });
 });
 
@@ -651,7 +828,9 @@ describe('agent pod', () => {
     ...extra,
   });
 
-  it('renders vendor, key, enforcement, model, usage and the ribbon with hostile strings visible', () => {
+  // For people (2026-11-18): name, job, what it is doing, what it runs on and has spent. "what is
+  // this token last tool this shit… whats the use of user to know this?" (the trial).
+  it('renders its name, job, what it does, the model and spend, and the file, with hostile strings visible', () => {
     const ctx = makeContext();
     const target = `src/${BIDI}${HOSTILE}${LONG}.ts`;
     const node = createAgentPod(
@@ -662,19 +841,26 @@ describe('agent pod', () => {
     const t = node.el.textContent ?? '';
     expect(t).toContain('Claude Code');
     expect(t).toContain('claude-1');
-    expect(t).toContain('Reported');
+    // How far Friday holds it, in words, said because it is not the usual; the level in the tooltip.
+    expect(t).toContain('Friday watches only');
     expect(t).not.toContain('L1 reported');
-    expect(node.el.querySelector('.badge-info')?.getAttribute('title')).toBe('Enforcement level L1 (reported)');
-    expect(t).toContain('claude-haiku-5-5');
-    expect(t).toContain('$0.18');
-    expect(t).toContain('18k tokens');
-    expect(t).toContain('last tool 1.1 s');
+    expect(node.el.querySelector('.badge-info')?.getAttribute('title')).toContain('(level L1, reported)');
+    expect(node.el.querySelector('[data-role="doing"]')?.textContent).toBe('Working on “Add the subscription API”');
+    const runsOn = node.el.querySelector('[data-role="runs-on"]') as HTMLElement;
+    expect(runsOn.textContent).toBe('Claude Haiku 5.5 · $0.18 so far');
+    // Tokens and the last action's time: there for whoever looks, not on the card.
+    expect(t).not.toContain('tokens');
+    expect(t).not.toContain('last tool');
+    expect(runsOn.title).toContain('18k tokens');
+    expect(runsOn.title).toContain('1.1 s');
     expect(t).toContain('+14 −2');
-    expect(t).toContain('spawned');
+    expect(t).toContain('Started by Friday');
     const file = node.el.querySelector('[data-action="diff"]') as HTMLElement;
     expect(file.textContent).toContain('⟨U+202E⟩');
     expect(Array.from(file.textContent ?? '').length).toBeLessThan(80);
-    expect(node.el.querySelector('.nd-tool')?.textContent).toContain('⟨U+200B⟩');
+    // What it does, in a word; the host's own name for the tool in its tooltip, as text.
+    expect(node.el.querySelector('.nd-tool')?.textContent).toBe('Editing');
+    expect(node.el.querySelector('.nd-tool')?.getAttribute('title')).toContain('⟨U+200B⟩');
     click(file);
     expect(ctx.store.select('ui').drawer).toEqual({
       kind: 'diff',
@@ -710,54 +896,78 @@ describe('agent pod', () => {
     const t = node.el.textContent ?? '';
     expect(t).toContain('shadow');
     expect(t).toContain('big-model');
-    expect(t).toContain('(requested)');
-    expect(t).toContain('Watched');
+    expect(t).toContain('(asked for)');
+    expect(t).toContain('Friday watches only');
     expect(t).not.toContain('L0');
-    expect(t).toContain('attached');
+    expect(t).toContain('Runs in your editor');
     expect(podUsage({ pod: p, activity: null })).toEqual({ cost: '—', tokens: '—' });
     expect(podModelName({ pod: { ...p, run: null }, activity: null })).toBeNull();
     expect(vendorLabel({ harness: null })).toBe('Agent');
   });
 
-  it('says Enforced, Reported, Watched or Unverified, with the level in the tooltip (review M9k)', () => {
+  // "Reported" and "Unverified" were codes a person could not read (the trial, 2026-11-18).
+  it('says how far Friday holds an agent in words, with the level in the tooltip, and only when unusual', () => {
     const basis = `Friday hooks from this session ${HOSTILE}`;
     expect(enforcementWords('L1', 'enforcing', basis)).toEqual({
-      label: 'Enforced',
+      label: 'Checked by Friday',
       tone: 'good',
-      title: `Enforcement level L1 (enforcing): ${basis}`,
+      title: `Friday checks each action of this agent before it happens, and can stop it. (level L1, enforcing: ${basis})`,
     });
-    expect(enforcementWords('L2', null)).toEqual({
-      label: 'Enforced',
-      tone: 'strong',
-      title: 'Enforcement level L2 (isolated)',
-    });
-    expect(enforcementWords('L1', 'reported')).toMatchObject({ label: 'Reported', tone: 'info' });
-    expect(enforcementWords('L1', 'degraded')).toEqual({
-      label: 'Unverified',
+    expect(enforcementWords('L2', null)).toMatchObject({ label: 'Checked by Friday', tone: 'strong' });
+    expect(enforcementWords('L1', 'reported')).toMatchObject({ label: 'Friday watches only', tone: 'info' });
+    expect(enforcementWords('L1', 'degraded')).toMatchObject({
+      label: 'Checks not confirmed',
       tone: 'warn',
-      title: 'Enforcement level L1 (degraded)',
+      title: expect.stringContaining('(level L1, degraded)'),
     });
-    expect(enforcementWords('L1', null)).toMatchObject({
-      label: 'Unverified',
-      title: 'Enforcement level L1 (unverified)',
-    });
-    expect(enforcementWords('L0', 'observed')).toMatchObject({ label: 'Watched', tone: 'muted' });
-    expect(enforcementWords(null, null)).toEqual({
-      label: 'Watched',
-      tone: 'muted',
-      title: 'Enforcement level L0 (observed)',
-    });
-    // On the pod: the word on the badge, the level only in its tooltip; the basis is text.
+    expect(enforcementWords('L1', null).title).toContain('(level L1, unverified)');
+    expect(enforcementWords('L0', 'observed')).toMatchObject({ label: 'Friday watches only', tone: 'muted' });
+    expect(enforcementWords(null, null).title).toContain('(level L0, observed)');
+    // On the card: nothing is said when Friday checks every action, which is the usual.
     const ctx = makeContext();
     const p = pod({
       harness: makeHarness({ enforcement_level: 'L1', enforcement_status: 'enforcing', enforcement_basis: basis }),
     });
     const node = createAgentPod(ctx, model({ pod: p }));
-    const badge = node.el.querySelector('.badge-good') as HTMLElement;
-    expect(badge.textContent).toBe('Enforced');
+    expect(node.el.querySelector('.badge-good')).toBeNull();
+    expect(node.el.textContent).not.toContain('Checked by Friday');
+    // When not, the words are there, with the level and the basis as text in the tooltip.
+    const unsure = createAgentPod(
+      ctx,
+      model({
+        pod: pod({
+          harness: makeHarness({ enforcement_level: 'L1', enforcement_status: 'degraded', enforcement_basis: basis }),
+        }),
+      }),
+    );
+    const badge = unsure.el.querySelector('.badge-warn') as HTMLElement;
+    expect(badge.textContent).toBe('Checks not confirmed');
     expect(badge.title).toContain('L1');
     expect(badge.title).toContain(HOSTILE);
-    expectNoMarkup(node.el);
+    expectNoMarkup(unsure.el);
+  });
+
+  it('says what an agent is doing in one sentence', () => {
+    const agent = (status: string) => makeAgent({ status: status as never });
+    const spawn = makeHarness({ attach_mode: 'spawn' });
+    const editor = makeHarness({ attach_mode: 'attach' });
+    const task = makeTask({ summary: 'Settings screens', status: 'RUNNING' });
+    expect(doingWords({ agent: agent('BUSY'), task, taskId: task.task_id, harness: spawn })).toBe(
+      'Working on “Settings screens”',
+    );
+    expect(
+      doingWords({ agent: agent('BUSY'), task: { ...task, status: 'WAITING' }, taskId: task.task_id, harness: spawn }),
+    ).toBe('Waiting for you on “Settings screens”');
+    expect(doingWords({ agent: agent('AVAILABLE'), task: null, taskId: null, harness: spawn })).toBe(
+      'Free: it starts a task by itself',
+    );
+    expect(doingWords({ agent: agent('AVAILABLE'), task: null, taskId: null, harness: editor })).toBe(
+      'Free: it takes a task when you prompt it',
+    );
+    expect(doingWords({ agent: agent('DISCONNECTED'), task: null, taskId: null, harness: spawn })).toBe(
+      'Not connected',
+    );
+    expect(doingWords({ agent: agent('AVAILABLE'), task: null, taskId: null, harness: null })).toBe('Not connected');
   });
 
   it('measures the last tool from its decision to its completion', () => {
@@ -802,7 +1012,7 @@ describe('proposed plan', () => {
     const bar = createPlanReviewBar(ctx, { goalId: goal.goal_id, plan });
     expectNoMarkup(bar.el);
     expect(bar.el.textContent).toContain('Plan v2 proposed');
-    expect(bar.el.textContent).toContain('by the Master Brain');
+    expect(bar.el.textContent).toContain('by Friday’s planner');
     expect(bar.el.textContent).toContain('1 new · 1 rework · 1 dropped');
     expect(actionOf(bar.el, 'approve')).toBeNull();
     click(actionOf(bar.el, 'review'));

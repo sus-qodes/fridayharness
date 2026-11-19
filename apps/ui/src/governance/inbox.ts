@@ -21,7 +21,7 @@ export function replyTarget(item: Pick<SnapshotInboxItem, 'from'>): string | nul
 
 function senderText(item: Pick<SnapshotInboxItem, 'from'>): string {
   if (item.from.kind === 'agent') return item.from.agent_key ?? item.from.id;
-  if (item.from.kind === 'master_brain') return 'Master Brain';
+  if (item.from.kind === 'master_brain') return 'Friday’s planner';
   if (item.from.kind === 'system') return 'Friday';
   return item.from.kind;
 }
@@ -119,7 +119,7 @@ export function inboxDrawer(ctx: AppContext, request: DrawerRequest): Component 
       m.facts?.length
         ? h('ul', { class: 'gv-facts' }, ...m.facts.slice(0, 20).map((f) => h('li', null, cleanText(f.fact))))
         : null,
-      h('p', { class: 'field-hint' }, 'Messages are information from an agent; they never grant anything.'),
+      h('p', { class: 'field-hint' }, 'Messages are information from an agent; they never allow anything.'),
       actionsBox,
     );
     renderActions(item);

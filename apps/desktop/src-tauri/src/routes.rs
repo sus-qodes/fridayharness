@@ -49,9 +49,16 @@ pub enum Confirm {
     /// `tasks/{tid}/recover` with `action: cancel`: the cancel dialog, the recovery body.
     RecoverCancel,
     CancelGoal,
+    /// `goals/{gid}/land`: merges the goal's branch into the person's own branch.
+    LandGoal,
+    /// `goals/{gid}/land/set-aside`: the same, after files in the way were set aside.
+    LandGoalAside,
     StopDaemon,
     LaunchAgent,
     StartAgent,
+    /// `agent-processes/{key}/update`: a remembered agent's role, options and autostart. Its
+    /// spending limit is among them and applies from its next attempt, so the person sees it.
+    UpdateAgent,
 }
 
 /// Which command may send a route.
@@ -106,6 +113,14 @@ pub static ROUTES: &[Route] = &[
     get("tasks/{tid}/events", &["order", "limit", "before"]),
     get("tasks/{tid}/diff", &["stat"]),
     get("tasks/{tid}/recovery", &[]),
+    // What was allowed for this task and still holds, for the inspector's "Take back". The whole
+    // list of approvals is never forwarded.
+    get("tasks/{tid}/approvals", &[]),
+    // A file the person and the goal both changed in the project folder: both versions, the
+    // person's choice for one file, and their own version put back.
+    get("tasks/{tid}/folder-conflict", &[]),
+    post("tasks/{tid}/folder-conflict"),
+    post("tasks/{tid}/folder-conflict/undo"),
     get("tasks/{tid}/delivered-context", &[]),
     post("tasks"),
     post("tasks/{tid}/continue"),
@@ -115,8 +130,12 @@ pub static ROUTES: &[Route] = &[
     post("tasks/{tid}/unreserve"),
     confirm("tasks/{tid}/cancel", Confirm::CancelTask),
     post("tasks/{tid}/assign"),
+    // The install of a task's folder, run again; and what a check printed.
+    post("tasks/{tid}/setup"),
+    get("artifacts/{id}", &[]),
     post("tasks/{tid}/verify"),
     post("tasks/{tid}/integrate"),
+    post("tasks/{tid}/integrate/back"),
     post("tasks/{tid}/recover"),
     post("tasks/{tid}/worktree"),
     post("context/compile"),
@@ -125,9 +144,21 @@ pub static ROUTES: &[Route] = &[
     get("goals", &[]),
     get("goals/{gid}", &[]),
     get("goals/{gid}/diff", &["stat"]),
+    // What landing would do, read before the dialog (the POST of the same path is confirmed below).
+    get("goals/{gid}/land", &[]),
     post("goals"),
+    // A question's answer in full, and that its person opened it.
+    get("goals/{gid}/answer", &[]),
+    post("goals/{gid}/answer/read"),
     confirm("goals/{gid}/cancel", Confirm::CancelGoal),
+    confirm("goals/{gid}/land", Confirm::LandGoal),
+    // Uncommitted files in the way are kept and taken out of the way first, then it lands.
+    confirm("goals/{gid}/land/set-aside", Confirm::LandGoalAside),
+    // The files set aside at a landing, written back into the folder (never over a changed file).
+    post("goals/{gid}/set-aside/restore"),
     post("goals/{gid}/replan"),
+    // When this goal's finished work is put into the project: the tick on the plan's Approve.
+    post("goals/{gid}/landing"),
     post("goals/{gid}/plans"),
     post("plans/{plan}/versions/{v}/approve"),
     post("plans/{plan}/versions/{v}/reject"),
@@ -162,6 +193,25 @@ pub static ROUTES: &[Route] = &[
     post("worktrees/prune"),
     get("policy", &[]),
     confirm("policy/trust", Confirm::Trust),
+    // The few config.yaml settings the interface changes: none applies on its own say (trust,
+    // this machine's approval or a restart still decides), so no dialog of the shell's.
+    post("config/settings"),
+    // The project's checks: read with what its package.json suggests, and changed by name only
+    // (the daemon builds the command from that list; the page sends none).
+    get("config/checks", &[]),
+    // The project's checks tried on the untouched project: started, then read while it runs.
+    get("config/checks/trial", &[]),
+    post("config/checks/trial"),
+    // The settings files a copy of the project may be given (names only); set through config/settings.
+    get("config/copy-files", &[]),
+    post("config/checks"),
+    // How this person plans on this machine (kept outside config.yaml); the spending approval and
+    // the restart it needs stay the shell's own dialogs.
+    post("brain/planner-choice"),
+    // Takes this machine's spending approval back: it only tightens. Giving it is `allow_spending`.
+    post("brain/deny-remote"),
+    // Lifts what keeps a host out of work (a failed sign-in, a bench): "I signed in: try again".
+    post("readiness/clear"),
     post("control/pause"),
     post("control/resume"),
     confirm("control/halt", Confirm::Halt),
@@ -177,9 +227,15 @@ pub static ROUTES: &[Route] = &[
     confirm("agent-processes", Confirm::LaunchAgent),
     post("agent-processes/{key}/stop"),
     confirm("agent-processes/{key}/start", Confirm::StartAgent),
+    // A remembered agent changed in place: what it will run with, its spending limit included, is
+    // shown before it is saved, as it was when the agent was first started.
+    confirm("agent-processes/{key}/update", Confirm::UpdateAgent),
     post("agent-processes/{key}/forget"),
     get("agent-setup/claude-code", &["agent"]),
     post("agent-setup/claude-code"),
+    // Antigravity only attaches: these write the project's files, nothing starts it.
+    get("agent-setup/antigravity", &["agent"]),
+    post("agent-setup/antigravity"),
 ];
 
 /// Why a request was not forwarded. `code` is the shell's own error code (`DESKTOP-xxxx`).
@@ -535,6 +591,65 @@ mod tests {
     }
 
     #[test]
+    fn what_a_check_printed_is_read_and_an_install_is_run_again() {
+        // What a check printed, by the id alone, as the page asks for it.
+        let c = req("GET", &p("artifacts/A1b2_c3-d4")).unwrap();
+        assert_eq!(c.route.template, "artifacts/{id}");
+        assert_eq!(c.param("id"), Some("A1b2_c3-d4"));
+        assert!(req("POST", &p("tasks/task_1/setup")).is_ok());
+        // The whole reference (`artifact:<id>`) would need an encoded ':', which no path may hold.
+        assert!(refused("GET", &p("artifacts/artifact%3AA1b2_c3-d4")));
+        assert!(refused("GET", &p("artifacts/artifact:A1b2_c3-d4")));
+        // One file by its id: no folders, no query, no writing.
+        assert!(refused("GET", &p("artifacts")));
+        assert!(refused("GET", &p("artifacts/a/b")));
+        assert!(refused("GET", &p("artifacts/a?path=x")));
+        assert!(refused("GET", &p("artifacts/..%2Fconfig.yaml")));
+        assert!(refused("POST", &p("artifacts/a")));
+        assert!(refused("GET", &p("tasks/task_1/setup")));
+    }
+
+    #[test]
+    fn connecting_antigravity_is_a_preview_and_an_apply_and_nothing_else() {
+        let c = req("GET", &p("agent-setup/antigravity?agent=dev-1")).unwrap();
+        assert_eq!(c.route.owner, Owner::Request);
+        let body = json!({"agent_key": "dev-1"});
+        assert!(for_request("POST", &p("agent-setup/antigravity"), Some(&body), PID, PORT).is_ok());
+        // The preview takes the agent key only, and no route under it starts or stops anything.
+        assert!(refused("GET", &p("agent-setup/antigravity?agent=dev-1&run=1")));
+        assert!(refused("POST", &p("agent-setup/antigravity/start")));
+        assert!(refused("POST", &p("agent-setup/gemini")));
+    }
+
+    #[test]
+    fn the_allowances_of_a_task_are_listed_and_taken_back() {
+        let c = req("GET", &p("tasks/task_ABC123/approvals")).unwrap();
+        assert_eq!(c.param("tid"), Some("task_ABC123"));
+        assert!(req("POST", &p("approvals/appr_1/revoke")).is_ok());
+        // One task's, with no filter to widen it; the whole list stays out of the page's reach.
+        assert!(refused("GET", &p("tasks/task_ABC123/approvals?status=pending")));
+        assert!(refused("POST", &p("tasks/task_ABC123/approvals")));
+        assert!(refused("GET", &p("approvals")));
+        assert!(refused("GET", &p("approvals?status=granted")));
+    }
+
+    #[test]
+    fn the_checks_are_read_and_changed_and_spending_is_only_ever_taken_back() {
+        assert!(req("GET", &p("config/checks")).is_ok());
+        assert!(req("GET", &p("config/copy-files")).is_ok());
+        assert!(refused("POST", &p("config/copy-files")));
+        assert!(req("POST", &p("config/checks")).is_ok());
+        assert!(refused("GET", &p("config/checks?root=x")));
+        assert!(refused("GET", &p("config/checks/tests")));
+        assert!(req("GET", &p("config/checks/trial")).is_ok());
+        assert!(req("POST", &p("config/checks/trial")).is_ok());
+        assert!(req("POST", &p("brain/deny-remote")).is_ok());
+        // No route gives the approval: that is the shell's own command, behind its own dialog.
+        assert!(refused("POST", &p("brain/allow-remote")));
+        assert!(refused("GET", &p("brain/deny-remote")));
+    }
+
+    #[test]
     fn the_project_preferences_are_read_and_saved() {
         let c = req("GET", &p("ui/prefs")).unwrap();
         assert_eq!(c.route.owner, Owner::Request);
@@ -681,9 +796,12 @@ mod tests {
             p("control/halt"),
             p("tasks/task_1/cancel"),
             p("goals/goal_1/cancel"),
+            p("goals/goal_1/land"),
+            p("goals/goal_1/land/set-aside"),
             p("daemon/stop"),
             p("agent-processes"),
             p("agent-processes/claude-1/start"),
+            p("agent-processes/claude-1/update"),
         ] {
             let e = req("POST", &raw).unwrap_err();
             assert_eq!(e.code, CONFIRMATION_REQUIRED, "{raw}");

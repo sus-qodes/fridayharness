@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Friday</title>
+    <link rel="stylesheet" href="confirm.css" />
+  </head>
+  <body>
+    <main class="card" role="alertdialog" aria-labelledby="title" aria-describedby="text">
+      <header class="head">
+        <img src="favicon.svg" alt="" width="26" height="26" />
+        <h1 id="title"></h1>
+      </header>
+      <div id="text" class="text"></div>
+      <footer class="actions">
+        <button id="no" type="button" class="btn">Cancel</button>
+        <button id="yes" type="button" class="btn primary" disabled></button>
+      </footer>
+    </main>
+    <script src="confirm.js"></script>
+  </body>
+</html>

@@ -39,7 +39,7 @@ export function isTauri(): boolean {
 /**
  * The routes the shell sends only through `confirm_and_send` (mirror of `Owner::Confirm` in
  * routes.rs): approving, trusting policy, halting, cancelling a task or a goal, stopping Friday,
- * starting an agent.
+ * starting an agent or changing one.
  */
 export const DESKTOP_CONFIRMED: readonly { method: 'POST'; path: RegExp }[] = [
   { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/approvals\/[^/?]+\/approve$/ },
@@ -47,9 +47,13 @@ export const DESKTOP_CONFIRMED: readonly { method: 'POST'; path: RegExp }[] = [
   { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/control\/halt$/ },
   { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/tasks\/[^/?]+\/cancel$/ },
   { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/goals\/[^/?]+\/cancel$/ },
+  { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/goals\/[^/?]+\/land$/ },
+  // The same merge, after the uncommitted files in its way were kept and taken out of it.
+  { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/goals\/[^/?]+\/land\/set-aside$/ },
   { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/daemon\/stop$/ },
   { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/agent-processes$/ },
   { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/agent-processes\/[^/?]+\/start$/ },
+  { method: 'POST', path: /^\/api\/v1\/projects\/[^/?]+\/agent-processes\/[^/?]+\/update$/ },
 ];
 
 const DANGER = 'danger-full-access';

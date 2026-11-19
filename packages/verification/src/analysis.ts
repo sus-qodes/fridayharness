@@ -287,6 +287,49 @@ export function selectChecks<T extends SelectableCheck>(checks: readonly T[], ki
 }
 
 /**
+ * A document: a file that a project's build, types and tests do not read. Not `.txt` (a
+ * `requirements.txt` lists packages, and tests read fixtures), and not `.mdx` (a site compiles it).
+ */
+const DOCUMENT = /\.(?:md|markdown|rst|adoc)$/i;
+
+/** Whether a change touches documents and nothing else. */
+export function documentsOnly(changed: readonly string[]): boolean {
+  return changed.length > 0 && changed.every((p) => DOCUMENT.test(p));
+}
+
+/** The checks a change calls for, and the ones it does not, with why. */
+export interface FittedChecks<T> {
+  run: T[];
+  skipped: T[];
+  why: 'nothing_changed' | 'documents_only' | null;
+}
+
+/**
+ * The checks that fit a change (2026-11-18). In the trial a question that changed no file waited
+ * for the build, the types, the lint and 565 tests, and so did two edited Markdown files.
+ *  - Nothing changed: nothing to check. A verification task is the exception: running the checks
+ *    is its work.
+ *  - Documents only: the lint checks run (a formatter reads documents), and any check that says
+ *    it reads them (`on_documents: true`); the build, the types and the tests do not.
+ * `changed` null: not known, so every check runs.
+ */
+export function checksForChange<T extends { kind?: string | undefined; on_documents?: boolean | undefined }>(
+  checks: readonly T[],
+  changed: readonly string[] | null,
+  taskKind: string,
+): FittedChecks<T> {
+  const all: FittedChecks<T> = { run: [...checks], skipped: [], why: null };
+  if (changed === null || checks.length === 0) return all;
+  if (changed.length === 0) {
+    return taskKind === 'verification' ? all : { run: [], skipped: [...checks], why: 'nothing_changed' };
+  }
+  if (!documentsOnly(changed)) return all;
+  const run = checks.filter((c) => c.kind === 'lint' || c.on_documents === true);
+  const skipped = checks.filter((c) => !run.includes(c));
+  return { run, skipped, why: skipped.length ? 'documents_only' : null };
+}
+
+/**
  * The version of the checks that judge a task kind (review F15): outcomes judged by other checks
  * are not comparable, so they are counted in another cohort.
  */
@@ -308,6 +351,12 @@ export function checksVersion(checks: readonly SelectableCheck[], kind: string):
 export interface TestGraph {
   /** Test files that import the file. */
   testsOf(file: string): string[];
+  /**
+   * Test files that reach the file through other files too (an index, a package's entry). Only
+   * whether a file is tested is judged by it; `tests` stays the direct importers, which targeted
+   * runs of a check are given. Without it, `testsOf` judges both.
+   */
+  testsReaching?(file: string): string[];
   /** The graph parsed the file (a source file it understands). */
   isSource(file: string): boolean;
   isTest(file: string): boolean;
@@ -327,8 +376,8 @@ export function relatedTests(changed: readonly string[], graph: TestGraph): { te
     }
     if (!graph.isSource(f)) continue;
     const related = graph.testsOf(f);
-    if (related.length) for (const t of related) tests.add(t);
-    else untested.push(f);
+    for (const t of related) tests.add(t);
+    if (!related.length && !(graph.testsReaching?.(f).length ?? 0)) untested.push(f);
   }
   return { tests: [...tests].sort(), untested: untested.sort() };
 }

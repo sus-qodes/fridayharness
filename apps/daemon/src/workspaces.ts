@@ -6,6 +6,8 @@ import {
   goalBranch,
   isAncestor,
   parentOf,
+  preservedPrefix,
+  refreshWorktree,
   removeWorktree,
   resolveCommit,
   restoredRef,
@@ -16,7 +18,10 @@ import {
 import { type Actor, FridayError, type WorktreeView } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
+import { collisionNote, leftMarked, stillMarked, unfinishedNote } from './collisions.js';
+import type { FileCopier } from './copy-files.js';
 import { InFlight } from './in-flight.js';
+import { noteInstall } from './install-broken.js';
 import type { Logger } from './log.js';
 import type { SetupOutcome } from './worktree-setup.js';
 
@@ -83,6 +88,12 @@ export class WorkspaceManager {
       setup?: (worktree: { path: string }, ids: { task_id: string; run_id: string }) => Promise<SetupOutcome | null>;
       /** What a failed or refused install does to the attempt: `warn` (the agent is told) or `fail`. */
       setupFailure?: () => 'warn' | 'fail';
+      /**
+       * Gives the worktree the files the project keeps out of version control and lists for its
+       * copies (`worktrees.files`, a settings file such as `.env`); answers what the agent should
+       * know when one could not be given.
+       */
+      files?: FileCopier;
     },
   ) {}
 
@@ -93,6 +104,39 @@ export class WorkspaceManager {
 
   private get pid() {
     return this.opts.project.project_id;
+  }
+
+  /** Brings the saved folder work of an earlier attempt into a fresh worktree; the note for its agent, or null. */
+  async #continueFolderWork(taskId: string, dir: string): Promise<string | null> {
+    const { project, logger } = this.opts;
+    try {
+      const refs = await runGit(
+        project.root,
+        ['for-each-ref', '--sort=-creatordate', '--format=%(refname)', `${preservedPrefix(taskId)}folder-attempt-*`],
+        { okCodes: [1, 128] },
+      );
+      const ref = refs.stdout.split('\n').find((l) => l.trim());
+      if (!ref) return null;
+      const picked = await runGit(dir, ['cherry-pick', '--no-commit', '--allow-empty', ref.trim()], {
+        okCodes: [1, 128],
+      });
+      if (picked.code !== 0) {
+        await runGit(dir, ['cherry-pick', '--abort'], { okCodes: [1, 128] });
+        await runGit(dir, ['reset', '--hard', '-q', 'HEAD'], { okCodes: [1, 128] });
+        return null;
+      }
+      const files = (await runGit(dir, ['diff', '--cached', '--name-only', '-z'])).stdout.split('\0').filter(Boolean);
+      // Uncommitted edits, as the first agent left them: not staged.
+      await runGit(dir, ['reset', '-q'], { okCodes: [1, 128] });
+      if (!files.length) return null;
+      return `An earlier attempt at this task, made in the project folder, stopped part-way. What it had changed is in your folder as uncommitted edits (${files.length} file(s)): look at them first, keep what is right and finish the task.`;
+    } catch (e) {
+      logger.warn('saved folder work was not brought into the worktree', {
+        task_id: taskId,
+        message: (e as Error).message,
+      });
+      return null;
+    }
   }
 
   private baseFor(taskId: string): Promise<string | undefined> {
@@ -147,16 +191,62 @@ export class WorkspaceManager {
       if (state.q.operationRuns(this.pid, { task_id: run.task_id, status: 'running', limit: 1 }).length) {
         await this.opts.quiesce?.(run.task_id);
       }
-      const alloc = await this.#allocate(run.task_id);
+      let alloc = await this.#allocate(run.task_id);
+      let refresh = null;
+      let note: string | null = null;
+      // A worktree that is reused takes in what the goal branch gained since it was cut, whatever
+      // the attempt (2026-11-17): the work of the tasks this one depends on is then in its folder,
+      // and the run's base moves to that point, so verification judges only this task's changes.
+      const goalHead = alloc.reused_branch ? await this.baseFor(run.task_id) : undefined;
+      if (goalHead) {
+        // Where the two collide, the folder still gets the merge (2026-11-18): the files git cannot
+        // merge hold both versions marked, and this attempt starts with them as its first work.
+        // Before, the attempt was declined, the next one was told to merge by a git command of its
+        // own, and its folder passed for a revert of the goal's work when it edited instead.
+        const result = await refreshWorktree({ dir: alloc.path, goalHead, taskId: run.task_id });
+        refresh = { ...result, conflicts: result.conflicts.map((c) => c.path).slice(0, 50) };
+        if (result.conflicts.length) {
+          const stored = state.artifacts?.storeText(this.pid, 'workspace', JSON.stringify(result, null, 2));
+          const artifact_ref = stored ? `artifact:${stored.artifact_id}` : null;
+          refresh = { ...refresh, artifact_ref };
+          note = collisionNote(result, artifact_ref);
+        } else {
+          // An earlier attempt was given such files and ended before it finished them.
+          const unfinished = stillMarked(alloc.path, leftMarked(state, this.pid, run.task_id));
+          if (unfinished.length) note = unfinishedNote(unfinished);
+        }
+        alloc = { ...alloc, base_commit: goalHead };
+      }
       // Dependencies before the agent starts (plan Phase 7): no attempt waits for an install
       // approval mid-run, and what happened is on the run's record.
       const setup = this.opts.setup ? await this.opts.setup(alloc, { task_id: run.task_id, run_id: runId }) : null;
+      // A lockfile the package manager refuses fails this in every folder: the person is asked
+      // once, with a way to have it repaired; an install that passes closes the question.
+      if (setup) {
+        try {
+          noteInstall(state, this.pid, setup, alloc.path, run.task_id);
+        } catch (e) {
+          logger.warn('the failed install could not be said to the person', { message: (e as Error).message });
+        }
+      }
       if (setup && (setup.status === 'failed' || setup.status === 'refused') && this.opts.setupFailure?.() === 'fail') {
         const reason = `its dependencies could not be installed in its worktree (${setup.reason}); fix the install (worktrees.setup in config.yaml, "friday policy trust"), or set worktrees.setup.on_failure to warn`;
         this.#askHuman(run.task_id, reason, { worktree: alloc.path, setup });
         throw new FridayError('invalid_request', reason);
       }
-      state.workspaceReady(this.pid, runId, { ...alloc, setup });
+      // An earlier attempt made in the project folder left work that recovery saved (2026-11-17):
+      // a fresh worktree gets it as uncommitted edits, and its agent is told. Anything that does not
+      // apply cleanly is left out, and the worktree is as it was cut.
+      if (alloc.created && !note) note = await this.#continueFolderWork(run.task_id, alloc.path);
+      // Every attempt, since the person's file may have changed and a clean-up may have removed it.
+      const lacking = await this.opts.files?.(alloc.path, { task_id: run.task_id, run_id: runId });
+      state.workspaceReady(this.pid, runId, {
+        ...alloc,
+        setup,
+        refresh: refresh?.commits.length ? refresh : null,
+        note: note ? note.slice(0, 2000) : null,
+        lacking: lacking ?? null,
+      });
       logger.info('task worktree ready', {
         task_id: run.task_id,
         run_id: runId,

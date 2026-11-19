@@ -67,7 +67,8 @@ export function isDraining(e: unknown): boolean {
 }
 
 function describe(e: unknown): string {
-  if (e instanceof ApiError) return truncate(cleanText(`${e.code}: ${e.message}`), 300);
+  // What went wrong first; Friday's code for it last, for whoever reports it.
+  if (e instanceof ApiError) return truncate(cleanText(`${e.message} (${e.code})`), 300);
   if (e instanceof Error) return truncate(cleanText(e.message || e.name), 300);
   return 'unknown error';
 }
@@ -169,6 +170,15 @@ export class SyncEngine {
     }
     this.#draining = false;
     return this.start();
+  }
+
+  /**
+   * The app that runs Friday says it has stopped (the desktop shell's watchdog, or its own stop):
+   * the strip says so now, without waiting for the reconnect attempts to run out. `retry` starts
+   * again, as after any stop.
+   */
+  daemonGone(): void {
+    if (this.#running) this.#end(UNREACHABLE_MESSAGE);
   }
 
   stop(): void {

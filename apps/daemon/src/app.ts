@@ -1,6 +1,8 @@
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { blastRadius, lookupSymbol, skeletonOf } from '@friday/code-graph';
+import { DEFAULT_PRICES } from '@friday/planner';
 import { patternsOverlap } from '@friday/policy';
 import {
   type Actor,
@@ -19,7 +21,19 @@ import {
   type TokenClass,
   VerifyRequest,
 } from '@friday/protocol';
-import { FRIDAY_DIR, FRIDAY_VERSION, type ProjectRef } from '@friday/sdk';
+import {
+  CONFIG_FILE,
+  editChecksText,
+  editConfigText,
+  FRIDAY_DIR,
+  FRIDAY_VERSION,
+  type ProjectRef,
+  packageManagerOf,
+  parseConfig,
+  setCheckLimitText,
+  setCheckRequiredText,
+  suggestChecks,
+} from '@friday/sdk';
 import {
   backupTo,
   createSnapshot,
@@ -37,11 +51,15 @@ import { ZodError, z } from 'zod';
 import { backupCode } from './backup-code.js';
 import type { BrainHandle } from './brain.js';
 import { escalationView, mountBrainRoutes } from './brain-routes.js';
+import { suggestedLimit } from './check-time.js';
 import type { CompileInput, ContextService } from './context.js';
 import type { ControlManager } from './control.js';
+import { findSettingsFiles } from './copy-files.js';
 import { countMatches, listFiles } from './files.js';
+import { bothVersions, FOLDER_CONFLICT, keptFiles, putBack, syncFolder, takeTheirs, tipBlob } from './folder-sync.js';
 import { type GraphService, query as graphQuery, summary as graphSummary } from './graph-service.js';
 import type { IntegrationManager } from './integration.js';
+import { landGoal, landPlan, putSetAsideBack } from './land.js';
 import type { Logger } from './log.js';
 import type { OperationManager } from './operations.js';
 import type { EffectivePolicy } from './policy.js';
@@ -56,7 +74,7 @@ import type { UiAuth } from './ui-auth.js';
 import { UI_PREFS_MAX_BYTES, UiPrefs } from './ui-prefs.js';
 import { buildUiSnapshot, toolCallTally, type UiSnapshotInfo } from './ui-snapshot.js';
 import { mountUiStatic, type UiBundle, uiPath } from './ui-static.js';
-import type { WorkspaceManager } from './workspaces.js';
+import { taskBase, type WorkspaceManager } from './workspaces.js';
 
 export interface AppDeps {
   state: FridayState;
@@ -83,6 +101,8 @@ export interface AppDeps {
   context: ContextService;
   /** Task worktrees (M5a). */
   workspaces?: WorkspaceManager;
+  /** Runs the install of a task's worktree dependencies again, and records what it did. */
+  setupWorktree?: (taskId: string, actor: Actor) => Promise<unknown>;
   /** Integration into goal branches (M5c). */
   integration?: IntegrationManager;
   /** Recovery of lost and failed attempts (M5d). */
@@ -93,7 +113,7 @@ export interface AppDeps {
   policy?: () => EffectivePolicy;
   reloadPolicy?: () => EffectivePolicy;
   /** Records this clone's trust in exactly the loosening with this hash, then reloads. */
-  trustPolicy?: (looseningHash: string) => EffectivePolicy;
+  trustPolicy?: (what: { all: true } | { items: readonly string[] }) => EffectivePolicy;
   /** The execution gateway (M6c, ADR-0029). */
   operations?: OperationManager;
   /** Model routing (M7, ADR-0031). */
@@ -119,12 +139,27 @@ const OPERATOR: TokenClass[] = ['operator'];
 /** Routes a UI session may not call (plan M9 §5.2). */
 const UI_SESSION_REFUSED = /^\/admin\/|^\/protocol\/|\/harness-sessions\/bind$|\/ui\/login-codes$/;
 const HUMAN: Actor = { kind: 'human', id: 'local-operator' };
+/** The person behind a request: the credential they signed in with, else the local operator. */
+const humanOf = (c: Context): Actor => {
+  const auth = (c as unknown as { get(k: 'auth'): { credential_id?: string } | undefined }).get('auth');
+  return { kind: 'human', id: auth?.credential_id ?? HUMAN.id };
+};
 
 function errorResponse(c: Context, err: FridayError) {
   return c.json(err.toBody() as ErrorBody, err.http as 400);
 }
 
 /** Builds the daemon's HTTP application (plan M1.5, Appendix 8). */
+/** Input and output prices of the models Friday has a price for, USD per million tokens. */
+function knownPrices(): Record<string, { input: number; output: number }> {
+  const out: Record<string, { input: number; output: number }> = {};
+  for (const [model, entry] of Object.entries(DEFAULT_PRICES)) {
+    const price = 'tiers' in entry ? entry.tiers[0]?.price : entry;
+    if (price) out[model] = { input: price.input, output: price.output };
+  }
+  return out;
+}
+
 export function buildApp(deps: AppDeps): Hono<Env> {
   const { state, project, logger } = deps;
   const pid = project.project_id;
@@ -383,6 +418,288 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.get(`${P}/goals/:gid/diff`, allow(...OPERATOR), async (c) =>
     c.json(await goalDiff(state, project, c.req.param('gid'), diffOpts(c))),
   );
+  // A person lands a completed goal into their own branch (2026-11-16): the desktop asks first
+  // (`confirm_and_send`); landing is git's merge, all or nothing.
+  app.post(`${P}/goals/:gid/land`, allow(...OPERATOR), async (c) =>
+    c.json(await landGoal(state, project, c.req.param('gid'), humanOf(c))),
+  );
+  // The same, when uncommitted files of the folder are in the way (2026-11-18): they are kept as
+  // a commit and taken out of the way first, and written back if the landing does not happen.
+  app.post(`${P}/goals/:gid/land/set-aside`, allow(...OPERATOR), async (c) =>
+    c.json(await landGoal(state, project, c.req.param('gid'), humanOf(c), { setAside: true })),
+  );
+  // The files set aside at a landing of the goal, written back into the folder, uncommitted.
+  app.post(`${P}/goals/:gid/set-aside/restore`, allow(...OPERATOR), async (c) =>
+    c.json(await putSetAsideBack(state, project, c.req.param('gid'), humanOf(c))),
+  );
+  // A file the person changed in the project folder that the goal's finished work changes too
+  // (2026-11-17): what is in the way for a task now, with both versions; the person's choice for one
+  // file; and their own version put back after it was replaced.
+  const folderConflict = async (taskId: string) => {
+    const task = state.q.task(pid, taskId);
+    const tip = task.goal_id ? await taskBase(state, project, taskId) : undefined;
+    if (!task.goal_id || !tip) return { task, tip: null, files: [] as string[] };
+    const kept = await keptFiles(state, pid, task.goal_id, project.root, tip);
+    // Nothing is written here: only what a sync would leave in the way is read.
+    const s = await syncFolder(project.root, tip, kept, { dryRun: true });
+    return { task, tip, files: s.in_the_way };
+  };
+  const settleIfClear = (taskId: string, actor: Actor, remaining: number) => {
+    if (remaining > 0) return;
+    for (const e of state.q.escalations(pid, 'pending', { task_id: taskId })) {
+      if (e.kind === FOLDER_CONFLICT) {
+        state.answerEscalation(
+          pid,
+          actor,
+          String(e.escalation_id),
+          'every file is decided; the agent in the folder can take the task now',
+        );
+      }
+    }
+  };
+  app.get(`${P}/tasks/:tid/folder-conflict`, allow(...OPERATOR), async (c) => {
+    const f = await folderConflict(c.req.param('tid'));
+    const files = f.tip
+      ? await Promise.all(f.files.map((file) => bothVersions(project.root, f.tip as string, file)))
+      : [];
+    return c.json({ goal_head: f.tip, files });
+  });
+  app.post(`${P}/tasks/:tid/folder-conflict`, allow(...OPERATOR), async (c) => {
+    const body = z.object({ path: z.string().min(1).max(1000), take: z.enum(['mine', 'theirs']) }).parse(await json(c));
+    const taskId = c.req.param('tid');
+    const f = await folderConflict(taskId);
+    if (!f.tip || !f.files.includes(body.path)) {
+      throw new FridayError('invalid_request', `${body.path} is not in the way of this task now`);
+    }
+    const base = { task_id: taskId, goal_id: f.task.goal_id, path: body.path };
+    if (body.take === 'mine') {
+      const theirs = await tipBlob(project.root, f.tip, body.path);
+      state.recordObservation(pid, humanOf(c), 'folder.file_kept', { ...base, theirs }, [{ kind: 'task', id: taskId }]);
+    } else {
+      const backup = await takeTheirs(project.root, f.tip, body.path);
+      state.recordObservation(pid, humanOf(c), 'folder.file_replaced', { ...base, backup }, [
+        { kind: 'task', id: taskId },
+      ]);
+    }
+    const remaining = (await folderConflict(taskId)).files.length;
+    settleIfClear(taskId, humanOf(c), remaining);
+    return c.json({ path: body.path, take: body.take, remaining });
+  });
+  app.post(`${P}/tasks/:tid/folder-conflict/undo`, allow(...OPERATOR), async (c) => {
+    const body = z.object({ path: z.string().min(1).max(1000) }).parse(await json(c));
+    const taskId = c.req.param('tid');
+    const last = state.store
+      .readByRef(pid, 'task', taskId, { types: ['folder.file_replaced', 'folder.file_restored'] })
+      .filter((e) => (e.payload as { path?: unknown }).path === body.path)
+      .at(-1);
+    if (last?.type !== 'folder.file_replaced') {
+      throw new FridayError('invalid_request', `Friday has no version of ${body.path} to put back`);
+    }
+    const backup = (last.payload as { backup?: string | null }).backup ?? null;
+    await putBack(project.root, body.path, backup);
+    state.recordObservation(pid, humanOf(c), 'folder.file_restored', { task_id: taskId, path: body.path }, [
+      { kind: 'task', id: taskId },
+    ]);
+    return c.json({ path: body.path, restored: true });
+  });
+  // When this goal's work lands, chosen by a person for this goal alone (the tick on Approve): it
+  // overrides the project's `landing.mode` for it. A person's own act, so it needs no trust.
+  app.post(`${P}/goals/:gid/landing`, allow(...OPERATOR), async (c) => {
+    const body = z.object({ mode: z.enum(['ask', 'goal', 'task']) }).parse(await json(c));
+    const goalId = c.req.param('gid');
+    if (!state.q.findGoal(pid, goalId)) throw new FridayError('goal_not_found', `no goal ${goalId}`);
+    state.recordObservation(pid, humanOf(c), 'goal.landing_choice', { goal_id: goalId, mode: body.mode }, []);
+    return c.json({ goal_id: goalId, mode: body.mode });
+  });
+  // What that would do, read before anyone clicks: the branch it lands into, or what is in the way.
+  app.get(`${P}/goals/:gid/land`, allow(...OPERATOR), async (c) =>
+    c.json(await landPlan(state, project, c.req.param('gid'))),
+  );
+  // The few settings of config.yaml a person changes from the interface (`EDITABLE_SETTINGS`).
+  // None applies on its own say: automatic verification waits for this clone's trust, remote
+  // planning for this machine's approval, the planner's provider for a restart.
+  const configFile = path.join(project.root, FRIDAY_DIR, CONFIG_FILE);
+  /**
+   * Writes config.yaml beside itself, then renames it over the file: it is never seen half written.
+   * A file that is read-only, or held for a moment by an editor, a sync client or a scanner, is
+   * tried again briefly and then refused in words, with nothing left behind (2026-11-17: it was an
+   * "internal error" and a stray `.tmp` file in the repository).
+   */
+  const writeConfig = async (text: string): Promise<void> => {
+    const temp = `${configFile}.${process.pid}.tmp`;
+    try {
+      writeFileSync(temp, text);
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          renameSync(temp, configFile);
+          break;
+        } catch (e) {
+          const code = (e as NodeJS.ErrnoException).code ?? '';
+          if (attempt >= 4 || !['EPERM', 'EBUSY', 'EACCES'].includes(code)) throw e;
+          await new Promise((r) => setTimeout(r, 80 * (attempt + 1)));
+        }
+      }
+    } catch (e) {
+      rmSync(temp, { force: true });
+      const code = (e as NodeJS.ErrnoException).code ?? (e as Error).message;
+      throw new FridayError(
+        'invalid_request',
+        `${FRIDAY_DIR}/${CONFIG_FILE} could not be written (${code}): it is read-only, or open in a program that holds it. Close it there, or make it writable, then try again; nothing was changed`,
+      );
+    }
+  };
+  app.post(`${P}/config/settings`, allow(...OPERATOR), async (c) => {
+    const body = z.object({ set: z.record(z.string(), z.unknown()) }).parse(await json(c));
+    const { text, changed } = editConfigText(
+      readFileSync(configFile, 'utf8'),
+      body.set,
+      `${FRIDAY_DIR}/${CONFIG_FILE}`,
+    );
+    if (changed.length) {
+      await writeConfig(text);
+      state.recordObservation(pid, humanOf(c), 'config.edited', { changed }, []);
+    }
+    return c.json({ changed });
+  });
+  // The project's checks, set from the interface (2026-11-17): the ones config.yaml has (read from
+  // the file as it is now), and the ones the project most likely wants, read from the scripts of
+  // its package.json. A check is added only from that list, by its name: the page never sends a
+  // command. Verification reads config.yaml again, so a new check judges the next verification.
+  const checksView = () => {
+    const have = parseConfig(readFileSync(configFile, 'utf8'), `${FRIDAY_DIR}/${CONFIG_FILE}`).verification.checks;
+    const names = new Set(have.map((k) => k.name));
+    // How long each took lately, in work checked and in the last "Run the checks now", and the
+    // time limit those times call for (2026-11-19).
+    const times = state.q.checkTimes(pid);
+    const tried = deps.integration?.checkTrial().checks ?? [];
+    const timing = (k: (typeof have)[number]) => {
+      const seen = times.get(k.name);
+      const trial = tried.find((t) => t.name === k.name && t.duration_ms !== null);
+      const longest = Math.max(seen?.longest_ms ?? 0, trial?.duration_ms ?? 0) || null;
+      return {
+        timeout_ms: k.timeout_ms,
+        took_ms: longest,
+        ran_out: Boolean(seen?.ran_out || trial?.timed_out),
+        suggested_ms: suggestedLimit(k.timeout_ms, longest),
+      };
+    };
+    return {
+      checks: have.map((k) => ({
+        name: k.name,
+        kind: k.kind,
+        command: k.command,
+        args: k.args,
+        required: k.required,
+        ...timing(k),
+      })),
+      suggested: suggestChecks(project.root).filter((s) => !names.has(s.name)),
+      manager: packageManagerOf(project.root),
+    };
+  };
+  app.get(`${P}/config/checks`, allow(...OPERATOR), (c) => c.json(checksView()));
+  app.post(`${P}/config/checks`, allow(...OPERATOR), async (c) => {
+    const Names = z.array(z.string().min(1).max(60)).max(20).default([]);
+    const body = z
+      .object({
+        add: Names,
+        remove: Names,
+        // One check made required (it must pass) or advisory (it is shown, and holds nothing back).
+        strength: z.object({ name: z.string().min(1).max(60), required: z.boolean() }).optional(),
+        // One check's time limit, in whole minutes (2026-11-19).
+        limit: z.object({ name: z.string().min(1).max(60), minutes: z.number().int().min(1).max(60) }).optional(),
+      })
+      .parse(await json(c));
+    if (body.limit) {
+      const set = setCheckLimitText(
+        readFileSync(configFile, 'utf8'),
+        body.limit.name,
+        body.limit.minutes * 60_000,
+        `${FRIDAY_DIR}/${CONFIG_FILE}`,
+      );
+      if (set.changed) {
+        await writeConfig(set.text);
+        state.recordObservation(
+          pid,
+          humanOf(c),
+          'config.edited',
+          {
+            changed: ['verification.checks'],
+            limit: { name: body.limit.name, timeout_ms: body.limit.minutes * 60_000 },
+          },
+          [],
+        );
+      }
+    }
+    if (body.strength) {
+      const set = setCheckRequiredText(
+        readFileSync(configFile, 'utf8'),
+        body.strength.name,
+        body.strength.required,
+        `${FRIDAY_DIR}/${CONFIG_FILE}`,
+      );
+      if (set.changed) {
+        await writeConfig(set.text);
+        state.recordObservation(
+          pid,
+          humanOf(c),
+          'config.edited',
+          { changed: ['verification.checks'], strength: body.strength },
+          [],
+        );
+      }
+    }
+    const offered = suggestChecks(project.root);
+    const add = body.add.map((name) => {
+      const s = offered.find((o) => o.name === name);
+      if (!s) {
+        throw new FridayError(
+          'invalid_request',
+          `"${name}" is not a check Friday found in this project's package.json; write it into ${FRIDAY_DIR}/${CONFIG_FILE} by hand`,
+        );
+      }
+      return { name: s.name, kind: s.kind, command: s.command, args: s.args };
+    });
+    const { text, added, removed } = editChecksText(
+      readFileSync(configFile, 'utf8'),
+      { add, remove: body.remove },
+      `${FRIDAY_DIR}/${CONFIG_FILE}`,
+    );
+    if (added.length || removed.length) {
+      await writeConfig(text);
+      state.recordObservation(
+        pid,
+        humanOf(c),
+        'config.edited',
+        { changed: ['verification.checks'], added, removed },
+        [],
+      );
+    }
+    return c.json({ added, removed, ...checksView() });
+  });
+  // The project's checks tried on the commit the project folder is on, before any agent's work
+  // (2026-11-18): started by a person, run in a checkout of Friday's own, read while it runs.
+  const trial = () => {
+    if (!deps.integration) throw new FridayError('capability_unsupported', 'this daemon runs no checks');
+    return deps.integration;
+  };
+  app.get(`${P}/config/checks/trial`, allow(...OPERATOR), (c) => c.json(trial().checkTrial()));
+  app.post(`${P}/config/checks/trial`, allow(...OPERATOR), (c) => {
+    const view = trial().startCheckTrial();
+    state.recordObservation(pid, humanOf(c), 'config.edited', { changed: [], tried: 'verification.checks' }, []);
+    return c.json(view);
+  });
+  // Files from outside version control that every copy of the project gets (2026-11-17): the list
+  // config.yaml asks for, the one in force on this computer (it waits for trust), and the settings
+  // files Friday found in the project folder that git ignores. Names only. The list is set through
+  // `config/settings` (`worktrees.files`), where each path is checked to be inside the project.
+  app.get(`${P}/config/copy-files`, allow(...OPERATOR), async (c) => {
+    const asked = parseConfig(readFileSync(configFile, 'utf8'), `${FRIDAY_DIR}/${CONFIG_FILE}`).worktrees.files;
+    return c.json({
+      files: asked.map((f) => ({ from: f.from, to: f.to ?? f.from })),
+      in_force: deps.policy ? deps.policy().worktree_files.map((f) => ({ from: f.from, to: f.to })) : [],
+      found: await findSettingsFiles(project.root),
+    });
+  });
   // The scope picker's view of the repository (plan M9 §5.11): tracked files only, capped.
   app.get(`${P}/files`, allow(...OPERATOR), async (c) =>
     c.json(await listFiles(project.root, c.req.query('dir') ?? '')),
@@ -668,7 +985,12 @@ export function buildApp(deps: AppDeps): Hono<Env> {
         case 'release':
           return c.json({ task: state.releaseTask(pid, HUMAN, tid, reason) });
         case 'cancel':
-          return c.json({ task: state.cancelTask(pid, HUMAN, tid, reason) });
+          // What waited for the task is settled with it when the person chose how (`dependents`).
+          return c.json(
+            body.dependents
+              ? state.cancelTaskAndDependents(pid, HUMAN, tid, reason, body.dependents)
+              : { task: state.cancelTask(pid, HUMAN, tid, reason) },
+          );
         case 'rework':
           return c.json({ task: state.reworkTask(pid, HUMAN, tid, reason) });
         case 'unreserve':
@@ -740,6 +1062,12 @@ export function buildApp(deps: AppDeps): Hono<Env> {
 
   app.get(`${P}/approvals`, allow(...OPERATOR), (c) =>
     c.json({ approvals: state.q.approvals(pid, c.req.query('status')) }),
+  );
+  // What was granted for one task (2026-11-17): the inspector shows the ones that still hold, to
+  // be taken back there. A route of its own, so the desktop shell forwards this and never the
+  // whole list.
+  app.get(`${P}/tasks/:tid/approvals`, allow(...OPERATOR), (c) =>
+    c.json({ approvals: state.q.approvals(pid, 'granted', { task_id: c.req.param('tid') }) }),
   );
   for (const [verb, granted] of [
     ['approve', true],
@@ -1164,6 +1492,49 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.post(`${P}/tasks/:tid/worktree`, allow(...OPERATOR), async (c) =>
     c.json(await workspaces().forTask(c.req.param('tid'), HUMAN), 201),
   );
+  // The install of a task's worktree dependencies, run again by a person (2026-11-17): after a
+  // failed install nothing but a new attempt ran it, and that attempt failed the same way.
+  app.post(`${P}/tasks/:tid/setup`, allow(...OPERATOR), async (c) => {
+    if (!deps.setupWorktree) {
+      throw new FridayError('capability_unsupported', 'this daemon installs no worktree dependencies');
+    }
+    return c.json({ setup: await deps.setupWorktree(c.req.param('tid'), HUMAN) });
+  });
+
+  // What a check, an operation or a long message printed (2026-11-17): the end of it, where a
+  // failing check says what failed. Before, a person saw "exit code 1" and had the file to find.
+  // Redacted when stored and again here; bounded, with how much came before.
+  app.get(`${P}/artifacts/:id`, allow(...OPERATOR), (c) => {
+    if (!state.artifacts) throw new FridayError('capability_unsupported', 'this daemon keeps no artifacts');
+    const id = c.req.param('id').replace(/^artifact:/, '');
+    const record = /^[A-Za-z0-9_-]{1,80}$/.test(id) ? state.artifacts.get(id) : undefined;
+    if (!record || record.project_id !== pid)
+      throw new FridayError('invalid_request', 'that output is not kept (any more)');
+    const whole = state.redactor.redactString(state.artifacts.readText(id)).value;
+    const lines = whole.split('\n');
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+    const MAX_LINES = 400;
+    const MAX_CHARS = 60_000;
+    let from = Math.max(0, lines.length - MAX_LINES);
+    let text = lines.slice(from).join('\n');
+    if (text.length > MAX_CHARS) {
+      text = text.slice(-MAX_CHARS);
+      // Whole lines only: the first one kept may be cut.
+      const cut = text.indexOf('\n');
+      if (cut >= 0) text = text.slice(cut + 1);
+      from = lines.length - text.split('\n').length;
+    }
+    return c.json({
+      artifact_ref: `artifact:${id}`,
+      kind: record.kind,
+      created_at: record.created_at,
+      text,
+      lines: lines.length,
+      /** The first line shown, counted from 1; above 1 when the start was left out. */
+      from_line: from + 1,
+      truncated: from > 0,
+    });
+  });
 
   // The project's policy and this clone's trust (M6b, ADR-0028).
   const effective = (): EffectivePolicy => {
@@ -1173,9 +1544,31 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.get(`${P}/policy`, allow(...OPERATOR), (c) => c.json({ policy: effective() }));
   app.post(`${P}/policy/reload`, allow(...OPERATOR), (c) => c.json({ policy: deps.reloadPolicy?.() ?? effective() }));
   app.post(`${P}/policy/trust`, allow(...OPERATOR), async (c) => {
-    const body = z.object({ loosening_hash: z.string().min(1).max(64) }).parse(await json(c));
+    // The whole list (`loosening_hash`, as `friday policy trust` sends it), or single settings by
+    // their ids (`items`, 2026-11-18): a person who switched one thing on trusts that one thing.
+    const body = z
+      .union([
+        z.object({ loosening_hash: z.string().min(1).max(64) }).strict(),
+        z.object({ items: z.array(z.string().min(1).max(64)).min(1).max(100) }).strict(),
+      ])
+      .parse(await json(c));
     const now = deps.reloadPolicy?.() ?? effective();
-    // Trust is for exactly what the human was shown: refused when the files changed since.
+    if (!deps.trustPolicy) throw new FridayError('capability_unsupported', 'this daemon cannot record trust');
+    if ('items' in body) {
+      // Trust is for exactly what the human was shown: an id that names no present setting (the
+      // files changed since, or the value did) is refused, and nothing is trusted.
+      const present = new Set(now.loosening.map((l) => l.id));
+      const gone = body.items.filter((i) => !present.has(i));
+      if (gone.length) {
+        throw new FridayError(
+          'invalid_request',
+          'the project settings changed since you looked: that setting is not asked for any more, or not with that value. Look at the list again',
+          { missing: gone },
+        );
+      }
+      return c.json({ policy: deps.trustPolicy({ items: body.items }) });
+    }
+    // Refused when the files changed since.
     if (now.loosening_hash !== body.loosening_hash) {
       throw new FridayError(
         'invalid_request',
@@ -1184,8 +1577,7 @@ export function buildApp(deps: AppDeps): Hono<Env> {
           : "nothing in the policy files loosens Friday's defaults; there is nothing to trust",
       );
     }
-    if (!deps.trustPolicy) throw new FridayError('capability_unsupported', 'this daemon cannot record trust');
-    return c.json({ policy: deps.trustPolicy(body.loosening_hash) });
+    return c.json({ policy: deps.trustPolicy({ all: true }) });
   });
 
   // Recovery of lost and failed attempts (M5d, ADR-0026).
@@ -1235,6 +1627,8 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     const tid = c.req.param('tid');
     return c.json({
       dry_run: routingOf().explain(tid),
+      // The connected agents it could be given to, and whether it would start there.
+      offers: routingOf().offers(tid),
       decisions: state.q.routingDecisions(pid, { task_id: tid }),
       role_decision: state.q.latestTaskRoleDecision(pid, tid) ?? null,
     });
@@ -1250,6 +1644,9 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   app.get(`${P}/routing/pins`, allow(...OPERATOR), (c) =>
     c.json({
       pins: c.req.query('all') === 'true' ? state.q.routingPins(pid) : state.q.routingPins(pid, state.clock.now()),
+      // USD per million tokens of the models Friday knows a price for (2026-11-18): the Models page
+      // says what choosing one model for everything costs.
+      prices: knownPrices(),
     }),
   );
   app.post(`${P}/routing/pins`, allow(...OPERATOR), async (c) => {
@@ -1337,6 +1734,22 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     const body = await c.req.json().catch(() => ({}));
     const repaired = z.object({ repaired: z.boolean().optional() }).parse(body ?? {}).repaired === true;
     return c.json({ integration: await deps.integration.integrate(task.task_id, HUMAN, { repaired }) });
+  });
+
+  // Work that did not fit the goal's other work goes back to the agent that made it, in its own
+  // folder, where Friday merges the goal's work in and leaves what collides marked (2026-11-18).
+  // The person's way out of an integration question without a terminal.
+  app.post(`${P}/tasks/:tid/integrate/back`, allow(...OPERATOR), (c) => {
+    const task = deps.state.q.task(pid, c.req.param('tid'));
+    const last = deps.state.q.latestIntegration(pid, task.task_id);
+    const unfit = last?.status === 'conflicted' || last?.status === 'failed';
+    if (unfit && !deps.state.q.worktreeForTask(task.task_id)) {
+      throw new FridayError(
+        'invalid_request',
+        `${task.task_id} was made in the project folder, so there is no copy of its own for an agent to merge it in`,
+      );
+    }
+    return c.json({ task: deps.state.sendBackUnintegrated(pid, HUMAN, task.task_id) });
   });
 
   // File reservations (M5c, ADR-0025).
@@ -1429,7 +1842,10 @@ export function buildApp(deps: AppDeps): Hono<Env> {
     const rel = file.replace(/\\/g, '/').replace(/^\.\//, '');
     const sk = await skeletonOf(g, g.root, rel, c.req.query('level') === '2' ? 2 : 1);
     if (!sk)
-      throw new FridayError('invalid_request', `${rel} is not in the code graph (only TS/JS files git sees are)`);
+      throw new FridayError(
+        'invalid_request',
+        `${rel} is not in the code graph of your project folder (it holds the TypeScript and JavaScript files git sees there)`,
+      );
     return c.json({ version: g.version, ...sk });
   });
   app.get(`${P}/graph/search`, allow(...OPERATOR), async (c) => {

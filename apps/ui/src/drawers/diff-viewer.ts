@@ -218,7 +218,7 @@ function counts(added: number | null | undefined, removed: number | null | undef
 }
 
 const SOURCE: Record<TaskDiff['source'], string> = {
-  worktree: "the current attempt's worktree",
+  worktree: 'the task’s folder, as the current attempt left it',
   verified: 'the verified tree',
   integrated: 'the integrated commit',
   none: 'what the agent reported (no contents)',
@@ -457,7 +457,7 @@ export function createDiffViewer(ctx: AppContext, request: DrawerRequest): Compo
       h(
         'div',
         { class: 'dr-banner dr-banner-warn', role: 'note' },
-        h('strong', null, 'Discrepancy between the agent’s claim and what Friday saw'),
+        h('strong', null, 'What the agent says differs from what Friday saw'),
         d.claimedNotSeen.length
           ? h(
               'div',
@@ -486,7 +486,7 @@ export function createDiffViewer(ctx: AppContext, request: DrawerRequest): Compo
         sourceLine,
         'Goal branch ',
         mono(g.branch),
-        ` · ${plural(g.commits_ahead.length, 'commit')} ahead of the main checkout · merge base ${shortSha(g.merge_base)}`,
+        ` · ${plural(g.commits_ahead.length, 'commit')} ahead of your own branch · merge base ${shortSha(g.merge_base)}`,
       );
       replace(
         extra,

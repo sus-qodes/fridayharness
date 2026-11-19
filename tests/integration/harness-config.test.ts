@@ -79,12 +79,15 @@ describe('friday harness config claude-code', () => {
         '.claude/settings.local.json',
         '.claude/skills/friday/SKILL.md',
         '.claude/skills/friday/reference.md',
+        // Keeps Friday's folder out of the project's lint (2026-11-19, the trial's F18).
+        '.friday/eslint.config.mjs',
         '.friday/harness/claude-code/README.md',
         '.friday/harness/claude-code/hook.mjs',
         '.friday/harness/claude-code/launch-mcp.mjs',
         '.mcp.json',
       ].sort(),
     );
+    expect(changed['.friday/eslint.config.mjs']?.tracked).toBe(true);
     expect(changed['.claude/settings.local.json']?.tracked).toBe(false);
     expect(changed['(private) agent.json']?.tracked).toBe(false);
 
@@ -116,6 +119,7 @@ describe('friday harness config claude-code', () => {
         '.claude/settings.json',
         '.claude/skills/friday/SKILL.md',
         '.claude/skills/friday/reference.md',
+        '.friday/eslint.config.mjs',
         '.friday/harness/claude-code/README.md',
         '.friday/harness/claude-code/hook.mjs',
         '.friday/harness/claude-code/launch-mcp.mjs',

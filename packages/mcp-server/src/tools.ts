@@ -363,7 +363,12 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
         })) as ResultOf<'task.claim'>;
         // The claim stands even when its context could not be delivered: the note says why and
         // how to ask again, so the agent never holds a task it was told nothing about.
-        const ctx = res.context ? renderContextMarkdown(res.context as ContextPacket, 8000) : (res.note ?? '');
+        // A note that comes with the context (what Friday put into the folder before the task) is
+        // said first, where the agent reads it before it opens a file.
+        const said = res.note ? `${res.note}\n\n` : '';
+        const ctx = res.context
+          ? `${said}${renderContextMarkdown(res.context as ContextPacket, 8000)}`
+          : (res.note ?? '');
         // Friday's model suggestion (ADR-0031 §6): this session's host chooses its own model.
         const model = res.routing?.model
           ? `\nModel: Friday suggests ${res.routing.model} for this task (${res.routing.reason}).`
@@ -747,7 +752,7 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
       name: 'friday_request_permission',
       title: 'Request permission',
       description:
-        'Ask for something policy blocks. action_class is a capability: "file.write" (resource = the path), "shell.git.push" or another shell capability (command = the exact command), "network.read" (resource = the URL). A grant covers that exact target for your task, once; ask with reuse "run" or "task" if you will need it again. Secrets are never handed out.',
+        'Ask for something policy blocks. For a command: command = the exact command line (action_class can be "command"). For a file: action_class "file.write" and resource = the path. For a URL: "network.read" and resource = the URL. A grant covers that exact target for your task, once; ask with reuse "run" or "task" if you will need it again. A command Friday already asked the person about is the same request: you get its id back, not a second one. You are told when the person decides. Secrets are never handed out.',
       shape: {
         action_class: z.string().min(1).max(100),
         resource: z.string().max(2000).optional(),
@@ -792,17 +797,20 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
                   ? `The human approved ${res.approval_id} in this session, for one use. Go ahead with exactly that.`
                   : status === 'denied'
                     ? `The human rejected ${res.approval_id}. Do not try to do it another way; report the task as blocked if you cannot continue without it.`
-                    : `Permission request ${res.approval_id} is still waiting for a human. Do not retry the blocked action until it is granted.`,
+                    : `Permission request ${res.approval_id} is still waiting for the person. Go on with whatever else the task needs: you get a message when they decide, and what you asked for passes then.`,
               structured: done,
             };
           }
         }
+        // Said by what it is (2026-11-18): "is granted… do not retry until it is granted" was one
+        // sentence, and a waiting request never said that the agent would hear of the decision.
+        const sentence = (r: string) => `${r.charAt(0).toUpperCase()}${r.slice(1).replace(/[.\s]+$/, '')}.`;
         const text =
-          res.approval_id === null
-            ? res.status === 'granted'
-              ? `No approval needed: ${res.reason}. Go ahead.`
-              : `Not allowed: ${res.reason}. Do not try to do it another way; report the task as blocked if you cannot continue without it.`
-            : `Permission request ${res.approval_id} (${res.capability ?? a.action_class}, ${res.risk ?? 'unknown'} risk) is ${res.status}. ${res.reason}. Do not retry the blocked action until it is granted.`;
+          res.status === 'granted'
+            ? `${sentence(res.reason)} Go ahead.`
+            : res.status === 'denied'
+              ? `Not allowed: ${sentence(res.reason)} Do not try to do it another way; report the task as blocked if you cannot continue without it.`
+              : `Permission request ${res.approval_id} (${res.capability ?? a.action_class}, ${res.risk ?? 'unknown'} risk) waits: ${sentence(res.reason)}`;
         return { text, structured: res };
       },
     },
@@ -884,9 +892,10 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
       name: 'friday_claim_done',
       title: 'Submit a completion claim',
       description:
-        'Finish your task: list the exact changed paths and each check you actually ran with its real outcome. Friday verifies the claim; the task is not complete until verification passes.',
+        'Finish your task: list the exact changed paths and each check you actually ran with its real outcome. Friday verifies the claim; the task is not complete until verification passes. When the task was a question a person asked, put the whole answer in `answer` and one sentence about it in `summary`.',
       shape: {
         summary: z.string().min(1).max(2000),
+        answer: z.string().max(60_000).optional(),
         changed_paths: z.array(z.string()).max(200),
         checks: z
           .array(
@@ -924,6 +933,7 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
           run_id,
           status: 'completed_claim',
           summary: a.summary as string,
+          ...(typeof a.answer === 'string' && a.answer.trim() ? { answer: a.answer } : {}),
           changed_paths: a.changed_paths as string[],
           checks,
           risks: (a.risks as string[] | undefined) ?? [],
@@ -958,7 +968,7 @@ export function createFridayTools(session: FridaySession, host: HostUi = {}): Fr
           ...(me?.current_task ? { task_id: me.current_task.task_id } : {}),
         });
         return {
-          text: `Question ${res.escalation_id} is waiting for a human (they answer with "friday answer ${res.escalation_id} ...").`,
+          text: `Question ${res.escalation_id} is waiting for the person: they answer it in Friday, under "Waiting for you" (from a terminal: "friday answer ${res.escalation_id} ..."). Tell them, and do not go on until they have answered.`,
           structured: res,
         };
       },

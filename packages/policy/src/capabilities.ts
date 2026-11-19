@@ -65,6 +65,7 @@ export const CLASS_CAPABILITY: Record<CommandClass, Capability> = {
   'test.local': 'shell.test',
   'build.local': 'shell.build',
   'lint.local': 'shell.test',
+  'file.write': 'file.write',
   'git.mutate': 'shell.git.commit',
   'package.install': 'package.install',
   'fs.destructive': 'file.delete',

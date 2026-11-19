@@ -23,6 +23,7 @@ export {
   type DelegationDecision,
   type DelegationTask,
   delegate,
+  type RunningWork,
   scoreCandidate,
 } from './delegate.js';
 export { diffPlanVersions, type PlanDiff, type PlanVersionTask } from './diff.js';
@@ -47,6 +48,7 @@ export {
   requestEstimate,
   runPlanner,
 } from './model.js';
+export { canRunSideBySide, sharedWith } from './parallel.js';
 export { parsePlanDraft, parseReplanDraft } from './parse.js';
 export { costOf, DEFAULT_PRICES, type ModelPrice, type PriceTable, priceEntry, worstCaseCost } from './pricing.js';
 export {
@@ -101,6 +103,7 @@ export {
   type RoleClassifierSettings,
 } from './role-classifier.js';
 export {
+  AgentKeyRef,
   draftJsonSchema,
   NeedsHuman,
   PLAN_LIMITS,
@@ -111,6 +114,7 @@ export {
   ReplanDraft,
   type ReplanDraftInput,
   ScopeGlob,
+  withoutAssignments,
 } from './schemas.js';
 export { type BrainAction, failureAction, type TriggerEvent, type TriggerFacts, triggersFor } from './triggers.js';
 export {

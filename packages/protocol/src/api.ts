@@ -663,6 +663,12 @@ export type VerifyRequest = z.input<typeof VerifyRequest>;
 export const TaskActionRequest = z.object({
   reason: z.string().max(2000).optional(),
   agent_key: z.string().max(64).optional(),
+  /**
+   * `cancel` only: what becomes of the unfinished tasks that depend on the cancelled one. `cancel`:
+   * they are cancelled too, through every level; `release`: they no longer wait for it and start
+   * once their other prerequisites are done. Left out, they keep waiting (as before 2026-11-17).
+   */
+  dependents: z.enum(['cancel', 'release']).optional(),
 });
 export type TaskActionRequest = z.input<typeof TaskActionRequest>;
 
@@ -679,6 +685,15 @@ export type PlanChange = z.infer<typeof PlanChange>;
 const IntentLine = z.string().trim().min(1).max(300);
 const IntentLines = z.array(IntentLine).max(12);
 
+/**
+ * How a goal is taken up (2026-11-18). `plan`: it is planned, by the Master Brain or by a person,
+ * and the plan is approved before anything starts. `do`: one task with the request as it was
+ * typed, started at once, with no plan to read. `ask`: a question; one agent answers it and
+ * changes nothing, and there is nothing to check or to land.
+ */
+export const GoalMode = z.enum(['plan', 'do', 'ask']);
+export type GoalMode = z.infer<typeof GoalMode>;
+
 export const GoalCreateRequest = z.object({
   request: z.string().min(3).max(4000),
   constraints: IntentLines.default([]),
@@ -689,6 +704,8 @@ export const GoalCreateRequest = z.object({
   priority: Priority.default('normal'),
   /** Ask the Master Brain for a plan right away (default). False: a human will propose one. */
   plan: z.boolean().default(true),
+  /** `do` and `ask` need no plan: `plan` is not read for them. */
+  mode: GoalMode.default('plan'),
 });
 export type GoalCreateRequest = z.input<typeof GoalCreateRequest>;
 
@@ -712,6 +729,8 @@ export const GoalView = z.object({
   intent_revision: z.number().int().positive().default(1),
   priority: Priority,
   status: GoalStatus,
+  /** How it was taken up; `plan` for every goal made before 2026-11-18. */
+  mode: GoalMode.default('plan'),
   plan_id: z.string().nullable(),
   created_by: Actor,
   created_at: z.string(),
@@ -919,6 +938,11 @@ export const PlanTaskView = z.object({
   priority: Priority,
   risk_level: RiskLevel,
   note: z.string().nullable(),
+  /**
+   * The agent this task is for, by key: reserved for it when the plan is approved, so no other
+   * agent takes it first. Null: Friday delegates it by role. Absent from views written before it.
+   */
+  assign_to: z.string().nullable().optional(),
 });
 export type PlanTaskView = z.infer<typeof PlanTaskView>;
 
@@ -1100,6 +1124,11 @@ export const UsageHostView = z.object({
   turns: z.number().int().nullable(),
   /** The model the host named in its report. */
   model: z.string().nullable(),
+  /**
+   * `input_tokens` is the whole prompt, the cached part included (Codex), so `allTokens` counts the
+   * cache once. Absent from a report made before 2026-11-18.
+   */
+  input_includes_cache: z.boolean().optional(),
 });
 export type UsageHostView = z.infer<typeof UsageHostView>;
 

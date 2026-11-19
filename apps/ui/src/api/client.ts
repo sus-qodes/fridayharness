@@ -5,9 +5,16 @@
 import type {
   AgentHost,
   AgentLaunchRequest,
+  AgentOptions,
   AgentProcess,
   AgentProcessesView,
+  AgentProfile,
   AgentView,
+  AnswerView,
+  AntigravitySetupPlan,
+  AntigravitySetupResult,
+  ApprovalRow,
+  BrainStatusView,
   ClaudeSetupPlan,
   ClaudeSetupResult,
   ContextExplanation,
@@ -24,9 +31,11 @@ import type {
   HarnessEntry,
   InboxItem,
   IntegrationView,
+  LandPlanView,
   LivePlanVersion,
   MessageView,
   ModelEvidenceView,
+  PutBackView,
   RecoveryAssessment,
   RoutingPinView,
   RunView,
@@ -37,6 +46,7 @@ import type {
   VerificationView,
   WorktreeView,
 } from '@friday/protocol';
+import type { ModelInfo } from '../model/models.js';
 import type { HttpRequestOptions } from '../platform/http-transport.js';
 import type { RequestOptions, Transport } from '../platform/transport.js';
 import { TIMEOUTS } from './timeouts.js';
@@ -47,6 +57,19 @@ const MEDIUM = TIMEOUTS.medium;
 export type TaskAction = 'ready' | 'release' | 'cancel' | 'rework' | 'unreserve';
 export type Reach = 'once' | 'run' | 'task';
 export type RecoveryActionName = 'reassign' | 'restart' | 'rebind' | 'needs_human' | 'cancel';
+
+/** What landing a goal did (`POST goals/:gid/land`). */
+export interface LandResult {
+  goal_id: string;
+  /** `landed`: merged now; `already`: the branch had nothing more to bring. */
+  status: 'landed' | 'already';
+  branch: string;
+  into: string;
+  head: string;
+  fast_forward: boolean;
+  /** Files that were in the way and were set aside first: how many, and under which ref they are kept. */
+  set_aside?: { ref: string; count: number };
+}
 
 export interface TaskDetail {
   task: TaskView;
@@ -94,15 +117,90 @@ export interface MemoryHit {
 }
 
 /** `GET policy`: the effective policy (ADR-0028); what loosens waits for this clone's trust. */
+/** A check of the project's own, as config.yaml has it. */
+export interface ProjectCheck {
+  name: string;
+  kind: string;
+  command: string;
+  args: string[];
+  required: boolean;
+  /** Its time limit (2026-11-19; absent from an older daemon). */
+  timeout_ms?: number;
+  /** The longest it took lately (work checked, and the last trial); null when never run. */
+  took_ms?: number | null;
+  /** It ran out of time lately. */
+  ran_out?: boolean;
+  /** The limit those times call for, when longer than the one it has. */
+  suggested_ms?: number | null;
+}
+
+/** One check of a trial of the project's checks. */
+export interface CheckTrialRow {
+  name: string;
+  kind: string;
+  required: boolean;
+  status: 'waiting' | 'running' | 'passed' | 'failed';
+  summary: string | null;
+  duration_ms: number | null;
+  /** It was stopped at its time limit (2026-11-19). */
+  timed_out?: boolean;
+  timeout_ms?: number;
+  output_tail: string | null;
+}
+
+/** The project's checks run on the commit the project folder is on, before any agent's work. */
+export interface CheckTrialView {
+  status: 'idle' | 'running' | 'done' | 'failed';
+  started_at: string | null;
+  finished_at: string | null;
+  commit: string | null;
+  uncommitted: boolean;
+  running: string | null;
+  problem: string | null;
+  checks: CheckTrialRow[];
+}
+
+/** A check Friday found in package.json: the script it runs and what that script is. */
+export interface SuggestedProjectCheck {
+  name: string;
+  kind: string;
+  command: string;
+  args: string[];
+  script: string;
+  runs: string;
+}
+
+export interface ProjectChecksView {
+  checks: ProjectCheck[];
+  suggested: SuggestedProjectCheck[];
+  /** The package manager the project uses (its lockfile's), for the words around the list. */
+  manager: string;
+}
+
+/** One file every copy of the project gets: `from` in the project folder, `to` its name in the copy. */
+export interface CopiedFile {
+  from: string;
+  to: string;
+}
+
+/** `GET config/copy-files`: what config.yaml asks for, what is in force here, and what Friday found. */
+export interface CopyFilesView {
+  files: CopiedFile[];
+  in_force: CopiedFile[];
+  /** Settings files in the project folder that version control ignores, by path. */
+  found: string[];
+}
+
 export interface PolicyView {
   policy: {
     version: string;
     sources: string[];
     /** Each setting a tracked file loosens, with where it comes from. */
-    loosening: { source: string; setting: string; from: string; to: string }[];
-    /** What `policy/trust` must send back; null when nothing loosens. */
+    /** `id` and `trusted` are per setting (2026-11-18); a daemon from before then sends neither. */
+    loosening: { source: string; setting: string; from: string; to: string; id?: string; trusted?: boolean }[];
+    /** The whole list as one name: what `policy/trust` takes to trust all of it; null when nothing loosens. */
     loosening_hash: string | null;
-    /** Whether the loosening above applies (this clone trusted exactly it). */
+    /** Whether every setting above applies here. */
     trusted: boolean;
     [key: string]: unknown;
   };
@@ -170,8 +268,20 @@ export class FridayApi {
     return this.post('/tasks', body, { idempotencyKey: newKey() });
   }
 
-  taskAction(taskId: string, action: TaskAction, reason?: string): Promise<{ task: TaskView }> {
-    return this.post(`/tasks/${encodeURIComponent(taskId)}/${action}`, reason ? { reason } : {});
+  /**
+   * `extra.dependents` (cancel only): what becomes of the unfinished tasks that depend on the task:
+   * `cancel` cancels them too, `release` lets them start without it.
+   */
+  taskAction(
+    taskId: string,
+    action: TaskAction,
+    reason?: string,
+    extra?: { dependents?: 'cancel' | 'release' },
+  ): Promise<{ task: TaskView; cancelled?: string[]; released?: string[] }> {
+    return this.post(`/tasks/${encodeURIComponent(taskId)}/${action}`, {
+      ...(reason ? { reason } : {}),
+      ...(extra?.dependents ? { dependents: extra.dependents } : {}),
+    });
   }
 
   assign(taskId: string, agentKey: string): Promise<{ mode: 'assigned' | 'reserved'; task: TaskView }> {
@@ -189,6 +299,41 @@ export class FridayApi {
     return this.post(`/tasks/${encodeURIComponent(taskId)}/integrate`, repaired ? { repaired: true } : {}, {
       timeoutMs: LONG,
     });
+  }
+
+  /** Work that did not fit the goal's other work goes back to its agent, which merges it in its own copy. */
+  sendBackToAgent(taskId: string): Promise<{ task: TaskView }> {
+    return this.post(`/tasks/${encodeURIComponent(taskId)}/integrate/back`, {});
+  }
+
+  /**
+   * What a check (or an operation) printed: the end of it, bounded, with how much came before.
+   * `ref` is `artifact:<id>` as a check's `artifact_ref` gives it; the request carries the id
+   * alone, because the desktop shell forwards no path that holds an encoded character.
+   */
+  artifactText(ref: string): Promise<{
+    artifact_ref: string;
+    kind: string;
+    text: string;
+    lines: number;
+    from_line: number;
+    truncated: boolean;
+  }> {
+    const id = ref.startsWith('artifact:') ? ref.slice('artifact:'.length) : ref;
+    return this.get(`/artifacts/${encodeURIComponent(id)}`, { timeoutMs: MEDIUM });
+  }
+
+  /** Runs the install of a task's folder again; answers what it did. */
+  setupWorktree(taskId: string): Promise<{
+    setup: {
+      status: string;
+      reason: string;
+      command: string | null;
+      args: string[];
+      output_tail: string | null;
+    } | null;
+  }> {
+    return this.post(`/tasks/${encodeURIComponent(taskId)}/setup`, {}, { timeoutMs: LONG });
   }
 
   recovery(taskId: string): Promise<{ assessment: RecoveryAssessment }> {
@@ -240,8 +385,20 @@ export class FridayApi {
     outcomes: string[];
     priority: string;
     plan: boolean;
+    /** `ask`: a question, answered and nothing changed. `do`: one task, started at once. Default: planned. */
+    mode?: 'plan' | 'do' | 'ask';
   }): Promise<GoalView> {
     return this.post('/goals', body, { idempotencyKey: newKey() });
+  }
+
+  /** A question's answer in full, with where it stands. */
+  goalAnswer(goalId: string): Promise<AnswerView> {
+    return this.get(`/goals/${encodeURIComponent(goalId)}/answer`);
+  }
+
+  /** The person opened the answer: it no longer waits for them. */
+  markAnswerRead(goalId: string): Promise<{ ok: boolean }> {
+    return this.post(`/goals/${encodeURIComponent(goalId)}/answer/read`, {});
   }
 
   cancelGoal(goalId: string, reason?: string): Promise<GoalView> {
@@ -288,6 +445,11 @@ export class FridayApi {
 
   reject(approvalId: string, note?: string): Promise<{ ok: boolean; status: string }> {
     return this.post(`/approvals/${encodeURIComponent(approvalId)}/reject`, { via: 'ui', ...(note ? { note } : {}) });
+  }
+
+  /** The approvals granted for a task, as recorded: the inspector keeps the ones still in force. */
+  taskGrants(taskId: string): Promise<{ approvals: ApprovalRow[] }> {
+    return this.get(`/tasks/${encodeURIComponent(taskId)}/approvals`);
   }
 
   revoke(approvalId: string, note?: string): Promise<{ ok: boolean }> {
@@ -368,14 +530,15 @@ export class FridayApi {
 
   // ---- routing
   models(): Promise<{
-    models: { id: string; provider?: string; local?: boolean }[];
+    models: ModelInfo[];
     evidence: ModelEvidenceView[];
     settings: Record<string, unknown>;
   }> {
     return this.get('/models');
   }
 
-  pins(all = false): Promise<{ pins: RoutingPinView[] }> {
+  /** The choices, and since 2026-11-18 the price of each model Friday knows one for (USD per million tokens). */
+  pins(all = false): Promise<{ pins: RoutingPinView[]; prices?: Record<string, { input: number; output: number }> }> {
     return this.get(`/routing/pins${all ? '?all=true' : ''}`);
   }
 
@@ -410,6 +573,136 @@ export class FridayApi {
 
   trustPolicy(looseningHash: string): Promise<PolicyView> {
     return this.post('/policy/trust', { loosening_hash: looseningHash });
+  }
+
+  /** Trusts single settings on this computer, by their ids: only those, whatever else waits. */
+  trustSettings(ids: string[]): Promise<PolicyView> {
+    return this.post('/policy/trust', { items: ids });
+  }
+
+  /** Sets a few config.yaml settings (the daemon's `EDITABLE_SETTINGS`); answers those that changed. */
+  editSettings(set: Record<string, unknown>): Promise<{ changed: string[] }> {
+    return this.post('/config/settings', { set });
+  }
+
+  /** The settings files the copies of the project get, and the ones Friday found (names only). */
+  copyFiles(): Promise<CopyFilesView> {
+    return this.get('/config/copy-files');
+  }
+
+  /**
+   * The project's checks as config.yaml has them, and the ones Friday found in package.json that
+   * it does not have yet.
+   */
+  projectChecks(): Promise<ProjectChecksView> {
+    return this.get('/config/checks');
+  }
+
+  /**
+   * Adds checks from the suggestions, and removes checks, by name: the daemon builds each command
+   * from what it read in package.json, so the page sends none.
+   */
+  changeProjectChecks(change: {
+    add?: string[];
+    remove?: string[];
+    /** One check made required (it must pass) or advisory (shown, and holds nothing back). */
+    strength?: { name: string; required: boolean };
+    /** One check's time limit, in whole minutes (2026-11-19). */
+    limit?: { name: string; minutes: number };
+  }): Promise<ProjectChecksView & { added: string[]; removed: string[] }> {
+    return this.post('/config/checks', {
+      add: change.add ?? [],
+      remove: change.remove ?? [],
+      ...(change.strength ? { strength: change.strength } : {}),
+      ...(change.limit ? { limit: change.limit } : {}),
+    });
+  }
+
+  /** Where the trial of the project's checks stands (run on the untouched project, in Friday's own copy). */
+  checkTrial(): Promise<CheckTrialView> {
+    return this.get('/config/checks/trial');
+  }
+
+  /** Starts that trial; answers at once, and `checkTrial` follows it. */
+  startCheckTrial(): Promise<CheckTrialView> {
+    return this.post('/config/checks/trial', {});
+  }
+
+  /**
+   * Takes back this machine's approval to spend on planning (the running planner's provider when
+   * none is named). Giving it is the machine's own act: the desktop's dialog, or a terminal.
+   */
+  denySpending(provider?: 'anthropic' | 'claude-code'): Promise<{ removed: boolean; brain: BrainStatusView }> {
+    return this.post('/brain/deny-remote', provider ? { provider } : {});
+  }
+
+  /**
+   * How this person plans on this machine (kept outside config.yaml): through Claude Code, with an
+   * Anthropic key, by writing plans themselves, or, with null, as the project's config.yaml says.
+   * Answers the planner's status; while its `choice.wanted` differs from `provider`, a restart applies it.
+   */
+  choosePlanner(provider: 'anthropic' | 'claude-code' | 'none' | null): Promise<BrainStatusView> {
+    return this.post('/brain/planner-choice', { provider });
+  }
+
+  /**
+   * The model this person's planner uses on this machine, or with null Friday's default (the
+   * project's `master_brain.model`). It applies from the next plan; no restart.
+   */
+  choosePlannerModel(model: string | null): Promise<BrainStatusView> {
+    return this.post('/brain/planner-choice', { model });
+  }
+
+  /**
+   * Lifts what keeps a host (or one of its models) out of work: a failed sign-in, a bench. The next
+   * task tries it again; a host still signed out is kept out again.
+   */
+  clearReadiness(host: string, model: string | null = null): Promise<{ ended: unknown[] }> {
+    return this.post('/readiness/clear', { host, model });
+  }
+
+  /** The files a person and the goal both changed in the project folder, each with both versions. */
+  folderConflict(taskId: string): Promise<{
+    goal_head: string | null;
+    files: { path: string; mine: string | null; theirs: string | null }[];
+  }> {
+    return this.get(`/tasks/${encodeURIComponent(taskId)}/folder-conflict`);
+  }
+
+  /** The person's choice for one such file: keep their own version, or take the goal's finished one. */
+  settleFolderFile(taskId: string, path: string, take: 'mine' | 'theirs'): Promise<{ remaining: number }> {
+    return this.post(`/tasks/${encodeURIComponent(taskId)}/folder-conflict`, { path, take });
+  }
+
+  /** Puts the person's own version of a file back after it was replaced. */
+  restoreFolderFile(taskId: string, path: string): Promise<{ restored: boolean }> {
+    return this.post(`/tasks/${encodeURIComponent(taskId)}/folder-conflict/undo`, { path });
+  }
+
+  /** A person's choice for one goal: when its finished work is put into the project. */
+  goalLanding(goalId: string, mode: 'ask' | 'goal' | 'task'): Promise<{ goal_id: string; mode: string }> {
+    return this.post(`/goals/${encodeURIComponent(goalId)}/landing`, { mode });
+  }
+
+  /** Merges a completed goal's branch into the branch the project folder has checked out. */
+  landGoal(goalId: string): Promise<LandResult> {
+    // Longer than the daemon gives the merge itself (120 s), so its own answer is what arrives.
+    return this.post(`/goals/${encodeURIComponent(goalId)}/land`, {}, { timeoutMs: 180_000 });
+  }
+
+  /** Lands the goal after setting aside the uncommitted files in its way (kept, and put back if it fails). */
+  landGoalAside(goalId: string): Promise<LandResult> {
+    return this.post(`/goals/${encodeURIComponent(goalId)}/land/set-aside`, {}, { timeoutMs: 300_000 });
+  }
+
+  /** Writes the files set aside at a landing of the goal back into the project folder. */
+  putSetAsideBack(goalId: string): Promise<PutBackView> {
+    return this.post(`/goals/${encodeURIComponent(goalId)}/set-aside/restore`, {}, { timeoutMs: 120_000 });
+  }
+
+  /** What landing would do now: the branch it lands into, or what is in the way. Changes nothing. */
+  landPlan(goalId: string): Promise<LandPlanView> {
+    return this.get(`/goals/${encodeURIComponent(goalId)}/land`, { timeoutMs: TIMEOUTS.diff });
   }
 
   // ---- control
@@ -469,6 +762,17 @@ export class FridayApi {
     return this.post(`/agent-processes/${encodeURIComponent(agentKey)}/start`, {}, { timeoutMs: 60_000 });
   }
 
+  /**
+   * Changes a remembered agent's role, options and whether it starts with Friday. What runs now
+   * keeps what it started with (`running`); the next start uses the new.
+   */
+  updateAgent(
+    agentKey: string,
+    body: { role?: string; options?: AgentOptions; autostart?: boolean },
+  ): Promise<{ profile: AgentProfile; running: boolean }> {
+    return this.post(`/agent-processes/${encodeURIComponent(agentKey)}/update`, body, { timeoutMs: 30_000 });
+  }
+
   forgetAgent(agentKey: string): Promise<{ ok: boolean }> {
     return this.post(`/agent-processes/${encodeURIComponent(agentKey)}/forget`, {}, { timeoutMs: 30_000 });
   }
@@ -480,6 +784,15 @@ export class FridayApi {
 
   claudeSetupApply(agentKey: string): Promise<ClaudeSetupResult> {
     return this.post('/agent-setup/claude-code', { agent_key: agentKey }, { timeoutMs: TIMEOUTS.setup });
+  }
+
+  /** What `harness config antigravity` would change: Antigravity attaches when the person opens it. */
+  antigravitySetupPlan(agentKey: string): Promise<AntigravitySetupPlan> {
+    return this.get(`/agent-setup/antigravity?agent=${encodeURIComponent(agentKey)}`, { timeoutMs: TIMEOUTS.setup });
+  }
+
+  antigravitySetupApply(agentKey: string): Promise<AntigravitySetupResult> {
+    return this.post('/agent-setup/antigravity', { agent_key: agentKey }, { timeoutMs: TIMEOUTS.setup });
   }
 
   // ---- preferences: the project's copy, which outlives the page's origin (plan §6 rule 8)

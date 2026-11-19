@@ -30,17 +30,18 @@ describe('History lines', () => {
         { kind: 'human', id: 'local-operator' },
       ),
     );
-    expect(line.text).toBe('Released: Running → Ready · halted');
+    // In the cards' words (2026-11-19).
+    expect(line.text).toBe('Let go by its agent: Working → Not started · halted');
     expect(line.actor).toBe('you');
     expect(line.sequence).toBe(5);
   });
 
   it.each([
-    ['task.waiting', { waiting_reason: 'blocked' }, 'Waiting: blocked: needs you'],
-    ['run.created', { run: { attempt: 2 } }, 'Attempt created: attempt 2'],
-    ['task.completion_claimed', { summary: 'Done it' }, 'Agent claimed it is done: "Done it"'],
-    ['approval.decided', { status: 'granted', via: 'ui', note: 'ok' }, 'Approval decided: granted · via ui · "ok"'],
-    ['verification.finished', { status: 'PASSED', summary: '3/3' }, 'Verification finished: passed · 3/3'],
+    ['task.waiting', { waiting_reason: 'blocked' }, 'Waiting: the agent is stuck'],
+    ['run.created', { run: { attempt: 2 } }, 'A try began: try 2'],
+    ['task.completion_claimed', { summary: 'Done it' }, 'The agent said it is done: "Done it"'],
+    ['approval.decided', { status: 'granted', via: 'ui', note: 'ok' }, 'You decided: allowed · in the app · "ok"'],
+    ['verification.finished', { status: 'PASSED', summary: '3/3' }, 'Checks finished: passed · 3/3'],
     ['something.new', {}, 'Something new'],
   ])('%s', (type, payload, text) => {
     expect(describeEvent(makeEvent(1, type, payload)).text).toBe(text);
@@ -65,7 +66,7 @@ describe('History lines', () => {
   it('names who acted', () => {
     expect(actorLabel({ kind: 'agent', id: 'agent_0000000000000000abc' })).toBe('agent agent_00000000');
     expect(actorLabel({ kind: 'system', id: 'friday' })).toBe('Friday');
-    expect(actorLabel({ kind: 'master_brain', id: 'mb' })).toBe('Master Brain');
+    expect(actorLabel({ kind: 'master_brain', id: 'mb' })).toBe('Friday’s planner');
     expect(actorLabel(null)).toBe('Friday');
   });
 

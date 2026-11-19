@@ -12,7 +12,7 @@ import {
   PID,
   T0,
 } from '../test/fixtures.js';
-import { createTaskInspector, INSPECTOR_TABS, inspectorActions, inspectorTabOf } from './task-inspector.js';
+import { createTaskInspector, INSPECTOR_TABS, inspectorActions, inspectorTabOf, whyLine } from './task-inspector.js';
 
 const IMG = '<img src=x onerror=alert(1)>';
 const BIDI = '\u202E';
@@ -107,6 +107,9 @@ describe('inspectorActions', () => {
     ['FAILED', null, false, ['rework', 'cancel']],
     ['HARNESS_LOST', null, false, ['recover', 'cancel']],
     ['RUNNING', null, true, ['recover', 'cancel']],
+    // An agent holds it: besides Cancel, the quiet way to hand it over or start it again.
+    ['RUNNING', null, false, ['unstick', 'cancel']],
+    ['ASSIGNED', null, false, ['unstick', 'cancel']],
     ['COMPLETED', null, false, []],
     ['CANCELLED', null, false, []],
   ])('%s (%s, recovery question %s) → %j', (status, reason, recoveryQuestion, actions) => {
@@ -163,7 +166,103 @@ describe('the task inspector: Overview', () => {
     expect(el.textContent).toContain('1 passed of 2 run');
     expect(el.textContent).toContain('4.2 s');
     expect(el.textContent).toContain('advisory');
-    expect(el.textContent).toContain('Conflicted');
+    expect(el.textContent).toContain('Clashes with other work');
+    drawer.destroy();
+  });
+
+  it('says when only Friday’s own checks ran, because the project has none set', () => {
+    // The board of the other tests has a configured check: nothing is added there.
+    const withProject = createTaskInspector(makeContext({ snapshot: boardWith('COMPLETED') }), {
+      kind: 'inspector',
+      id: TID,
+    });
+    expect(withProject.el.querySelector('[data-role="friday-only"]')).toBeNull();
+    withProject.destroy();
+    const board = boardWith('COMPLETED');
+    board.verifications = { [TID]: makeVerification({ task_id: TID }) };
+    const drawer = createTaskInspector(makeContext({ snapshot: board }), { kind: 'inspector', id: TID });
+    const note = drawer.el.querySelector('[data-role="friday-only"]');
+    expect(note?.textContent).toContain('Checked by Friday only');
+    expect(note?.textContent).toContain('not that the project’s tests pass');
+    drawer.destroy();
+  });
+
+  it('says what a failed check found in words, and shows what a check printed on request (2026-11-17)', async () => {
+    const board = boardWith('FAILED');
+    board.verifications = {
+      [TID]: makeVerification({
+        task_id: TID,
+        status: 'FAILED',
+        summary: '1 of 2 required checks failed',
+        checks: [
+          {
+            name: 'unit tests',
+            kind: 'test',
+            status: 'FAILED',
+            exit_code: 1,
+            artifact_ref: 'artifact:out1',
+            summary: 'exit 1',
+            required: true,
+            origin: 'configured',
+            duration_ms: 900,
+            details: null,
+          },
+          {
+            name: 'friday.diff',
+            kind: 'diff',
+            status: 'FAILED',
+            exit_code: null,
+            artifact_ref: null,
+            summary: '2 changed file(s); failed: diff.outside_team_scope',
+            required: true,
+            origin: 'friday',
+            duration_ms: 30,
+            details: {
+              findings: [
+                {
+                  rule: 'diff.outside_team_scope',
+                  severity: 'fail',
+                  message: `Files were changed outside what this task may change ${IMG}`,
+                  paths: ['docs/x.md'],
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    };
+    const ctx = makeContext({
+      snapshot: board,
+      answers: {
+        'GET /artifacts/out1': {
+          artifact_ref: 'artifact:out1',
+          kind: 'verification',
+          text: '$ npm test\n1 failing',
+          lines: 2,
+          from_line: 1,
+          truncated: false,
+        },
+      },
+    });
+    const drawer = createTaskInspector(ctx, { kind: 'inspector', id: TID });
+    const rows = [...drawer.el.querySelectorAll<HTMLElement>('.dr-check')];
+    expect(rows).toHaveLength(2);
+    // Friday's check by what it checks, its finding as a sentence with the file, and no rule code read out.
+    expect(rows[1]?.textContent).toContain('Changes stay where the task may work');
+    expect(rows[1]?.textContent).toContain(`Files were changed outside what this task may change ${IMG}`);
+    expect(rows[1]?.textContent).toContain('docs/x.md');
+    expect(rows[1]?.textContent).not.toContain('diff.outside_team_scope');
+    expect(rows[1]?.textContent).not.toContain('friday.diff');
+    expect(buttonNamed(rows[1] as HTMLElement, 'Show output')).toBeUndefined();
+    expect(drawer.el.querySelector('img')).toBeNull();
+    // The project's own check keeps its name and summary, and its output is one click away.
+    expect(rows[0]?.textContent).toContain('unit tests');
+    expect(rows[0]?.textContent).toContain('exit 1');
+    expect(ctx.transport.to('GET', '/artifacts/out1')).toHaveLength(0);
+    buttonNamed(rows[0] as HTMLElement, 'Show output')?.click();
+    await settle();
+    expect(ctx.transport.to('GET', '/artifacts/out1')).toHaveLength(1);
+    expect(rows[0]?.querySelector('pre')?.textContent).toBe('$ npm test\n1 failing');
     drawer.destroy();
   });
 
@@ -185,6 +284,64 @@ describe('the task inspector: Overview', () => {
     ctx.board(boardWith('HARNESS_LOST'));
     buttonNamed(drawer.el, 'Recover')?.click();
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'recover', id: TID });
+    drawer.destroy();
+  });
+
+  it('offers a quiet way out of a task that is not moving, which opens the recovery dialog (2026-11-17)', () => {
+    const ctx = makeContext({ snapshot: boardWith('RUNNING') });
+    const drawer = createTaskInspector(ctx, { kind: 'inspector', id: TID });
+    // Not "Recover…": nothing went wrong that Friday knows of.
+    expect(buttonNamed(drawer.el, 'Recover')).toBeUndefined();
+    const quiet = buttonNamed(drawer.el, 'Not moving?') as HTMLButtonElement;
+    expect(quiet.classList.contains('btn-ghost')).toBe(true);
+    expect(quiet.title).toContain('The work so far is kept');
+    quiet.click();
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'recover', id: TID });
+    drawer.destroy();
+    // A task nobody holds has no such button.
+    const ready = createTaskInspector(makeContext({ snapshot: boardWith('READY') }), { kind: 'inspector', id: TID });
+    expect(buttonNamed(ready.el, 'Not moving?')).toBeUndefined();
+    ready.destroy();
+  });
+
+  it('shows what was allowed for the task and still holds, and no heading when there is nothing (2026-11-17)', async () => {
+    const heading = (root: HTMLElement) =>
+      [...root.querySelectorAll<HTMLElement>('.dr-section')].find(
+        (x) => x.querySelector('.section-title')?.textContent === 'Allowed for this task',
+      );
+    const none = createTaskInspector(makeContext({ snapshot: boardWith('RUNNING') }), { kind: 'inspector', id: TID });
+    await settle();
+    expect(heading(none.el)?.hidden).toBe(true);
+    none.destroy();
+
+    const ctx = makeContext({
+      snapshot: boardWith('RUNNING'),
+      answers: {
+        [`GET /tasks/${TID}/approvals`]: {
+          approvals: [
+            {
+              approval_id: 'apr_1',
+              task_id: TID,
+              status: 'granted',
+              reuse: 'task',
+              capability: 'package.install',
+              target: 'npm install zod',
+              expires_at: null,
+            },
+          ],
+        },
+        'POST /approvals/apr_1/revoke': { ok: true },
+      },
+    });
+    const drawer = createTaskInspector(ctx, { kind: 'inspector', id: TID });
+    await settle();
+    const box = heading(drawer.el) as HTMLElement;
+    expect(box.hidden).toBe(false);
+    expect(box.textContent).toContain('Install packages');
+    expect(box.textContent).toContain('npm install zod');
+    buttonNamed(box, 'Take back')?.click();
+    await settle();
+    expect(ctx.transport.to('POST', '/approvals/apr_1/revoke')).toHaveLength(1);
     drawer.destroy();
   });
 
@@ -226,13 +383,16 @@ describe('the task inspector: Overview', () => {
     ctx.confirmAnswer = false;
     buttonNamed(drawer.el, 'Cancel task')?.click();
     await settle();
-    expect(ctx.confirms).toHaveLength(1);
-    expect(ctx.confirms[0]?.danger).toBe(true);
+    // A task waits for this one: what becomes of it is asked first, then the cancellation itself.
+    expect(ctx.confirms.map((c) => c.title)).toEqual(['1 other task waits for this one', 'Cancel this task?']);
+    expect(ctx.confirms.every((c) => c.danger === true)).toBe(true);
     expect(ctx.transport.to('POST', `/tasks/${TID}/cancel`)).toHaveLength(0);
     ctx.confirmAnswer = true;
     buttonNamed(drawer.el, 'Cancel task')?.click();
     await settle();
-    expect(ctx.transport.to('POST', `/tasks/${TID}/cancel`)).toHaveLength(1);
+    expect(ctx.transport.to('POST', `/tasks/${TID}/cancel`).map((c) => c.body)).toEqual([
+      { reason: 'cancelled in the inspector', dependents: 'cancel' },
+    ]);
     drawer.destroy();
   });
 
@@ -365,6 +525,29 @@ const PACKET: ContextPacket = {
           selection_reason: 'in the write scope',
           estimated_tokens: 120,
         },
+        // The repository's shape and a name looked up: no file, so no code graph to open.
+        {
+          source_id: 'graph:14c3226ad9f20bd67e96e345aa408ceb3c29343e+5ed69f8997a8',
+          source_type: 'graph',
+          authority: 'git',
+          recency: T0,
+          relevance: 0.5,
+          relationship_distance: 1,
+          verification_status: 'verified',
+          selection_reason: 'the shape of the repository',
+          estimated_tokens: 40,
+        },
+        {
+          source_id: 'src/money.ts#Money',
+          source_type: 'graph',
+          authority: 'git',
+          recency: T0,
+          relevance: 0.5,
+          relationship_distance: 1,
+          verification_status: 'verified',
+          selection_reason: 'a declaration the task uses',
+          estimated_tokens: 40,
+        },
       ],
     },
   ],
@@ -434,9 +617,33 @@ describe('the task inspector: What the agent was given', () => {
     expect(el.textContent).toContain('1 source cut by the budget');
     expect(el.textContent).toContain('2 sources withheld');
     expect(el.querySelector('[role="meter"]')?.getAttribute('aria-valuenow')).toBe('29');
+    // One button per file: the shape of the repository has none, a declaration opens its file.
+    const graphButtons = [...el.querySelectorAll('button')].filter((b) => b.textContent?.includes('Code graph'));
+    expect(graphButtons).toHaveLength(2);
+    graphButtons[1]?.click();
+    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'graph', path: 'src/money.ts' });
     buttonNamed(el, 'Code graph')?.click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'graph', path: `src/${IMG}${BIDI}.ts` });
     drawer.destroy();
+  });
+
+  // "How does it decide that this needs to be done by Claude?" (the trial, 2026-11-18).
+  it('says why the task went to its agent and runs on its model', () => {
+    expect(
+      whyLine({
+        agent_key: 'claude-1',
+        agent: 'the best fit of the free agents',
+        model: 'claude-opus-5-5',
+        model_reason: 'you chose it for every task (Settings → Models)',
+      }),
+    ).toBe(
+      'Why claude-1: the best fit of the free agents. Why Claude Opus 5.5: you chose it for every task (Settings → Models).',
+    );
+    expect(whyLine({ agent_key: 'codex-1', agent: 'you gave it this task', model: null, model_reason: null })).toBe(
+      'Why codex-1: you gave it this task.',
+    );
+    expect(whyLine({ agent_key: null, agent: null, model: null, model_reason: null })).toBeNull();
+    expect(whyLine(undefined)).toBeNull();
   });
 
   it('compiles a fresh preview labelled as compiled for a human', async () => {
@@ -454,7 +661,7 @@ describe('the task inspector: What the agent was given', () => {
     });
     const drawer = createTaskInspector(ctx, { kind: 'inspector', id: TID, tab: 'context' });
     await settle();
-    expect(drawer.el.textContent).toContain('No context packet was delivered');
+    expect(drawer.el.textContent).toContain('No agent was given anything for this task yet.');
     buttonNamed(drawer.el, 'Compile a fresh preview')?.click();
     await settle();
     expect(ctx.transport.to('POST', '/context/compile')[0]?.body).toEqual({ task_id: TID, purpose: 'explain' });
@@ -509,7 +716,7 @@ describe('the task inspector: Changes', () => {
     ],
   };
 
-  it('shows the branch, worktree, base and head, and the changed files', async () => {
+  it('shows the branch, the task folder, base and head, and the changed files', async () => {
     const ctx = makeContext({ snapshot: boardWith('RUNNING'), answers: { [`GET /tasks/${TID}/diff`]: diff } });
     const open = vi.fn();
     (ctx.platform as { openInEditor: (p: string, l?: number) => void }).openInEditor = open;
@@ -532,7 +739,7 @@ describe('the task inspector: Changes', () => {
     el.querySelector<HTMLButtonElement>('.dr-git-file .btn-icon')?.click();
     expect(open).toHaveBeenCalledWith(`C:/wt/abc/src/${IMG}${ZW}.ts`);
     expect(el.querySelectorAll('.dr-git-file .btn-icon')).toHaveLength(1);
-    el.querySelector<HTMLButtonElement>('[aria-label="Open the worktree in VS Code"]')?.click();
+    el.querySelector<HTMLButtonElement>('[aria-label="Open the task folder in VS Code"]')?.click();
     expect(open).toHaveBeenLastCalledWith('C:/wt/abc');
     drawer.destroy();
   });

@@ -192,7 +192,8 @@ describe("an agent's own question", () => {
   });
 
   it('does not restart a later run when a question of an earlier run is answered (review M9i)', async () => {
-    const td = await startTestDaemon(ws(), { extraConfig: NO_WORKTREES });
+    // The task comes back and is given out by hand here, not by delegation.
+    const td = await startTestDaemon(ws(), { extraConfig: NO_WORKTREES, brain: { autoStart: false } });
     const s = await spawnedSession(td, { hooks: true });
     const asked = (await s.client.escalate({
       task_id: s.task.task_id,
@@ -248,7 +249,8 @@ describe("an agent's own question", () => {
 
 describe("Friday's own questions", () => {
   it('settles a recovery question when a human performs a recovery action', async () => {
-    const td = await startTestDaemon(ws(), { extraConfig: NO_WORKTREES });
+    // The task comes back and is given out by hand here, not by delegation.
+    const td = await startTestDaemon(ws(), { extraConfig: NO_WORKTREES, brain: { autoStart: false } });
     const s = await spawnedSession(td, { hooks: true });
     await s.client.reportError({
       task_id: s.task.task_id,

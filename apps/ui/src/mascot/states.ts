@@ -300,7 +300,7 @@ export const STATE_LOOK: Readonly<Record<MascotState, StateLook>> = Object.freez
     badge: 'dots',
     blinks: true,
     motion: motion({ gaze: 'up-right', tiltHz: 0.5, tiltAmp: 0.08, pulseHz: 1, ambientS: 30 }),
-    description: 'The Master Brain is planning',
+    description: 'Friday is planning',
   },
   searching: {
     eyes: 'pill',

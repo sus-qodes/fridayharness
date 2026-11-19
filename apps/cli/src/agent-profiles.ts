@@ -11,6 +11,23 @@ import { writePrivateFile } from '@friday/sdk';
 
 const FILE = 'agents.json';
 const MAX_PROFILES = 32;
+/**
+ * The file's version. 1 (no number): every Claude Code agent carried `max_budget_usd: 1`, the
+ * default of the time, chosen by nobody. Read from such a file, that 1 is left out, so the agent
+ * gets today's default when it starts; from 2 on, a cap in the file is one a person set.
+ */
+const VERSION = 2;
+/** The cap an agent gets when a person set none and its host is charged per use (or Friday cannot tell). */
+export const DEFAULT_CAP_USD = 5;
+
+/**
+ * The cap Claude Code runs an attempt with: the person's own (a number, or null for none), else
+ * none for a subscription's sign-in and `DEFAULT_CAP_USD` otherwise.
+ */
+export function effectiveCap(options: AgentOptions, signIn: string | undefined): number | null {
+  if (options.max_budget_usd !== undefined) return options.max_budget_usd;
+  return signIn === 'subscription' ? null : DEFAULT_CAP_USD;
+}
 
 export const AGENT_KEY = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const ROLE = /^[a-z][a-z0-9_-]{0,31}$/;
@@ -56,9 +73,14 @@ export function validateOptions(host: AgentHostName, raw: unknown): AgentOptions
     out.models = [...(ms as string[])];
   }
   if (host === 'claude-code') {
-    const budget = o.max_budget_usd ?? 1;
-    if (typeof budget !== 'number' || !Number.isFinite(budget) || budget < 0.01 || budget > 100) bad('max_budget_usd');
-    out.max_budget_usd = budget as number;
+    // Left out: decided when the agent starts. null: no cap, by a person's choice.
+    if (o.max_budget_usd === null) out.max_budget_usd = null;
+    else if (o.max_budget_usd !== undefined) {
+      const budget = o.max_budget_usd;
+      if (typeof budget !== 'number' || !Number.isFinite(budget) || budget < 0.01 || budget > 1000)
+        bad('max_budget_usd');
+      out.max_budget_usd = budget as number;
+    }
     for (const k of ['sandbox', 'windows_sandbox', 'service_tier']) if (o[k] !== undefined) bad(k);
   } else {
     if (o.max_budget_usd !== undefined) bad('max_budget_usd');
@@ -83,7 +105,10 @@ export function optionFlags(host: AgentHostName, o: AgentOptions): string[] {
   if (o.effort) flags.push(`--effort=${o.effort}`);
   if (o.cost_class) flags.push(`--cost-class=${o.cost_class}`);
   if (o.models?.length) flags.push(`--models=${o.models.join(',')}`);
-  if (host === 'claude-code' && o.max_budget_usd !== undefined) flags.push(`--max-budget-usd=${o.max_budget_usd}`);
+  // A number only: no cap (null), and a cap not decided yet, pass no flag.
+  if (host === 'claude-code' && typeof o.max_budget_usd === 'number') {
+    flags.push(`--max-budget-usd=${o.max_budget_usd}`);
+  }
   if (host === 'codex') {
     if (o.sandbox) flags.push(`--sandbox=${o.sandbox}`);
     if (o.windows_sandbox) flags.push(`--windows-sandbox=${o.windows_sandbox}`);
@@ -99,8 +124,9 @@ export class AgentProfiles {
     const file = path.join(this.privateDir, FILE);
     if (!existsSync(file)) return [];
     try {
-      const data = JSON.parse(readFileSync(file, 'utf8')) as { agents?: unknown };
+      const data = JSON.parse(readFileSync(file, 'utf8')) as { agents?: unknown; version?: unknown };
       if (!Array.isArray(data.agents)) return [];
+      const old = typeof data.version !== 'number' || data.version < VERSION;
       const out: AgentProfile[] = [];
       for (const a of data.agents.slice(0, MAX_PROFILES)) {
         const p = a as Partial<AgentProfile>;
@@ -109,11 +135,14 @@ export class AgentProfiles {
         if (typeof p.agent_key !== 'string' || !AGENT_KEY.test(p.agent_key)) continue;
         if (typeof p.role !== 'string' || !ROLE.test(p.role)) continue;
         try {
+          const raw = { ...((p.options ?? {}) as Record<string, unknown>) };
+          // The old default, never a person's choice: today's default applies in its place.
+          if (old && host === 'claude-code' && raw.max_budget_usd === 1) delete raw.max_budget_usd;
           out.push({
             agent_key: p.agent_key,
             host,
             role: p.role,
-            options: validateOptions(host, p.options),
+            options: validateOptions(host, raw),
             autostart: p.autostart === true,
             updated_at: typeof p.updated_at === 'string' ? p.updated_at : new Date(0).toISOString(),
           });
@@ -143,6 +172,6 @@ export class AgentProfiles {
   }
 
   #write(agents: AgentProfile[]): void {
-    writePrivateFile(this.privateDir, FILE, `${JSON.stringify({ agents }, null, 2)}\n`);
+    writePrivateFile(this.privateDir, FILE, `${JSON.stringify({ version: VERSION, agents }, null, 2)}\n`);
   }
 }

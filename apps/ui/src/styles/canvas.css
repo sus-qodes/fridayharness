@@ -50,6 +50,10 @@
   color: var(--color-slate-400);
   white-space: nowrap;
   pointer-events: none;
+  z-index: 7;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-canvas);
 }
 
 /* Cards off screen are not rendered; the card itself stays focusable so Tab brings it into view. */

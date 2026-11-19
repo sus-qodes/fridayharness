@@ -357,6 +357,10 @@
   transform: rotate(180deg);
 }
 
+.pn-assign {
+  max-width: 420px;
+}
+
 .pn-deps {
   display: flex;
   flex-wrap: wrap;
@@ -599,6 +603,48 @@
   color: var(--color-cyan-glow);
 }
 
+/* What landing waits for (changes in the way, a merge of the person's own), and its files. */
+.pn-land-now {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+/* What keeps a host out of work (not signed in, a limit), with its button. */
+.pn-host-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.pn-host-block {
+  padding: 8px 10px;
+  border: 1px solid var(--color-amber);
+  border-radius: 8px;
+}
+
+.pn-host-block-detail {
+  font-size: var(--text-caption);
+  overflow-wrap: anywhere;
+}
+
+/* The plan editor's note that a kept draft is back, with Start over. */
+.pn-draft-restored {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pn-land-blocked {
+  font-size: var(--text-caption);
+  color: var(--color-amber);
+  overflow-wrap: anywhere;
+}
+
 /* Agents drawer */
 .pn-host-name {
   font-weight: var(--weight-semibold);
@@ -744,4 +790,556 @@
 
 .pn-gs-done .pn-gs-item-title {
   color: var(--color-slate-400);
+}
+
+/* The spending limit per attempt: its choice, then the amount under it. */
+.pn-limit-amount {
+  margin-top: 6px;
+}
+
+.pn-limit-amount .input {
+  max-width: 160px;
+}
+
+/* How a host is signed in, under the Host field. */
+.pn-sign-in {
+  margin-top: 4px;
+  font-size: var(--text-sm);
+}
+
+/* A setup's health check in words: one sentence, what needs attention, the rest folded. */
+.pn-checks-summary {
+  margin: 4px 0 8px;
+  font-size: var(--text-sm);
+}
+
+.pn-checks-summary.pn-tone-good {
+  color: var(--color-emerald);
+}
+
+.pn-checks-summary.pn-tone-warn {
+  color: var(--color-amber);
+}
+
+.pn-checks-summary.pn-tone-danger {
+  color: var(--color-crimson);
+}
+
+.pn-check-fix {
+  flex-basis: 100%;
+}
+
+.pn-checks-passed {
+  margin-top: 6px;
+  font-size: var(--text-sm);
+}
+
+.pn-checks-passed > summary {
+  cursor: pointer;
+  color: var(--color-slate-400);
+}
+
+/* "Raise the limit and continue": what happened, above the new limit. */
+.pn-raise-what {
+  margin: 0 0 12px;
+}
+
+/* Settings → Models: the one choice, then the finer ones folded under it. */
+.pn-one-model {
+  margin-bottom: 12px;
+}
+
+.pn-pins-more .pn-pin-form {
+  margin-top: 8px;
+}
+
+/* The plan editor: what a plan is, above the form, and each task's seldom-changed fields folded. */
+.pn-plan-intro {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-elevated);
+}
+
+.pn-plan-intro .pn-note {
+  margin: 2px 0;
+}
+
+.pn-task-advanced {
+  margin-top: 8px;
+}
+
+.pn-task-advanced > .pn-grid2,
+.pn-task-advanced > .pn-grid3 {
+  margin-top: 8px;
+}
+
+/* "Change this goal": the status of the planner call under the note. */
+.pn-change-status {
+  min-height: 1.2em;
+  font-size: var(--text-sm);
+}
+
+/* Settings → Planner: the model picker keeps to its side of the row. */
+.pn-planner-model select {
+  max-width: 320px;
+}
+
+/* What a check found, in words (2026-11-17): the findings, the files they are about, and the
+   output behind "Show output". Shared by the task inspector and the Verify dialog. */
+.pn-findings {
+  flex-basis: 100%;
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  font-size: var(--text-sm);
+}
+
+.pn-finding {
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+
+.pn-finding-mark {
+  font-weight: 600;
+}
+
+.pn-finding-fail .pn-finding-mark {
+  color: var(--red-text);
+}
+
+.pn-finding-warn .pn-finding-mark {
+  color: var(--color-amber);
+}
+
+.pn-finding-paths {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0 0 0 12px;
+  font-size: var(--text-caption);
+  color: var(--color-slate-400);
+}
+
+.pn-check-more {
+  flex-basis: 100%;
+}
+
+.pn-check-output-toggle {
+  padding: 2px 8px;
+  font-size: var(--text-caption);
+}
+
+.pn-check-output {
+  margin-top: 4px;
+}
+
+.pn-check-output .agent-text {
+  margin: 4px 0 0;
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* The cards of Settings that set something up (2026-11-17): planning, the project's checks, what
+   agents may do without asking, what planning may spend. Their title and rows had no style. */
+.pn-qs-title {
+  font-size: var(--text-title-sm);
+  font-weight: 700;
+  color: var(--color-white);
+  margin-bottom: 2px;
+}
+
+.pn-qs-body {
+  display: grid;
+  gap: 8px;
+}
+
+.pn-qs-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--text-sm);
+}
+
+.pn-qs-budget {
+  width: 110px;
+}
+
+.pn-qs-limit {
+  font-size: var(--text-sm);
+}
+
+.pn-pc-body,
+.pn-perm-body,
+.pn-spend-under {
+  display: grid;
+  gap: 8px;
+}
+
+.pn-pc-name,
+.pn-perm-title {
+  font-weight: 600;
+}
+
+/* The command of a check: it shares the row, and wraps inside its own space. */
+.pn-pc-cmd {
+  flex: 1 1 180px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+}
+
+.pn-perm-text {
+  flex: 1 1 220px;
+}
+
+.pn-perm-examples {
+  font-size: var(--text-caption);
+}
+
+.pn-spending .row {
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+/* The list a computer trusts: what each setting allows, then the exact setting and its file. */
+.pn-loosening-words {
+  flex: 1 1 100%;
+  font-size: var(--text-sm);
+}
+
+.pn-loosening-exact,
+.pn-loosening-source {
+  font-size: var(--text-caption);
+  overflow-wrap: anywhere;
+}
+
+/* A task folder that is gone, in the Verify and recovery dialogs; the clean-up after a landing. */
+.pn-folder-gone,
+.gv-folder-gone,
+.pn-land-cleanup {
+  margin-top: 8px;
+}
+/* Files set aside at a landing, with the way back (2026-11-18). */
+.pn-land-aside {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 6px;
+}
+
+/* ---- "Put finished work into my project": one choice of three (2026-11-17) --------------------- */
+
+.pn-landing-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pn-landing-choice {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  text-align: left;
+}
+
+.pn-landing-choice.is-on {
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--ink);
+}
+
+.pn-landing-choice:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.pn-landing-what {
+  font-size: var(--text-caption);
+  font-weight: var(--weight-regular, 400);
+  white-space: normal;
+}
+
+/* ---- An on/off switch that says where it stands (2026-11-18) ----------------------------------- */
+
+.pn-switch-row {
+  align-items: center;
+  gap: 12px;
+}
+
+.pn-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.pn-switch-track {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  transition: background 120ms ease;
+}
+
+.pn-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #f5f6f8;
+  transition: transform 120ms ease;
+}
+
+.pn-switch.is-on .pn-switch-track {
+  background: #22c55e;
+}
+
+.pn-switch.is-on .pn-switch-thumb {
+  transform: translateX(14px);
+}
+
+.pn-switch-word {
+  min-width: 22px;
+  font-weight: 600;
+  font-size: var(--text-caption);
+}
+
+.pn-switch:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pn-switch-track,
+  .pn-switch-thumb {
+    transition: none;
+  }
+}
+
+/* ---- One of several, or any of several: the mark that says which is chosen (2026-11-18) -------- */
+
+.pn-landing-choice[role="radio"],
+.pn-landing-choice[role="checkbox"] {
+  position: relative;
+  padding-left: 40px;
+}
+
+.pn-landing-choice[role="radio"]::before,
+.pn-landing-choice[role="checkbox"]::before {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 11px;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  background: transparent;
+}
+
+.pn-landing-choice[role="radio"]::before {
+  border-radius: 50%;
+}
+
+.pn-landing-choice[role="checkbox"]::before {
+  border-radius: 4px;
+}
+
+.pn-landing-choice[aria-checked="true"] {
+  outline: 1px solid rgba(34, 211, 238, 0.55);
+}
+
+.pn-landing-choice[role="radio"][aria-checked="true"]::before {
+  border-color: #22d3ee;
+  background: radial-gradient(circle, #22d3ee 0 4px, transparent 5px);
+}
+
+.pn-landing-choice[role="checkbox"][aria-checked="true"]::before {
+  border-color: #22d3ee;
+  background: #22d3ee;
+  box-shadow: inset 0 0 0 2px #0b0d10;
+}
+
+/* ---- A check's strength, and a trial of the checks (2026-11-18) -------------------------------- */
+
+.pn-pc-strength {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: var(--text-caption);
+  border: 1px solid var(--border-strong);
+  background: transparent;
+}
+
+.pn-pc-strength.is-required {
+  color: #86efac;
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+.pn-pc-strength.is-advisory {
+  color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
+/* A check's time limit, under its row (2026-11-19). */
+.pn-pc-time {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: var(--text-caption);
+}
+
+.pn-pc-time-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.pn-pc-limit {
+  min-width: 84px;
+  padding: 2px 6px;
+}
+
+.pn-pc-suggest {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  color: #fde68a;
+}
+
+.pn-pc-trial {
+  margin: 12px 0 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-medium);
+}
+
+.pn-pc-trial-row {
+  flex-wrap: wrap;
+}
+
+.pn-pc-output {
+  flex-basis: 100%;
+}
+
+.pn-pc-output pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  font-size: var(--text-caption);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pn-pc-verdict {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+}
+
+.pn-pc-verdict.is-good {
+  border-color: rgba(34, 197, 94, 0.45);
+  color: #bbf7d0;
+}
+
+.pn-pc-verdict.is-warn {
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #fde68a;
+}
+
+.pn-pc-verdict.is-danger {
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fecaca;
+}
+
+/* The answer to a question (2026-11-18): the question, who answered, and the answer laid out for reading. */
+.pn-answer {
+  display: grid;
+  gap: 10px;
+}
+.pn-answer-question {
+  margin: 0;
+  font-size: var(--text-body, 14px);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.pn-answer-meta {
+  font-size: var(--text-caption);
+}
+.pn-answer-body {
+  max-height: min(56vh, 620px);
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.pn-answer-working {
+  color: var(--color-cyan-glow, #67e8f9);
+}
+
+/* An agent's text laid out for reading (ui/prose.ts). */
+.pr {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.pr > :first-child {
+  margin-top: 0;
+}
+.pr > :last-child {
+  margin-bottom: 0;
+}
+.pr-p {
+  margin: 0 0 10px;
+}
+.pr-h {
+  margin: 16px 0 6px;
+  font-size: 1.05em;
+  font-weight: 650;
+}
+.pr-list {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+.pr-list li {
+  margin: 2px 0;
+}
+.pr-code,
+.pr-pre {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.92em;
+}
+.pr-code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+}
+.pr-pre {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow: auto;
+  white-space: pre;
 }

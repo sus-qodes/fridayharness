@@ -10,6 +10,15 @@ import { icon } from '../ui/svg.js';
 import { type AppContext, type Component, closeModal, type ModalRequest } from './context.js';
 import { type LayerStack, RANK } from './layers.js';
 
+/**
+ * What a modal's content may add: `beforeClose` answers whether the dialog may close now (true), or
+ * the person chose to stay (false). It is asked for the close button, Esc and the content's own
+ * `close`; a modal replaced by another one is not asked (the content keeps its own draft then).
+ */
+export interface ModalContent extends Component {
+  beforeClose?: () => boolean | Promise<boolean>;
+}
+
 export interface ModalHost extends Component {
   /** The request shown now (tests). */
   current(): ModalRequest | null;
@@ -37,9 +46,33 @@ export function mountModalHost(ctx: AppContext, layers: LayerStack): ModalHost {
     s.backdrop.remove();
   }
 
-  /** Closes the modal shown for `request`, and only that one (a stale `close` does nothing). */
+  /**
+   * Closes the modal shown for `request`, and only that one (a stale `close` does nothing). A
+   * content that holds unsaved work says whether it may close (`beforeClose`: the plan editor asks
+   * the person), for the close button, Esc and its own Cancel alike; while it is asking, another
+   * close is not asked twice.
+   */
+  let asking = false;
   function closeFor(request: ModalRequest): void {
-    if (ctx.store.select('ui').modal === request) closeModal(ctx);
+    if (ctx.store.select('ui').modal !== request) return;
+    const guard = shown?.request === request ? (shown.content as ModalContent).beforeClose : undefined;
+    if (!guard) {
+      closeModal(ctx);
+      return;
+    }
+    if (asking) return;
+    asking = true;
+    void Promise.resolve()
+      .then(() => guard())
+      .then(
+        (ok) => ok,
+        // A content whose question fails must not keep the dialog on screen.
+        () => true,
+      )
+      .then((ok) => {
+        asking = false;
+        if (ok && ctx.store.select('ui').modal === request) closeModal(ctx);
+      });
   }
 
   function show(request: ModalRequest): void {

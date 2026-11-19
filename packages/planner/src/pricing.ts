@@ -16,6 +16,9 @@ export type PriceTable = Record<string, ModelPrice | { tiers: { up_to_prompt_tok
  * `.friday/config.yaml` (`providers.anthropic.prices`) when they change.
  */
 export const DEFAULT_PRICES: PriceTable = {
+  // Fable 5.2 (added 2026-11-17, from the pricing page): without a price the planner could not
+  // count its spending against the budget, and refused the model.
+  'claude-fable-5-2': { input: 8, cache_write_5m: 10, cache_write_1h: 16, cache_read: 0.2, output: 40 },
   'claude-fable-5-1': { input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 0.25, output: 50 },
   'claude-opus-5-5': { input: 4, cache_write_5m: 5, cache_write_1h: 8, cache_read: 0.2, output: 20 },
   'claude-sonnet-5-5': { input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.1, output: 10 },

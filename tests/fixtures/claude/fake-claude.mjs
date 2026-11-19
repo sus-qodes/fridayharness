@@ -322,9 +322,21 @@ async function play(steps) {
           };
       send({ type: 'result', subtype: 'success', is_error: false, num_turns: 3, duration_ms: 10, total_cost_usd: 0.0012, usage, ...modelUsage, result: JSON.stringify(structured), structured_output: structured });
       return;
+    } else if (s.op === 'silent') {
+      // A turn that ends with no tool call, no text and no structured answer.
+      send({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, duration_ms: 1, total_cost_usd: 0, usage: {}, result: '' });
+      return;
     } else if (s.op === 'fail') {
       send({ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 1, total_cost_usd: 0, usage: {}, result: s.message ?? 'failed' });
       return;
+    } else if (s.op === 'budget') {
+      // The turn has cost `s.cost` by now: a session whose --max-budget-usd is at or below it ends
+      // there, as Claude Code ends one; with a higher cap, or none, the turn goes on.
+      const cap = flags['--max-budget-usd'] === undefined ? null : Number(flags['--max-budget-usd']);
+      if (cap !== null && cap <= s.cost) {
+        send({ type: 'result', subtype: 'error_max_budget_usd', is_error: true, num_turns: 2, total_cost_usd: s.cost, usage: {} });
+        return;
+      }
     } else if (s.op === 'exit') {
       process.exit(s.code ?? 3);
     }
@@ -378,6 +390,13 @@ const init = {
 // A host whose report lacks fields, or comes late, as a test asks for (review M8-R04).
 for (const k of script.omitInit ?? []) delete init[k];
 if (!script.initAfterResult) send(init);
+// A resumed session first answers what it queued itself (a background command of the process before
+// it, reported as "didn't finish"): a turn of its own, no model call and nothing said, with a
+// result, before it takes the message it was resumed with (seen on 2.1.306).
+if (flags['--resume'] && script.notifyOnResume) {
+  send({ type: 'result', subtype: 'success', is_error: false, num_turns: 0, duration_ms: 1, total_cost_usd: 0, usage: {}, result: '' });
+  await sleep(150);
+}
 take(first);
 const steps = resumed ? (script.resume ?? []) : (script.turns[session.turns] ?? []);
 session.turns += 1;

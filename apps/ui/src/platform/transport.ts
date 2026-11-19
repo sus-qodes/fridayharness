@@ -68,7 +68,7 @@ interface ErrorBody {
 export function errorFrom(status: number, body: unknown): ApiError {
   const e = (body as ErrorBody | null)?.error;
   const code = typeof e?.code === 'string' ? e.code : `HTTP-${status}`;
-  const message = typeof e?.message === 'string' ? e.message : `the daemon answered ${status}`;
+  const message = typeof e?.message === 'string' ? e.message : `Friday answered ${status}`;
   if (status === 401) return new AuthError(code, message);
   return new ApiError(
     status,

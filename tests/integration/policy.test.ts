@@ -139,11 +139,24 @@ describe('project policy and trust', () => {
     await cli(['--project', dir, 'approve', asked2.approval_id as string]);
     expect(await edit('backend/b.ts')).toBe('allow');
 
-    // ...and the trust both end when the loosening changes: it is a different policy.
+    // A second loosening waits for its own trust (2026-11-18): what was trusted stays in force, and
+    // so does the approval, because the policy in force is still the one it was made under. One
+    // hash used to cover the list, so a new file switched off what had been trusted.
     policyFile('relax.yaml', 'risk:\n  shell.git.commit: low\n');
     const changed = await reload(td);
     expect(changed.trusted).toBe(false);
-    expect((await pre('Bash', { command: 'git push' })).decision).toBe('deny');
+    expect(changed.loosening.map((l) => [l.setting, (l as { trusted?: boolean }).trusted])).toEqual([
+      ['autonomy.git.push', true],
+      ['risk.shell.git.commit', false],
+    ]);
+    expect((await pre('Bash', { command: 'git push' })).decision).toBe('allow');
+    expect(await edit('backend/b.ts')).toBe('allow');
+
+    // ...and the approval ends when the policy in force changes: trusting the new setting makes it
+    // a different policy.
+    expect((await cli(['--project', dir, 'policy', 'trust', '--yes'])).code).toBe(0);
+    expect((await show(td)).trusted).toBe(true);
+    expect((await pre('Bash', { command: 'git push' })).decision).toBe('allow');
     expect(await edit('backend/b.ts')).toBe('deny');
   });
 

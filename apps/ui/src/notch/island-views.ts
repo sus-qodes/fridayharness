@@ -15,11 +15,20 @@ import type { AppContext, Component } from '../shell/context.js';
 import { button, h, replace, setText, setVar, toggleClass } from '../ui/dom.js';
 import { cleanText, plural, truncate } from '../ui/format.js';
 import { icon, s } from '../ui/svg.js';
-import { itemSignature, type NotchModel, statsText, type WaitingItem } from './derive.js';
+import {
+  attentionWords,
+  itemSignature,
+  type NotchModel,
+  statsText,
+  turnHost,
+  turnPrompt,
+  type WaitingItem,
+} from './derive.js';
 
 /** The cards the Notch shows, built by their own areas. */
 export interface NotchSlots {
-  approval(ctx: AppContext, a: ApprovalRow, opts: { compact: boolean }): Component;
+  /** `onFull`: the card's full view is the Studio's; the Notch opens it there and folds. */
+  approval(ctx: AppContext, a: ApprovalRow, opts: { compact: boolean; onFull?: () => void }): Component;
   question(ctx: AppContext, e: EscalationView, opts: { compact: boolean; onLater: () => void }): Component;
   waiting(ctx: AppContext, t: SnapshotTask, opts: { compact: boolean }): Component;
   /** The goal line of the desktop card ("Describe a goal…"). */
@@ -45,6 +54,8 @@ export interface ViewHandlers {
   focusWaiting(): void;
   /** "Later" and `Esc`: fold the card. */
   later(): void;
+  /** "Let another agent take it": the task kept for an agent its person runs is free again. */
+  release(taskId: string): void;
   settings(): void;
   toggleMute(): void;
   /** The pager: the previous (−1) or next (+1) waiting item. */
@@ -219,6 +230,34 @@ function noticeItem(item: WaitingItem, handlers: ViewHandlers): HTMLElement | nu
     title = `Proposed plan v${item.version}`;
     line = truncate(cleanText(item.request), 120);
     door = 'Open the plan review';
+  } else if (item.kind === 'verify') {
+    title = 'Work is ready for you to verify';
+    line = `${visible(item.task.agent_key ?? 'An agent')} · ${truncate(cleanText(item.task.summary), 120)}`;
+    door = 'Open the verification';
+  } else if (item.kind === 'land') {
+    title = 'A goal is ready to land';
+    line = truncate(cleanText(item.request), 120);
+    door = 'Open the landing';
+  } else if (item.kind === 'answer') {
+    // The beginning of the answer is read right here; the rest is one step away.
+    title = item.failed ? 'A question got no answer' : 'Your answer is ready';
+    line = item.failed
+      ? truncate(cleanText(item.question), 160)
+      : truncate(cleanText(item.preview ?? item.question), 320);
+    door = item.failed ? 'See what happened' : 'Read the whole answer';
+  } else if (item.kind === 'stopped' || item.kind === 'asking') {
+    const w = attentionWords(item, turnHost(item.host));
+    title = w.title;
+    line = `${truncate(cleanText(w.line), 200)} · ${truncate(cleanText(item.task.summary), 80)}`;
+    door = 'Open the task';
+  } else if (item.kind === 'quiet') {
+    title = `${visible(item.agentKey)} has gone quiet`;
+    line = `Nothing was reported on this task for a while. Look at ${turnHost(item.host)}: it may be closed, or waiting for you there · ${truncate(cleanText(item.task.summary), 90)}`;
+    door = 'Open the task';
+  } else if (item.kind === 'turn') {
+    title = `Your turn in ${turnHost(item.host)}`;
+    line = `${visible(item.agentKey)} takes this task when you type ${turnPrompt(item.host)} there · ${truncate(cleanText(item.task.summary), 100)}`;
+    door = 'Open the task';
   } else if (item.kind === 'message') {
     const m = item.message;
     const from = m.from.kind === 'agent' ? (m.from.agent_key ?? m.from.id) : m.from.kind;
@@ -230,9 +269,10 @@ function noticeItem(item: WaitingItem, handlers: ViewHandlers): HTMLElement | nu
     line = 'Agents recorded them; approve or retract each.';
     door = 'Open Project memory';
   } else if (item.kind === 'policy') {
-    title = 'Policy change not yet trusted';
-    line = "The project's files loosen Friday's defaults; nothing of it applies until you trust it.";
-    door = 'Open Settings → Policy';
+    title = 'Project settings wait for your trust';
+    line =
+      'This project’s files ask to let Friday or its agents do more than the defaults. None of it applies on this computer until you trust it.';
+    door = 'Open Settings → Permissions';
   } else return null;
   return h(
     'div',
@@ -240,6 +280,12 @@ function noticeItem(item: WaitingItem, handlers: ViewHandlers): HTMLElement | nu
     h('p', { class: 'nt-notice-title' }, title),
     h('p', { class: 'nt-notice-line muted' }, line),
     button(door, () => handlers.openItem(item), { class: 'btn btn-ghost nt-notice-door' }),
+    item.kind === 'turn'
+      ? button('Let another agent take it', () => handlers.release(item.taskId), {
+          class: 'btn btn-ghost nt-notice-door nt-notice-release',
+          title: 'The task is free again for an agent that starts by itself',
+        })
+      : null,
   );
 }
 
@@ -305,15 +351,23 @@ export function expandedView(ctx: AppContext, slots: NotchSlots, handlers: ViewH
   const prompt = slots.quickPrompt(ctx, { onDone: () => handlers.promptDone() });
   const promptHolder = h('div', { class: 'nt-prompt' }, prompt.el);
 
-  // Footer: settings, mute, Open Studio.
+  // Footer: settings, mute, the fold, Open Studio.
   const settings = button([icon('gear', 14), 'Settings'], () => handlers.settings(), {
     class: 'btn btn-ghost nt-foot-btn',
+  });
+  // The fold (2026-11-17): a handle in the middle of the card's lower edge that rolls it back up
+  // into the pill. It is what `Esc` and "Later" do, which a hand on the mouse had no button for
+  // while the card showed a notice or nothing at all.
+  const fold = button(icon('chevronUp', 16), () => handlers.later(), {
+    class: 'btn nt-fold',
+    ariaLabel: 'Fold back up (Esc)',
+    title: 'Fold back up (Esc)',
   });
   const mute = button('', () => handlers.toggleMute(), { class: 'btn btn-ghost nt-foot-btn nt-mute' });
   const studioFoot = button([icon('expand', 14), 'Open Studio'], () => handlers.openStudioGeneral(), {
     class: 'btn btn-ghost nt-foot-btn',
   });
-  const footer = h('footer', { class: 'nt-foot' }, settings, mute, h('span', { class: 'spacer' }), studioFoot);
+  const footer = h('footer', { class: 'nt-foot' }, settings, mute, h('span', { class: 'spacer' }), fold, studioFoot);
 
   const el = h(
     'section',
@@ -336,7 +390,8 @@ export function expandedView(ctx: AppContext, slots: NotchSlots, handlers: ViewH
     if (!item) return;
     let comp: Component | null = null;
     try {
-      if (item.kind === 'approval') comp = slots.approval(ctx, item.approval, { compact: true });
+      if (item.kind === 'approval')
+        comp = slots.approval(ctx, item.approval, { compact: true, onFull: () => handlers.openItem(item) });
       else if (item.kind === 'question')
         comp = slots.question(ctx, item.escalation, { compact: true, onLater: () => handlers.later() });
       else if (item.kind === 'waiting') comp = slots.waiting(ctx, item.task, { compact: true });

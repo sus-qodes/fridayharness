@@ -123,6 +123,23 @@ export function buildProgram(): Command {
       );
     });
 
+  // A folder that is not under git, or has no commit: git started and the first version saved
+  // (2026-11-19). The desktop app offers it when Friday is set up in such a folder.
+  program
+    .command('git-start')
+    .description(
+      "start git in the project folder if needed and save its files as the first version (secrets and tools' folders left out)",
+    )
+    .action(async () => {
+      const root = path.resolve(g().project ?? process.cwd());
+      const { startGit } = await import('./start-git.js');
+      const r = startGit(root);
+      out(g(), r, () =>
+        [r.message, ...(r.secrets.length ? [`Left out, they hold secrets: ${r.secrets.join(', ')}`] : [])].join('\n'),
+      );
+      if (!['started', 'saved', 'already'].includes(r.status)) process.exitCode = 1;
+    });
+
   program
     .command('init')
     .description('create .friday/config.yaml and .friday/.gitignore in the current repository')
@@ -464,6 +481,20 @@ export function buildProgram(): Command {
         out(g(), res.task, () => `${res.task.task_id}  ${res.task.status}`);
       });
   }
+  task
+    .command('setup <task>')
+    .description("run the install of a task's folder again (after a failed install was fixed)")
+    .action(async (id: string) => {
+      const { client } = operator(g());
+      type Setup = { status: string; reason: string; output_tail: string | null } | null;
+      const res = await client.post<{ setup: Setup }>(client.projectPath(`/tasks/${id}/setup`), {});
+      out(g(), res, () => {
+        const s = res.setup;
+        if (!s) return `${id}  nothing to install: the project declares no install for a task folder`;
+        const tail = s.status === 'passed' || !s.output_tail ? '' : `\n${s.output_tail}`;
+        return `${id}  install ${s.status}: ${s.reason}${tail}`;
+      });
+    });
   task
     .command('role <task> <role>')
     .description('set the task contract role explicitly (a human role assignment)')

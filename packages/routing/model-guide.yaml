@@ -3,7 +3,7 @@
 # The catalog records what Friday knows about a model: who provides it, which harnesses run it,
 # whether it is local, its price and provenance. It is not a routing guide: the static role registry
 # in src/role-registry.ts chooses the dispatch order. Prices are USD per million tokens.
-version: 2026-10-21.2
+version: 2026-11-17.1
 
 models:
   - id: claude-fable-5-1
@@ -27,7 +27,17 @@ models:
       test_generation: 0.93
       review: 0.95
       security_analysis: 0.94
-    notes: top tier; the most expensive
+    notes: the top tier before Fable 5.2; still served, and dearer than its successor
+  # Fable 5.2 (added 2026-11-17): the current top tier, at a lower price than 5.1.
+  - id: claude-fable-5-2
+    provider: anthropic
+    vendors: [claude-code]
+    vision: true
+    local: false
+    context_tokens: 1000000
+    price: { input: 8, output: 40 }
+    capabilities: *top
+    notes: top tier; the most capable, and the most expensive of the current models
   - id: claude-opus-5-5
     provider: anthropic
     vendors: [claude-code, cursor]
@@ -77,7 +87,7 @@ models:
     vendors: [claude-code]
     vision: true
     local: false
-    context_tokens: 200000
+    context_tokens: 1000000
     price: { input: 0.1, output: 0.5 }
     latency_ms: 800
     capabilities:
@@ -172,7 +182,8 @@ models:
     notes: "handoff: #1 Vibe Code Bench for UI and frontend generation"
   - id: gemini-3.8-flash
     provider: google
-    vendors: [gemini]
+    # antigravity: seen running it (a session of CLI 1.5.9 reported "Gemini 3.8 Flash", 2026-11-16).
+    vendors: [gemini, antigravity]
     vision: true
     local: false
     context_tokens: 1048576

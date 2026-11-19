@@ -1,4 +1,5 @@
-import { globsOverlap, matchesAny } from '@friday/policy';
+import { matchesAny } from '@friday/policy';
+import { canRunSideBySide } from './parallel.js';
 import type { PlanDraft, PlanTaskDraft, ReplanDraft } from './schemas.js';
 
 /**
@@ -93,7 +94,10 @@ function findCycle(nodes: Map<string, Node>): string[] | null {
 }
 
 /**
- * Tasks that may run at the same time must not share write scope (single live writer, plan B26).
+ * Tasks that may run at the same time must be different pieces of work (`canRunSideBySide`): their
+ * write scopes are apart, or each has files of its own beside the ones they share. Until
+ * 2026-11-18 they could share nothing (single live writer, plan B26), which made a planner chain
+ * every task of an application, since each feature touches the router and the texts.
  * With `involving`, only pairs that include one of those ids are reported.
  */
 function parallelConflicts(nodes: Map<string, Node>, involving?: Set<string>): string[] {
@@ -106,9 +110,9 @@ function parallelConflicts(nodes: Map<string, Node>, involving?: Set<string>): s
       const b = live[j] as Node;
       if (involving && !involving.has(a.id) && !involving.has(b.id)) continue;
       const ordered = before.get(a.id)?.has(b.id) || before.get(b.id)?.has(a.id);
-      if (!ordered && globsOverlap(a.write, b.write)) {
+      if (!ordered && !canRunSideBySide(a.write, b.write)) {
         errors.push(
-          `${a.label} and ${b.label} can run at the same time but both write ${a.write.join(', ') || '(anything)'} / ${b.write.join(', ') || '(anything)'}: add a dependency between them or give them disjoint write scopes`,
+          `${a.label} and ${b.label} can run at the same time but would change the same files (${a.write.join(', ') || '(anything)'} / ${b.write.join(', ') || '(anything)'}): make one depend on the other, or give each files of its own. Two tasks may share a few files (a router, a texts file, a changelog) when each also has its own`,
         );
       }
     }

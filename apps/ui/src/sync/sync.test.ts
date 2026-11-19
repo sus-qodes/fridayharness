@@ -681,6 +681,27 @@ function boardStore(extra: Partial<UiSnapshot> = {}): FridayStore {
   return store;
 }
 
+describe('SyncEngine, told that Friday stopped', () => {
+  it('says stopped at once, and starts again on retry', async () => {
+    const t = new FakeTransport();
+    t.snapshots = [snapshot(10)];
+    t.fallback = silent;
+    const { store, engine } = setup(t);
+    await engine.start();
+    await tick(10);
+    expect(store.select('system').connection).toBe('live');
+    engine.daemonGone();
+    expect(store.select('system').connection).toBe('stopped');
+    expect(store.select('system').lastError).toBe(UNREACHABLE_MESSAGE);
+    // Told twice, or while already stopped: nothing more happens.
+    engine.daemonGone();
+    await engine.retry();
+    await tick(10);
+    expect(store.select('system').connection).toBe('live');
+    engine.stop();
+  });
+});
+
 describe('Dispatcher (plan §7.2)', () => {
   it('says which events change domain state', () => {
     for (const type of ['task.ready', 'approval.decided', 'brain.call_started', 'goal.created', 'control.paused'])
@@ -871,6 +892,56 @@ describe('Dispatcher (plan §7.2)', () => {
     const before = store.select('activity').reactions.length;
     expect(d.handle(event(12, 'brain.call_started', { job_id: 'j', kind: 'plan', goal_id: 'g' }))).toBe(true);
     expect(store.select('activity').reactions).toHaveLength(before);
+  });
+
+  it('says when an agent Friday started stopped on its own, and not when it was asked to (2026-11-17)', () => {
+    const store = boardStore();
+    const d = new Dispatcher(store);
+    const said: { kind: string; text: string; detail?: string; timeoutMs?: number; key?: string }[] = [];
+    d.notice = (t) => said.push(t);
+    // Asked to stop, or ended cleanly: nothing to say.
+    d.handle(event(11, 'agent.process_exited', { agent_key: 'claude-1', exit_code: 1, requested: true }));
+    d.handle(event(12, 'agent.process_exited', { agent_key: 'claude-1', exit_code: 0, requested: false }));
+    // An older Friday does not say whether it was asked: nothing is claimed.
+    d.handle(event(13, 'agent.process_exited', { agent_key: 'claude-1', exit_code: 1 }));
+    expect(said).toEqual([]);
+    d.handle(event(14, 'agent.process_exited', { agent_key: 'claude-1', exit_code: 1, requested: false }));
+    expect(said).toEqual([
+      {
+        kind: 'warn',
+        text: 'claude-1 stopped on its own',
+        detail: 'Nobody asked it to stop. Open Agents to see what it printed and to start it again.',
+        // It stays until read: the person may not be looking.
+        timeoutMs: 0,
+        key: 'agent-exit:claude-1',
+      },
+    ]);
+    expect(store.select('activity').reactions.at(-1)).toMatchObject({ kind: 'lost' });
+    // A window that shows no notices (the Notch) handles the event all the same.
+    const quiet = new Dispatcher(boardStore());
+    expect(() =>
+      quiet.handle(event(15, 'agent.process_exited', { agent_key: 'claude-1', exit_code: 1, requested: false })),
+    ).not.toThrow();
+  });
+
+  it('says when a remembered agent did not start with Friday, with why, as text', () => {
+    const d = new Dispatcher(boardStore());
+    const said: { text: string; detail?: string }[] = [];
+    d.notice = (t) => said.push(t);
+    d.handle(
+      event(11, 'agent.autostart_failed', {
+        agent_key: 'codex-1',
+        host: 'codex',
+        message: 'Codex was not found on this computer <img src=x onerror=alert(1)>',
+      }),
+    );
+    expect(said).toHaveLength(1);
+    expect(said[0]?.text).toBe('codex-1 did not start with Friday');
+    expect(said[0]?.detail).toBe(
+      'Codex was not found on this computer <img src=x onerror=alert(1)> Open Agents to start it.',
+    );
+    d.handle(event(12, 'agent.autostart_failed', { host: 'codex' }));
+    expect(said).toHaveLength(1);
   });
 
   it('maps the remaining reactions', () => {

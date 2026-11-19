@@ -181,6 +181,7 @@ pub fn build(app: &AppHandle, show_notch: bool) -> tauri::Result<Items<Wry>> {
     let show = CheckMenuItem::with_id(app, "show_notch", "Show Notch", true, show_notch, None::<&str>)?;
     let studio = MenuItem::with_id(app, "studio", "Open Studio", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+    let open_project = MenuItem::with_id(app, "open_project", "Open another project…", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", "Pause", true, None::<&str>)?;
     let mute = CheckMenuItem::with_id(app, "mute", "Mute sounds", true, false, None::<&str>)?;
     let browser = MenuItem::with_id(app, "browser", "Open in browser", true, None::<&str>)?;
@@ -192,8 +193,8 @@ pub fn build(app: &AppHandle, show_notch: bool) -> tauri::Result<Items<Wry>> {
     let menu = Menu::with_items(
         app,
         &[
-            &status, &version, &sep()?, &show, &studio, &settings, &sep()?, &pause, &mute, &browser, &halt, &sep()?, &stop,
-            &restart, &sep()?, &quit,
+            &status, &version, &sep()?, &show, &studio, &settings, &open_project, &sep()?, &pause, &mute, &browser, &halt,
+            &sep()?, &stop, &restart, &sep()?, &quit,
         ],
     )?;
     let tray = TrayIconBuilder::with_id(ID)

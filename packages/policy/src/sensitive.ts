@@ -27,6 +27,8 @@ const HOST_CONFIG = [
   '.friday/config.yaml',
   '.friday/policies/**',
   '.friday/.gitignore',
+  // Run by the project's linter (2026-11-19): it keeps Friday's own folder out of the lint.
+  '.friday/eslint.config.mjs',
 ];
 /**
  * Programs started by their bare name from the project's root: the hook command a host runs

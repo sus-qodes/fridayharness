@@ -21,6 +21,7 @@ export type TaskTrigger =
   | 'verification.fail'
   | 'verification.interrupt'
   | 'task.rework'
+  | 'integration.rework'
   | 'harness.lost'
   | 'run.resumed'
   | 'task.cancel';
@@ -103,6 +104,16 @@ export const TASK_RULES: readonly TaskRule[] = [
     event: 'task.verification_interrupted',
   },
   { from: ['FAILED'], to: 'REWORK', trigger: 'task.rework', actors: PLANNERS, event: 'task.rework' },
+  // Verified work that does not fit the goal's other work (2026-11-18): a collision with what
+  // other tasks changed, or checks that fail once it is merged with theirs. The task is not done
+  // until its work is in the goal, so it goes back to its agent, in the folder it worked in.
+  {
+    from: ['COMPLETED'],
+    to: 'REWORK',
+    trigger: 'integration.rework',
+    actors: ['system', 'human'],
+    event: 'task.rework',
+  },
   { from: ['REWORK'], to: 'READY', trigger: 'task.ready', actors: PLANNERS, event: 'task.ready' },
   // ADR-0003: harness loss and recovery.
   {

@@ -9,7 +9,8 @@ import { OpenCodeWorker } from './worker.js';
 
 interface Io {
   out(value: unknown, text: () => string): void;
-  extraChanges?(root: string): FileChange[];
+  /** On removal, `remove` names the host taken away: what is Friday's alone then goes too. */
+  extraChanges?(root: string, remove?: { host: string }): FileChange[];
 }
 export function opencodeConfigCli(
   ref: ProjectRef,
@@ -27,7 +28,7 @@ export function opencodeConfigCli(
   if (flags.scope === 'local' || flags.claudeMd || flags.requireEnforcing)
     throw new Error('OpenCode supports only an experimental project preflight declaration');
   const changes = planOpenCode({ projectDir: ref.root, ...(flags.remove ? { remove: true } : {}) });
-  if (!flags.remove) changes.push(...(io.extraChanges?.(ref.root) ?? []));
+  changes.push(...(io.extraChanges?.(ref.root, flags.remove ? { host: 'opencode' } : undefined) ?? []));
   if (!flags.print) applyOpenCodePlan(changes);
   io.out(
     {

@@ -10,7 +10,7 @@ import {
 import { ROLE_REGISTRY_SOURCE, type RoleDecision, type RoleDecisionInput } from '@friday/routing';
 import type { BrainJob, BrainJobInput, FridayState } from '@friday/state';
 import { consolidatePlan } from './consolidate.js';
-import { type DelegationCandidate, delegate } from './delegate.js';
+import { type DelegationCandidate, delegate, type RunningWork } from './delegate.js';
 import { buildEscalation, type EscalationReason } from './escalate.js';
 import {
   draftProjectIntent,
@@ -40,7 +40,7 @@ import {
 import { existingTasks, proposalFromDraft, proposalFromReplan } from './proposals.js';
 import type { ModelRequest, PlannerModel } from './providers/types.js';
 import { classifyTaskRoles, ROLE_CLASSIFIER_PROMPT_VERSION, type RoleClassifierSettings } from './role-classifier.js';
-import { draftJsonSchema, type NeedsHuman } from './schemas.js';
+import { draftJsonSchema, type NeedsHuman, withoutAssignments } from './schemas.js';
 import { type BrainAction, failureAction, type TriggerFacts, triggersFor } from './triggers.js';
 import { type ExistingTask, type PlanTaskBounder, validateReplanDraft } from './validate.js';
 
@@ -74,6 +74,15 @@ export interface BrainDeps {
   /** The planning model; null when none is configured (`plannerUnavailable` says why). */
   model: PlannerModel | null;
   plannerUnavailable?: string;
+  /**
+   * Why the model cannot be called now though one is configured (the project does not allow remote
+   * calls, this machine has not approved them, no key is stored), or null when it can. Read at each
+   * decision. Without it a configured model counted as a planner that plans, so a setup that never
+   * could (the default: provider anthropic, no key) answered every failed check with a planning
+   * call that was refused and a "Friday cannot plan" question, where a setup with no planner at
+   * all sends the task back to its agent (2026-11-17).
+   */
+  plannerReady?: () => string | null;
   settings: BrainSettings;
   /** Read before every model call; defaults to `settings`. */
   remotePolicy?: () => RemotePolicy;
@@ -617,6 +626,8 @@ export class MasterBrain {
           .brainJobs(projectId, ['pending', 'waiting', 'calling', 'done', 'failed'])
           .some((j) => j.kind === 'role' && j.task_id === taskId),
       failuresOf: (taskId) => state.q.verificationFailures(taskId),
+      setupTrouble: (taskId) => state.worktreeSetupTrouble(projectId, taskId),
+      checkTrouble: (taskId) => state.checksNotRun(taskId),
       replansOf: (goalId) => {
         const g = state.q.findGoal(projectId, goalId);
         return (g?.plan_id ? state.q.planVersions(g.plan_id) : []).filter(
@@ -626,6 +637,8 @@ export class MasterBrain {
       brainEscalation: (id) => {
         const row = state.q.escalation(id);
         if (row?.requested_by_kind !== 'master_brain' || !row.goal_id) return null;
+        // An answer to "the install failed" is a person's decision on record; the plan is not at fault.
+        if (row.kind === 'setup_failed' || row.kind === 'check_not_run') return null;
         if (row.kind !== 'ambiguous_intent') return { goal_id: String(row.goal_id), replan: true, force: false };
         // A question asked by a proposal: re-propose (replacing it) only if it is still undecided.
         const d = JSON.parse(String(row.details_json ?? '{}')) as { plan_id?: string; plan_version?: number };
@@ -633,9 +646,12 @@ export class MasterBrain {
         const pending = v?.status === 'PROPOSED';
         return { goal_id: String(row.goal_id), replan: pending, force: pending };
       },
-      planner: this.#deps.model
-        ? { available: true, reason: '' }
-        : { available: false, reason: this.#deps.plannerUnavailable ?? 'no planner is configured' },
+      planner: (() => {
+        const why = this.#deps.model
+          ? (this.#deps.plannerReady?.() ?? null)
+          : (this.#deps.plannerUnavailable ?? 'no planner is configured');
+        return why === null ? { available: true, reason: '' } : { available: false, reason: why };
+      })(),
       limits: {
         escalateAfterFailures: settings.escalateAfterFailures,
         maxReplans: settings.maxReplans,
@@ -1083,6 +1099,7 @@ export class MasterBrain {
         instructions: PLAN_INSTRUCTIONS,
         prompt: planPrompt(promptGoal(goal), {
           feedback: [feedback, ...decisions].filter(Boolean).join('\n') || null,
+          sideBySide: this.#sideBySide(),
         }),
         schema: draftJsonSchema('plan'),
         schemaName: 'plan',
@@ -1109,10 +1126,13 @@ export class MasterBrain {
     // A plan asked for with a human's feedback is proposed as the model wrote it: the feedback may
     // be how the human wants the work split.
     const teams = state.planBounds?.().teams ?? {};
+    // A model never reserves work for an agent: the agent a task is for is a person's choice.
+    const drafted = withoutAssignments(outcome.draft);
     const d = feedback
-      ? outcome.draft
-      : consolidatePlan(outcome.draft, {
+      ? drafted
+      : consolidatePlan(drafted, {
           teamRoles: new Set(Object.keys(teams).filter((r) => (teams[r]?.length ?? 0) > 0)),
+          sideBySide: this.#sideBySide(),
         }).draft;
     const v = state.proposePlan(
       projectId,
@@ -1197,7 +1217,8 @@ export class MasterBrain {
     const callId = this.#recordCalls(outcome.calls, goalId, goal.plan_id);
     if (this.#closed && !outcome.ok && outcome.reason === 'provider') return this.#interruptedByShutdown(job);
     if (!outcome.ok) return { status: 'done', result: this.#plannerFailed(outcome, goalId, taskId) };
-    const d = outcome.draft;
+    // A model never reserves work for an agent: the agent a task is for is a person's choice.
+    const d = withoutAssignments(outcome.draft);
     // Freshness (review F06): the revision must still fit the plan and the tasks as they are now.
     const nowGoal = state.q.goal(projectId, goalId);
     const nowActive = nowGoal.plan_id ? state.q.latestPlanVersion(nowGoal.plan_id, ['ACTIVE']) : undefined;
@@ -1404,8 +1425,25 @@ export class MasterBrain {
         ],
         action: 'wait for a human decision before revising again',
       },
+      setup_failed: {
+        question: `The checks of ${what} failed, and its dependencies were not installed in its folder (${detail}). This looks like a setup problem, not the agent's work. How should Friday continue?`,
+        options: [
+          'fix what kept it from installing, then install again ("friday task setup <task>")',
+          'send it back to its agent ("friday task rework <task>")',
+          'cancel it ("friday task cancel <task>")',
+        ],
+        action: 'wait: another attempt would fail the same way',
+      },
+      check_not_run: {
+        question: `The work on ${what} was not checked: ${detail}. This is the setup of this computer or of the project's checks, not the agent's work. How should Friday continue?`,
+        options: [
+          'install what the check needs, or correct the check, then send the task back to its agent',
+          'cancel it',
+        ],
+        action: 'wait: another attempt would end the same way',
+      },
       action_failed: {
-        question: `The Master Brain could not finish its work on ${what}: ${detail}. How should it continue?`,
+        question: `Friday's planner could not finish its work on ${what}: ${detail}. How should it continue?`,
         options: [
           'fix the cause, then "friday goal replan"',
           'continue by hand ("friday plan propose", "friday task …")',
@@ -1423,7 +1461,12 @@ export class MasterBrain {
       question: s.question,
       options: s.options,
       proposed_action: s.action,
-      evidence: [...(taskId ? this.#evidence(taskId, null) : []), ...errors],
+      evidence: [
+        ...(taskId ? this.#evidence(taskId, null) : []),
+        ...errors,
+        // What the install printed last, for the card that offers to run it again.
+        ...(reason === 'setup_failed' && taskId ? state.worktreeSetupEvidence(projectId, taskId) : []),
+      ],
     });
     const id = state.raiseEscalation(projectId, MASTER_BRAIN, {
       kind: esc.reason,
@@ -1489,12 +1532,24 @@ export class MasterBrain {
             recent_paths: stats.recent_paths,
             goals_done: stats.goals_done,
             cost: 0,
+            waits_for_person: Boolean(h) && h?.attach_mode !== 'spawn',
+            // Each task of an agent Friday starts gets a folder of its own, where worktrees are on.
+            own_folder: h?.attach_mode === 'spawn' && state.config.worktreeMode === 'per_task',
           },
           spawn: h?.attach_mode === 'spawn',
           free: live && !a.shadow && a.status === 'AVAILABLE' && !a.current_task_id,
         },
       ];
     });
+  }
+
+  /**
+   * How many agents can work at the same time now: every connected agent Friday starts in a folder
+   * of its own, and one more for the project folder when an agent its person runs is connected.
+   */
+  #sideBySide(): number {
+    const live = this.#candidates(this.#deps.state.clock.now()).filter((x) => x.c.harness_live && !x.c.shadow);
+    return live.filter((x) => x.c.own_folder).length + (live.some((x) => !x.c.own_folder) ? 1 : 0);
   }
 
   /** Assigns READY plan tasks of active goals, best first (ADR-0013 §9). */
@@ -1512,13 +1567,18 @@ export class MasterBrain {
         .filter((e) => e.kind === 'recovery_needed' || e.kind === 'routing_violated')
         .map((e) => String(e.task_id)),
     );
-    // Plan tasks of active goals, and loose tasks a human reserved for an agent: a spawned agent
-    // cannot claim a reservation, so it is pushed (below); other loose tasks stay a human's.
+    // Plan tasks of active goals; loose tasks a human reserved for an agent (a spawned agent cannot
+    // claim a reservation, so it is pushed below); and loose tasks that came back (2026-11-17): one
+    // that an agent already held and that is READY again, after its agent was lost or it was
+    // released, gets the next free agent. Before, such a task was taken by nobody while two agents
+    // were idle. A loose task a person made ready and gave to nobody yet stays theirs to give.
     const ready = state.q
       .tasks(projectId, { statuses: ['READY'] })
       .filter(
         (t) =>
-          ((t.goal_id && active.has(t.goal_id)) || (!t.goal_id && t.reserved_for_agent_key)) && !asked.has(t.task_id),
+          (t.goal_id
+            ? active.has(t.goal_id)
+            : Boolean(t.reserved_for_agent_key) || state.q.runs(t.task_id).length > 0) && !asked.has(t.task_id),
       )
       .sort(
         (a, b) => (PRIORITY[a.priority] ?? 9) - (PRIORITY[b.priority] ?? 9) || a.created_at.localeCompare(b.created_at),
@@ -1548,10 +1608,21 @@ export class MasterBrain {
       }
       // A review or research task without a write scope is read-only (the policy keeps it so), so
       // it conflicts with nothing; an implementation task without a scope may write anywhere.
+      // Where each works matters (2026-11-18): tasks in folders of their own may change the same
+      // files, tasks in one folder may not.
       const running = state.q
         .tasks(projectId, { statuses: ['ASSIGNED', 'RUNNING', 'WAITING'] })
         .filter((t) => !((t.kind === 'review' || t.kind === 'research') && (t.scope?.write ?? []).length === 0))
-        .map((t) => t.scope?.write ?? []);
+        .map((t): RunningWork => {
+          const run = t.current_run_id ? state.q.findRun(t.current_run_id) : undefined;
+          return {
+            write: t.scope?.write ?? [],
+            // Its attempt works on the task's own branch, or waits for the folder of that branch.
+            own_folder: Boolean(run && (run.branch_ref || run.workspace === 'pending')),
+            task_id: t.task_id,
+            agent_key: (t.assigned_agent_id && state.q.findAgent(t.assigned_agent_id)?.agent_key) || null,
+          };
+        });
       // The model each agent's harness would run for this task, and its cost (ADR-0031 §9). An
       // agent whose route blocks the task is no candidate (review F01).
       const fitted = candidates.map((x) => ({ x, fit: this.#deps.modelFit?.(task, x.c.agent_id) ?? null }));

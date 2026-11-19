@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { FridayError, TaskKind, TaskScope } from '@friday/protocol';
-import { parse as parseYaml } from 'yaml';
+import { isMap, isNode, isScalar, parseDocument, parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
 /**
@@ -79,6 +79,23 @@ export const ExecutionSettings = z
   })
   .strict()
   .prefault({});
+
+/**
+ * A path inside the project, as `worktrees.files` names one: relative, no drive, no `..`, never
+ * git's or Friday's own folder. Checked again against the real file when it is copied.
+ */
+const InsidePath = z
+  .string()
+  .trim()
+  .min(1)
+  .max(300)
+  .refine(
+    (p) =>
+      !/^([A-Za-z]:|[\\/]|~)/.test(p) &&
+      !p.split(/[\\/]/).some((part) => part === '..' || part === '.git' || part === '.friday' || part === ''),
+    'name a file inside the project by its path from the project folder (no "..", no drive, not .git or .friday)',
+  );
+const CopiedFileSpec = z.object({ from: InsidePath, to: InsidePath.optional() }).strict();
 
 const McpLevel = z.enum(['auto', 'review', 'manual', 'never']);
 const MCP_NAME = /^[A-Za-z0-9_-]{1,64}$/;
@@ -227,6 +244,11 @@ const Check = z.object({
   /** false: advisory; a failure is reported and does not fail the verification. */
   required: z.boolean().default(true),
   /**
+   * true: this check also runs for a change that touches only documents (`.md`, `.rst`, `.adoc`).
+   * By default only lint checks do: a build, the types and the tests do not read documents.
+   */
+  on_documents: z.boolean().optional(),
+  /**
    * Arguments that run only the tests related to the change, where "{files}" stands for them
    * (ADR-0024 §5). This targeted form runs first; if it fails, the full check is skipped.
    */
@@ -368,6 +390,21 @@ export const FridayConfig = z
       })
       .prefault({}),
     /**
+     * When a goal's verified work is merged into the branch the project folder has checked out
+     * (2026-11-17): `ask` (a person presses Land), `goal` (once the whole goal is complete) or
+     * `task` (each task as it is integrated). Anything but `ask` is a loosening this clone trusts
+     * first, and it applies only in a project with a required check: unverified work never lands
+     * by itself. Friday never pushes.
+     */
+    landing: z.object({ mode: z.enum(['ask', 'goal', 'task']).default('ask') }).prefault({}),
+    /**
+     * Verified work that does not fit the goal's other work (2026-11-18): it collides with what
+     * tasks running at the same time changed, or the checks fail once it is merged with theirs.
+     * `back_to_agent` is how often such work goes back to its agent by itself, in its own folder,
+     * before a person is asked; 0 asks a person at once, as Friday did before.
+     */
+    integration: z.object({ back_to_agent: z.number().int().min(0).max(5).default(2) }).prefault({}),
+    /**
      * Conflict-prone files (ADR-0025): writing under a `required` pattern takes an exclusive
      * reservation for the task; `ttl_ms` is how long it outlives a task that stands still.
      */
@@ -385,6 +422,18 @@ export const FridayConfig = z
     worktrees: z
       .object({
         mode: z.enum(['per_task', 'off']).default('per_task'),
+        /**
+         * Files that are in the project folder and not in version control, which every copy of the
+         * project gets (2026-11-17): a task's worktree, and Friday's checkout of a merged revision.
+         * A copy is made from version control, so a settings file such as `.env` is not in it, and
+         * a project whose tests read one fails every check there. `from` is the file in the project
+         * folder, `to` its name in the copy (the same when left out), so a file kept for agents
+         * (`.env.agents.local`, with no real key in it) can stand in for the person's own `.env`.
+         * A loosening: programs an agent runs can read what is copied, so it waits for
+         * `friday policy trust` on every clone. Never written over a tracked file, and only where
+         * the copy's own ignore rules keep it out of a commit.
+         */
+        files: z.array(CopiedFileSpec).max(20).default([]),
         /**
          * Dependencies in a fresh task worktree (plan Phase 7): Friday installs them before the agent
          * starts, in the execution profile. Without a command, the lockfile decides (pnpm, npm, yarn,
@@ -516,6 +565,10 @@ export const LIVE_CONFIG_KEYS: readonly string[] = [
   'risk',
   'security',
   'verification',
+  'landing',
+  'integration',
+  // Read when a copy is prepared, so a change needs no restart (the rest of `worktrees` does).
+  'worktrees.files',
   'reservations',
   'recovery',
   'context',
@@ -626,6 +679,296 @@ export function loadConfig(path: string): FridayConfig {
   return parseConfig(readFileSync(path, 'utf8'), path);
 }
 
+/** One file every copy of the project gets (`worktrees.files`): project-relative, forward or back slashes. */
+export interface CopiedFile {
+  from: string;
+  to?: string | undefined;
+}
+
+/**
+ * The settings a person may change from the interface (2026-11-16), each with the values it takes.
+ * Nothing here applies on its own say: automatic verification is a loosening this clone trusts
+ * before it applies (ADR-0029 §6), remote planning needs this machine's approval as well as the
+ * project's request, and the planner's provider is read when Friday starts.
+ */
+export const EDITABLE_SETTINGS = {
+  'verification.auto_on_completion': z.boolean(),
+  // Landing without a click: a loosening, in force once this clone trusts it.
+  'landing.mode': z.enum(['ask', 'goal', 'task']),
+  'master_brain.provider': z.enum(['anthropic', 'claude-code', 'none']),
+  // Plans start without a person's approval: a loosening, in force once this clone trusts it.
+  'master_brain.auto_approve': z.boolean(),
+  'providers.claude-code.allow_remote': z.boolean(),
+  'providers.claude-code.daily_budget_usd': z.number().min(0).max(100_000),
+  // The same two for planning with an Anthropic key (2026-11-17): they were a line to write by hand.
+  'providers.anthropic.allow_remote': z.boolean(),
+  'providers.anthropic.daily_budget_usd': z.number().min(0).max(100_000),
+  // What agents may run without asking (below): `auto` is a loosening this clone trusts first.
+  'autonomy.file.write': z.enum(['auto', 'review']),
+  'autonomy.git.mutate': z.enum(['auto', 'review']),
+  'autonomy.package.install': z.enum(['auto', 'review']),
+  'autonomy.fs.destructive': z.enum(['auto', 'review']),
+  'autonomy.process.kill': z.enum(['auto', 'review']),
+  'autonomy.network.fetch': z.enum(['auto', 'review']),
+  'autonomy.unknown': z.enum(['auto', 'review']),
+  // Files outside version control that every copy of the project gets: a loosening, trusted first.
+  'worktrees.files': z.array(CopiedFileSpec).max(20),
+} as const;
+export type EditableSetting = keyof typeof EDITABLE_SETTINGS;
+
+/**
+ * The command classes a person may let agents run without asking, from the interface (2026-11-17):
+ * the ones Friday asks about by default (`review` in the policy's `DEFAULT_AUTONOMY`). Pushing,
+ * force-pushing and publishing always ask, and reading secrets is never allowed: those are not
+ * here, so no page can loosen them.
+ */
+export const ASKABLE_COMMAND_CLASSES = [
+  'file.write',
+  'git.mutate',
+  'package.install',
+  'fs.destructive',
+  'process.kill',
+  'network.fetch',
+  'unknown',
+] as const;
+
+/**
+ * Where a setting stands in config.yaml. A command class is one key under `autonomy`, with its dot
+ * (`autonomy: { "git.mutate": auto }`); every other setting is a path of plain keys.
+ */
+export function settingPath(setting: string): string[] {
+  return setting.startsWith('autonomy.') ? ['autonomy', setting.slice('autonomy.'.length)] : setting.split('.');
+}
+
+/** A scalar as config.yaml writes it: a word plain, anything else quoted as JSON (valid YAML). */
+function yamlScalar(value: unknown): string {
+  if (typeof value === 'boolean' || typeof value === 'number') return String(value);
+  const s = String(value);
+  return /^[A-Za-z][A-Za-z0-9_-]*$/.test(s) && !/^(?:true|false|null|yes|no|on|off)$/i.test(s) ? s : JSON.stringify(s);
+}
+
+const yamlKey = (k: string): string => (/^[A-Za-z0-9_-]+$/.test(k) ? k : JSON.stringify(k));
+
+/** The text of the line an offset is on, up to the offset: what stands before it on its line. */
+function lineBefore(text: string, offset: number): string {
+  return text.slice(text.lastIndexOf('\n', offset - 1) + 1, offset);
+}
+
+/**
+ * `text` with one setting set by changing as little of it as can be: the value's own characters
+ * when the key is there, new lines after its section when it is not. Null when the file is laid
+ * out in a way this does not handle (a flow map, an empty or aliased section): the caller then
+ * writes the document whole.
+ */
+function patchOne(text: string, at: readonly string[], value: unknown): string | null {
+  const doc = parseDocument(text);
+  if (doc.errors.length) return null;
+  let node: unknown;
+  try {
+    node = doc.getIn(at, true);
+  } catch {
+    return null;
+  }
+  if (node !== undefined) {
+    // The key is there: its value is replaced where it stands, and nothing else moves.
+    if (!isScalar(node) || !node.range) return null;
+    const [start, end] = node.range;
+    if (text.slice(start, end).includes('\n')) return null;
+    return `${text.slice(0, start)}${yamlScalar(value)}${text.slice(end)}`;
+  }
+  // The key is not there: the deepest section of its path that is, takes it as new lines.
+  let depth = at.length - 1;
+  let parent: unknown;
+  for (; depth >= 0; depth -= 1) {
+    try {
+      parent = depth === 0 ? doc.contents : doc.getIn(at.slice(0, depth), true);
+    } catch {
+      return null;
+    }
+    if (parent !== undefined) break;
+  }
+  const missing = at.slice(depth);
+  const linesAt = (indent: string) =>
+    missing.map((k, i) => {
+      const pad = `${indent}${'  '.repeat(i)}`;
+      return i === missing.length - 1 ? `${pad}${yamlKey(k)}: ${yamlScalar(value)}` : `${pad}${yamlKey(k)}:`;
+    });
+  if (isScalar(parent) && parent.value === null && depth > 0) {
+    // A section with nothing under it (`providers:` whose lines are commented out): the new lines
+    // go right under its key, before those comments, which stay.
+    let holder: unknown;
+    try {
+      holder = depth === 1 ? doc.contents : doc.getIn(at.slice(0, depth - 1), true);
+    } catch {
+      return null;
+    }
+    if (!isMap(holder) || holder.flow) return null;
+    const pair = holder.items.find((item) => isScalar(item.key) && item.key.value === at[depth - 1]);
+    const key = pair?.key as { range?: [number, number, number] | null } | undefined;
+    if (!key?.range) return null;
+    const keyIndent = lineBefore(text, key.range[0]);
+    const lineEnd = text.indexOf('\n', key.range[1]);
+    const rest = text.slice(key.range[1], lineEnd === -1 ? text.length : lineEnd);
+    // Only `key:` alone on its line, a comment after it at most (`key: ~` is written whole).
+    if (!/^ *$/.test(keyIndent) || !/^:[ \t]*(#.*)?$/.test(rest)) return null;
+    const added = linesAt(`${keyIndent}  `).join('\n');
+    return lineEnd === -1 ? `${text}\n${added}\n` : `${text.slice(0, lineEnd)}\n${added}${text.slice(lineEnd)}`;
+  }
+  if (!isMap(parent) || parent.flow || !parent.items.length || !parent.range) return null;
+  const first = parent.items[0]?.key as { range?: [number, number, number] | null } | null | undefined;
+  if (!first?.range) return null;
+  const indent = lineBefore(text, first.range[0]);
+  // Only a block map whose keys start their lines is extended (`a: { b: 1 }` and `- a: 1` are not).
+  if (!/^ *$/.test(indent)) return null;
+  const lines = linesAt(indent);
+  // After the last line of the section, a comment at its end included.
+  const lastLineEnd = text.indexOf('\n', Math.max(0, parent.range[1] - 1));
+  const head = lastLineEnd === -1 ? text : text.slice(0, lastLineEnd);
+  const tail = lastLineEnd === -1 ? '' : text.slice(lastLineEnd);
+  // A new section of the whole file stands apart from the one before it.
+  const gap = depth === 0 && head.trim() ? '\n' : '';
+  return `${head}\n${gap}${lines.join('\n')}${tail || '\n'}`;
+}
+
+/** The parsed values of a config text with these settings set: what an edit must produce, nothing more. */
+function expected(text: string, sets: readonly (readonly [readonly string[], unknown])[]): string {
+  const root = (parseYaml(text) ?? {}) as Record<string, unknown>;
+  for (const [at, value] of sets) {
+    let o = root;
+    for (const k of at.slice(0, -1)) {
+      if (typeof o[k] !== 'object' || o[k] === null || Array.isArray(o[k])) o[k] = {};
+      o = o[k] as Record<string, unknown>;
+    }
+    o[at.at(-1) as string] = value;
+  }
+  return canonical(root);
+}
+
+/** A value with its keys in order, as text: two configurations are the same when these are. */
+function canonical(v: unknown): string {
+  const sort = (x: unknown): unknown =>
+    Array.isArray(x)
+      ? x.map(sort)
+      : x && typeof x === 'object'
+        ? Object.fromEntries(
+            Object.keys(x as Record<string, unknown>)
+              .sort()
+              .map((k) => [k, sort((x as Record<string, unknown>)[k])]),
+          )
+        : x;
+  return JSON.stringify(sort(v));
+}
+
+/**
+ * `text` (a config.yaml) with these settings set; refused when a setting is not editable, a value
+ * is not one it takes, or the result is not a valid configuration. Answers the new text and the
+ * settings that changed.
+ *
+ * The file is a person's, and tracked: only what was asked changes (2026-11-17). A value is
+ * replaced where it stands and a missing key is added as new lines, so every comment, its spacing
+ * and every other line stay as they were, as do the file's line endings (CRLF on a Windows
+ * checkout) and its byte-order mark. Written whole through the YAML library, as before, only when
+ * the layout is one the small edit does not handle, and then without folding long lines. Either way
+ * the result is read back: it must be a configuration Friday reads whose values are the old ones
+ * with exactly these settings set, or nothing is written.
+ */
+export function editConfigText(
+  text: string,
+  sets: Readonly<Record<string, unknown>>,
+  source = 'config.yaml',
+): { text: string; changed: EditableSetting[] } {
+  const bom = text.startsWith('\uFEFF') ? '\uFEFF' : '';
+  const raw = bom ? text.slice(1) : text;
+  const newlines = raw.match(/\r\n|\n/g) ?? [];
+  const crlf = newlines.length > 0 && newlines.filter((n) => n === '\r\n').length * 2 >= newlines.length;
+  const lf = raw.replace(/\r\n/g, '\n');
+  const doc = parseDocument(lf);
+  if (doc.errors.length) {
+    throw new FridayError('invalid_request', `${source} is not valid YAML: ${doc.errors[0]?.message ?? 'unreadable'}`);
+  }
+  const wanted: [EditableSetting, readonly string[], unknown][] = [];
+  for (const [key, value] of Object.entries(sets)) {
+    if (!Object.hasOwn(EDITABLE_SETTINGS, key)) {
+      throw new FridayError('invalid_request', `${key} is not a setting the interface changes`);
+    }
+    const setting = key as EditableSetting;
+    const checked = EDITABLE_SETTINGS[setting].safeParse(value);
+    if (!checked.success) {
+      throw new FridayError('invalid_request', `${key}: ${checked.error.issues[0]?.message ?? 'not a value it takes'}`);
+    }
+    const at = settingPath(setting);
+    let now: unknown;
+    try {
+      now = doc.getIn(at);
+    } catch {
+      now = undefined;
+    }
+    const held = isNode(now) ? now.toJSON() : now;
+    if (!sameValue(held, checked.data)) wanted.push([setting, at, checked.data]);
+  }
+  if (!wanted.length) return { text, changed: [] };
+  const goal = expected(
+    lf,
+    wanted.map(([, at, value]) => [at, value] as const),
+  );
+  const reads = (candidate: string): boolean => {
+    try {
+      return canonical(parseYaml(candidate) ?? {}) === goal;
+    } catch {
+      return false;
+    }
+  };
+
+  // The small edit, one setting after another (a second key may go into a section the first made).
+  let out: string | null = lf;
+  for (const [, at, value] of wanted) {
+    // A list is not a value the small edit writes: the document is then written whole.
+    out = out === null || (typeof value === 'object' && value !== null) ? null : patchOne(out, at, value);
+  }
+  if (out !== null && !reads(out)) out = null;
+
+  if (out === null) {
+    // The whole document, through the YAML library: comments are kept, their spacing is its own.
+    try {
+      for (const [setting, at, value] of wanted) {
+        for (let i = 1; i < at.length; i += 1) {
+          const prefix = at.slice(0, i);
+          const node = doc.getIn(prefix, true);
+          if (node === undefined) continue;
+          // `providers:` with nothing under it is an empty section, not a value.
+          if (isScalar(node) && node.value === null) doc.setIn(prefix, doc.createNode({}));
+          else if (!isMap(node)) {
+            throw new FridayError(
+              'invalid_request',
+              `${source}: ${prefix.join('.')} is not a section of settings (it is a value, a list or a reference), so ${setting} cannot be set under it; correct the file by hand`,
+            );
+          }
+        }
+        doc.setIn(at, typeof value === 'object' && value !== null ? doc.createNode(value) : value);
+      }
+      out = doc.toString({ lineWidth: 0 });
+    } catch (e) {
+      if (e instanceof FridayError) throw e;
+      throw new FridayError(
+        'invalid_request',
+        `${source} could not be changed (${(e as Error).message}); correct the file by hand`,
+      );
+    }
+    if (!reads(out)) {
+      throw new FridayError(
+        'invalid_request',
+        `${source} could not be changed without altering other settings; correct the file by hand`,
+      );
+    }
+  }
+  // The result must still be a configuration Friday reads, or nothing is written.
+  parseConfig(out, source);
+  return {
+    text: `${bom}${crlf ? out.replace(/\n/g, '\r\n') : out}`,
+    changed: wanted.map(([setting]) => setting),
+  };
+}
+
 /** Initial config written by `friday init`. Block style so the hook launcher can find the id without a YAML parser. */
 export function renderInitialConfig(projectId: string, name: string, opts: { graph?: boolean } = {}): string {
   return `# Friday project configuration. Tracked in git; never put secrets here.
@@ -679,6 +1022,15 @@ verification:
 #       cache:                              # a lockfile install is paid once per lockfile, then cloned
 #         enabled: true
 #         max_mb: 4096
+#
+# A copy of the project is made from version control, so a settings file such as .env is not in it.
+# List the files every copy should get; "to" gives it another name there. Programs an agent runs can
+# read them, so the list waits for "friday policy trust" on every clone.
+#   worktrees:
+#     files:
+#       - from: .env
+#       - from: .env.agents.local             # a file with no real key in it,
+#         to: .env                            # given to the copies as .env
 
 # What "friday init" does once for a new project: build the code graph right away, so the Studio
 # and every agent start from a ready one (it then follows your changes). false: built on first use.

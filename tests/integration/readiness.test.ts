@@ -58,12 +58,14 @@ describe('runtime readiness', () => {
     // Nothing connected, nothing checked: no candidate can be shown able to take the work.
     const nothing = (await explain()).dry_run;
     expect(nothing).toMatchObject({ blocked: true, model: null });
-    expect(nothing.reason).toContain('not ready: claude-code/claude-sonnet-5-5 is not installed');
+    expect(nothing.reason).toContain('not ready: claude-code/claude-sonnet-5-5 has not been seen here yet');
     expect(nothing.readiness.map((r) => [r.host, r.model, r.dispatchable])).toEqual([
       ['claude-code', 'claude-sonnet-5-5', false],
       ['cursor', 'claude-opus-5-5', false],
       ['codex', 'openai/gpt-6.1-sol', false],
       ['opencode', 'z-ai/glm-5.3', false],
+      // Last in the role since 2026-11-16, and no more ready than the rest on a machine that has seen none.
+      ['antigravity', 'gemini-3.8-flash', false],
     ]);
     let report = await td.operator.get<ReadinessReport>(P('/readiness'));
     const codex = report.hosts.find((h) => h.host === 'codex');
@@ -76,6 +78,8 @@ describe('runtime readiness', () => {
     ]);
     expect(codex?.assessments.find((a) => a.model === 'openai/gpt-6.1-sol')?.roles).toEqual([
       { role: 'backend_engineer', rank: 4 },
+      // Codex's place in frontend work, added 2026-11-17 after the ranked entries.
+      { role: 'frontend_engineer', rank: 5 },
       { role: 'qa_and_debugging', rank: 2 },
       { role: 'devops_and_terminal', rank: 2 },
     ]);
@@ -117,7 +121,7 @@ describe('runtime readiness', () => {
     expect(explained.code, explained.stderr).toBe(0);
     expect(explained.stdout).toContain('readiness claude-code/claude-sonnet-5-5: ready');
     expect(explained.stdout).toContain(
-      'readiness cursor/claude-opus-5-5: not ready, cursor/claude-opus-5-5 is not installed',
+      'readiness cursor/claude-opus-5-5: not ready, cursor/claude-opus-5-5 has not been seen here yet',
     );
     const evidenceShown = await cli(['--project', dir, 'readiness', '--evidence', '--host', 'claude-code']);
     expect(evidenceShown.code, evidenceShown.stderr).toBe(0);
@@ -148,12 +152,31 @@ describe('runtime readiness', () => {
     const blocked = await td.operator.get<{ dry_run: DryRun }>(P(`/routing/explain/${task.task_id}`));
     expect(blocked.dry_run).toMatchObject({ blocked: true, model: null });
     expect(blocked.dry_run.reason).toContain('codex/openai/gpt-6.1-sol is not signed in: run "codex login"');
+    // The board says which host is kept out and why, so the interface can offer the way back.
+    type Blocks = { host_blocks?: { host: string; model: string | null; kind: string; detail: string | null }[] };
+    const board = () => td.operator.get<Blocks>(P('/ui/snapshot'));
+    expect((await board()).host_blocks).toEqual([
+      // A check a person recorded counts for a day; a host's own refusal has no end (`until: null`).
+      expect.objectContaining({ host: 'codex', model: null, kind: 'sign_in', detail: 'run "codex login"' }),
+    ]);
 
     const cleared = await cli(['--project', dir, 'readiness', 'clear', 'codex']);
     expect(cleared.code, cleared.stderr).toBe(0);
     expect(cleared.stdout).toContain('Cleared 1 record(s) for codex');
     const after = await td.operator.get<{ dry_run: DryRun }>(P(`/routing/explain/${task.task_id}`));
     expect(after.dry_run).toMatchObject({ blocked: false, model: 'openai/gpt-6.1-sol' });
+    expect((await board()).host_blocks).toEqual([]);
+
+    // The interface's button is the same clearing, without a terminal ("I signed in: try again").
+    await td.operator.post(P('/readiness/evidence'), {
+      host: 'codex',
+      source: 'test',
+      stages: [{ stage: 'authenticated', status: 'failed', detail: 'run "codex login"' }],
+    });
+    expect((await board()).host_blocks).toHaveLength(1);
+    const lifted = await td.operator.post<{ ended: unknown[] }>(P('/readiness/clear'), { host: 'codex', model: null });
+    expect(lifted.ended).toHaveLength(1);
+    expect((await board()).host_blocks).toEqual([]);
   }, 60_000);
 
   it('fails over to the next host in the ranking after a host failure, and says so (ADR-0035 §3–§4)', async () => {

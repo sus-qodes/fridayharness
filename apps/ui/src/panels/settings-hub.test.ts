@@ -75,7 +75,8 @@ describe('the Settings Hub, Planner', () => {
     const hub = hubAt(ctx, 'planner');
     const el = hub.el;
     expect(el.textContent).toContain('You can always write plans yourself');
-    const budget = el.querySelector('input[type="number"]') as HTMLInputElement;
+    // The anthropic steps' budget, not the Claude Code switch's.
+    const budget = el.querySelector('input[type="number"]:not(.pn-qs-budget)') as HTMLInputElement;
     type(budget, '7');
     expect(el.textContent).toContain('friday brain allow-remote --budget 7');
     buttonBy(el, 'Store the key…').click();
@@ -84,7 +85,8 @@ describe('the Settings Hub, Planner', () => {
     expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'The key is stored' });
     buttonBy(el, 'Allow spending up to $7.00 a day…').click();
     await flush();
-    expect(shell.allowSpending).toHaveBeenCalledWith(7);
+    // Anthropic is the provider the shell approves when none is named.
+    expect(shell.allowSpending).toHaveBeenCalledWith(7, undefined);
     buttonBy(el, 'Open config.yaml in VS Code').click();
     expect(opened.at(-1)).toMatch(/\.friday[\\/]config\.yaml$/);
     hub.destroy();
@@ -94,10 +96,76 @@ describe('the Settings Hub, Planner', () => {
     const { ctx } = desktopContext({ provider: 'local', model: 'qwen2.5:7b', remote: false, key: 'not needed' });
     const hub = hubAt(ctx, 'planner');
     expect(() => buttonBy(hub.el, 'Store the key…')).toThrow();
-    expect(hub.el.querySelector('input[type="number"]')).toBeNull();
+    expect(hub.el.querySelector('input[type="number"]:not(.pn-qs-budget)')).toBeNull();
     expect(hub.el.textContent).toContain('friday doctor');
     expect(hub.el.textContent).not.toContain('Allow spending');
     hub.destroy();
+  });
+
+  it('shows no Anthropic key steps beside a planner that is, or is about to be, Claude Code', () => {
+    // Chosen by this person and not running yet: the steps for a key would lead nowhere.
+    const wanted = { here: 'claude-code', project: 'anthropic', wanted: 'claude-code' };
+    const found = { found: true, allowed: true, approved: false, project_budget_usd: 5 };
+    const { ctx } = desktopContext({ choice: wanted, claude_code: found });
+    const hub = hubAt(ctx, 'planner');
+    expect(hub.el.textContent).toContain('Plan with your Claude Code sign-in');
+    expect(hub.el.textContent).not.toContain('Store the key…');
+    expect(hub.el.textContent).not.toContain('friday secrets set anthropic');
+    hub.destroy();
+    // Running through it: the switch stays, where a person turns it off again.
+    const on = desktopContext({
+      provider: 'claude-code',
+      key: 'not needed',
+      planner_available: true,
+      choice: wanted,
+      claude_code: { ...found, approved: true },
+    });
+    const ready = hubAt(on.ctx, 'planner');
+    expect(ready.el.textContent).toContain('Friday plans through Claude Code.');
+    expect(ready.el.textContent).toContain('I’ll write plans myself instead');
+    ready.destroy();
+  });
+
+  it('keeps what is typed while the board moves, and leaves no listener behind when it is drawn again', () => {
+    const { ctx } = desktopContext();
+    // Every subscription to the store is counted, and counted off when it is ended.
+    const real = ctx.store.subscribe.bind(ctx.store);
+    let live = 0;
+    (ctx.store as { subscribe: unknown }).subscribe = ((...args: Parameters<typeof real>) => {
+      live += 1;
+      const stop = real(...args);
+      let stopped = false;
+      return () => {
+        if (!stopped) live -= 1;
+        stopped = true;
+        stop();
+      };
+    }) as typeof real;
+    const hub = hubAt(ctx, 'planner');
+    const mounted = live;
+    const budget = hub.el.querySelector('input[type="number"]:not(.pn-qs-budget)') as HTMLInputElement;
+    type(budget, '9');
+    // Events arrive: `head` and `cursor` move with each one, and nothing the page shows changes.
+    for (let i = 1; i <= 5; i += 1) {
+      const board = ctx.store.select('board');
+      ctx.store.setState({ board: board && { ...board, head: 10 + i, brain: brain({ head: 10 + i, cursor: i }) } });
+    }
+    expect(hub.el.querySelector('input[type="number"]:not(.pn-qs-budget)')).toBe(budget);
+    expect(budget.value).toBe('9');
+    expect(live).toBe(mounted);
+    // The planner's state changing draws the page again: what the drawing before subscribed to is ended.
+    for (const key of ['stored', 'missing', 'stored', 'missing'] as const) {
+      const board = ctx.store.select('board');
+      ctx.store.setState({ board: board && { ...board, brain: brain({ key }) } });
+    }
+    expect(hub.el.querySelector('input[type="number"]:not(.pn-qs-budget)')).not.toBe(budget);
+    expect(live).toBe(mounted);
+    // Another tab, and back: the same.
+    ctx.store.patch('ui', { settingsTab: 'policy' });
+    ctx.store.patch('ui', { settingsTab: 'planner' });
+    expect(live).toBe(mounted);
+    hub.destroy();
+    expect(live).toBe(0);
   });
 
   it("follows the planner's state: once it can plan, the steps go", () => {
@@ -208,21 +276,93 @@ describe('the Settings Hub, Policy and Friday', () => {
     buttonBy(hub.el, 'Trust this list').click();
     await flush();
     expect(ctx.confirms.at(-1)?.body).toEqual([
-      'autonomy.git.push: manual → auto (.friday/policy.yaml)',
-      expect.stringContaining('exactly this list (hash abc123def4567890)'),
+      'Agents may push to a remote without asking (autonomy.git.push: manual → auto, .friday/policy.yaml)',
+      expect.stringContaining('records trust in exactly this'),
+    ]);
+    // A daemon that names no setting by itself is asked for the whole list, as it always was.
+    expect(ctx.transport.to('POST', '/policy/trust').map((c) => c.body)).toEqual([
+      { loosening_hash: 'abc123def4567890' },
     ]);
     hub.destroy();
+  });
+
+  it('trusts one setting at a time: each waits with its own button, and what is in force says so (2026-11-18)', async () => {
+    const items = [
+      {
+        id: 'id_install',
+        trusted: true,
+        source: 'config.yaml',
+        setting: 'autonomy.package.install',
+        from: 'review',
+        to: 'auto',
+      },
+      { id: 'id_land', trusted: false, source: 'config.yaml', setting: 'landing.mode', from: 'ask', to: 'goal' },
+      {
+        id: 'id_verify',
+        trusted: false,
+        source: 'config.yaml',
+        setting: 'verification.auto_on_completion',
+        from: 'false',
+        to: 'true',
+      },
+    ];
+    let now = items;
+    const view = () => ({
+      policy: { version: 'v1', loosening: now, loosening_hash: 'h_all', trusted: now.every((l) => l.trusted) },
+    });
+    const ctx = makeContext({
+      answers: {
+        'GET /policy': () => view(),
+        'POST /policy/trust': (c: { body: unknown }) => {
+          const ids = (c.body as { items: string[] }).items;
+          now = now.map((l) => (ids.includes(l.id) ? { ...l, trusted: true } : l));
+          return view();
+        },
+      },
+    });
+    ctx.confirmAnswer = true;
+    const hub = hubAt(ctx, 'policy');
+    await flush();
+    expect(hub.el.textContent).toContain('2 of 3 wait for your trust');
+    // The rows of what the project's files ask for (each names the file it is set in).
+    const asked = (root: Element) =>
+      [...root.querySelectorAll('.pn-list .pn-item')].filter((li) => li.querySelector('.pn-loosening-source'));
+    const rows = asked(hub.el);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]?.textContent).toContain('in force');
+    expect(rows[0]?.querySelector('button')).toBeNull();
+    // One click, one setting: the question names it alone, and only its id is sent.
+    (rows[1]?.querySelector('button') as HTMLButtonElement).click();
+    await flush();
+    expect(ctx.confirms.at(-1)?.title).toBe('Trust this setting on this computer?');
+    expect(ctx.confirms.at(-1)?.body).toHaveLength(2);
+    expect(String(ctx.confirms.at(-1)?.body?.[0])).toContain('landing.mode');
+    expect(ctx.transport.to('POST', '/policy/trust').map((c) => c.body)).toEqual([{ items: ['id_land'] }]);
+    await flush();
+    expect(hub.el.textContent).toContain('1 of 3 wait for your trust');
+    hub.destroy();
+
+    // On the desktop the shell asks, in its own window: the page asks nothing first.
+    const desk = makeContext({ answers: { 'GET /policy': () => view(), 'POST /policy/trust': () => view() } });
+    (desk as { platform: unknown }).platform = { ...desk.platform, kind: 'tauri', desktop: {} };
+    const hub2 = hubAt(desk, 'policy');
+    await flush();
+    (asked(hub2.el).flatMap((li) => [...li.querySelectorAll('button')])[0] as HTMLButtonElement).click();
+    await flush();
+    expect(desk.confirms).toHaveLength(0);
+    expect(desk.transport.to('POST', '/policy/trust').map((c) => c.body)).toEqual([{ items: ['id_verify'] }]);
+    hub2.destroy();
   });
 
   it('says how to start Friday again before stopping it, and follows the worktrees in use', async () => {
     const ctx = makeContext();
     ctx.confirmAnswer = false;
     const hub = hubAt(ctx, 'friday');
-    expect(hub.el.textContent).toContain('Active Worktrees (0)');
+    expect(hub.el.textContent).toContain('Task folders in use: 0');
     buttonBy(hub.el, 'Stop Friday').click();
     await flush();
     expect(ctx.confirms.at(-1)?.body).toContain(
-      'Work in worktrees is kept. Start it again from its shortcut, the desktop app, or friday run.',
+      'The work in the task folders is kept. Start Friday again from its shortcut or the desktop app.',
     );
     const board = ctx.store.select('board');
     ctx.store.setState({
@@ -231,7 +371,94 @@ describe('the Settings Hub, Policy and Friday', () => {
         runs: { r1: makeRun({ run_id: 'r1', status: 'ACTIVE', workspace: 'ready', execution_root: 'C:/wt/a' }) },
       },
     });
-    expect(hub.el.textContent).toContain('Active Worktrees (1)');
+    expect(hub.el.textContent).toContain('Task folders in use: 1');
     hub.destroy();
+  });
+});
+
+describe('the Settings Hub, what was added on 2026-11-17', () => {
+  const NOTHING = { policy: { loosening: [], loosening_hash: null, trusted: true } };
+  const CHECKS = {
+    checks: [],
+    suggested: [
+      { name: 'tests', kind: 'test', command: 'npm', args: ['run', 'test'], script: 'test', runs: 'vitest run' },
+    ],
+    manager: 'npm',
+  };
+
+  it('lists Checks and Permissions among its pages, by those names', () => {
+    const hub = hubAt(makeContext(), 'look');
+    const names = [...hub.el.querySelectorAll('.hub-item')].map((b) => b.textContent);
+    expect(names).toContain('Checks');
+    expect(names).toContain('Permissions');
+    expect(names).not.toContain('Policy & Trust');
+    hub.destroy();
+  });
+
+  it('Checks holds the project’s own checks, with what package.json suggests, and the automatic switch', async () => {
+    const ctx = makeContext({ answers: { 'GET /config/checks': CHECKS, 'GET /policy': NOTHING } });
+    const hub = hubAt(ctx, 'checks');
+    await flush();
+    expect(hub.el.querySelector('[data-setup="checks"]')?.textContent).toContain('npm run test');
+    expect(hub.el.querySelector('[data-setup="verify"]')?.textContent).toContain('Check the work automatically');
+    // The switch moved here from the page of permissions.
+    ctx.store.patch('ui', { settingsTab: 'policy' });
+    await flush();
+    expect(hub.el.querySelector('[data-setup="verify"]')).toBeNull();
+    expect(hub.el.querySelector('[data-setup="permissions"]')?.textContent).toContain(
+      'What agents may do without asking',
+    );
+    expect(hub.el.textContent).toContain('What this computer trusts');
+    hub.destroy();
+  });
+
+  it('the Planner says what planning may spend once it was allowed, and whether plans wait', () => {
+    const ready = {
+      key: 'stored' as const,
+      planner_available: true,
+      reason: null,
+      allow_remote: true,
+      approved_here: true,
+    };
+    const { ctx } = desktopContext({
+      ...ready,
+      spending: { provider: 'anthropic', approved: true, yours_usd: 3, project_usd: 5 },
+    });
+    const hub = hubAt(ctx, 'planner');
+    expect(hub.el.querySelector('[data-setup="spending"]')?.textContent).toContain('Up to $3.00 a day');
+    expect(hub.el.querySelector('[data-setup="auto-approve"]')?.textContent).toContain('Start plans without asking me');
+    hub.destroy();
+    // Not allowed here yet: the steps that allow it are shown, and no card to change a limit.
+    const before = desktopContext({
+      spending: { provider: 'anthropic', approved: false, yours_usd: null, project_usd: 5 },
+    });
+    const hub2 = hubAt(before.ctx, 'planner');
+    expect(hub2.el.querySelector('[data-setup="spending"]')).toBeNull();
+    expect(hub2.el.querySelector('[data-setup="auto-approve"]')).not.toBeNull();
+    hub2.destroy();
+  });
+
+  it('allows planning with a key for the project from the page: asked, said to be shared, then a restart', async () => {
+    const restart = vi.fn(async () => true);
+    const { ctx } = desktopContext({ allow_remote: false }, { restart });
+    const hub = hubAt(ctx, 'planner');
+    ctx.confirmAnswer = false;
+    buttonBy(hub.el, 'Allow it for this project').click();
+    await flush();
+    expect(ctx.transport.to('POST', '/config/settings')).toHaveLength(0);
+    ctx.confirmAnswer = true;
+    buttonBy(hub.el, 'Allow it for this project').click();
+    await flush();
+    expect([ctx.confirms.at(-1)?.body].flat().join(' ')).toContain('which your team shares');
+    expect(ctx.transport.to('POST', '/config/settings').map((c) => c.body)).toEqual([
+      { set: { 'providers.anthropic.allow_remote': true } },
+    ]);
+    expect(restart).toHaveBeenCalledOnce();
+    hub.destroy();
+    // A project that allows it already is not asked.
+    const allowed = desktopContext({ allow_remote: true });
+    const hub2 = hubAt(allowed.ctx, 'planner');
+    expect(buttonBy(hub2.el, 'Allow it for this project').hidden).toBe(true);
+    hub2.destroy();
   });
 });

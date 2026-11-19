@@ -241,7 +241,13 @@ export function runHarnessConformance(name: string, makeSubject: () => Promise<C
       s.td.daemon.tick();
       await s.td.operator.post(s.td.operator.projectPath(`/tasks/${t.task_id}/release`), { reason: 'reassign' });
       const h2 = await s.attach({ key: 'identity-2' });
-      await s.td.operator.post(s.td.operator.projectPath(`/tasks/${t.task_id}/assign`), { agent_key: 'dev-1' });
+      // Friday gives a task that came back to a free agent by itself (2026-11-17), so the person's
+      // own assignment may find it taken already: either way the same agent gets it.
+      await s.td.operator
+        .post(s.td.operator.projectPath(`/tasks/${t.task_id}/assign`), { agent_key: 'dev-1' })
+        .catch((e: Error) => {
+          if (!/only READY tasks can be assigned/.test(e.message)) throw e;
+        });
       await h2.waitFor('task.start');
       const again = await eventually(
         () => task(s, t.task_id),

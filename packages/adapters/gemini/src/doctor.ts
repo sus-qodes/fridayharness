@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import os from 'node:os';
 import path from 'node:path';
 import { bundledHookSource } from '@friday/adapter-claude';
-import { DaemonClient, type ProjectRef, readDiscovery, readInstallInfo, readToken } from '@friday/sdk';
+import { DaemonClient, installCheck, type ProjectRef, readDiscovery, readToken } from '@friday/sdk';
 import { hooksSwitchedOff, LAUNCHER_HEADER, readProjectHooks } from './checks.js';
 import {
   compareVersions,
@@ -36,6 +36,8 @@ export interface GeminiDoctorOptions {
   quick?: boolean;
   /** Override detection (tests). */
   install?: GeminiInstall;
+  /** The MCP server entry of the copy of Friday that runs the check (tests); null for none. */
+  ownMcpEntry?: string | null;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -307,18 +309,13 @@ export async function geminiDoctor(
     });
   }
 
-  const info = readInstallInfo(env);
-  const mcpEntry = env.FRIDAY_MCP_ENTRY ?? info?.mcp_server_entry ?? undefined;
-  checks.push(
-    mcpEntry && existsSync(mcpEntry)
-      ? { id: 'gemini.install', status: 'ok', message: `MCP server entry: ${mcpEntry}` }
-      : {
-          id: 'gemini.install',
-          status: 'fail',
-          message: 'Friday is not set up on this machine (install.json has no MCP server entry)',
-          fix: 'run "pnpm build" in the Friday repository, then "friday setup"',
-        },
-  );
+  // A warning when the Gemini CLI a person opens would start another copy of Friday than this one.
+  const { entry: _entry, ...machine } = installCheck({
+    env,
+    named: env.FRIDAY_MCP_ENTRY,
+    own: opts.ownMcpEntry,
+  });
+  checks.push({ id: 'gemini.install', ...machine });
 
   // Secrets: the live tokens must not appear in any file Gemini CLI reads or runs in the project.
   const live = [readToken(ref, 'operator', env), readToken(ref, 'bootstrap', env)].filter((t): t is string =>

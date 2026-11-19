@@ -9,7 +9,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hostModule, type NormalizedHook } from '@friday/adapter-claude';
+import { ANTIGRAVITY_NO_DECISION, hostModule, type NormalizedHook } from '@friday/adapter-claude';
 import { newId } from '@friday/protocol';
 import { renderInitialConfig } from '@friday/sdk';
 import { useTestWorkspace } from '@friday/test-support';
@@ -102,6 +102,24 @@ const EXPECTED: Record<string, Partial<NormalizedHook>> = {
   'PreToolUse.mcp-single': { tool_name: 'mcp__github__search_code', host_tool_name: 'mcp_github_search_code' },
   'PreToolUse.mcp-friday': { tool_name: 'mcp__friday__friday_whoami' },
   'PreToolUse.ask_question': { event: 'PreToolUse', tool_name: null, host_tool_name: 'ask_question' },
+  // The tool names and the MCP call of CLI 1.5 (the first live session, 1.5.9).
+  'PreToolUse.read_file': {
+    tool_name: 'Read',
+    host_tool_name: 'read_file',
+    tool_input: { file_path: at('README.md') },
+  },
+  'PreToolUse.edit_file': { tool_name: 'Edit', host_tool_name: 'edit_file', paths: [at('src', 'a.ts')] },
+  'PreToolUse.write_file': {
+    tool_name: 'Write',
+    host_tool_name: 'write_file',
+    tool_input: { file_path: at('src', 'a.ts') },
+    shape_error: null,
+  },
+  'PreToolUse.call_mcp_tool.friday': { tool_name: 'mcp__friday__friday_whoami', host_tool_name: 'call_mcp_tool' },
+  'PreToolUse.mcp-eager-friday': {
+    tool_name: 'mcp__friday__friday_whoami',
+    host_tool_name: 'mcp_friday_friday_whoami',
+  },
   PostToolUse: { event: 'PostToolUse', tool_name: 'Shell', error: null, command: 'npm test' },
   'PostToolUse.error': { event: 'PostToolUseFailure', tool_name: 'Shell', error: 'exit status 1' },
   Stop: { event: 'Stop', stop_hook_active: null, session_id: 'conv-fixture-1', stop_completed: true },
@@ -110,8 +128,18 @@ const EXPECTED: Record<string, Partial<NormalizedHook>> = {
   PreInvocation: { event: null },
 };
 
-/** The reply each fixture gets from the launcher with Friday down: a decision, or none (`{}`). */
-const WITH_FRIDAY_DOWN: Record<string, 'deny' | 'force_ask' | 'none' | 'context'> = {
+/**
+ * The reply each fixture gets from the launcher with Friday down: a decision, or none. For a tool
+ * call, none is "Friday did not judge this" (`ask`: the person and their permissions decide); for
+ * every other event it is `{}`. Friday's own tools pass (`allow`): its protocol judges them, and
+ * that needs no daemon to say.
+ */
+const WITH_FRIDAY_DOWN: Record<string, 'deny' | 'force_ask' | 'none' | 'context' | 'allow'> = {
+  'PreToolUse.read_file': 'none',
+  'PreToolUse.edit_file': 'deny',
+  'PreToolUse.write_file': 'deny',
+  'PreToolUse.call_mcp_tool.friday': 'allow',
+  'PreToolUse.mcp-eager-friday': 'allow',
   SessionStart: 'context',
   'PreToolUse.run_command': 'force_ask',
   'PreToolUse.view_file.friday-db': 'deny',
@@ -129,7 +157,7 @@ const WITH_FRIDAY_DOWN: Record<string, 'deny' | 'force_ask' | 'none' | 'context'
   'PreToolUse.read_url_content': 'force_ask',
   'PreToolUse.mcp-double': 'force_ask',
   'PreToolUse.mcp-single': 'force_ask',
-  'PreToolUse.mcp-friday': 'none',
+  'PreToolUse.mcp-friday': 'allow',
   'PreToolUse.ask_question': 'none',
   PostToolUse: 'none',
   'PostToolUse.error': 'none',
@@ -158,6 +186,34 @@ describe('the Antigravity module reads the documented hook input', () => {
       const f = fixture(name, SHOP);
       if (!HOOK_EVENTS.includes(f.event as AntigravityHookEvent)) continue;
       for (const key of Object.keys(f.input)) expect(known[f.event], `${name}: ${key}`).toContain(key);
+    }
+  });
+
+  it('always gives a tool call a decision, since a reply without one is a denial there', () => {
+    expect(JSON.parse(ANTIGRAVITY_NO_DECISION)).toEqual({
+      decision: 'ask',
+      reason: 'Friday: not judged by Friday; your Antigravity permissions decide',
+    });
+    const ag = hostModule('antigravity');
+    const render = (name: string, j: Parameters<typeof ag.render>[0]) => {
+      const f = fixture(name, SHOP);
+      return ag.render(j, ag.normalize(f.input, f.event, {}));
+    };
+    // A call Friday did not judge (a tool it has no rule for, or Friday is down): the person decides.
+    for (const name of ['PreToolUse.read_file', 'PreToolUse.invoke_subagent'])
+      expect(render(name, { decision: 'none' }), name).toEqual({
+        stdout: ANTIGRAVITY_NO_DECISION,
+        stderr: '',
+        exit_code: 0,
+      });
+    // A call Friday's own rules pass goes ahead (the owner's choice of 2026-11-16); never auto_approve.
+    expect(JSON.parse(render('PreToolUse.edit_file', { decision: 'allow', reason: 'inside the task' }).stdout)).toEqual(
+      { decision: 'allow', reason: 'Friday: inside the task' },
+    );
+    // Only a tool call needs a decision: the other events keep the empty object, and take no allow.
+    for (const name of ['PostToolUse', 'Stop']) {
+      expect(render(name, { decision: 'none' }).stdout, name).toBe('{}');
+      expect(render(name, { decision: 'allow', reason: 'r' }).stdout, name).toBe('{}');
     }
   });
 
@@ -216,7 +272,7 @@ describe('the launcher as .agents/hooks.json runs it, with Friday down', () => {
     return { code: r.status, stdout: r.stdout, stderr: r.stderr, json: JSON.parse(r.stdout || 'null') };
   }
 
-  it('answers each fixture deny, force_ask or nothing, always on stdout with exit code 0', () => {
+  it('answers each fixture deny, force_ask, not judged, or allow for its own tools, always on stdout with exit code 0', () => {
     const commands = attached();
     expect(commands.PreToolUse).toBe(hookCommand('PreToolUse'));
     for (const name of fixtureNames()) {
@@ -226,16 +282,23 @@ describe('the launcher as .agents/hooks.json runs it, with Friday down', () => {
       expect(r.code, name).toBe(0);
       expect(r.stderr, name).toBe('');
       const want = WITH_FRIDAY_DOWN[name];
-      if (want === 'none') expect(r.json, name).toEqual({});
-      else if (want === 'context') {
+      if (want === 'none') {
+        // Antigravity reads a tool-call reply without a decision as a denial (CLI 1.5.9), so "not
+        // judged" is said in its own words; the other events expect an empty object.
+        if (f.event === 'PreToolUse') expect(r.stdout, name).toBe(ANTIGRAVITY_NO_DECISION);
+        else expect(r.json, name).toEqual({});
+      } else if (want === 'context') {
         const text = r.json.injectSteps?.[0]?.systemMessage?.systemMessage;
         expect(text, name).toMatch(/^Friday is not available for this session \(the daemon is not running\)/);
       } else {
         expect(r.json.decision, name).toBe(want);
         expect(r.json.reason, name).toMatch(/^Friday: /);
       }
-      // Friday restricts; it never answers for the human or the host's own policy.
-      expect(['allow', 'auto_approve', 'ask', 'deny_unless_prior_grant'], name).not.toContain(r.json.decision);
+      // With Friday down nothing is judged, so nothing passes but Friday's own tools; its one `ask`
+      // is "not judged": the person and the host's own permissions decide. Never auto_approve.
+      expect(['auto_approve', 'deny_unless_prior_grant'], name).not.toContain(r.json.decision);
+      if (r.json.decision === 'allow') expect(want, name).toBe('allow');
+      if (r.json.decision === 'ask') expect(r.stdout, name).toBe(ANTIGRAVITY_NO_DECISION);
       expect(r.stdout, name).not.toContain('FILE BODY');
     }
   });

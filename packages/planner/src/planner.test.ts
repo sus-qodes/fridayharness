@@ -3,15 +3,16 @@ import { type DelegationCandidate, delegate, scoreCandidate } from './delegate.j
 import { diffPlanVersions, type PlanVersionTask } from './diff.js';
 import { buildEscalation } from './escalate.js';
 import { budgetedCost, type PlannerCall, runPlanner } from './model.js';
+import { canRunSideBySide, sharedWith } from './parallel.js';
 import { parsePlanDraft, parseReplanDraft } from './parse.js';
 import { costOf, worstCaseCost } from './pricing.js';
-import { PROMPT_VERSIONS } from './prompts.js';
+import { agentsLine, PLANNER_SYSTEM, PROMPT_VERSIONS, planPrompt } from './prompts.js';
 import { AnthropicPlannerModel, structuredOutputSchema, wrapProjectContext } from './providers/anthropic.js';
 import { FakePlannerModel } from './providers/fake.js';
 import { ModelError, type ModelRequest, type ModelResponse } from './providers/types.js';
-import { draftJsonSchema, type PlanDraftInput, type ReplanDraftInput } from './schemas.js';
+import { draftJsonSchema, PlanDraft, type PlanDraftInput, type ReplanDraftInput } from './schemas.js';
 import { type TriggerEvent, type TriggerFacts, triggersFor } from './triggers.js';
-import type { ExistingTask } from './validate.js';
+import { type ExistingTask, validatePlanDraft } from './validate.js';
 
 const task = (key: string, write: string[], depends_on: string[] = [], extra: Record<string, unknown> = {}) => ({
   key,
@@ -347,6 +348,101 @@ describe('delegation', () => {
     expect(delegate({ ...backendTask, write: [] }, [agent('dev-1')], [['backend/**']]).agent_key).toBe('dev-1');
     expect(delegate(backendTask, [], []).reason).toMatch(/stays claimable/);
   });
+
+  // Agents Friday starts each work in a folder of their own, and their work is merged (2026-11-18).
+  // In the trial of that week every plan listed the project's changelog, so each task waited for
+  // every other: seven goals, and never two agents at work.
+  it('starts a task beside one that changes the same files when both have a folder of their own', () => {
+    const own = (key: string, over: Partial<DelegationCandidate> = {}) => agent(key, { own_folder: true, ...over });
+    const inOwn = { write: ['backend/**'], own_folder: true, task_id: 'task_run', agent_key: 'be-1' };
+    expect(delegate(backendTask, [own('dev-1')], [inOwn])).toMatchObject({ agent_key: 'dev-1' });
+    // An agent that works in the project folder would not have the other's changes: it is passed
+    // over, also with the higher score, and the task goes to one with a folder of its own.
+    const folder = agent('ag-1', { role: 'backend', waits_for_person: true });
+    const two = delegate(backendTask, [folder, own('dev-1')], [inOwn]);
+    expect(two.agent_key).toBe('dev-1');
+    expect(two.scores.find((x) => x.agent_key === 'ag-1')).toMatchObject({
+      eligible: false,
+      reason: expect.stringContaining('works in the project folder'),
+    });
+    // Only that agent is free: the task waits for one with a folder of its own, and says so.
+    expect(delegate(backendTask, [folder], [inOwn])).toMatchObject({
+      agent_key: null,
+      reason: expect.stringMatching(/^waits: it shares files with a task that is running/),
+    });
+    // The running task works in the project folder: nothing starts on its files, whoever is free.
+    const inFolder = { write: ['backend/**'], own_folder: false, task_id: 'task_ag', agent_key: 'ag-1' };
+    expect(delegate(backendTask, [own('dev-1')], [inFolder])).toMatchObject({
+      agent_key: null,
+      reason:
+        'waits: its write scope overlaps a task that is running in the project folder (ag-1 is changing the same files for task_ag)',
+    });
+    // Other files: nothing to wait for, wherever anybody works.
+    expect(delegate(backendTask, [folder], [{ ...inFolder, write: ['frontend/**'] }]).agent_key).toBe('ag-1');
+  });
+
+  it('gives two ready tasks to two free agents', () => {
+    // What `#delegate` does: one task after another, the agent just chosen no longer free.
+    const free = [agent('claude-1', { own_folder: true }), agent('codex-1', { own_folder: true })];
+    const first = delegate({ ...backendTask, task_id: 'task_a', write: ['a/**', 'docs/CHANGELOG.md'] }, free, []);
+    expect(first.agent_key).toBe('claude-1');
+    const second = delegate(
+      { ...backendTask, task_id: 'task_b', write: ['b/**', 'docs/CHANGELOG.md'] },
+      free.map((c) => (c.agent_key === first.agent_key ? { ...c, current_task_id: 'task_a' } : c)),
+      [{ write: ['a/**', 'docs/CHANGELOG.md'], own_folder: true, task_id: 'task_a', agent_key: 'claude-1' }],
+    );
+    expect(second.agent_key).toBe('codex-1');
+  });
+});
+
+describe('tasks that may run side by side (2026-11-18)', () => {
+  it('lets two tasks share files when each has files of its own', () => {
+    const wizard = ['web/src/features/wizard/**', 'web/src/routes/index.tsx', 'docs/CHANGELOG.md'];
+    const settings = ['web/src/features/settings/**', 'web/src/routes/index.tsx', 'docs/CHANGELOG.md'];
+    expect(canRunSideBySide(wizard, settings)).toBe(true);
+    expect(sharedWith(wizard, settings)).toEqual(['web/src/routes/index.tsx', 'docs/CHANGELOG.md']);
+    expect(canRunSideBySide(['a/**'], ['b/**'])).toBe(true);
+    // The same files, one wholly inside the other, or no scope at all: one piece of work.
+    expect(canRunSideBySide(['web/**'], ['web/**'])).toBe(false);
+    expect(canRunSideBySide(['web/**'], ['web/src/features/settings/**', 'web/src/routes/index.tsx'])).toBe(false);
+    expect(canRunSideBySide(['docs/CHANGELOG.md'], ['src/**', 'docs/CHANGELOG.md'])).toBe(false);
+    expect(canRunSideBySide(['**'], ['src/**', 'docs/**'])).toBe(false);
+    expect(canRunSideBySide([], ['src/**'])).toBe(false);
+  });
+
+  it('accepts such a plan, and still orders tasks whose work is in the same files', () => {
+    const draft = (b: string[]) =>
+      PlanDraft.parse({
+        objective: 'two screens',
+        summary: 'two screens',
+        tasks: [
+          {
+            key: 'wizard',
+            summary: 'the wizard',
+            acceptance_criteria: ['it works'],
+            scope: { write: ['web/wizard/**', 'web/routes.tsx'] },
+          },
+          { key: 'settings', summary: 'the settings', acceptance_criteria: ['it works'], scope: { write: b } },
+        ],
+      });
+    expect(validatePlanDraft(draft(['web/settings/**', 'web/routes.tsx']))).toEqual({ ok: true, errors: [] });
+    const same = validatePlanDraft(draft(['web/routes.tsx']));
+    expect(same.ok).toBe(false);
+    expect(same.errors[0]).toMatch(/can run at the same time but would change the same files/);
+    expect(same.errors[0]).toMatch(/may share a few files/);
+  });
+
+  it('tells the planner how many agents can work at once, and nothing when none is connected', () => {
+    expect(agentsLine(3)).toContain('Agents that can work at the same time now: 3');
+    expect(agentsLine(1)).toContain('One agent can work at a time now');
+    expect(agentsLine(0)).toBe('');
+    const goal = { goal_id: 'goal_1', request: 'build it', constraints: [], outcomes: [], priority: 'normal' };
+    expect(planPrompt(goal, { sideBySide: 2 })).toContain('Agents that can work at the same time now: 2');
+    expect(planPrompt(goal)).not.toContain('agent');
+    // The rules every planning call gets say that a shared file is no reason to chain.
+    expect(PLANNER_SYSTEM).toContain('never chain tasks only because of such files');
+    expect(PLANNER_SYSTEM).toContain('Split such a goal without being asked');
+  });
 });
 
 describe('Master Brain trigger table', () => {
@@ -552,6 +648,73 @@ describe('Master Brain trigger table', () => {
       [{ kind: 'after_rejection', goal_id: 'goal_1', plan_id: 'plan_1', version: 2, note: 'too broad' }],
     ],
     ['a reservation ends', ev('task.reservation_released', { task_id: 'task_g1' }), facts(), [{ kind: 'delegate' }]],
+    [
+      'what kept a host out is lifted (a person said they signed in again)',
+      ev('readiness.invalidated', { evidence_ids: ['rdy_1'], host: 'claude-code', model: null }),
+      facts(),
+      [{ kind: 'delegate' }],
+    ],
+    [
+      // 2026-11-17: the folder's dependencies were never installed, so a failing check of the project
+      // is not the work's: a person is asked at the first failure, with the reason.
+      'plan task failed where its install failed',
+      ev('task.failed', { task_id: 'task_g1' }),
+      facts({ setupTrouble: (id) => (id === 'task_g1' ? 'npm exited with 1' : null) }),
+      [
+        {
+          kind: 'escalate',
+          goal_id: 'goal_1',
+          task_id: 'task_g1',
+          reason: 'setup_failed',
+          detail: 'npm exited with 1',
+        },
+      ],
+    ],
+    [
+      'the failed install comes before the failure count, the revision limit and a missing planner',
+      ev('task.failed', { task_id: 'task_g1' }),
+      facts({
+        setupTrouble: () => 'the install is not trusted on this machine',
+        failuresOf: () => 9,
+        replansOf: () => 9,
+        planner: { available: false, reason: 'no key is stored' },
+      }),
+      [
+        {
+          kind: 'escalate',
+          goal_id: 'goal_1',
+          task_id: 'task_g1',
+          reason: 'setup_failed',
+          detail: 'the install is not trusted on this machine',
+        },
+      ],
+    ],
+    [
+      // The project's checks could not start on this computer: nothing was judged, so no agent is
+      // sent back and no plan revised; a person is asked at once.
+      'plan task failed where its checks could not be started',
+      ev('task.failed', { task_id: 'task_g1' }),
+      facts({
+        checkTrouble: (id) => (id === 'task_g1' ? 'the check "tests" could not start: spawn pnpm ENOENT' : null),
+        failuresOf: () => 9,
+        planner: { available: false, reason: 'no key is stored' },
+      }),
+      [
+        {
+          kind: 'escalate',
+          goal_id: 'goal_1',
+          task_id: 'task_g1',
+          reason: 'check_not_run',
+          detail: 'the check "tests" could not start: spawn pnpm ENOENT',
+        },
+      ],
+    ],
+    [
+      'a failure with the install in order takes the usual course',
+      ev('task.failed', { task_id: 'task_g1' }),
+      facts({ setupTrouble: () => null }),
+      [{ kind: 'replan', goal_id: 'goal_1', task_id: 'task_g1', reason: 'verification failed' }],
+    ],
     ['human answers an agent', ev('escalation.answered', { escalation_id: 'esc_agent' }), facts(), []],
     [
       'Friday closes a question its task made moot',

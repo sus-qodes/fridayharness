@@ -4,7 +4,8 @@
  * string from an event passes `cleanText` and is cut short: payloads are written by agents too.
  */
 import type { DomainEvent } from '@friday/protocol';
-import { WAITING_REASON } from '../model/status.js';
+import { capabilityWords } from '../model/capability-words.js';
+import { statusLook, TASK_STATUS, WAITING_REASON } from '../model/status.js';
 import { cleanText, humanize, shortId, truncate } from '../ui/format.js';
 
 export const HISTORY_PAGE = 100;
@@ -45,7 +46,7 @@ export function actorLabel(actor: { kind?: string; id?: string } | null | undefi
     case 'harness':
       return `session ${shortId(actor.id)}`;
     case 'master_brain':
-      return 'Master Brain';
+      return 'Friday’s planner';
     default:
       return 'Friday';
   }
@@ -54,52 +55,52 @@ export function actorLabel(actor: { kind?: string; id?: string } | null | undefi
 const LABELS: Record<string, string> = {
   'task.created': 'Task created',
   'task.ready': 'Ready to start',
-  'task.assigned': 'Assigned',
+  'task.assigned': 'Given to an agent',
   'task.started': 'Agent started work',
   'task.waiting': 'Waiting',
   'task.resumed': 'Resumed',
-  'task.released': 'Released',
-  'task.completion_claimed': 'Agent claimed it is done',
-  'task.verification_started': 'Verification started',
-  'task.verification_interrupted': 'Verification interrupted',
-  'task.completed': 'Completed',
-  'task.failed': 'Failed',
-  'task.rework': 'Sent back for rework',
-  'task.harness_lost': 'The agent session was lost',
+  'task.released': 'Let go by its agent',
+  'task.completion_claimed': 'The agent said it is done',
+  'task.verification_started': 'Checks started',
+  'task.verification_interrupted': 'Checks stopped before the end',
+  'task.completed': 'Done',
+  'task.failed': 'Checks failed',
+  'task.rework': 'Sent back to be redone',
+  'task.harness_lost': 'The agent stopped',
   'task.cancelled': 'Cancelled',
-  'run.created': 'Attempt created',
-  'run.accepted': 'Agent accepted the attempt',
-  'run.declined': 'Agent declined the attempt',
-  'run.suspended': 'Attempt suspended',
-  'run.resumed': 'Attempt resumed',
-  'run.ended': 'Attempt ended',
-  'run.workspace_ready': 'Worktree ready',
-  'run.rebound': 'Work brought into a worktree of this clone',
-  'run.model_observed': 'Model observed',
-  'verification.started': 'Verification started',
+  'run.created': 'A try began',
+  'run.accepted': 'The agent took it',
+  'run.declined': 'The agent did not take it',
+  'run.suspended': 'Paused',
+  'run.resumed': 'Going again',
+  'run.ended': 'The try ended',
+  'run.workspace_ready': 'Task folder ready',
+  'run.rebound': 'Work brought into a task folder on this computer',
+  'run.model_observed': 'Model in use',
+  'verification.started': 'Checks started',
   'verification.check_completed': 'Check finished',
-  'verification.finished': 'Verification finished',
-  'verification.interrupted': 'Verification interrupted',
-  'approval.requested': 'Approval requested',
-  'approval.decided': 'Approval decided',
-  'approval.revoked': 'Approval revoked',
-  'escalation.requested': 'Question for a human',
-  'integration.completed': 'Integrated into the goal branch',
-  'integration.conflicted': 'Integration conflicted',
-  'integration.failed': 'Integration failed',
-  'integration.not_needed': 'Integration not needed',
-  'recovery.performed': 'Recovery performed',
-  'worktree.allocated': 'Worktree allocated',
-  'worktree.released': 'Worktree released',
-  'worktree.removed': 'Worktree removed',
-  'file.reserved': 'File reserved',
-  'file.reservation_ended': 'File reservation ended',
-  'routing.decided': 'Model routed',
-  'routing.blocked': 'Routing blocked',
-  'routing.violated': 'Routing violated',
-  'context.compiled': 'Context compiled',
+  'verification.finished': 'Checks finished',
+  'verification.interrupted': 'Checks stopped before the end',
+  'approval.requested': 'Asked for your permission',
+  'approval.decided': 'You decided',
+  'approval.revoked': 'Permission taken back',
+  'escalation.requested': 'A question for you',
+  'integration.completed': 'Merged into the goal',
+  'integration.conflicted': 'Clashed with other work',
+  'integration.failed': 'Could not merge',
+  'integration.not_needed': 'Nothing to merge',
+  'recovery.performed': 'Given to another agent, or started again',
+  'worktree.allocated': 'Task folder created',
+  'worktree.released': 'Task folder no longer in use',
+  'worktree.removed': 'Task folder removed',
+  'file.reserved': 'File kept for this task',
+  'file.reservation_ended': 'File free again',
+  'routing.decided': 'Model chosen',
+  'routing.blocked': 'No model could be chosen',
+  'routing.violated': 'Ran on another model than chosen',
+  'context.compiled': 'Brief prepared for the agent',
   'communication.sent': 'Message sent',
-  'control.task_stopped': 'Stopped by a halt',
+  'control.task_stopped': 'Stopped when you halted the work',
 };
 
 const TONES: Record<string, EventTone> = {
@@ -118,6 +119,23 @@ const TONES: Record<string, EventTone> = {
   'task.cancelled': 'muted',
   'run.declined': 'warn',
 };
+
+/** A decision on a request, and where it was made, in words (2026-11-19). */
+const DECIDED: Record<string, string> = {
+  granted: 'allowed',
+  denied: 'refused',
+  expired: 'ran out',
+  revoked: 'taken back',
+};
+const VIA: Record<string, string> = {
+  ui: 'in the app',
+  notch: 'in the Notch',
+  cli: 'in a terminal',
+  desktop: 'in the app',
+};
+
+/** A task's state by the words the cards use; anything else made readable. */
+const stateWords = (s: string) => (s in TASK_STATUS ? statusLook(s).label : humanize(s));
 
 /** The details worth one line, by event type, else the transition and reason. */
 function details(type: string, p: Payload): string[] {
@@ -143,7 +161,7 @@ function details(type: string, p: Payload): string[] {
     }
     case 'run.created': {
       const attempt = obj(p.run).attempt;
-      if (typeof attempt === 'number') out.push(`attempt ${attempt}`);
+      if (typeof attempt === 'number') out.push(`try ${attempt}`);
       break;
     }
     case 'verification.finished':
@@ -160,15 +178,15 @@ function details(type: string, p: Payload): string[] {
       const a = obj(p.approval);
       const cap = str(a.capability);
       const target = str(a.target);
-      if (cap) out.push(clip(cap, 60));
+      if (cap) out.push(clip(capabilityWords(cap), 60));
       if (target) out.push(clip(target, 120));
       break;
     }
     case 'approval.decided': {
       const status = str(p.status);
-      if (status) out.push(status);
+      if (status) out.push(DECIDED[status] ?? status);
       const via = str(p.via);
-      if (via) out.push(`via ${clip(via, 20)}`);
+      if (via) out.push(VIA[via] ?? `via ${clip(via, 20)}`);
       const note = str(p.note);
       if (note) out.push(`"${clip(note)}"`);
       break;
@@ -187,7 +205,7 @@ function details(type: string, p: Payload): string[] {
     default:
       break;
   }
-  if (from && to) out.push(`${humanize(from)} → ${humanize(to)}`);
+  if (from && to) out.push(`${stateWords(from)} → ${stateWords(to)}`);
   const reason = str(transition.reason) ?? str(p.reason) ?? (type === 'approval.decided' ? null : str(p.note));
   if (reason && !out.some((x) => x.includes(clip(reason)))) out.push(clip(reason));
   const message = str(p.message) ?? str(p.error);

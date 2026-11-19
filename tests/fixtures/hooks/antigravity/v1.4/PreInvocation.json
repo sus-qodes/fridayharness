@@ -3,7 +3,7 @@
   "host_version": "1.4",
   "written_at": "2026-10-18",
   "event": "PreInvocation",
-  "note": "before a model call: an event Friday does not configure",
+  "note": "a later model call of a turn (invocationNum 3): Friday answers nothing and sends nothing; only the first, the person's prompt, is read",
   "input": {
     "invocationNum": 3,
     "initialNumSteps": 10,

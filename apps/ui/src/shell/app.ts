@@ -160,6 +160,8 @@ export type ShellRegion =
 export interface ShellOptions {
   /** The connection strip's "Try again" (the sync engine's `retry`). */
   onRetry?: () => void;
+  /** The strip's words and button once Friday stopped, where the app starts it itself (`StripOptions.stopped`). */
+  stopped?: { message: string; action: string };
   /** Reloads the page (the stale-page banner). */
   reload?: () => void;
   /** Draws the in-page Notch when `areas.notch` is given (default true). */
@@ -264,6 +266,8 @@ export function mountShell(
   // A collapsed rail is opened first.
   const hooks: ShellHooks = {
     onShowWaiting: () => {
+      // "Waiting for you" is beside the board: from Settings, the board is shown first.
+      if (ctx.store.select('ui').activeView === 'settings') ctx.store.patch('ui', { activeView: 'canvas' });
       if (railCollapsed) {
         setRailCollapsed(false);
       }
@@ -274,7 +278,9 @@ export function mountShell(
 
   mount('The header', top, () => mountHeader(ctx, { onShowWaiting: hooks.onShowWaiting }));
   mount('The banners', top, () => mountBanners(ctx, { reload: opts.reload }));
-  mount('The connection strip', top, () => mountConnectionStrip(ctx.store, { onRetry: opts.onRetry }));
+  mount('The connection strip', top, () =>
+    mountConnectionStrip(ctx.store, { onRetry: opts.onRetry, ...(opts.stopped ? { stopped: opts.stopped } : {}) }),
+  );
   mount('The Studio', studio, () => areas.studio(ctx, studio));
   mount('The Settings Hub', settingsHub, () => mountSettingsHub(ctx));
   mount('The decisions', rail, () => areas.tray(ctx, rail, { onCollapse: () => setRailCollapsed(true) }));
@@ -353,6 +359,18 @@ export function mountShell(
     ],
   });
   stops.push(popGlobalKeys);
+
+  // A task or a goal picked while Settings is showing (the palette's result, a notice) is shown
+  // where it is: on the board. The selection at the time Settings opened does not count.
+  let selectionSeen = ctx.store.select('ui').selectedTaskId ?? null;
+  stops.push(
+    ctx.store.subscribe('ui', (ui) => {
+      const selected = ui.selectedTaskId ?? null;
+      if (selected === selectionSeen) return;
+      selectionSeen = selected;
+      if (selected && ui.activeView === 'settings') ctx.store.patch('ui', { activeView: 'canvas' });
+    }),
+  );
 
   function renderView(): void {
     const isSettings = ctx.store.select('ui').activeView === 'settings';
@@ -558,6 +576,8 @@ export async function bootBrowserWith(root: HTMLElement, areas: AreaSet, env: Bo
         void engine.refresh();
       },
     });
+    // What happens without anyone asking (an agent that ended on its own) is said here.
+    dispatcher.notice = (t) => services.toasts.show(t);
     root.replaceChildren();
     const shell = mountShell(ctx, services, root, areas, {
       onRetry: () => {

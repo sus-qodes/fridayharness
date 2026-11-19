@@ -21,14 +21,14 @@ export function attachedSessions(board: UiSnapshot | null): number {
   return board.harnesses.filter((h) => h.attach_mode === 'attach' && h.status !== 'TERMINATED').length;
 }
 
-export const ATTACHED_NOTE = 'Sessions attached in VS Code need a prompt there to continue.';
+export const ATTACHED_NOTE = 'Agents connected from VS Code continue when you prompt them there.';
 
 /** What a pause did, in one sentence. */
 export function pauseText(result: ControlResult): string {
   const sent = (result?.tasks ?? []).filter((t) => t.stop === 'sent').length;
   const base = "Friday is paused: nothing new starts and agents' changes are refused until you resume.";
   if (sent === 0) return base;
-  return `${base} Stop sent to ${plural(sent, 'attempt')} that cannot be held at the tool boundary; their work is preserved.`;
+  return `${base} Friday asked ${plural(sent, 'agent')} it cannot hold in place to stop; their work is kept.`;
 }
 
 /** What a resume did, in one sentence. */

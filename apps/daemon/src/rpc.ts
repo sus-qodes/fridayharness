@@ -7,8 +7,11 @@ import { GitRoot, type SourceIdentity } from '@friday/git';
 import {
   type Autonomy,
   type Capability,
+  CLASS_CAPABILITY,
   type CommandClass,
   capabilityOf,
+  classifyCommand,
+  DEFAULT_RISK,
   evaluateCapability,
   mcpLevel,
   type ProjectPolicy,
@@ -32,9 +35,11 @@ import {
 import { type ProjectRef, policyVersion } from '@friday/sdk';
 import type { Caller, FridayState } from '@friday/state';
 import type { CompileInput, RecipientReadFilter } from './context.js';
+import { askAboutFiles, type FolderSync, keptFiles, syncFolder, syncNote, waitingNote } from './folder-sync.js';
 import { type GraphService, query as graphQuery } from './graph-service.js';
 import type { OperationManager } from './operations.js';
 import type { ToolJudge } from './tool-policy.js';
+import { taskBase } from './workspaces.js';
 
 /** The commit a checkout is at, or null where git cannot read one (a folder outside git). */
 async function checkoutHead(cwd: string | null): Promise<string | null> {
@@ -458,6 +463,90 @@ function requestCapability(deps: RpcDeps, c: Caller, p: ParsedParamsOf<'permissi
     : task?.current_run_id
       ? state.q.findRun(task.current_run_id)
       : undefined;
+  // A request to run a command is the hook's own question, asked ahead (2026-11-18). Agents name
+  // the class in words of their own ("shell.npm.run", "shell.package.install"), which no rule knew:
+  // each such request went to a person as an unknown capability, under a name the hook never looks
+  // for, so even granted it unlocked nothing and stood beside the hook's own card for the same
+  // command. It is now judged as the command it is, by the judge the hook uses.
+  if (p.command && !p.resource && deps.judgeTool && task && task.current_run_id === (run?.run_id ?? null)) {
+    const agent = state.q.findAgent(c.agent_id);
+    const host = state.q.harness(c.harness_id);
+    const { result, approval_id } = deps.judgeTool({
+      harness: host,
+      agent: agent ? { agent_id: agent.agent_id, role: agent.role } : undefined,
+      // Claude Code runs it in its Bash tool; of another host's shell nothing is known here, and
+      // the command is read the stricter way (as its own hook or approval request will be).
+      action: {
+        tool: host.vendor === 'claude-code' ? 'Bash' : 'commandExecution',
+        kind: 'command',
+        command: p.command,
+      },
+      actor: { kind: 'agent', id: c.agent_id },
+      askHuman: true,
+      request: { justification: p.justification, reuse: p.reuse, ttl_s: p.ttl_s },
+    });
+    const capabilityName = result.grant?.capability ?? result.relied_on?.[0]?.capability ?? p.action_class;
+    const row = approval_id ? state.q.approvalRow(pid, approval_id) : undefined;
+    const risk = (row?.risk as 'low' | 'medium' | 'high' | undefined) ?? 'medium';
+    if (result.decision === 'allow') {
+      return {
+        approval_id: null,
+        status: 'granted' as const,
+        reason:
+          result.rule === 'command.approved'
+            ? 'a human already approved exactly this: run it now'
+            : // Codex asked a person for leave to run the tests its own sandbox had stopped (the trial,
+              // 2026-11-18): Friday had allowed them all along, and allows the run outside it too.
+              `no approval needed: ${result.reason} Run it now. If your own sandbox stopped it, run it again and let your host run it outside the sandbox: Friday allows that as well`,
+        expires_at: null,
+        capability: capabilityName,
+        risk,
+      };
+    }
+    if (result.decision === 'ask' && approval_id) {
+      return {
+        approval_id,
+        status: 'pending' as const,
+        reason: `the person was asked in Friday, under "Waiting for you" (${approval_id}). Go on with whatever else the task needs: you get a message when they decide, and the command passes then. If nothing else is left, end your turn and say you wait for ${approval_id}`,
+        expires_at: row?.expires_at ?? null,
+        capability: capabilityName,
+        risk,
+      };
+    }
+    // A class that always needs a person's explicit word (a push): the hook refuses it and says
+    // to ask, so asking must make the request the hook then finds, not answer with the refusal.
+    const effectiveNow = deps.policy?.();
+    const cls = result.command_class as CommandClass | undefined;
+    if (
+      cls &&
+      result.rule === `command.${cls}` &&
+      classifyCommand(
+        p.command,
+        effectiveNow?.autonomy ?? (project.config.autonomy as Partial<Record<CommandClass, Autonomy>>),
+      ).autonomy === 'manual'
+    ) {
+      return state.requestPermission(
+        pid,
+        c,
+        { ...p, task_id: task.task_id, run_id: run?.run_id },
+        {
+          capability: CLASS_CAPABILITY[cls],
+          decision: 'review',
+          risk: effectiveNow?.risk?.[CLASS_CAPABILITY[cls]] ?? DEFAULT_RISK[CLASS_CAPABILITY[cls]] ?? 'high',
+          reason: `${cls} commands need a person's explicit approval`,
+          policy_version: effectiveNow?.version ?? policyVersion(project.config),
+        },
+      );
+    }
+    return {
+      approval_id: null,
+      status: 'denied' as const,
+      reason: result.reason,
+      expires_at: null,
+      capability: capabilityName,
+      risk,
+    };
+  }
   const capability = capabilityOf(p.action_class);
   const effective = deps.policy?.();
   const version = effective?.version ?? policyVersion(project.config);
@@ -627,7 +716,36 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
       const c = caller();
       // Where an attached session's work starts: the commit its checkout is at now (LESSONS D-41).
       const harness = state.q.harness(harnessId);
-      const head = harness.attach_mode === 'spawn' ? null : await checkoutHead(harness.host_cwd);
+      let head = harness.attach_mode === 'spawn' ? null : await checkoutHead(harness.host_cwd);
+      // A session in the project folder builds on the goal's finished work (2026-11-17): what the
+      // goal branch gained is written into the folder before it takes a task of that goal, never
+      // over a file its person changed. With nothing in the way the attempt starts from the goal's
+      // revision, so verification judges only what this task changes.
+      let synced: FolderSync | null = null;
+      const inFolder =
+        harness.attach_mode !== 'spawn' &&
+        harness.host_cwd !== null &&
+        path.resolve(harness.host_cwd).toLowerCase() === path.resolve(project.root).toLowerCase();
+      if (inFolder && head) {
+        const wanted = p.task_id ?? state.nextTaskFor(pid, c.agent_id)?.task_id;
+        const tip = wanted ? await taskBase(state, project, wanted).catch(() => undefined) : undefined;
+        const goalId = wanted ? (state.q.findTask(pid, wanted)?.goal_id ?? null) : null;
+        if (wanted && goalId && tip && tip !== head) {
+          try {
+            synced = await syncFolder(project.root, tip, await keptFiles(state, pid, goalId, project.root, tip));
+            if (!synced.in_the_way.length && !synced.kept.length) head = tip;
+          } catch {
+            // A folder git cannot write to now is taken as it is: the claim goes on.
+            synced = null;
+          }
+          // A file the person changed that the goal changed too: they choose which version stays,
+          // and the task waits for that (2026-11-17). What could be brought in already is.
+          if (synced?.in_the_way.length) {
+            askAboutFiles(state, pid, { kind: 'agent', id: c.agent_id }, { task_id: wanted, goal_id: goalId }, synced);
+            throw new FridayError('invalid_request', waitingNote(synced));
+          }
+        }
+      }
       const out = state.claimTask(
         pid,
         c,
@@ -639,7 +757,22 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
       // was too large) must not turn the claim into an error that leaves the agent holding a task
       // it was told nothing about; it gets the claim, the reason, and the way to ask again.
       let context: ContextPacket | null = null;
-      let note: string | null = null;
+      let note: string | null = synced ? syncNote(synced) : null;
+      if (synced && (synced.brought.length || synced.in_the_way.length)) {
+        state.recordObservation(
+          pid,
+          { kind: 'agent', id: c.agent_id },
+          'folder.synced',
+          {
+            task_id: out.task.task_id,
+            run_id: out.run_id,
+            goal_head: synced.goal_head,
+            brought: synced.brought.slice(0, 200),
+            in_the_way: synced.in_the_way.slice(0, 200),
+          },
+          [{ kind: 'task', id: out.task.task_id }],
+        );
+      }
       try {
         context = await deps.compile(
           {
@@ -650,7 +783,8 @@ async function handle(deps: RpcDeps, auth: AuthInfo, method: string, raw: Record
           { kind: 'agent', id: c.agent_id },
         );
       } catch (e) {
-        note = `the task is yours, but its context could not be delivered: ${(e as Error).message}. Ask for it with friday_request_context.`;
+        const undelivered = `the task is yours, but its context could not be delivered: ${(e as Error).message}. Ask for it with friday_request_context.`;
+        note = note ? `${note} ${undelivered}` : undelivered;
       }
       // Friday's model suggestion for this run (ADR-0031 §6): advisory unless the harness applies it.
       const run = state.q.findRun(out.run_id);

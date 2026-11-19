@@ -25,6 +25,8 @@ const TERMINAL = new Set(['COMPLETED', 'CANCELLED', 'ABANDONED']);
 
 const KEY_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
 const ROLE_RE = /^[a-z][a-z0-9-]{0,31}$/;
+/** An agent key, as the server's `AgentKeyRef` takes it. */
+const AGENT_KEY_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 /** Import refuses larger files (a plan is a few kilobytes). */
 export const MAX_IMPORT_BYTES = 1_000_000;
 
@@ -40,6 +42,11 @@ export interface DraftTask {
   scope: { write: string[]; read: string[] };
   priority: DraftPriority;
   risk_level: DraftRisk;
+  /**
+   * The agent this task is for (`dev-1`): reserved for it when the plan is approved, so no other
+   * agent takes it first. Absent or empty: Friday gives it to an agent by role.
+   */
+  assign_to?: string;
 }
 
 /** A first plan for a goal (`PlanDraft`). */
@@ -83,7 +90,7 @@ export interface DraftIssue {
   /**
    * Where it is: `objective`, `summary`, `plan`, `tasks`, `tasks.<i>.<field>` (`key`, `summary`,
    * `kind`, `role`, `description`, `acceptance_criteria`, `depends_on`, `scope.write`,
-   * `scope.read`, `priority`, `risk_level`), `rework.<task_id>`, `drop.<task_id>`; a revision's
+   * `scope.read`, `priority`, `risk_level`, `assign_to`), `rework.<task_id>`, `drop.<task_id>`; a revision's
    * new tasks use `new_tasks.<i>.<field>`.
    */
   path: string;
@@ -157,6 +164,7 @@ function cleanList(list: readonly string[]): string[] {
 /** A task as it is sent: trimmed text, empty lines and globs removed, an empty description left out. */
 export function normalizeTask(t: DraftTask): DraftTask {
   const description = (t.description ?? '').trim();
+  const assignTo = (t.assign_to ?? '').trim();
   return {
     key: t.key.trim(),
     summary: t.summary.trim(),
@@ -168,6 +176,7 @@ export function normalizeTask(t: DraftTask): DraftTask {
     scope: { write: cleanList(t.scope.write), read: cleanList(t.scope.read) },
     priority: t.priority,
     risk_level: t.risk_level,
+    ...(assignTo ? { assign_to: assignTo } : {}),
   };
 }
 
@@ -206,6 +215,18 @@ export function globsOverlap(a: readonly string[], b: readonly string[]): boolea
     }
   }
   return false;
+}
+
+/**
+ * Whether two writing tasks may run at the same time (the daemon's `canRunSideBySide`): their
+ * scopes are apart, or each has files of its own beside the ones they share (a router, a texts
+ * file, a changelog). Each then works in a copy of its own, and Friday merges their work.
+ */
+export function canRunSideBySide(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length === 0 || b.length === 0) return false;
+  if (!globsOverlap(a, b)) return true;
+  const own = (x: readonly string[], y: readonly string[]) => x.some((p) => !globsOverlap([p], y));
+  return own(a, b) && own(b, a);
 }
 
 /** Why a glob is not a project-relative POSIX glob, or null. */
@@ -279,12 +300,12 @@ function overlaps(nodes: Map<string, Node>, involving?: ReadonlySet<string>): Dr
       const b = live[j] as Node;
       if (involving && !involving.has(a.id) && !involving.has(b.id)) continue;
       const ordered = before.get(a.id)?.has(b.id) || before.get(b.id)?.has(a.id);
-      if (ordered || !globsOverlap(a.write, b.write)) continue;
+      if (ordered || canRunSideBySide(a.write, b.write)) continue;
       const main = involving && !involving.has(b.id) ? a : b;
       const other = main === a ? b : a;
       issues.push({
         path: main.path,
-        message: `${a.label} and ${b.label} can run at the same time but both write ${a.write.join(', ')} / ${b.write.join(', ')}: add a dependency between them or give them disjoint write scopes`,
+        message: `${a.label} and ${b.label} can run at the same time but would change the same files (${a.write.join(', ')} / ${b.write.join(', ')}): make one depend on the other, or give each files of its own. Two tasks may share a few files (a router, a texts file, a changelog) when each also has its own`,
         ...(other.path ? { related: [other.path] } : {}),
       });
     }
@@ -332,10 +353,15 @@ function taskIssues(t: DraftTask, prefix: string, label: string): DraftIssue[] {
     if (bad) add(`scope.${side}`, bad);
   }
   if (t.scope.write.length === 0 && !READ_ONLY_KINDS.includes(t.kind)) {
-    add('scope.write', `${label} must declare a write scope (only review and research tasks may be read-only)`);
+    add(
+      'scope.write',
+      `${label} must say which files it may change (only review and research tasks may change nothing)`,
+    );
   }
   if (!(PRIORITIES as readonly string[]).includes(t.priority)) add('priority', `"${t.priority}" is not a priority`);
   if (!(RISKS as readonly string[]).includes(t.risk_level)) add('risk_level', `"${t.risk_level}" is not a risk level`);
+  if (t.assign_to && !AGENT_KEY_RE.test(t.assign_to))
+    add('assign_to', 'an agent key is lowercase letters, digits and dashes, such as "dev-1"');
   return issues;
 }
 
@@ -538,6 +564,54 @@ export function changeLines(c: RevisionChanges): string[] {
 
 // ---- JSON ----------------------------------------------------------------------------------------
 
+/**
+ * A proposed plan as the editor's draft, to change it before approving (2026-11-17). A first plan is
+ * its tasks as they stand. A revision is what it changes: the tasks it adds, the ones it reworks and
+ * the ones it drops, with a dependency on a task of the active plan named by that task's id, as the
+ * revision editor names it. What the proposal keeps as it is, is not part of a revision.
+ */
+export function draftFromProposal(
+  proposed: Pick<LivePlanVersion, 'summary' | 'tasks'>,
+  o: { revision: boolean; objective?: string | null },
+): FirstPlanDraft | RevisionDraft {
+  const tasks = [...proposed.tasks].sort((a, b) => a.position - b.position);
+  const idByKey = new Map(tasks.filter((t) => t.task_id).map((t) => [t.key, t.task_id as string]));
+  const added = new Set(tasks.filter((t) => t.change === 'new').map((t) => t.key));
+  const asDraft = (t: (typeof tasks)[number], dep: (key: string) => string): DraftTask => ({
+    key: t.key,
+    summary: t.summary,
+    kind: (TASK_KINDS as readonly string[]).includes(t.kind) ? (t.kind as DraftKind) : 'implementation',
+    role: t.role,
+    ...(t.description ? { description: t.description } : {}),
+    acceptance_criteria: t.acceptance_criteria.length ? [...t.acceptance_criteria] : [''],
+    depends_on: t.depends_on.map(dep),
+    scope: { write: [...(t.scope?.write ?? [])], read: [...(t.scope?.read ?? [])] },
+    priority: (PRIORITIES as readonly string[]).includes(t.priority) ? (t.priority as DraftPriority) : 'normal',
+    risk_level: (RISKS as readonly string[]).includes(t.risk_level) ? (t.risk_level as DraftRisk) : 'low',
+    ...(t.assign_to ? { assign_to: t.assign_to } : {}),
+  });
+  if (!o.revision) {
+    const objective = (o.objective ?? '').trim();
+    return {
+      ...(objective ? { objective } : {}),
+      summary: proposed.summary,
+      tasks: tasks.filter((t) => t.change !== 'drop').map((t) => asDraft(t, (k) => k)),
+    };
+  }
+  return {
+    summary: proposed.summary,
+    rework: tasks
+      .filter((t) => t.change === 'rework' && t.task_id)
+      .map((t) => ({ task_id: t.task_id as string, note: t.note ?? '' })),
+    drop: tasks
+      .filter((t) => t.change === 'drop' && t.task_id)
+      .map((t) => ({ task_id: t.task_id as string, reason: t.note ?? '' })),
+    new_tasks: tasks
+      .filter((t) => t.change === 'new')
+      .map((t) => asDraft(t, (k) => (added.has(k) ? k : (idByKey.get(k) ?? k)))),
+  };
+}
+
 export function exportJson(draft: FirstPlanDraft | RevisionDraft): string {
   return JSON.stringify(draft, null, 2);
 }
@@ -586,6 +660,7 @@ function taskFrom(v: unknown, i: number, warnings: string[]): DraftTask {
     scope: { write: strList(scope.write), read: strList(scope.read) },
     priority: pick(o.priority, PRIORITIES, 'normal', `task "${key}": priority`, warnings),
     risk_level: pick(o.risk_level, RISKS, 'low', `task "${key}": risk_level`, warnings),
+    ...(str(o.assign_to) ? { assign_to: str(o.assign_to) } : {}),
   };
 }
 

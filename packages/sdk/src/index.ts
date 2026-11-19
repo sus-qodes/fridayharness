@@ -18,12 +18,16 @@ export {
 export { DaemonClient, type DaemonClientOptions, DaemonUnreachableError, type RequestOptions } from './client.js';
 export {
   ApprovalSettings,
+  ASKABLE_COMMAND_CLASSES,
   type CheckConfig,
   type ConfigKeyEffect,
   changedConfigKeys,
   configKeyEffect,
+  EDITABLE_SETTINGS,
+  type EditableSetting,
   EnvName,
   ExecutionSettings,
+  editConfigText,
   FridayConfig,
   LIVE_CONFIG_KEYS,
   liveConfig,
@@ -38,6 +42,7 @@ export {
   RESTART_CONFIG_KEYS,
   RoutingSettings,
   renderInitialConfig,
+  settingPath,
 } from './config.js';
 export {
   CONFIG_FILE,
@@ -46,19 +51,24 @@ export {
   ensurePrivateDir,
   FRIDAY_DIR,
   findProjectRoot,
+  type InstallCheck,
   type InstallInfo,
+  installCheck,
   type LocalTokenClass,
   loadProject,
+  ownMcpEntry,
   type ProjectRef,
   privateDirFor,
   projectKey,
   readDiscovery,
   readInstallInfo,
   readToken,
+  samePath,
   stateDir,
   writePrivateFile,
 } from './discovery.js';
 export { dpapiAvailable } from './dpapi.js';
+export { ensureLintSkip, LINT_SKIP, LINT_SKIP_FILE, LINT_SKIP_FOLDERS } from './lint-skip.js';
 export {
   POLICY_DIR,
   PolicyFile,
@@ -68,8 +78,24 @@ export {
   writePolicyTrust,
 } from './policy-files.js';
 export {
+  type CheckToAdd,
+  editChecksText,
+  packageManagerOf,
+  type SuggestedCheck,
+  type SuggestedKind,
+  setCheckLimitText,
+  setCheckRequiredText,
+  suggestChecks,
+} from './project-checks.js';
+export {
   approveProvider,
+  choosePlanner,
+  choosePlannerModel,
+  PLANNER_CHOICES,
+  type PlannerChoice,
   type ProviderApproval,
+  plannerChoice,
+  plannerModelChoice,
   providerApproval,
   providerEndpoint,
   revokeProvider,

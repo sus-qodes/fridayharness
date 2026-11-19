@@ -28,6 +28,9 @@ export function claudeHookOutput(
       return j.brief ? j.text : { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: j.text } };
     case 'continue':
       return { decision: 'block', reason: `Friday: ${j.reason}` };
+    case 'halt':
+      // Claude Code's UserPromptSubmit blocks a prompt the same way (no hook of Friday's asks it yet).
+      return { decision: 'block', reason: j.text };
   }
 }
 

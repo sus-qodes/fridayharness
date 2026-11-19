@@ -17,6 +17,7 @@ export {
   type GraphEdge,
   type GraphNode,
   type GraphStats,
+  isFridayOwn,
   isTestPath,
   type SymbolEdge,
   type SymbolNode,

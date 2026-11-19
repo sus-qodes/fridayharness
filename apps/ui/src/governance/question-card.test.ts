@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LET_AGENT_DECIDE } from '../model/escalations.js';
 import { makeContext, type TestContext } from '../test/context.js';
 import { makeAgent, makeEscalation, makeRun, makeSnapshot, makeTask } from '../test/fixtures.js';
-import { questionCard } from './question-card.js';
+import { questionCard, repairRequest } from './question-card.js';
 
 const HOSTILE = '<img src=x onerror=alert(1)>';
 const LONG = 'z'.repeat(5000);
@@ -215,7 +215,7 @@ describe('question cards by kind (plan FD-21)', () => {
       }),
     );
     expect(card.el.querySelectorAll('.gv-chip')).toHaveLength(0);
-    expect(card.el.querySelector('.gv-cli')?.textContent).toContain('What the CLI would do');
+    expect(card.el.querySelector('.gv-cli')?.textContent).toContain('The same from a terminal');
     expect(card.el.querySelector('.gv-cli')?.textContent).toContain(HOSTILE);
     expect(card.el.querySelector('img')).toBeNull();
     card.destroy();
@@ -226,6 +226,39 @@ describe('question cards by kind (plan FD-21)', () => {
     buttonNamed(card.el, 'Recover').click();
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'recover', id: TASK });
     card.destroy();
+  });
+
+  it('a stop at the agent’s spending limit offers to raise it and continue, with the other ways behind one button', () => {
+    const card = mount(
+      makeEscalation({
+        kind: 'recovery_needed',
+        requested_by_kind: 'system',
+        question:
+          'claude-1 stopped at its spending limit: this attempt cost $5.03, and reached the limit of $5 per attempt. The work so far is kept. Raise the limit to let the task continue, or cancel it.',
+        options: [`friday recover ${TASK} --action reassign`, `friday task cancel ${TASK}`],
+        details: { reason: 'budget_exceeded', scope: 'agent', agent_key: 'claude-1', cap_usd: 5, cost_usd: 5.03 },
+      }),
+    );
+    expect(card.el.textContent).toContain('claude-1 stopped at its spending limit');
+    // No terminal commands for a person who has a button, and no bare "Recover…".
+    expect(card.el.querySelector('.gv-cli')).toBeNull();
+    expect(card.el.textContent).not.toContain('friday recover');
+    expect(
+      Array.from(card.el.querySelectorAll('.gv-actions:not(.gv-actions-end) button')).map((b) => b.textContent),
+    ).toEqual(['Raise the limit and continue…', 'Other options…']);
+    buttonNamed(card.el, 'Raise the limit and continue').click();
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'raise-limit', id: TASK });
+    buttonNamed(card.el, 'Other options').click();
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'recover', id: TASK });
+    card.destroy();
+    // The task's own cap (routing.task_budget_usd) is not an agent's limit: the recovery dialog as before.
+    const taskCap = mount(
+      makeEscalation({ kind: 'recovery_needed', options: [], details: { reason: 'budget_exceeded', cap_usd: 1 } }),
+    );
+    expect(taskCap.el.textContent).not.toContain('Raise the limit');
+    buttonNamed(taskCap.el, 'Recover').click();
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'recover', id: TASK });
+    taskCap.destroy();
   });
 
   describe('routing', () => {
@@ -253,6 +286,240 @@ describe('question cards by kind (plan FD-21)', () => {
       expect(why.textContent).toContain('gpt⟨U+202E⟩');
       expect(why.querySelector('img')).toBeNull();
       card.destroy();
+    });
+
+    describe('a task with no agent to run it', () => {
+      const blocked = (codes: string[]) =>
+        makeEscalation({
+          kind: 'routing_blocked',
+          requested_by_kind: 'system',
+          question: `${TASK} cannot start: no dispatchable candidate for role "frontend_engineer" on this harness`,
+          options: [`friday routing explain ${TASK}`, 'friday routing pin --task <task> --model <model>'],
+          details: { harness_id: null, reason_codes: codes },
+        });
+      const offer = (over: Record<string, unknown> = {}) => ({
+        agent_key: 'claude-1',
+        host: 'claude-code',
+        attach_mode: 'spawn',
+        free: true,
+        blocked: false,
+        model: 'claude-sonnet-5-5',
+        reason: 'x',
+        ...over,
+      });
+      const runOn = (el: Element) => [...el.querySelectorAll('.gv-run-on button')].map((b) => b.textContent);
+
+      it('says what is wrong in words and leads with the agents it can be given to', async () => {
+        const card = mount(
+          blocked(['registry.none_eligible']),
+          {},
+          {
+            [`GET /routing/explain/${TASK}`]: {
+              offers: [
+                offer(),
+                offer({ agent_key: `codex${HOSTILE}`, host: 'codex', free: false }),
+                offer({ agent_key: 'antigravity-1', host: 'antigravity', attach_mode: 'attach' }),
+                // One it would not start on even so is not offered.
+                offer({ agent_key: 'local-1', host: 'generic', blocked: true }),
+              ],
+            },
+            [`POST /tasks/${TASK}/assign`]: { mode: 'assigned', task: {} },
+          },
+        );
+        expect(card.el.querySelector('.gv-card-title')?.textContent).toBe('A task has no agent to run it');
+        expect(card.el.querySelector('.gv-question-text')?.textContent).toBe(
+          'None of your connected agents can take this task as things are.',
+        );
+        // The decision's own sentence is one step away, and no terminal command is offered.
+        const details = card.el.querySelector('details.gv-details') as HTMLDetailsElement;
+        expect(details.open).toBe(false);
+        expect(details.textContent).toContain('no dispatchable candidate for role');
+        expect(card.el.querySelector('.gv-cli')).toBeNull();
+        expect(card.el.textContent).not.toContain('friday routing pin');
+        expect(card.el.textContent).toContain('Looking for an agent that can take it');
+        await flush();
+        expect(runOn(card.el)).toEqual([
+          'claude-1 (Claude Code)',
+          // A busy agent and one the person runs themselves say so on the button.
+          `codex${HOSTILE} (Codex, busy now)`,
+          'antigravity-1 (Antigravity, your editor)',
+        ]);
+        expect(card.el.querySelector('img')).toBeNull();
+        // One click gives it to the agent, which Friday then follows.
+        arm(card.el);
+        buttonNamed(card.el, 'claude-1 (Claude Code)').click();
+        await flush();
+        expect(ctx.transport.to('POST', `/tasks/${TASK}/assign`)[0]?.body).toEqual({ agent_key: 'claude-1' });
+        expect(card.el.querySelector('.gv-status')?.textContent).toBe('Given to claude-1: it starts now.');
+        card.destroy();
+      });
+
+      it('says how a kept task starts: when a busy agent is free, or when the person takes it in their editor', async () => {
+        const answersFor = {
+          [`GET /routing/explain/${TASK}`]: {
+            offers: [
+              offer({ agent_key: 'codex-1', host: 'codex', free: false }),
+              offer({ agent_key: 'antigravity-1', host: 'antigravity', attach_mode: 'attach' }),
+            ],
+          },
+          [`POST /tasks/${TASK}/assign`]: { mode: 'reserved', task: {} },
+        };
+        const busy = mount(blocked(['pin.unavailable']), {}, answersFor);
+        expect(busy.el.querySelector('.gv-question-text')?.textContent).toBe(
+          'A model was chosen for this work that the agent it reached cannot run.',
+        );
+        await flush();
+        arm(busy.el);
+        buttonNamed(busy.el, 'codex-1').click();
+        await flush();
+        expect(busy.el.querySelector('.gv-status')?.textContent).toBe(
+          'Kept for codex-1: it starts when that agent is free.',
+        );
+        // The question is still open (it closes when the task starts), so nothing is switched off.
+        expect(buttonNamed(busy.el, 'Cancel task').disabled).toBe(false);
+        busy.destroy();
+        const own = mount(blocked(['role.unsupported']), {}, answersFor);
+        expect(own.el.querySelector('.gv-question-text')?.textContent).toBe(
+          'Friday could not tell what kind of work this task is, so it chose no agent for it.',
+        );
+        await flush();
+        arm(own.el);
+        buttonNamed(own.el, 'antigravity-1').click();
+        await flush();
+        expect(own.el.querySelector('.gv-status')?.textContent).toBe(
+          'Kept for antigravity-1: take it there, in Antigravity, with /friday.',
+        );
+        own.destroy();
+      });
+
+      it('offers to start an agent when none can take it, and stays usable when the answer does not come', async () => {
+        const none = mount(
+          blocked(['delegation.all_blocked']),
+          {},
+          { [`GET /routing/explain/${TASK}`]: { offers: [] } },
+        );
+        await flush();
+        expect(none.el.textContent).toContain('No agent is connected that can take work.');
+        buttonNamed(none.el, 'Start an agent').click();
+        expect(ctx.store.select('ui').modal).toEqual({ kind: 'start-agent' });
+        none.destroy();
+        const refused = mount(
+          blocked(['constraint.sensitive']),
+          {},
+          { [`GET /routing/explain/${TASK}`]: { offers: [offer({ blocked: true })] } },
+        );
+        await flush();
+        expect(refused.el.textContent).toContain('None of the connected agents can take it, whoever it is given to.');
+        expect(refused.el.querySelector('.gv-question-text')?.textContent).toContain('marked sensitive');
+        refused.destroy();
+        // An older Friday, or an answer that failed: no agents are listed, the other ways remain.
+        const silent = mount(blocked([]), {}, {});
+        await flush();
+        expect(runOn(silent.el)).toEqual([]);
+        expect(silent.el.textContent).not.toContain('Looking for an agent');
+        expect(buttonNamed(silent.el, 'Choose a model').disabled).toBe(false);
+        silent.destroy();
+      });
+
+      it('chooses a model from those an agent here can run, for this task or for every task of its kind', async () => {
+        const models = {
+          models: [
+            { id: 'claude-fable-5-1', vendors: ['claude-code'], source: 'seed' },
+            { id: 'z-ai/glm-5.3', vendors: ['opencode'], source: 'seed' },
+            { id: 'claude-sonnet-5-5', vendors: ['claude-code'], source: 'seed' },
+            { id: 'openai/gpt-6.1-sol', vendors: ['codex'], source: 'seed' },
+          ],
+          evidence: [],
+          settings: {},
+        };
+        const card = mount(
+          blocked(['registry.none_eligible']),
+          {},
+          { 'GET /models': models, 'POST /routing/pins': { pin: {} } },
+        );
+        buttonNamed(card.el, 'Choose a model').click();
+        await flush();
+        const select = card.el.querySelector('.gv-pin-select') as HTMLSelectElement;
+        // Names, the app that runs each, the everyday model first and chosen; nothing no agent here runs.
+        expect([...select.options].map((o) => o.textContent)).toEqual([
+          'Claude Sonnet 5.5 (Claude Code)',
+          'Claude Fable 5.1 (Claude Code)',
+          'GPT-6.1 Sol (Codex)',
+        ]);
+        expect(select.value).toBe('claude-sonnet-5-5');
+        expect(card.el.textContent).toContain('Use it for every coding task, not only this one');
+        arm(card.el);
+        buttonNamed(card.el, 'Use this model').click();
+        await flush();
+        expect(ctx.transport.to('POST', '/routing/pins')[0]?.body).toMatchObject({
+          scope: 'task',
+          target: TASK,
+          model: 'claude-sonnet-5-5',
+        });
+        card.destroy();
+        const every = mount(
+          blocked(['registry.none_eligible']),
+          {},
+          { 'GET /models': models, 'POST /routing/pins': { pin: {} } },
+        );
+        buttonNamed(every.el, 'Choose a model').click();
+        await flush();
+        (every.el.querySelector('.gv-pin-select') as HTMLSelectElement).value = 'openai/gpt-6.1-sol';
+        (every.el.querySelector('.gv-pin-all input') as HTMLInputElement).checked = true;
+        arm(every.el);
+        buttonNamed(every.el, 'Use this model').click();
+        await flush();
+        expect(ctx.transport.to('POST', '/routing/pins')[0]?.body).toMatchObject({
+          scope: 'kind',
+          target: 'implementation',
+          model: 'openai/gpt-6.1-sol',
+        });
+        expect(ctx.toasts.at(-1)?.text).toBe('GPT-6.1 Sol for every coding task');
+        every.destroy();
+      });
+    });
+
+    it('says which host is kept out and why, and tries it again when the person signed in', async () => {
+      const card = mount(makeEscalation({ kind: 'routing_blocked' }), {}, { 'POST /readiness/clear': { ended: [] } });
+      // Nothing is kept out: the card is as before.
+      expect(card.el.querySelector('.gv-host-block')).toBeNull();
+      card.destroy();
+      const blocked = mount(
+        makeEscalation({ kind: 'routing_blocked' }),
+        {},
+        { 'POST /readiness/clear': { ended: [] } },
+      );
+      blocked.destroy();
+      ctx = makeContext({
+        snapshot: makeSnapshot({
+          agents: [makeAgent()],
+          tasks: [makeTask({ goal_id: GOAL })],
+          escalations: [makeEscalation({ kind: 'routing_blocked' })],
+          host_blocks: [
+            {
+              host: 'claude-code',
+              model: null,
+              kind: 'sign_in',
+              detail: 'auth: Not logged in',
+              since: '2026-11-17T09:00:00.000Z',
+              until: null,
+            },
+          ],
+        }),
+        answers: { 'POST /readiness/clear': { ended: [{ evidence_id: 'rdy_1' }] } },
+      });
+      const withBlock = questionCard(ctx, makeEscalation({ kind: 'routing_blocked' }));
+      document.body.append(withBlock.el);
+      const row = withBlock.el.querySelector('.gv-host-block') as HTMLElement;
+      expect(row.textContent).toContain('Claude Code is not signed in, so Friday gives it no work');
+      buttonNamed(withBlock.el, 'I signed in: try again').click();
+      await flush();
+      expect(ctx.transport.to('POST', '/readiness/clear').map((c) => c.body)).toEqual([
+        { host: 'claude-code', model: null },
+      ]);
+      expect(ctx.refreshes).toBe(1);
+      expect(withBlock.el.textContent).toContain('Friday offers the task again now');
+      withBlock.destroy();
     });
 
     it('Pin a model for this task lists the models and pins one to the task', async () => {
@@ -314,6 +581,7 @@ describe('question cards by kind (plan FD-21)', () => {
             },
           }),
           [`POST /goals/${GOAL}/cancel`]: { goal_id: GOAL },
+          [`POST /tasks/${TASK}/integrate/back`]: { task: { task_id: TASK, status: 'READY' } },
         },
       );
       ctx.store.setState({
@@ -364,16 +632,32 @@ describe('question cards by kind (plan FD-21)', () => {
       card.destroy();
     });
 
-    it('Integrate again and Integrate my repair call integrate, the repair with repaired: true', async () => {
+    it('Try again and I repaired it myself call integrate, the repair with repaired: true', async () => {
       const card = mountIntegration();
       arm(card.el);
-      buttonNamed(card.el, 'Integrate again').click();
+      buttonNamed(card.el, 'Try again').click();
       await flush();
-      expect(card.el.textContent).toContain('Integration conflicted');
-      buttonNamed(card.el, 'Integrate my repair').click();
+      expect(card.el.textContent).toContain('Clashes with other work');
+      buttonNamed(card.el, 'I repaired it myself').click();
       await flush();
       expect(ctx.transport.to('POST', `/tasks/${TASK}/integrate`).map((c) => c.body)).toEqual([{}, { repaired: true }]);
-      expect(card.el.textContent).toContain('Integrated');
+      expect(card.el.textContent).toContain('Merged into the goal');
+      card.destroy();
+    });
+
+    // The way out without a terminal (2026-11-18): the agent that made the work finishes the merge
+    // in its own copy. It is the first button, and the card says what will happen in plain words.
+    it('Let the agent fix it sends the work back to its agent, as the first choice', async () => {
+      const card = mountIntegration();
+      const names = [...card.el.querySelectorAll('.gv-actions button')].map((b) => b.textContent?.trim());
+      expect(names[0]).toBe('Let the agent fix it');
+      expect(card.el.textContent).toContain('both versions marked where they collide');
+      expect(card.el.textContent).not.toContain('commit, then choose');
+      arm(card.el);
+      buttonNamed(card.el, 'Let the agent fix it').click();
+      await flush();
+      expect(ctx.transport.to('POST', `/tasks/${TASK}/integrate/back`).map((c) => c.body)).toEqual([{}]);
+      expect(card.el.textContent).toContain('Sent back to its agent');
       card.destroy();
     });
 
@@ -409,6 +693,281 @@ describe('question cards by kind (plan FD-21)', () => {
     card.destroy();
   });
 
+  describe('a file the person and the goal both changed (2026-11-17)', () => {
+    const FILES = `GET /tasks/${TASK}/folder-conflict`;
+    const CHOOSE = `POST /tasks/${TASK}/folder-conflict`;
+    const UNDO = `POST /tasks/${TASK}/folder-conflict/undo`;
+    const asked = () =>
+      makeEscalation({
+        kind: 'folder_conflict',
+        goal_id: GOAL,
+        question: "You changed a file in the project folder that this goal's finished work also changes: src/a.ts.",
+        details: { files: ['src/a.ts'], goal_head: 'abc' },
+      });
+    const files = { goal_head: 'abc', files: [{ path: 'src/a.ts', mine: `mine ${HOSTILE}`, theirs: 'finished' }] };
+
+    it('lists each file with Keep mine, Take the finished one and Show both, as text', async () => {
+      const card = mount(asked(), {}, { [FILES]: files });
+      await flush();
+      expect(card.el.querySelector('.gv-card-title')?.textContent).toBe('You and an agent changed the same file');
+      expect(card.el.textContent).toContain('Friday did not touch yours');
+      const row = card.el.querySelector('.gv-folder-file') as HTMLElement;
+      expect(row.querySelector('.gv-folder-path')?.textContent).toBe('src/a.ts');
+      expect([...row.querySelectorAll('button')].filter((b) => !b.hidden).map((b) => b.textContent)).toEqual([
+        'Keep mine',
+        'Take the finished one',
+        'Show both',
+      ]);
+      // Both versions only when asked for, and never as markup.
+      expect(row.querySelector<HTMLElement>('.gv-folder-both')?.hidden).toBe(true);
+      buttonNamed(row, 'Show both').click();
+      expect(row.querySelector<HTMLElement>('.gv-folder-both')?.hidden).toBe(false);
+      expect(row.textContent).toContain(`mine ${HOSTILE}`);
+      expect(row.textContent).toContain('finished');
+      expect(card.el.querySelector('img')).toBeNull();
+      card.destroy();
+    });
+
+    it('Keep mine sends the choice, and the card is done when no file is left', async () => {
+      const card = mount(asked(), {}, { [FILES]: files, [CHOOSE]: { remaining: 0 } });
+      await flush();
+      buttonNamed(card.el, 'Keep mine').click();
+      await flush();
+      expect(ctx.transport.to('POST', `/tasks/${TASK}/folder-conflict`).map((c) => c.body)).toEqual([
+        { path: 'src/a.ts', take: 'mine' },
+      ]);
+      expect(card.el.textContent).toContain('Yours is kept.');
+      card.destroy();
+    });
+
+    it('Take the finished one offers to put mine back, which restores it', async () => {
+      const card = mount(asked(), {}, { [FILES]: files, [CHOOSE]: { remaining: 0 }, [UNDO]: { restored: true } });
+      await flush();
+      expect(buttonNamed(card.el, 'Put mine back').hidden).toBe(true);
+      buttonNamed(card.el, 'Take the finished one').click();
+      await flush();
+      expect(ctx.transport.to('POST', `/tasks/${TASK}/folder-conflict`).map((c) => c.body)).toEqual([
+        { path: 'src/a.ts', take: 'theirs' },
+      ]);
+      const back = buttonNamed(card.el, 'Put mine back');
+      expect(back.hidden).toBe(false);
+      back.click();
+      await flush();
+      expect(ctx.transport.to('POST', `/tasks/${TASK}/folder-conflict/undo`).map((c) => c.body)).toEqual([
+        { path: 'src/a.ts' },
+      ]);
+      expect(card.el.textContent).toContain('Yours is back in place.');
+      card.destroy();
+    });
+  });
+
+  describe('a lockfile no new task folder can install from (2026-11-18)', () => {
+    const broken = (over: Partial<EscalationView> = {}) =>
+      makeEscalation({
+        kind: 'install_broken',
+        task_id: null,
+        goal_id: null,
+        requested_by_kind: 'system',
+        requested_by_id: 'friday',
+        question:
+          "This project's packages cannot be installed in a new task folder: package-lock.json does not match package.json. Have an agent repair package-lock.json?",
+        options: ['have an agent repair it', 'not now'],
+        details: {
+          key: 'abc',
+          lockfile: 'package-lock.json',
+          missing: ['Missing: @emnapi/core@1.11.2 from lock file', `Missing: x${HOSTILE} from lock file`],
+          evidence: ['install: npm ci --prefer-offline'],
+        },
+        ...over,
+      });
+    const GOALS = 'POST /goals';
+
+    it('says it once in plain words, with what npm said, and leads with the repair', () => {
+      const card = mount(broken());
+      expect(card.el.querySelector('.gv-card-title')?.textContent).toBe(
+        'New task folders cannot install this project’s packages',
+      );
+      expect(card.el.textContent).toContain('that install now fails: package-lock.json does not match package.json');
+      expect(card.el.textContent).toContain('npm said: Missing: @emnapi/core@1.11.2 from lock file');
+      expect(card.el.textContent).toContain('costs minutes on every task');
+      const names = [...card.el.querySelectorAll('.gv-actions button')].map((b) => b.textContent?.trim());
+      expect(names).toEqual(['Have an agent repair it', 'Not now', 'Later']);
+      expect(buttonNamed(card.el, 'Have an agent repair it').classList.contains('btn-primary')).toBe(true);
+      // Nothing to type, and no instruction for a terminal.
+      expect(card.el.querySelector('textarea')).toBeNull();
+      expect(card.el.textContent).not.toContain('friday ');
+      expect(card.el.querySelector('img')).toBeNull();
+      card.destroy();
+    });
+
+    it('"Have an agent repair it" starts a goal for that file only, and closes the question', async () => {
+      const card = mount(broken(), {}, { [GOALS]: { goal_id: 'goal_repair' } });
+      arm(card.el);
+      buttonNamed(card.el, 'Have an agent repair it').click();
+      await flush();
+      const made = ctx.transport.to('POST', '/goals').map((c) => c.body as { request: string; plan: boolean });
+      expect(made).toHaveLength(1);
+      expect(made[0]?.request).toBe(repairRequest('package-lock.json'));
+      expect(made[0]?.request).toContain('change nothing else');
+      expect(made[0]?.plan).toBe(true);
+      expect(answers(ctx)).toEqual(['An agent was asked to repair it (goal goal_repair).']);
+      expect(card.el.textContent).toContain('A goal to repair it was started');
+      card.destroy();
+    });
+
+    it('a goal that could not be created leaves the question open', async () => {
+      const card = mount(
+        broken(),
+        {},
+        {
+          [GOALS]: () => {
+            throw new Error('the daemon is busy');
+          },
+        },
+      );
+      arm(card.el);
+      buttonNamed(card.el, 'Have an agent repair it').click();
+      await flush();
+      expect(answers(ctx)).toEqual([]);
+      expect(buttonNamed(card.el, 'Have an agent repair it').disabled).toBe(false);
+      card.destroy();
+    });
+
+    it('"Not now" closes it without starting anything', async () => {
+      const card = mount(broken(), {}, { [GOALS]: { goal_id: 'goal_repair' } });
+      arm(card.el);
+      buttonNamed(card.el, 'Not now').click();
+      await flush();
+      expect(ctx.transport.to('POST', '/goals')).toHaveLength(0);
+      expect(answers(ctx)).toEqual(['Not now.']);
+      expect(card.el.textContent).toContain('Friday asks again only when the package list changes');
+      card.destroy();
+    });
+  });
+
+  describe('a check that failed where the install failed (2026-11-17)', () => {
+    const SETUP = `POST /tasks/${TASK}/setup`;
+    const failedSetup = (over: Partial<EscalationView> = {}) =>
+      makeEscalation({
+        kind: 'setup_failed',
+        goal_id: GOAL,
+        requested_by_kind: 'master_brain',
+        question:
+          'The checks of the task failed, and its dependencies were not installed in its folder (npm exited with 1). This looks like a setup problem.',
+        options: ['fix what kept it from installing, then install again ("friday task setup <task>")'],
+        details: {
+          why: 'npm exited with 1',
+          proposed_action: 'wait: another attempt would fail the same way',
+          evidence: ['install: npm ci', `install output: npm ERR! network ${HOSTILE}`],
+        },
+        ...over,
+      });
+
+    it('says it is the setup, not the work, and leads with installing again', () => {
+      const card = mount(failedSetup());
+      expect(card.el.querySelector('.gv-card-title')?.textContent).toBe("A task's dependencies were not installed");
+      expect(card.el.textContent).toContain('most likely a setup problem, not the work of the agent');
+      expect(card.el.textContent).toContain('The install: npm exited with 1');
+      // The buttons that do something here, and none that would revise the plan or check a failed task again.
+      const names = [...card.el.querySelectorAll('.gv-actions button')].map((b) => b.textContent?.trim());
+      expect(names).toEqual([
+        'Install again',
+        'Send it back to the agent',
+        'Open the folder in VS Code',
+        'Cancel task',
+        'Later',
+      ]);
+      expect(buttonNamed(card.el, 'Install again').classList.contains('btn-primary')).toBe(true);
+      expect(card.el.querySelector('textarea')).toBeNull();
+      // What the install ran and printed is one step away, as text.
+      const details = card.el.querySelector('.gv-details') as HTMLElement;
+      expect(details.textContent).toContain('npm ci');
+      expect(details.textContent).toContain(`npm ERR! network ${HOSTILE}`);
+      expect(card.el.querySelector('img')).toBeNull();
+      card.destroy();
+    });
+
+    it('Install again runs the install; when it fails again it says why and shows what it printed', async () => {
+      const card = mount(
+        failedSetup(),
+        {},
+        {
+          [SETUP]: {
+            setup: {
+              status: 'failed',
+              reason: 'npm exited with 1',
+              command: 'npm',
+              args: ['ci'],
+              output_tail: 'npm ERR! still offline',
+            },
+          },
+        },
+      );
+      arm(card.el);
+      buttonNamed(card.el, 'Install again').click();
+      await flush();
+      expect(ctx.transport.to('POST', `/tasks/${TASK}/setup`)).toHaveLength(1);
+      const result = card.el.querySelector('.gv-setup-result') as HTMLElement;
+      expect(result.querySelector('.field-error')?.textContent).toBe('The install did not finish: npm exited with 1.');
+      expect(result.textContent).toContain('npm ERR! still offline');
+      // Still the first thing to do, and nothing was sent back or answered.
+      expect(buttonNamed(card.el, 'Install again').classList.contains('btn-primary')).toBe(true);
+      expect(ctx.transport.to('POST', `/tasks/${TASK}/rework`)).toHaveLength(0);
+      expect(answers(ctx)).toEqual([]);
+      card.destroy();
+    });
+
+    it('once it installs, sending the task back becomes the next step, and tells the agent why', async () => {
+      const card = mount(
+        failedSetup(),
+        {},
+        {
+          [SETUP]: { setup: { status: 'passed', reason: 'ok', command: 'npm', args: ['ci'], output_tail: null } },
+          [`POST /tasks/${TASK}/rework`]: { task: { task_id: TASK } },
+        },
+      );
+      arm(card.el);
+      buttonNamed(card.el, 'Install again').click();
+      await flush();
+      expect(card.el.querySelector('.gv-setup-ok')?.textContent).toContain(
+        'Installed. Send the task back to its agent',
+      );
+      expect(buttonNamed(card.el, 'Install again').classList.contains('btn-primary')).toBe(false);
+      const back = buttonNamed(card.el, 'Send it back to the agent');
+      expect(back.classList.contains('btn-primary')).toBe(true);
+      back.click();
+      await flush();
+      const sent = ctx.transport.to('POST', `/tasks/${TASK}/rework`);
+      expect(sent).toHaveLength(1);
+      expect((sent[0]?.body as { reason?: string } | undefined)?.reason).toContain(
+        'The dependencies are installed in the task folder now',
+      );
+      card.destroy();
+    });
+
+    it('sends it back as it is when a person chooses to, and says the install was not fixed', async () => {
+      const card = mount(failedSetup(), {}, { [`POST /tasks/${TASK}/rework`]: { task: { task_id: TASK } } });
+      arm(card.el);
+      buttonNamed(card.el, 'Send it back to the agent').click();
+      await flush();
+      const sent = ctx.transport.to('POST', `/tasks/${TASK}/rework`);
+      expect((sent[0]?.body as { reason?: string } | undefined)?.reason).toContain('were not installed');
+      expect(ctx.transport.to('POST', `/tasks/${TASK}/setup`)).toHaveLength(0);
+      card.destroy();
+    });
+
+    it('says so when the project declares nothing to install', async () => {
+      const card = mount(failedSetup(), {}, { [SETUP]: { setup: null } });
+      arm(card.el);
+      buttonNamed(card.el, 'Install again').click();
+      await flush();
+      expect(card.el.querySelector('.gv-setup-result')?.textContent).toContain(
+        'Nothing was installed: this project declares no install for a task folder.',
+      );
+      card.destroy();
+    });
+  });
+
   describe('Master Brain kinds', () => {
     it('with a planner: Revise with a note answers the question, which revises the plan', async () => {
       const card = mount(
@@ -433,11 +992,101 @@ describe('question cards by kind (plan FD-21)', () => {
     });
 
     it('without a planner: Write a revision opens the plan editor in revision mode', () => {
-      const card = mount(makeEscalation({ kind: 'invalid_plan', goal_id: GOAL, task_id: null }), {}, {}, false);
+      const card = mount(makeEscalation({ kind: 'replan_limit', goal_id: GOAL, task_id: null }), {}, {}, false);
       expect(card.el.textContent).toContain('no key is stored');
       buttonNamed(card.el, 'Write a revision').click();
       expect(ctx.store.select('ui').modal).toEqual({ kind: 'plan-editor', id: GOAL, mode: 'revision' });
       card.destroy();
+    });
+
+    describe('planning itself failed', () => {
+      const failed = (kind: string, why: string) =>
+        makeEscalation({
+          kind,
+          goal_id: GOAL,
+          task_id: null,
+          requested_by_kind: 'master_brain',
+          question: `Friday cannot plan goal ${GOAL} (Add Stripe…): ${why}. How should it continue?`,
+          options: ['enable the provider, then run "friday goal replan"', 'write the plan with "friday plan propose"'],
+          details: { why, proposed_action: 'wait for a planner or a human-written plan', evidence: [] },
+        });
+      const buttons = (el: Element) =>
+        [...el.querySelectorAll('.gv-actions:not(.gv-actions-end) button')].map((b) => b.textContent);
+
+      it('says what happened in words, and asks the planner again from the card', async () => {
+        const card = mount(failed('planner_unavailable', 'Claude Code said: Not logged in · Please run /login'));
+        expect(card.el.querySelector('.gv-question-text')?.textContent).toBe('Friday could not plan this goal.');
+        expect(card.el.querySelector('.gv-why')?.textContent).toBe(
+          'The planner is not signed in. Sign in to it (for Claude Code: open Claude Code once and sign in), then try again.',
+        );
+        // The daemon's own sentence, with its ids and terminal commands, is one step away.
+        const details = card.el.querySelector('details.gv-details') as HTMLDetailsElement;
+        expect(details.open).toBe(false);
+        expect(details.textContent).toContain(`Friday cannot plan goal ${GOAL}`);
+        expect(card.el.querySelector('.gv-cli')).toBeNull();
+        expect(card.el.textContent).not.toContain('friday goal replan');
+        expect(buttons(card.el)).toEqual(['Try again', 'Write the plan myself', 'Planner settings']);
+        arm(card.el);
+        buttonNamed(card.el, 'Try again').click();
+        await flush();
+        // Answering is what makes the daemon plan again; a separate request would leave the question open.
+        expect(answers(ctx)).toEqual(['Try again.']);
+        expect(ctx.transport.calls.filter((c) => c.path.endsWith('/replan'))).toHaveLength(0);
+        expect(card.el.querySelector('.gv-status')?.textContent).toContain('The planner was asked again');
+        card.destroy();
+      });
+
+      it('sends what the person adds for the planner, and names each kind of trouble', async () => {
+        const noted = mount(failed('invalid_plan', 'the output did not match the schema'));
+        expect(noted.el.querySelector('.gv-why')?.textContent).toContain(
+          'The planner answered, but not with a plan Friday could use.',
+        );
+        expect(buttons(noted.el)).toEqual(['Try again', 'Write the plan myself']);
+        (noted.el.querySelector('textarea') as HTMLTextAreaElement).value = '  two tasks at most  ';
+        arm(noted.el);
+        buttonNamed(noted.el, 'Try again').click();
+        await flush();
+        expect(answers(ctx)).toEqual(['two tasks at most']);
+        noted.destroy();
+        for (const [kind, why, said, settings] of [
+          ['planner_unavailable', 'Claude AI usage limit reached|1731855600', 'reached a usage limit', false],
+          ['budget_exceeded', '$5.00 of $5.00 spent', 'spending limit for planning is used up', true],
+          [
+            'action_failed',
+            `plan kept failing (4 attempts): boom ${HOSTILE}`,
+            `The planner could not finish: plan kept failing (4 attempts): boom ${HOSTILE}`,
+            false,
+          ],
+        ] as const) {
+          const card = mount(failed(kind, why));
+          expect(card.el.querySelector('.gv-why')?.textContent, kind).toContain(said);
+          expect(buttons(card.el).includes('Planner settings'), kind).toBe(settings);
+          expect(card.el.querySelector('img')).toBeNull();
+          card.destroy();
+        }
+      });
+
+      it('without a planner leads with writing the plan, and with Planner settings', () => {
+        const card = mount(failed('planner_unavailable', 'no planner is configured'), {}, {}, false);
+        expect(card.el.querySelector('.gv-why')?.textContent).toContain('No planner is ready on this computer.');
+        expect(buttons(card.el)).toEqual(['Write the plan myself', 'Planner settings']);
+        expect(buttonNamed(card.el, 'Write the plan myself').classList.contains('btn-primary')).toBe(true);
+        buttonNamed(card.el, 'Write the plan myself').click();
+        // A goal without a plan gets its first plan, not a "revision" of nothing.
+        expect(ctx.store.select('ui').modal).toEqual({ kind: 'plan-editor', id: GOAL, mode: 'first' });
+        buttonNamed(card.el, 'Planner settings').click();
+        expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'planner', drawer: null });
+        card.destroy();
+      });
+
+      it('keeps the task’s own buttons when the failure is about a task', () => {
+        const card = mount(
+          makeEscalation({ kind: 'planner_unavailable', goal_id: GOAL, details: { why: 'no planner is configured' } }),
+        );
+        expect(buttonNamed(card.el, 'Rework the task')).toBeTruthy();
+        expect(card.el.textContent).not.toContain('Friday could not plan this goal.');
+        card.destroy();
+      });
     });
 
     it('Rework sends the task back; Planner settings opens the settings', async () => {
@@ -453,7 +1102,7 @@ describe('question cards by kind (plan FD-21)', () => {
       card.destroy();
       const p = mount(makeEscalation({ kind: 'planner_unavailable', goal_id: null, task_id: null }));
       buttonNamed(p.el, 'Planner settings').click();
-      expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'planner' });
+      expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'planner', drawer: null });
       p.destroy();
     });
   });

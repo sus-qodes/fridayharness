@@ -93,7 +93,7 @@ export function fridayVersion() {
   return m[1];
 }
 
-function run(file, args, opts = {}) {
+export function run(file, args, opts = {}) {
   const r = spawnSync(file, args, {
     cwd: opts.cwd ?? REPO_ROOT,
     env: opts.env ?? process.env,
@@ -132,7 +132,7 @@ function npmEnv(extra = {}) {
   return { ...env, ...extra };
 }
 
-function npm(args, opts = {}) {
+export function npm(args, opts = {}) {
   return run(process.execPath, [npmCli(), ...args], { ...opts, env: npmEnv(opts.env) });
 }
 

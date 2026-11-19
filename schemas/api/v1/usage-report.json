@@ -232,6 +232,9 @@
                   "string",
                   "null"
                 ]
+              },
+              "input_includes_cache": {
+                "type": "boolean"
               }
             },
             "required": [

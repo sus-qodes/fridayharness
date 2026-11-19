@@ -303,6 +303,82 @@ describe('the spending cap per task (plan M11.5)', () => {
     expect(state.q.escalations(PROJECT, 'pending')).toHaveLength(1);
   });
 
+  it('ends an attempt its host stopped at the agent’s own limit for a human, once, with no task cap set', () => {
+    const state = open(null);
+    const s = startSpawn(state, 'fake-9', 'dev-9');
+    const { task, runId } = s;
+    const told = state.reportAgentError(PROJECT, s.caller, {
+      task_id: task.task_id,
+      run_id: runId,
+      message: 'the Claude Code turn ended: error_max_budget_usd',
+      fatal: true,
+      spending_cap: { cap_usd: 5, cost_usd: 5.0312 },
+    });
+    expect(told.task_status).toBe('WAITING');
+    // Blocked: the recovery sweep retries agent errors, and another attempt would spend the same again.
+    expect(state.q.task(PROJECT, task.task_id)).toMatchObject({ status: 'WAITING', waiting_reason: 'blocked' });
+    expect(state.q.run(runId)).toMatchObject({ status: 'ENDED', outcome: 'failed' });
+    // The agent is free for other work, and no task cap was recorded: it was the agent's own.
+    expect(state.q.findAgent(s.fake.agent_id)).toMatchObject({ status: 'AVAILABLE' });
+    expect(exceeded(state, runId)).toEqual([]);
+    expect(state.agentErrors(PROJECT, task.task_id)).toEqual(['the Claude Code turn ended: error_max_budget_usd']);
+    const questions = state.q.escalations(PROJECT, 'pending');
+    expect(questions).toHaveLength(1);
+    expect(questions[0]).toMatchObject({ kind: 'recovery_needed', task_id: task.task_id });
+    expect(questions[0]?.question).toBe(
+      'dev-9 stopped at its spending limit: this attempt cost $5.0312, and reached the limit of $5 per attempt. The work so far is kept. Raise the limit to let the task continue, or cancel it.',
+    );
+    expect(JSON.parse(String(questions[0]?.details_json))).toEqual({
+      reason: 'budget_exceeded',
+      scope: 'agent',
+      agent_key: 'dev-9',
+      host: 'generic',
+      attach_mode: 'spawn',
+      run_id: runId,
+      attempt: 1,
+      cost_usd: 5.0312,
+      cap_usd: 5,
+    });
+    // The same report again (a retry after a lost answer) changes nothing more.
+    state.reportAgentError(PROJECT, s.caller, {
+      task_id: task.task_id,
+      run_id: runId,
+      message: 'the Claude Code turn ended: error_max_budget_usd',
+      fatal: true,
+      spending_cap: { cap_usd: 5, cost_usd: 5.0312 },
+    });
+    expect(state.q.escalations(PROJECT, 'pending')).toHaveLength(1);
+  });
+
+  it('says the limit without a cost when the host named none, and keeps the task’s cap first when both were reached', () => {
+    const state = open(0.01);
+    const a = startSpawn(state, 'fake-10', 'dev-10');
+    state.reportAgentError(PROJECT, a.caller, {
+      task_id: a.task.task_id,
+      run_id: a.runId,
+      message: 'the Claude Code turn ended: error_max_budget_usd',
+      fatal: true,
+      spending_cap: { cap_usd: 2, cost_usd: null },
+    });
+    expect(state.q.escalations(PROJECT, 'pending')[0]?.question).toBe(
+      'dev-10 stopped at its spending limit: this attempt reached the limit of $2 per attempt. The work so far is kept. Raise the limit to let the task continue, or cancel it.',
+    );
+    // The task's cap was reached and recorded first: the attempt ends at that one, as before.
+    const b = startSpawn(state, 'fake-11', 'dev-11');
+    reachCap(state, b, 0.011);
+    state.reportAgentError(PROJECT, b.caller, {
+      task_id: b.task.task_id,
+      run_id: b.runId,
+      message: 'the Claude Code turn ended: error_max_budget_usd',
+      fatal: true,
+      spending_cap: { cap_usd: 0.01, cost_usd: 0.011 },
+    });
+    const mine = state.q.escalations(PROJECT, 'pending').filter((e) => e.task_id === b.task.task_id);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]?.question).toContain('routing.task_budget_usd');
+    expect(JSON.parse(String(mine[0]?.details_json)).scope).toBeUndefined();
+  });
+
   it('records a blocked result within the grace as such, and the attempt ends at the cap when the grace passes', () => {
     const state = open(0.01);
     const s = startSpawn(state, 'fake-6', 'dev-6');

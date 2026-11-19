@@ -1,6 +1,6 @@
 import { useTestWorkspace, waitForPidGone } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
-import { checkEnvironment, runCheck, summarizeOutcome } from './index.js';
+import { checkEnvironment, durationWords, runCheck, summarizeOutcome } from './index.js';
 
 describe('runCheck', () => {
   const ws = useTestWorkspace();
@@ -52,7 +52,14 @@ describe('runCheck', () => {
     const child = Number(/child (\d+)/.exec(o.output)?.[1]);
     expect(child).toBeGreaterThan(0);
     expect(await waitForPidGone(child, 5000)).toBe(true);
-    expect(summarizeOutcome(o)).toMatch(/timed out/);
+    expect(summarizeOutcome(o)).toMatch(/^ran out of time: stopped at its time limit, after /);
+  });
+
+  it('says a length of time as a person does', () => {
+    expect(durationWords(400)).toBe('under a second');
+    expect(durationWords(45_200)).toBe('45 s');
+    expect(durationWords(120_000)).toBe('2 min');
+    expect(durationWords(116_400)).toBe('1 min 56 s');
   });
 
   it('reports a command that cannot start', async () => {

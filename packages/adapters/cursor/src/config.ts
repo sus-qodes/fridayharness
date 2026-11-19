@@ -123,7 +123,8 @@ export function planCursor(opts: CursorConfigOptions): FileChange[] {
     if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(agentKey))
       throw new FridayError('invalid_request', `invalid agent key "${agentKey}"`);
     const before = read(agentFile);
-    const after = stringify({ agent_key: agentKey });
+    // Another host's own name in the file (`hosts`, Antigravity's) is kept.
+    const after = stringify({ ...json(before, agentFile), agent_key: agentKey });
     if (before !== after)
       changes.push({
         path: agentFile,

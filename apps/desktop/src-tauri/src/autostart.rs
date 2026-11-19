@@ -1,7 +1,9 @@
 //! "Start Friday when I sign in" (plan §7.10, §8.3): a per-user Run entry,
 //! `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `Friday`, holding this app's exe in
-//! quotes and no argument, so the app opens the last project. The entry is the setting itself:
-//! nothing in `desktop.json` can disagree with it.
+//! quotes and `--background`, so the app opens the last project and stays in the tray: a launch by
+//! hand opens the Studio, a sign-in does not (2026-11-17). An entry written before, the exe alone,
+//! is still this app's. The entry is the setting itself: nothing in `desktop.json` can disagree
+//! with it.
 
 use std::path::Path;
 
@@ -9,21 +11,28 @@ use crate::platform_windows;
 
 pub const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 pub const NAME: &str = "Friday";
+/// The argument of a start Windows makes at sign-in: the Studio stays hidden.
+pub const BACKGROUND: &str = "--background";
 /// Windows runs a Run entry of at most 260 characters.
 const MAX_COMMAND: usize = 260;
 
-/// The entry for an exe: its path in quotes (it may hold spaces). None when the path cannot be
-/// written as one (empty, a quote or a control character, or too long).
+/// The entry for an exe: its path in quotes (it may hold spaces) and `--background`. None when the
+/// path cannot be written as one (empty, a quote or a control character, or too long).
 pub fn command_line(exe: &Path) -> Option<String> {
     let path = exe.to_str()?;
     let ok = !path.is_empty() && !path.chars().any(|c| c == '"' || c.is_control());
-    let line = format!("\"{path}\"");
+    let line = format!("\"{path}\" {BACKGROUND}");
     (ok && line.chars().count() <= MAX_COMMAND).then_some(line)
 }
 
-/// True when a stored entry starts the exe of `line` (Windows paths ignore case).
+/// True when a stored entry starts the exe of `line`, with `--background` or, as written before
+/// 2026-11-17, without it (Windows paths ignore case).
 pub fn is_this_app(stored: &str, line: &str) -> bool {
-    stored.trim().to_lowercase() == line.to_lowercase()
+    let stored = stored.trim().to_lowercase();
+    let line = line.to_lowercase();
+    let suffix = format!(" {BACKGROUND}");
+    let bare = line.strip_suffix(&suffix).unwrap_or(&line);
+    stored == line || stored == bare
 }
 
 fn this_app() -> Result<String, String> {
@@ -55,27 +64,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_entry_is_the_exe_in_quotes() {
+    fn the_entry_is_the_exe_in_quotes_started_in_the_background() {
         let exe = Path::new(r"C:\Program Files\Friday\friday-desktop.exe");
-        assert_eq!(command_line(exe).as_deref(), Some(r#""C:\Program Files\Friday\friday-desktop.exe""#));
-        assert_eq!(command_line(Path::new(r"C:\a\b.exe")).as_deref(), Some(r#""C:\a\b.exe""#));
+        assert_eq!(
+            command_line(exe).as_deref(),
+            Some(r#""C:\Program Files\Friday\friday-desktop.exe" --background"#)
+        );
+        assert_eq!(command_line(Path::new(r"C:\a\b.exe")).as_deref(), Some(r#""C:\a\b.exe" --background"#));
         assert!(command_line(Path::new("")).is_none());
         assert!(command_line(Path::new(r#"C:\a"b.exe"#)).is_none());
         assert!(command_line(Path::new("C:\\a\nb.exe")).is_none());
         assert!(command_line(Path::new("C:\\a\0b.exe")).is_none());
-        // 258 characters of path and the two quotes fit; one more does not.
-        let fits = format!(r"C:\{}.exe", "d".repeat(258 - 7));
+        // 245 characters of path, the two quotes and " --background" fit; one more does not.
+        let fits = format!(r"C:\{}.exe", "d".repeat(245 - 7));
         assert_eq!(command_line(Path::new(&fits)).map(|l| l.chars().count()), Some(260));
-        let long = format!(r"C:\{}.exe", "d".repeat(259 - 7));
+        let long = format!(r"C:\{}.exe", "d".repeat(246 - 7));
         assert!(command_line(Path::new(&long)).is_none());
     }
 
     #[test]
     fn a_stored_entry_is_this_app_whatever_its_case() {
-        let line = r#""C:\Users\Me\Friday\friday-desktop.exe""#;
+        let line = r#""C:\Users\Me\Friday\friday-desktop.exe" --background"#;
         assert!(is_this_app(line, line));
-        assert!(is_this_app(r#" "c:\users\me\friday\FRIDAY-DESKTOP.EXE" "#, line));
-        assert!(!is_this_app(r#""C:\Old\friday-desktop.exe""#, line));
+        assert!(is_this_app(r#" "c:\users\me\friday\FRIDAY-DESKTOP.EXE" --BACKGROUND "#, line));
+        // An entry written before the flag existed is still this app's.
+        assert!(is_this_app(r#""C:\Users\Me\Friday\friday-desktop.exe""#, line));
+        assert!(!is_this_app(r#""C:\Old\friday-desktop.exe" --background"#, line));
         assert!(!is_this_app(r#""C:\Users\Me\Friday\friday-desktop.exe" --project C:\x"#, line));
     }
 
@@ -84,6 +98,6 @@ mod tests {
     fn the_running_exe_gives_an_entry() {
         // The test binary stands in for the app.
         let line = this_app().unwrap();
-        assert!(line.starts_with('"') && line.to_lowercase().ends_with(".exe\""), "{line}");
+        assert!(line.starts_with('"') && line.to_lowercase().ends_with(".exe\" --background"), "{line}");
     }
 }

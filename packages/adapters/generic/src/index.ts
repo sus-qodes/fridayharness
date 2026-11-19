@@ -357,7 +357,16 @@ export class GenericHarnessClient {
   }
 }
 
-export { cleanSummary, FINAL_SCHEMA, type Final, type FinalCheck, parseFinal, STRICT_FINAL_SCHEMA } from './final.js';
+export {
+  answerOf,
+  cleanSummary,
+  FINAL_SCHEMA,
+  type Final,
+  type FinalCheck,
+  MAX_ANSWER,
+  parseFinal,
+  STRICT_FINAL_SCHEMA,
+} from './final.js';
 export { classifyHostFailure, type HostFailureSite, retryAfterSeconds } from './host-failure.js';
 export {
   AttemptStops,

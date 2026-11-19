@@ -85,6 +85,96 @@ export function revokeProvider(
   return true;
 }
 
+/**
+ * How this person plans in this project, kept on this machine (2026-11-17): through Claude Code,
+ * with an Anthropic key, or by writing plans themselves. It depends on the accounts a person has,
+ * so it is theirs, not the team's: set in the tracked config.yaml, one person's choice switched
+ * every teammate's planner, whose own then read "not ready". `<private dir>/planner.json`; null
+ * when this machine chose nothing and `master_brain.provider` of config.yaml stands.
+ */
+export const PLANNER_CHOICES = ['anthropic', 'claude-code', 'none'] as const;
+export type PlannerChoice = (typeof PLANNER_CHOICES)[number];
+
+/** `planner.json` as an object; empty when it is missing or cannot be read. */
+function readPlannerFile(ref: Pick<ProjectRef, 'project_key'>, env: NodeJS.ProcessEnv): Record<string, unknown> {
+  try {
+    const v = JSON.parse(readFileSync(path.join(privateDirFor(ref, env), 'planner.json'), 'utf8')) as unknown;
+    return v && typeof v === 'object' && !Array.isArray(v) ? { ...(v as Record<string, unknown>) } : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Writes `planner.json`; with nothing left in it, the file goes and the project's settings stand. */
+function writePlannerFile(
+  ref: Pick<ProjectRef, 'project_key'>,
+  env: NodeJS.ProcessEnv,
+  data: Record<string, unknown>,
+): void {
+  if (Object.keys(data).length === 0) {
+    rmSync(path.join(privateDirFor(ref, env), 'planner.json'), { force: true });
+    return;
+  }
+  writePrivateFile(privateDirFor(ref, env), 'planner.json', `${JSON.stringify(data, null, 2)}\n`);
+}
+
+export function plannerChoice(
+  ref: Pick<ProjectRef, 'project_key'>,
+  env: NodeJS.ProcessEnv = process.env,
+): PlannerChoice | null {
+  const provider = readPlannerFile(ref, env).provider;
+  return (PLANNER_CHOICES as readonly unknown[]).includes(provider) ? (provider as PlannerChoice) : null;
+}
+
+/**
+ * Sets this machine's choice, or with null removes it (the project's setting stands again). The
+ * model this machine chose for its planner is kept either way.
+ */
+export function choosePlanner(
+  ref: Pick<ProjectRef, 'project_key'>,
+  provider: PlannerChoice | null,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (provider !== null && !(PLANNER_CHOICES as readonly string[]).includes(provider)) {
+    throw new FridayError('invalid_request', `"${provider}" is not a planner this machine can choose`);
+  }
+  const data = readPlannerFile(ref, env);
+  if (provider === null) delete data.provider;
+  else data.provider = provider;
+  writePlannerFile(ref, env, data);
+}
+
+/** A model id as a provider names one: no leading dash, so it never reads as an option of a command. */
+const PLANNER_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/;
+
+/**
+ * The model this person's planner uses on this machine (2026-11-17), kept beside how they plan and
+ * for the same reason: what a plan costs is paid from their account, not the team's. Null when this
+ * machine chose none and `master_brain.model` of config.yaml stands.
+ */
+export function plannerModelChoice(
+  ref: Pick<ProjectRef, 'project_key'>,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const model = readPlannerFile(ref, env).model;
+  return typeof model === 'string' && PLANNER_MODEL.test(model) ? model : null;
+}
+
+/** Sets this machine's planner model, or with null removes it (the project's setting stands again). */
+export function choosePlannerModel(
+  ref: Pick<ProjectRef, 'project_key'>,
+  model: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (model !== null && !PLANNER_MODEL.test(model)) {
+    throw new FridayError('invalid_request', `"${model}" is not a model name`);
+  }
+  const data = readPlannerFile(ref, env);
+  if (model === null) delete data.model;
+  else data.model = model;
+  writePlannerFile(ref, env, data);
+}
+
 /** The endpoint the user chose for a provider's key on this machine, or undefined for the default. */
 export function providerEndpoint(provider: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
   checkName(provider);

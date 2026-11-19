@@ -1,6 +1,7 @@
 import type { VerificationView } from '@friday/protocol';
 import { describe, expect, it } from 'vitest';
 import {
+  makeAgent,
   makeEscalation,
   makeGoal,
   makeHarness,
@@ -12,6 +13,7 @@ import {
   makeVerification,
 } from '../test/fixtures.js';
 import {
+  agentChoices,
   assignableAgents,
   checksSummary,
   conflictOf,
@@ -315,11 +317,47 @@ describe('helpers', () => {
     expect(qa && taskCardParts(b, qa, false).badges).toBe(true);
   });
 
-  it('lists assignable agents: connected, not shadows, not the holder', () => {
+  it('lists assignable agents: not shadows, not terminated, not the holder', () => {
     const s = makeScenario();
     s.harnesses.push(makeHarness());
     const task = s.tasks.find((t) => t.task_id === IDS.api);
     expect(task && assignableAgents(s, task).map((a) => a.agent_key)).toEqual(['codex-1']);
     expect(assignableAgents(null, makeTask())).toEqual([]);
+  });
+
+  it('offers agents that are not connected now, Antigravity among them, with what happens once given', () => {
+    const s = makeScenario();
+    s.harnesses.push(
+      makeHarness({ harness_id: 'harness_00000000000000000000ag01', vendor: 'antigravity', attach_mode: 'attach' }),
+    );
+    s.agents.push(
+      makeAgent({
+        agent_id: 'agent_000000000000000000000ag03',
+        agent_key: 'dev-1',
+        status: 'DISCONNECTED',
+        harness_id: 'harness_00000000000000000000ag01',
+      }),
+      makeAgent({ agent_id: 'agent_000000000000000000000ag04', agent_key: 'gone-1', status: 'TERMINATED' }),
+      makeAgent({ agent_id: 'agent_000000000000000000000ag05', agent_key: 'twin-1', shadow: true }),
+    );
+    const choices = agentChoices(s);
+    // Connected first, then the rest; never a terminated agent or a shadow.
+    expect(choices.map((c) => [c.agent_key, c.connected])).toEqual([
+      ['claude-1', true],
+      ['codex-1', true],
+      ['dev-1', false],
+    ]);
+    const ag = choices.find((c) => c.agent_key === 'dev-1');
+    expect(ag).toMatchObject({
+      host: 'antigravity',
+      label: 'dev-1 · Antigravity · not open now',
+      note: 'waits until you type /friday in Antigravity',
+    });
+    expect(choices.find((c) => c.agent_key === 'codex-1')).toMatchObject({
+      label: 'codex-1 · Codex',
+      note: 'it starts the task',
+    });
+    // The holder of a task is not offered it again.
+    expect(agentChoices(s, 'claude-1').map((c) => c.agent_key)).toEqual(['codex-1', 'dev-1']);
   });
 });

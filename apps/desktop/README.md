@@ -3,7 +3,7 @@
 A Tauri 2 app for Windows that hosts Friday's interface (the `apps/ui` bundle) in two windows:
 
 - **Notch** (`notch.html`): a transparent, always-on-top island at the top centre of the screen, over your editor. Clicks outside the island go through to the window underneath. It never takes focus by itself.
-- **Studio** (`index.html`): a normal window (1440×900, at least 960×640), hidden until you open it.
+- **Studio** (`index.html`): a normal window (1440×900, at least 960×640). A launch by hand opens it once the project is chosen (or says no project is open); a start at sign-in (`--background`) leaves it hidden until you open it.
 
 The Rust core is the **only HTTP client of the daemon** on the desktop (plan FD-06): it reads `daemon.json` and `operator.token` from Friday's private state folder at call time, forwards only the routes of an explicit allowlist (`src-tauri/src/routes.rs`), shows native dialogs before the actions that need them (`src-tauri/src/confirm.rs`), and streams events to the page on a channel. The webview holds no credential. The shell also has a tray, global shortcuts and native notifications, and it can start, stop and restart Friday.
 
@@ -120,6 +120,23 @@ The installer is a per-user NSIS setup, `Friday Desktop_0.1.0_x64-setup.exe` (1.
 
    It takes about 3 minutes after a release build, and writes `target\release\bundle\nsis\Friday Desktop_0.1.0_x64-setup.exe`. The NSIS bundler downloads NSIS per user on first use. The generated script, `target\release\nsis\x64\installer.nsi`, shows the install folder (`$LOCALAPPDATA\${PRODUCTNAME}`) and the mode (`currentUser`); read it before handing an installer out after any change to `Tauri.toml`.
 
+   That installer holds the app alone: it runs the Friday of the checkout it was built from, so it is for this computer.
+
+### The installer for other computers
+
+A computer that never had Friday's source needs the installer that carries Friday itself (2026-11-19):
+
+```powershell
+# TERMINAL, in the repository: Friday's own copy, made from the install archive and tried
+pnpm pack:desktop
+# TERMINAL, in apps\desktop\src-tauri, with the route 2 variables set
+$env:FRIDAY_RELEASE = "1"; cargo tauri build --config Tauri.release.toml; Remove-Item Env:FRIDAY_RELEASE
+```
+
+`pnpm pack:desktop` (`scripts/release/desktop.mjs`) makes the install archive as `pnpm pack:release` does and proves it installs and starts, installs it into `target\friday-bundle`, leaves out the compiled SQLite add-on (a running Friday keeps it locked, so an update could not replace it; Friday uses the SQLite built into Node.js), and starts Friday from the result once. `Tauri.release.toml` puts that folder beside the app as `friday\`, and `FRIDAY_RELEASE=1` keeps the build machine's checkout out of the app (`build.rs`), so that copy is the one it runs. The installer is about 11 MB, 60 MB installed.
+
+Node.js 22.18 or newer and Git are not carried: the agents' hooks run `node` by its name in every project, and a person without either is sent to its download page by the app. Installing a newer one over a running Friday works: the app restarts the project's Friday with the new code once nothing is at work.
+
 ## Running
 
 ```powershell
@@ -129,12 +146,16 @@ C:\friday\apps\desktop\src-tauri\target\release\friday-desktop.exe --project C:\
 
 At start the shell:
 
-1. opens the project: `--project`, else the last one (in `%APPDATA%\dev.friday.desktop\desktop.json`), else a folder picker. A folder without `.friday\config.yaml` offers **Set up Friday here** (`node <cli> --project <dir> init --json`), then lists the two files to commit and warns when the repository has no commit;
-2. finds Friday: `FRIDAY_HOME` (a checkout), then the checkout it was built from, then `%LOCALAPPDATA%\Friday\install.json` (`friday setup`), then asks for the folder; when `install.json` is missing or stale it runs `node <cli> setup --json`;
+1. opens the project: `--project`, else the last one (in `%APPDATA%\dev.friday.desktop\desktop.json`), else a folder picker. A folder without `.friday\config.yaml` offers **Set up Friday here** (`node <cli> --project <dir> init --json`), then lists the two files to commit; a folder with no saved version in git is offered **Save a first version** instead (`git-start --json`: git started if needed, secrets and tools' folders left out);
+2. finds Friday: `FRIDAY_HOME` (a checkout), then the checkout it was built from, then the copy the installer for other computers put beside it (`friday\node_modules\friday`), then `%LOCALAPPDATA%\Friday\install.json` (`friday setup`), then asks for the folder; without Node.js it says so, with its download page. It then runs `node <cli> setup --json`, once, when `install.json` is missing or broken, or when Friday was found in a folder and the file's `cli_entry` or `mcp_server_entry` names another copy (paths compared by real path, without case): the coding tools a person opens themselves start the Friday that file names, so it is kept on the copy the app runs. A start that opens no project does the same when Friday is found without asking. A copy found through `install.json` itself is left as it is, and so is the file when the app's copy has no MCP server launcher;
 3. finds the private folder exactly as `packages/sdk/src/discovery.ts` does: `<FRIDAY_STATE_DIR or %LOCALAPPDATA%\Friday>\projects\<project_id>-<first 8 hex of sha256(lower-cased real path of the main worktree)>`;
-4. starts the daemon when none answers: `node <cli> --project <root> run`, hidden (`CREATE_NO_WINDOW`), its output in `<root>\.friday\logs\daemon-console.log`; ready when `daemon.json` names the child's pid and `/health` answers for this project and instance (30 s). If it stops early, a dialog shows the last lines of the log and offers **Run checks** (`doctor --json`) or **Start again**.
+4. starts the daemon when none answers: `node <cli> --project <root> run`, hidden (`CREATE_NO_WINDOW`), its output in `<root>\.friday\logs\daemon-console.log`; ready when `daemon.json` names the child's pid and `/health` answers for this project and instance (30 s). If it stops early, a dialog shows the last lines of the log and offers **Run checks** (`doctor --json`) or **Start again**, and the Studio shows the shell's words with the last line the daemon wrote, **Start Friday**, **Open config.yaml** and **Open the log**. A daemon that answers but started before Friday's code on disk was built (an update) is restarted with the new code when no task is in progress and no plan is being written; otherwise the Studio says "Friday was updated" with **Restart now**, and the watchdog restarts it once the work is done.
+
+A folder picker that was cancelled leaves `no_project`: the Studio then offers **Choose a project folder…** (`choose_project_folder`). A daemon that stops while the Studio is open shows on the Studio's strip at once, with **Start Friday** (`restart_daemon`).
 
 The daemon is not tied to the app: it keeps running when the app quits (Quit asks whether to keep Friday running). Closing the Studio hides it; the tray's Quit ends the app. A second launch shows the Studio of the first.
+
+**Another project** is opened without leaving the app: the tray's **Open another project…**, the project's name in the Studio's header, the palette's command of that name, or a second launch with `--project` for another folder. Each shows the folder picker (a second launch names the folder), offers **Set up Friday here** for a folder that is not a project yet, and then asks what the project that was open should do, as Quit does: **Keep it running** (agents there keep working) or **Stop it there**. Cancel at any point leaves the app as it was, the remembered project included. The streams of the old project end, both windows load again (`project-changed`), and the new project's Friday is started as at launch. The folder that is already open only shows the Studio.
 
 **Tray:** status icon (idle, working, waiting for you, error) and, as its first menu item and its tooltip, the page's status sentence (what runs, what waits for you and why, what is ready, to verify or failed, how many agents are connected), then the version, Show Notch, Open Studio, Settings…, Pause/Resume, Mute sounds, Open in browser, Halt…, Stop Friday (confirmed), Restart Friday, Quit. A left click opens the Studio.
 
@@ -156,13 +177,16 @@ The page imports `@tauri-apps/api/core` only in `apps/ui/src/platform/tauri-tran
 | `daemon_status` | — | `{state, message?}`; state `starting`, `ready`, `stopping`, `stopped`, `failed` or `no_project` | also pushed as event `daemon-status` |
 | `stop_daemon` | — | — | native confirmation, then `POST /admin/shutdown` with the operator token; waits for the process to exit (2 min) |
 | `restart_daemon` | — | — | native confirmation, then stop and start as at launch; a cancel answers 400 `DESKTOP-1003`, which the page takes as "cancelled", not as an error |
+| `choose_project_folder` | — | — | the folder picker again, while no project is open (400 otherwise); the project it opens is started as at launch |
+| `open_another_project` | — | — | "Open another project…": the folder picker, then the chosen project takes the place of the open one (below); answers at once, and both windows get `project-changed` when it happened. With no project open it is `choose_project_folder` |
+| `open_project_file` | `kind`: `config` or `log` | — | opens `.friday\config.yaml` or the daemon's console log in VS Code, or in Notepad without it; failure `DESKTOP-2004` |
 | `notch_rect` | `x, y, w, h` (CSS pixels of the Notch window) | — | Notch window only; a rectangle at most 4.5 px high is the wake strip |
 | `notch_keyboard` | `take: boolean` | — | Notch window only; `true` makes the window focusable and focuses it, `false` restores and gives the keyboard back to the window that had it |
 | `show_studio` | `target?: {focus_task?, approval_id?, panel?, id?, tab?, path?, reach?}` | — | shows and focuses the Studio and sends it `studio-deeplink` with `target`. Rules (the same in the Studio's receiver, `apps/ui/src/desktop/boot.ts`): `focus_task`, `approval_id`, `id` `[A-Za-z0-9_-]{1,128}`; `panel` `[a-z-]{1,32}`; `tab` `^[a-z][a-z0-9-]{0,31}$`; `path` 1–1 024 characters, no control character; `reach` `once`, `run` or `task`. One bad field refuses the whole target (`DESKTOP-1007`), so the Notch leaves out a tab or path that breaks its rule |
 | `set_tray_state` | `state: 'idle'\|'working'\|'waiting'\|'error'`, `countsLine`, `paused?`, `muted?` | — | the tray icon, status line and tooltip. `countsLine` is the page's status sentence (`apps/ui/src/notch/derive.ts` `statusSentence`: "2 running, 1 waiting for you: 1 approval; 3 ready; 2 agents connected"); the shell cleans it and cuts it at 119 characters, because a Windows tray tooltip holds 127 and "Friday: " takes eight, then shows the same line as the tooltip (`Friday: <line>`) and as the disabled status item at the top of the menu. Pause/Resume and Mute follow `paused` and `muted` |
 | `notify` | `title`, `body`, `test?` | `boolean`: handed to Windows | Notch window only; sent only while the Notch is parked (Show Notch off) or the screen is locked; at most 10 a minute. With `test`: from either window, at once, at most 3 a minute on a budget of its own (then 429 `DESKTOP-1008`). The notification plugin queues the toast and drops Windows' answer, so `true` never means it appeared, and `false` means it could not be prepared or was not sent |
 | `get_autostart` | — | `boolean` | whether the per-user Run entry `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` → `Friday` starts this exe |
-| `set_autostart` | `enabled: boolean` | `boolean`: on now | writes the entry (this exe's path in quotes, no argument: the app opens the last project) or removes it; a path holding a quote or a control character, or over 260 characters, is refused; failure `DESKTOP-2007` |
+| `set_autostart` | `enabled: boolean` | `boolean`: on now | writes the entry (this exe's path in quotes and `--background`: the app opens the last project and stays in the tray) or removes it; an entry without the argument, written before 2026-11-17, still counts as on; a path holding a quote or a control character, or an entry over 260 characters, is refused; failure `DESKTOP-2007` |
 | `get_shortcuts` | — | `[{id, accel, state, note?}]`, state `registered`, `in_use`, `skipped` or `invalid` | ids `studio`, `notch`, `halt` |
 | `set_shortcut` | `id`, `accel` (`Ctrl+Alt+Shift+K`) | the new list | stored in `desktop.json` |
 | `open_in_editor` | `path` (absolute, or relative to the root), `line?` | — | only existing files inside the project root or the `friday-worktrees` folder; opens `vscode://file/<path>[:line]` with `ShellExecuteW` (no command line is built) |
@@ -212,6 +236,7 @@ A failed command rejects with `{status, body}`: `status` is the daemon's HTTP st
 | `open-halt` | Studio | none (the tray's Halt…, the halt shortcut) |
 | `toggle-mute` | all | `{muted}` (the tray's Mute sounds) |
 | `daemon-status` | all | `{state, message?}` |
+| `project-changed` | all | none: the app opened another project. Each window loads again and finds the new one through the waiting screen |
 
 ## Security
 

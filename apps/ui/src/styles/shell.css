@@ -422,6 +422,15 @@
   justify-self: end;
 }
 
+/* The desktop app: the Notch pill is at the top centre of the screen, so nothing of the header
+   stands there (2026-11-18). */
+.sh-bar.sh-bar-desktop {
+  grid-template-columns: auto auto 1fr;
+}
+.sh-bar.sh-bar-desktop .sh-center-zone {
+  justify-self: start;
+}
+
 .sh-metrics {
   display: flex;
   align-items: center;
@@ -565,6 +574,55 @@
 .sh-menu-item:focus-visible {
   background: rgba(255, 255, 255, 0.08);
   color: var(--color-white);
+}
+
+/* The project menu, under the project's name (2026-11-18). */
+.sh-project {
+  position: relative;
+}
+
+.sh-project-menu {
+  left: 0;
+  right: auto;
+  min-width: 260px;
+  max-width: 360px;
+}
+
+.sh-pm-item {
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.sh-pm-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sh-pm-state {
+  flex-shrink: 0;
+  font-size: var(--text-caption);
+  color: var(--color-slate-400);
+}
+
+.sh-pm-running {
+  color: var(--color-emerald);
+}
+
+.sh-pm-current {
+  font-weight: var(--weight-semibold);
+}
+
+.sh-pm-note {
+  padding: 6px 10px;
+  font-size: var(--text-caption);
+}
+
+.sh-pm-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-subtle);
 }
 
 .sh-banner-hint {
@@ -992,6 +1050,13 @@
   overflow-wrap: anywhere;
 }
 
+/* The one thing a message offers to do (2026-11-19). */
+.sh-toast-action {
+  margin-top: 8px;
+  padding: 3px 10px;
+  font-size: var(--text-sm);
+}
+
 .sh-toast-detail {
   max-height: 8.5em;
   margin-top: 2px;
@@ -1149,4 +1214,28 @@
   :root:not(.motion-on) .sh-dot {
     animation: none;
   }
+}
+
+/* The project's name as the way to another project (the desktop app): a button that reads as the
+   name it was, with a hand and a mark that it opens something. */
+.sh-project-switch {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sh-project-switch::after {
+  content: " ▾";
+  color: var(--color-slate-400);
+}
+
+.sh-project-switch:hover,
+.sh-project-switch:focus-visible {
+  color: var(--color-white);
 }

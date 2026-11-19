@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { createStore } from '../store/state.js';
 import {
+  makeAgent,
   makeApproval,
   makeEscalation,
   makeGoal,
+  makeHarness,
   makeInboxItem,
   makePlan,
   makeRun,
@@ -14,6 +16,7 @@ import {
 } from '../test/fixtures.js';
 import {
   activeTask,
+  attentionWords,
   awaitsReply,
   buildModel,
   checksLine,
@@ -25,11 +28,16 @@ import {
   nextExpiryIn,
   POLICY_UNTRUSTED_KEY,
   projectName,
+  QUIET_MS,
   runningCount,
+  STOPPED_GRACE_MS,
   statsText,
   statusSentence,
+  stopWords,
   studioTarget,
   taskTag,
+  turnHost,
+  turnPrompt,
   waitingCount,
   waitingItems,
 } from './derive.js';
@@ -230,10 +238,89 @@ describe('waiting items: a proposed plan (the one list the header, the rail, the
   });
 });
 
+describe('waiting items: work to verify and goals to land (review of 2026-11-16)', () => {
+  const claimed = (over = {}) =>
+    makeTask({
+      task_id: 't1',
+      status: 'READY_FOR_VERIFICATION',
+      agent_key: 'claude-1',
+      summary: 'Add the API',
+      updated_at: new Date(NOW - 5_000).toISOString(),
+      ...over,
+    });
+
+  it('lists claimed work a person verifies: always with automatic checks off, only when stuck with them on', () => {
+    const manual = makeSnapshot({ tasks: [claimed()] });
+    const items = waitingItems(manual, NOW);
+    expect(items.map((i) => i.kind)).toEqual(['verify']);
+    expect(items[0]).toMatchObject({ key: 'verify:t1', id: 't1', taskId: 't1' });
+    expect(waitingCount(manual, NOW)).toBe(1);
+    // Its door is the task's verification dialog.
+    expect(studioTarget(items[0] ?? null, null)).toEqual({ task_id: 't1', panel: 'verify', id: 't1' });
+    // Being verified, or verified: nothing waits for the person.
+    expect(waitingItems(makeSnapshot({ tasks: [claimed({ status: 'VERIFYING' })] }), NOW)).toEqual([]);
+    // Automatic checks on: Friday is about to check it itself...
+    const auto = { checks: [], auto_on_completion: true };
+    expect(waitingItems(makeSnapshot({ verification: auto, tasks: [claimed()] }), NOW)).toEqual([]);
+    // ...unless it has sat there for over a minute (a check that was interrupted): then it is the person's.
+    const stuck = claimed({ updated_at: new Date(NOW - 61_000).toISOString() });
+    expect(waitingItems(makeSnapshot({ verification: auto, tasks: [stuck] }), NOW).map((i) => i.kind)).toEqual([
+      'verify',
+    ]);
+  });
+
+  it('lists a completed goal until a person landed it, and never work that is already in the folder', () => {
+    const done = makeGoal({ goal_id: 'goal_done', status: 'COMPLETED', request: 'Add discount codes' });
+    const land = (landing: unknown) =>
+      waitingItems(
+        makeSnapshot({ goals: [done], ...(landing ? { goal_landing: { goal_done: landing as never } } : {}) }),
+        NOW,
+      );
+    expect(land({ work: 'branch', landed: null })).toEqual([
+      {
+        kind: 'land',
+        key: 'land:goal_done',
+        id: 'goal_done',
+        taskId: null,
+        goalId: 'goal_done',
+        request: 'Add discount codes',
+      },
+    ]);
+    expect(land({ work: 'mixed', landed: null }).map((i) => i.kind)).toEqual(['land']);
+    expect(land({ work: 'folder', landed: null })).toEqual([]);
+    expect(land({ work: 'branch', landed: { into: 'main', at: '2026-10-17T09:00:00.000Z' } })).toEqual([]);
+    // A daemon that does not say (older): nothing is guessed.
+    expect(land(null)).toEqual([]);
+    const [item] = land({ work: 'branch', landed: null });
+    expect(studioTarget(item ?? null, 'task_x')).toEqual({ panel: 'land', id: 'goal_done' });
+    // An active goal with the same record is not listed.
+    expect(
+      waitingItems(
+        makeSnapshot({
+          goals: [makeGoal({ goal_id: 'g2', status: 'ACTIVE' })],
+          goal_landing: { g2: { work: 'branch', landed: null } },
+        }),
+        NOW,
+      ),
+    ).toEqual([]);
+  });
+
+  it('says them in the status sentence, each task counted once', () => {
+    const board = makeSnapshot({
+      tasks: [claimed(), claimed({ task_id: 't2', status: 'VERIFYING' })],
+      counts: { READY_FOR_VERIFICATION: 1, VERIFYING: 1 },
+      goals: [makeGoal({ goal_id: 'goal_done', status: 'COMPLETED' })],
+      goal_landing: { goal_done: { work: 'branch', landed: null } },
+    });
+    const sentence = statusSentence(board, NOW);
+    expect(sentence).toContain('2 waiting for you: 1 task to check, 1 goal to land; 1 to check');
+  });
+});
+
 describe('the status sentence (the Running count’s tooltip and the tray’s line)', () => {
   it('counts what runs and what waits for you, then what is ready and who is connected', () => {
     expect(statusSentence(makeScenario(), NOW)).toBe(
-      '1 running, 3 waiting for you: 1 approval, 1 question, 1 blocked agent; 1 ready; 2 agents connected',
+      '1 running, 3 waiting for you: 1 approval, 1 question, 1 stuck agent; 1 not started; 2 agents connected',
     );
     expect(runningCount(makeScenario())).toBe(1);
     expect(runningCount(null)).toBe(0);
@@ -247,7 +334,7 @@ describe('the status sentence (the Running count’s tooltip and the tray’s li
       escalations: [makeEscalation({ status: 'answered' })],
     });
     expect(statusSentence(board, NOW)).toBe(
-      'Paused. 0 running, 0 waiting for you: 3 to verify; 2 failed or lost; 0 agents connected',
+      'Paused. 0 running, 0 waiting for you: 3 to check; 2 failed or stopped; 0 agents connected',
     );
     expect(statusSentence(null, NOW)).toBe('Friday is not connected');
   });
@@ -411,5 +498,216 @@ describe('the notch model', () => {
   it('has no active view without a board', () => {
     const m = buildModel(createStore().getState(), new IslandFsm({ timers: NO_TIMERS }).snapshot, NOW);
     expect(m).toMatchObject({ active: null, items: [], project: 'Friday', running: 0 });
+  });
+});
+
+describe('your turn: a task kept for an agent its person runs (2026-11-17)', () => {
+  const NOW = Date.parse('2026-10-17T10:00:00.000Z');
+  const board = (attach: 'attach' | 'spawn', status: 'READY' | 'RUNNING' = 'READY') =>
+    makeSnapshot({
+      harnesses: [makeHarness({ harness_id: 'h_ag', vendor: 'antigravity', attach_mode: attach })],
+      agents: [makeAgent({ agent_key: 'antigravity-1', harness_id: 'h_ag' })],
+      tasks: [
+        makeTask({ task_id: 't1', status, reserved_for_agent_key: 'antigravity-1', summary: 'Write the README' }),
+        makeTask({ task_id: 't2', status: 'READY', reserved_for_agent_key: null }),
+      ],
+    });
+
+  it('lists it as waiting for the person, with the app and the agent', () => {
+    const items = waitingItems(board('attach'), NOW);
+    expect(items.map((i) => i.key)).toEqual(['turn:t1']);
+    expect(items[0]).toMatchObject({ kind: 'turn', taskId: 't1', agentKey: 'antigravity-1', host: 'antigravity' });
+    expect(statusSentence(board('attach'), NOW)).toContain('1 task for an agent you run');
+    expect(studioTarget(items[0] ?? null, null)).toEqual({ task_id: 't1' });
+  });
+
+  it('lists nothing for an agent Friday starts, nor for a task that is not waiting to be taken', () => {
+    expect(waitingItems(board('spawn'), NOW)).toEqual([]);
+    expect(waitingItems(board('attach', 'RUNNING'), NOW)).toEqual([]);
+  });
+
+  // "Your turn in Antigravity" stood in the list for a task whose own page said it could not
+  // start (2026-11-18). Only a task that prompting the agent would start is the person's turn.
+  it('is nobody’s turn while prompting the agent would not start it', () => {
+    const waiting = (waits_for: NonNullable<ReturnType<typeof makeTask>['waits_for']>) => {
+      const b = board('attach');
+      return waitingItems({ ...b, tasks: b.tasks.map((t) => (t.task_id === 't1' ? { ...t, waits_for } : t)) }, NOW).map(
+        (i) => i.key,
+      );
+    };
+    expect(waiting('your_turn')).toEqual(['turn:t1']);
+    expect(waiting('agent_busy')).toEqual([]);
+    expect(waiting('paused')).toEqual([]);
+    expect(waiting('agent_away')).toEqual([]);
+    expect(waiting('question')).toEqual([]);
+  });
+
+  it('names the app and what to type there', () => {
+    expect([turnHost('antigravity'), turnPrompt('antigravity')]).toEqual(['Antigravity', '/friday']);
+    expect([turnHost('claude-code'), turnPrompt('claude-code')]).toEqual(['Claude Code', '/friday start']);
+    expect(turnHost('something-new')).toBe('your editor');
+  });
+});
+
+describe('gone quiet: a running task of an agent its person runs (2026-11-17)', () => {
+  const NOW = Date.parse('2026-10-17T10:00:00.000Z');
+  const board = (attach: 'attach' | 'spawn', updated: string) =>
+    makeSnapshot({
+      harnesses: [makeHarness({ harness_id: 'h_ag', vendor: 'antigravity', attach_mode: attach })],
+      agents: [makeAgent({ agent_key: 'antigravity-1', harness_id: 'h_ag' })],
+      tasks: [
+        makeTask({
+          task_id: 't1',
+          status: 'RUNNING',
+          agent_key: 'antigravity-1',
+          started_at: '2026-10-17T09:00:00.000Z',
+          updated_at: updated,
+          summary: 'Write the README',
+        }),
+      ],
+    });
+  const longAgo = new Date(NOW - QUIET_MS - 1000).toISOString();
+  const justNow = new Date(NOW - 60_000).toISOString();
+
+  it('is listed once nothing was reported for a quarter of an hour, and opens the task', () => {
+    const items = waitingItems(board('attach', longAgo), NOW);
+    expect(items.map((i) => i.key)).toEqual(['quiet:t1']);
+    expect(statusSentence(board('attach', longAgo), NOW)).toContain('1 agent that has gone quiet');
+    expect(studioTarget(items[0] ?? null, null)).toEqual({ task_id: 't1' });
+  });
+
+  it('is not listed while it reports, nor for an agent Friday starts', () => {
+    expect(waitingItems(board('attach', justNow), NOW)).toEqual([]);
+    expect(waitingItems(board('spawn', longAgo), NOW)).toEqual([]);
+  });
+});
+
+describe('an agent its person runs that stopped, or asks in its own window (2026-11-18)', () => {
+  const NOW = Date.parse('2026-11-18T07:02:30.000Z');
+  const board = (attention: Record<string, unknown> | null, attach: 'attach' | 'spawn' = 'attach') =>
+    makeSnapshot({
+      harnesses: [makeHarness({ harness_id: 'h_ag', vendor: 'antigravity', attach_mode: attach })],
+      agents: [makeAgent({ agent_key: 'antigravity-1', harness_id: 'h_ag' })],
+      tasks: [
+        makeTask({
+          task_id: 't1',
+          status: 'RUNNING',
+          agent_key: 'antigravity-1',
+          started_at: '2026-11-18T06:55:11.000Z',
+          updated_at: '2026-11-18T06:55:11.000Z',
+          summary: 'Scaffold the owner app',
+          attention: attention as never,
+        }),
+      ],
+    });
+
+  it('says at once that it stopped on an error of its host, and what the error means', () => {
+    const items = waitingItems(
+      board({
+        kind: 'stopped',
+        at: '2026-11-18T07:02:04.000Z',
+        reason: 'error',
+        error: 'Individual quota reached. Resets in 165h29m45s.',
+      }),
+      NOW,
+    );
+    expect(items.map((i) => i.kind)).toEqual(['stopped']);
+    const item = items[0] as Extract<(typeof items)[number], { kind: 'stopped' }>;
+    expect(stopWords(item.error)).toBe('quota');
+    const w = attentionWords(item, 'Antigravity');
+    expect(w.title).toBe('Antigravity is out of quota');
+    expect(w.line).toContain('Resets in 165h29m45s');
+    expect(w.line).toContain('give it to another agent');
+    expect(studioTarget(item, null)).toEqual({ task_id: 't1' });
+    expect(statusSentence(board({ kind: 'stopped', at: '2026-11-18T07:02:04.000Z', error: 'x' }), NOW)).toContain(
+      '1 agent that has stopped',
+    );
+    // Its servers being busy is another thing to do.
+    expect(stopWords('UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-high')).toBe('busy');
+    expect(stopWords('something else broke')).toBeNull();
+  });
+
+  it('waits a moment for a turn that ended without an error, says it once, and never for an agent Friday starts', () => {
+    const justNow = new Date(NOW - 5_000).toISOString();
+    const earlier = new Date(NOW - STOPPED_GRACE_MS - 1_000).toISOString();
+    expect(waitingItems(board({ kind: 'stopped', at: justNow }), NOW)).toEqual([]);
+    const items = waitingItems(board({ kind: 'stopped', at: earlier }), NOW);
+    expect(items.map((i) => i.kind)).toEqual(['stopped']);
+    expect(attentionWords(items[0] as never, 'Antigravity').line).toContain('waiting for you in its own window');
+    // Twenty minutes on it is still said once: not also as "gone quiet".
+    const late = waitingItems(board({ kind: 'stopped', at: earlier }), NOW + 20 * 60_000);
+    expect(late.map((i) => i.kind)).toEqual(['stopped']);
+    expect(waitingItems(board({ kind: 'stopped', at: earlier }, 'spawn'), NOW)).toEqual([]);
+  });
+
+  it('says that its host asks the person in its own window, for a rule of Friday', () => {
+    const items = waitingItems(
+      board({
+        kind: 'asking',
+        at: '2026-11-18T07:09:00.000Z',
+        tool: 'Bash',
+        target: 'npm install',
+        rule: 'package.install commands need a human decision.',
+      }),
+      NOW,
+    );
+    expect(items.map((i) => i.kind)).toEqual(['asking']);
+    const w = attentionWords(items[0] as never, 'Antigravity');
+    expect(w.title).toBe('Antigravity is asking you something');
+    expect(w.line).toContain('“npm install”');
+    expect(w.line).toContain('own window');
+  });
+});
+
+describe('an answer that waits to be read (2026-11-18)', () => {
+  const GID = 'goal_0000000000000000000000gg01';
+  const board = (a: Record<string, unknown> | null) =>
+    makeSnapshot({
+      goals: [makeGoal({ mode: 'ask', status: 'COMPLETED', request: 'How do price revisions work?' })],
+      ...(a
+        ? {
+            answers: {
+              [GID]: {
+                goal_id: GID,
+                question: 'How do price revisions work?',
+                state: 'ready',
+                task_id: 't1',
+                agent_key: 'claude-1',
+                summary: 'Each change is a new row',
+                preview: 'A price is kept per outlet.',
+                note: null,
+                at: '2026-11-18T07:00:00.000Z',
+                read: false,
+                ...a,
+              } as never,
+            },
+          }
+        : {}),
+    });
+  const NOW = Date.parse('2026-11-18T07:02:30.000Z');
+
+  it('is listed with how it begins until its person opens it, and opens the answer', () => {
+    const items = waitingItems(board({}), NOW);
+    expect(items.map((i) => i.kind)).toEqual(['answer']);
+    const item = items[0] as Extract<(typeof items)[number], { kind: 'answer' }>;
+    expect(item).toMatchObject({
+      goalId: GID,
+      preview: 'A price is kept per outlet.',
+      agentKey: 'claude-1',
+      failed: false,
+    });
+    expect(studioTarget(item, null)).toEqual({ panel: 'answer', id: GID });
+    expect(statusSentence(board({}), NOW)).toContain('1 answer to read');
+    // Opened: it no longer waits. And a question has nothing to land.
+    expect(waitingItems(board({ read: true }), NOW)).toEqual([]);
+  });
+
+  it('is not listed while the agent is still at it, and is listed when it ended without one', () => {
+    expect(waitingItems(board({ state: 'answering', preview: null, summary: null }), NOW)).toEqual([]);
+    expect(waitingItems(board({ state: 'waiting' }), NOW)).toEqual([]);
+    const failed = waitingItems(board({ state: 'failed', preview: null, summary: null }), NOW);
+    expect(failed).toMatchObject([{ kind: 'answer', failed: true, preview: null }]);
+    // A board from an older daemon has no answers: nothing is listed, nothing breaks.
+    expect(waitingItems(board(null), NOW)).toEqual([]);
   });
 });

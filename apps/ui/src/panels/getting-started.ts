@@ -10,7 +10,7 @@ import { button, h, replace } from '../ui/dom.js';
 import { icon } from '../ui/svg.js';
 import { linkButton, plannerState, projectPath, Teardown } from './common.js';
 
-export type ChecklistId = 'running' | 'policy' | 'agent' | 'planner' | 'checks' | 'commit' | 'notify';
+export type ChecklistId = 'policy' | 'agent' | 'planner' | 'checks' | 'commit' | 'notify';
 
 export interface ChecklistItem {
   id: ChecklistId;
@@ -21,7 +21,7 @@ export interface ChecklistItem {
   /** Where to fix it. */
   fix: {
     label: string;
-    action: 'agents' | 'start-agent' | 'planner' | 'config' | 'folder' | 'notifications' | 'policy';
+    action: 'agents' | 'start-agent' | 'planner' | 'checks' | 'config' | 'folder' | 'notifications' | 'policy';
   } | null;
 }
 
@@ -38,21 +38,26 @@ const DEFAULT_CONTEXT: ChecklistContext = { notifications: false, native: false 
 /** The checklist's items from the board (pure). */
 export function checklist(board: UiSnapshot | null, context: Partial<ChecklistContext> = {}): ChecklistItem[] {
   const c = { ...DEFAULT_CONTEXT, ...context };
-  const connected = (board?.harnesses ?? []).filter((x) => x.status !== 'TERMINATED').length;
+  // A session that is there now: one that left or is trying to come back is not a connected agent.
+  const connected = (board?.harnesses ?? []).filter((x) =>
+    ['REGISTERED', 'READY', 'BUSY'].includes(String(x.status)),
+  ).length;
   const planner = plannerState(board?.brain);
   const checks = board?.verification.checks.length ?? 0;
   const commit = board?.project.has_commit ?? true;
   const when = c.native ? 'while the Notch is hidden or the screen is locked' : 'while this tab is hidden';
-  const items: ChecklistItem[] = [{ id: 'running', done: true, title: 'Friday is running', detail: '', fix: null }];
+  // "Friday is running" stood first, always ticked (the list is not there when it is not): it
+  // told nobody anything, and made the count read one better than it was (2026-11-17).
+  const items: ChecklistItem[] = [];
   // Only while it applies: once trusted (or when nothing loosens), the item leaves the list.
   if (board?.policy_untrusted === true) {
     items.push({
       id: 'policy',
       done: false,
-      title: "Trust this project's policy",
+      title: 'Trust this project’s settings',
       detail:
-        "The project's tracked files loosen Friday's defaults; nothing of it applies on this clone until you trust exactly that list.",
-      fix: { label: 'Settings → Policy', action: 'policy' },
+        'This project’s files ask to let Friday or its agents do more than the defaults. None of it applies on this computer until you trust it.',
+      fix: { label: 'Settings → Permissions', action: 'policy' },
     });
   }
   items.push(
@@ -61,16 +66,16 @@ export function checklist(board: UiSnapshot | null, context: Partial<ChecklistCo
       done: connected > 0,
       title:
         connected > 0 ? `${connected === 1 ? 'An agent is' : `${connected} agents are`} connected` : 'Connect an agent',
-      detail: 'Start Claude Code or Codex from Friday, or set up Claude Code in VS Code.',
+      detail: 'Start Claude Code or Codex from Friday, or connect Claude Code in VS Code or Antigravity.',
       fix: { label: 'Open Agents', action: 'agents' },
     },
     {
       id: 'planner',
       done: planner.ready,
-      title: planner.ready ? 'The Master Brain can plan' : 'The Master Brain cannot plan yet',
+      title: planner.ready ? 'Friday can write plans' : 'Friday cannot write plans yet',
       detail: planner.ready
         ? ''
-        : `${planner.fixes.length ? `To let it plan: ${planner.fixes.join('; ')}.` : planner.text} You can always write plans yourself.`,
+        : `${planner.fixes.length ? `To let Friday plan: ${planner.fixes.join('; ')}.` : planner.text} You can always write plans yourself.`,
       fix: { label: 'Settings → Planner', action: 'planner' },
     },
     {
@@ -81,14 +86,15 @@ export function checklist(board: UiSnapshot | null, context: Partial<ChecklistCo
           ? `${checks === 1 ? '1 project check is' : `${checks} project checks are`} configured`
           : 'No project checks are configured',
       detail:
-        "Verification will run Friday's scope and credential checks only. Add your tests under verification.checks.",
-      fix: { label: 'Open config.yaml', action: 'config' },
+        "Verification runs only Friday's own checks (scope, credentials) until the project has its own. Settings suggests them from package.json.",
+      fix: { label: 'Settings → Checks', action: 'checks' },
     },
     {
       id: 'commit',
       done: commit,
       title: commit ? 'The repository has a commit' : 'The repository has no commit yet',
-      detail: 'Every agent works in the main checkout until you commit once (VS Code: Source Control → Commit).',
+      detail:
+        'Until the project has a first commit, every agent works in your own project folder instead of a folder of its task. Commit once (VS Code: Source Control → Commit).',
       fix: { label: 'Open the folder in VS Code', action: 'folder' },
     },
     {
@@ -131,6 +137,7 @@ export function gettingStarted(ctx: AppContext): Component {
     else if (action === 'planner') openDrawer(ctx, { kind: 'settings', tab: 'planner' });
     else if (action === 'notifications') openDrawer(ctx, { kind: 'settings', tab: 'notifications' });
     else if (action === 'policy') openDrawer(ctx, { kind: 'settings', tab: 'policy' });
+    else if (action === 'checks') openDrawer(ctx, { kind: 'settings', tab: 'checks' });
     else if (action === 'config') {
       if (root) ctx.platform.openInEditor(projectPath(root, '.friday/config.yaml'));
     } else if (root) ctx.platform.openInEditor(root);

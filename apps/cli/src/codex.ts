@@ -3,6 +3,7 @@ import {
   bundledHookPath,
   ClaudeSpawnAdapter,
   claudeEnvironment,
+  claudeVersionOf,
   compareVersions,
   detectClaudeCode,
   SPAWN_MIN,
@@ -18,8 +19,10 @@ import {
 import { opencodeRunCli, opencodeWorkerCli } from '@friday/adapter-opencode';
 import { DaemonClient, type ProjectRef, privateDirFor } from '@friday/sdk';
 import { type Command, Option } from 'commander';
+import { AgentProfiles } from './agent-profiles.js';
 import { type GlobalOptions, out, project, UsageError } from './context.js';
 import { renderDoctor } from './doctor.js';
+import { claudeSignIn, codexSignIn } from './sign-in.js';
 
 const SANDBOXES = ['read-only', 'workspace-write', 'danger-full-access'] as const;
 
@@ -31,6 +34,8 @@ interface SpawnRunOptions {
   serviceTier?: string;
   windowsSandbox?: 'elevated' | 'unelevated';
   maxBudgetUsd?: string;
+  /** claude-code: the remembered agent's own limit is read at each attempt (the agent launcher). */
+  rememberedLimit?: boolean;
   /** claude-code, codex: what the agent's work costs (plan M13.3). */
   costClass?: 'free' | 'cheap' | 'standard';
   /** claude-code, codex: the only models routing may run for it, comma-separated (plan M13.3). */
@@ -129,6 +134,10 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
       ).choices(['elevated', 'unelevated']),
     )
     .option('--max-budget-usd <amount>', "claude-code: a spending cap for each run attempt's session")
+    .option(
+      '--remembered-limit',
+      "claude-code: read this agent's spending cap from what Friday remembers of it at each attempt (used by the agent launcher)",
+    )
     .addOption(
       new Option(
         '--cost-class <class>',
@@ -226,10 +235,11 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
           supported: Boolean(claude?.version && compareVersions(claude.version, SPAWN_MIN) >= 0),
           path: claude?.binary ?? null,
           reason: !claude
-            ? 'Claude Code was not found (PATH, CLAUDE_CODE_BIN, the VS Code extension)'
+            ? 'Claude Code was not found on this computer: install it, then check again'
             : claude.version && compareVersions(claude.version, SPAWN_MIN) < 0
-              ? `spawn mode needs Claude Code ${SPAWN_MIN} or newer; this is ${claude.version}`
+              ? `Friday needs Claude Code ${SPAWN_MIN} or newer to start agents; this is ${claude.version}`
               : null,
+          ...(claude ? { sign_in: claudeSignIn() } : {}),
         },
         {
           host: 'codex',
@@ -238,6 +248,7 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
           supported: Boolean(codex.binary),
           path: codex.binary ?? null,
           reason: codex.binary ? null : (codex.problem ?? 'Codex was not found'),
+          ...(codex.binary ? { sign_in: codexSignIn() } : {}),
         },
         // Found from their install folders; neither is started to be found (plan M8b).
         {
@@ -278,15 +289,31 @@ export function registerSpawnRun(harness: Command, g: () => GlobalOptions): void
  */
 async function runClaudeSpawn(g: () => GlobalOptions, o: SpawnRunOptions): Promise<void> {
   const ref = project(g());
-  const found = detectClaudeCode();
-  const install = o.hostBin ? { binary: o.hostBin, version: found?.version ?? null, source: 'PATH' as const } : found;
-  if (!install) throw new UsageError('Claude Code was not found (PATH, CLAUDE_CODE_BIN, the VS Code extension)');
+  // The version is the given binary's own: before, it was read from whichever Claude Code detection
+  // found, which need not be the one the launcher resolved and passed here.
+  const install = o.hostBin
+    ? { binary: o.hostBin, version: claudeVersionOf(o.hostBin), source: 'PATH' as const }
+    : detectClaudeCode();
+  if (!install) {
+    throw new UsageError(
+      'Claude Code was not found (PATH, CLAUDE_CODE_BIN, its installers’ folders, the VS Code extension)',
+    );
+  }
   if (install.version && compareVersions(install.version, SPAWN_MIN) < 0) {
     throw new UsageError(
       `spawn mode needs Claude Code ${SPAWN_MIN} or newer (its restricted headless mode); this is ${install.version}`,
     );
   }
   const agentKey = o.agent ?? process.env.FRIDAY_AGENT ?? 'claude-1';
+  const atStart = o.maxBudgetUsd ? budgetOf(o.maxBudgetUsd) : undefined;
+  // Started by the launcher: a limit a person set on the remembered agent since (a number, or
+  // none) is the one of the next attempt; a limit nobody set stays what this start was given.
+  const cap = o.rememberedLimit
+    ? (): number | undefined => {
+        const own = new AgentProfiles(privateDirFor(ref)).get(agentKey)?.options.max_budget_usd;
+        return own === undefined ? atStart : (own ?? undefined);
+      }
+    : atStart;
   const adapter = new ClaudeSpawnAdapter({
     bootstrap: DaemonClient.forProject(ref, 'bootstrap', { clientName: 'friday-claude-spawn' }),
     projectId: ref.project_id,
@@ -297,7 +324,7 @@ async function runClaudeSpawn(g: () => GlobalOptions, o: SpawnRunOptions): Promi
     hostEnv: claudeEnvironment(),
     hook: { command: process.execPath, args: [bundledHookPath()] },
     ...(o.effort ? { effort: o.effort } : {}),
-    ...(o.maxBudgetUsd ? { maxBudgetUsd: budgetOf(o.maxBudgetUsd) } : {}),
+    ...(cap === undefined ? {} : { maxBudgetUsd: cap }),
     ...routingOptions(o),
     log: (m) => process.stderr.write(`${m}\n`),
   });

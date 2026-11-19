@@ -136,7 +136,9 @@ describe('restored work continues where it was (review M7.1 R05)', () => {
     const td = await startTestDaemon(ws(), {
       git: true,
       brain: { autoStart: false },
-      editConfig: (y) => y.replace('  checks: []\n', checks).replace(/provider: anthropic(\s+#)/, 'provider: none$1'),
+      // A failed integration stays for a person here (it would go back to its agent first).
+      editConfig: (y) =>
+        `${y.replace('  checks: []\n', checks).replace(/provider: anthropic(\s+#)/, 'provider: none$1')}integration:\n  back_to_agent: 0\n`,
     });
     const A = ws().projectDir;
     for (const [rel, body] of Object.entries({
@@ -196,8 +198,8 @@ describe('restored work continues where it was (review M7.1 R05)', () => {
     const failed = await integrationOf(td, id.ui as string);
     expect(failed.status).toBe('failed');
     // notes: claimed, waiting to be verified. audit: claimed, and being verified when the backup is taken.
-    await claim(wNotes, { 'notes/x.md': '# Notes\n' });
-    await claim(wAudit, { 'audit/r.md': '# Audit\n' });
+    await claim(wNotes, { 'notes/x.txt': '# Notes\n' });
+    await claim(wAudit, { 'audit/r.txt': '# Audit\n' });
     const auditing = verify(td, id.audit as string).catch(() => undefined);
     await eventually(
       () => td.daemon.state.q.latestVerification(id.audit as string)?.status,
@@ -255,8 +257,8 @@ describe('restored work continues where it was (review M7.1 R05)', () => {
       'COMPLETED',
     ]);
     const tree = (t: string) => daemon.state.q.worktreeForTask(t)?.path as string;
-    expect(existsSync(path.join(tree(id.notes as string), 'notes', 'x.md'))).toBe(true);
-    expect(existsSync(path.join(tree(id.audit as string), 'audit', 'r.md'))).toBe(true);
+    expect(existsSync(path.join(tree(id.notes as string), 'notes', 'x.txt'))).toBe(true);
+    expect(existsSync(path.join(tree(id.audit as string), 'audit', 'r.txt'))).toBe(true);
 
     // The claims are verified here by their real checks, and integrated.
     for (const t of [id.notes, id.audit] as string[]) {
@@ -288,8 +290,8 @@ describe('restored work continues where it was (review M7.1 R05)', () => {
       (await runGit(B, ['show', `${branch}:${p}`])).stdout.replace(/\r\n/g, '\n').trim();
     expect(await show('src/a.mjs')).toBe('export const a = 2;');
     expect(await show('src/b.mjs')).toBe('export const b = 2;');
-    expect(await show('notes/x.md')).toBe('# Notes');
-    expect(await show('audit/r.md')).toBe('# Audit');
+    expect(await show('notes/x.txt')).toBe('# Notes');
+    expect(await show('audit/r.txt')).toBe('# Audit');
   }, 240_000);
 
   it('brings a claim over only with the work it lists, so verification never judges other code', async () => {

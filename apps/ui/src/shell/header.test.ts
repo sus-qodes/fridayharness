@@ -15,6 +15,7 @@ import {
 import { h } from '../ui/dom.js';
 import {
   CONFIG_ERROR_MESSAGE,
+  configBannerKeys,
   configBannerText,
   configChanged,
   mountBanners,
@@ -69,6 +70,90 @@ describe('header', () => {
     expect(name.title).not.toContain(BIDI);
   });
 
+  it('in the desktop app the project’s name opens another project; in a browser it is only a name', async () => {
+    const browser = mountHeader(makeContext());
+    mounted.push(browser);
+    const plain = browser.el.querySelector('.sh-project-name') as HTMLElement;
+    expect(plain.tagName).toBe('SPAN');
+    expect(plain.title).toBe('C:/demo/shop');
+
+    const ctx = makeContext();
+    const openProject = vi.fn(async () => undefined);
+    (ctx as { platform: unknown }).platform = { ...ctx.platform, kind: 'tauri', desktop: { openProject } };
+    const header = mountHeader(ctx);
+    mounted.push(header);
+    const name = header.el.querySelector('.sh-project-name') as HTMLButtonElement;
+    expect(name.tagName).toBe('BUTTON');
+    expect(name.textContent).toBe('shop');
+    // The folder stays in the tooltip, with what a click does.
+    expect(name.title).toBe('C:/demo/shop. Click for your projects.');
+    expect(name.getAttribute('aria-label')).toBe('shop: your projects');
+    // A desktop app without the list of projects: the folder picker, as before.
+    name.click();
+    await Promise.resolve();
+    expect(openProject).toHaveBeenCalledOnce();
+  });
+
+  // Switching projects happens in this window, from a list of the recent ones with their state
+  // (2026-11-18): "it again opened the friday… looks like it reopened" (the trial).
+  it('lists the recent projects with their state, switches to one in this window, and offers another folder', async () => {
+    const ctx = makeContext();
+    const openProject = vi.fn(async () => undefined);
+    const openRecent = vi.fn(async (_root: string) => undefined);
+    const recentProjects = vi.fn(async () => [
+      { root: 'C:/demo/shop', name: 'shop', current: true, running: true, missing: false },
+      { root: 'C:/RestroSarthi', name: 'RestroSarthi', current: false, running: true, missing: false },
+      { root: 'C:/old/thing', name: 'thing', current: false, running: false, missing: true },
+      { root: 'C:/side', name: '<img src=x onerror=alert(1)>', current: false, running: false, missing: false },
+    ]);
+    (ctx as { platform: unknown }).platform = {
+      ...ctx.platform,
+      kind: 'tauri',
+      desktop: { openProject, openRecent, recentProjects },
+    };
+    const header = mountHeader(ctx);
+    mounted.push(header);
+    document.body.append(header.el);
+    const name = header.el.querySelector('.sh-project-name') as HTMLButtonElement;
+    name.click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    const menu = header.el.querySelector('.sh-project-menu') as HTMLElement;
+    expect(menu.hidden).toBe(false);
+    expect(name.getAttribute('aria-expanded')).toBe('true');
+    const rows = [...menu.querySelectorAll('[data-item="project"]')] as HTMLButtonElement[];
+    expect(rows.map((r) => r.textContent)).toEqual([
+      'shopopen now',
+      'RestroSarthiFriday running',
+      'thingfolder not found',
+      '<img src=x onerror=alert(1)>',
+    ]);
+    expect(menu.querySelector('img')).toBeNull();
+    expect(rows[2]?.disabled).toBe(true);
+    expect(rows[1]?.title).toBe('C:/RestroSarthi');
+    // Another project: in this window, said at once.
+    rows[1]?.click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    expect(openRecent).toHaveBeenCalledWith('C:/RestroSarthi');
+    expect(ctx.toasts.at(-1)?.text).toBe('Opening RestroSarthi in this window…');
+    expect(menu.hidden).toBe(true);
+    // The one open now changes nothing; another folder is the picker.
+    name.click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    (menu.querySelector('[data-item="project"]') as HTMLButtonElement).click();
+    expect(openRecent).toHaveBeenCalledOnce();
+    name.click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    (menu.querySelector('[data-item="another"]') as HTMLButtonElement).click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    expect(openProject).toHaveBeenCalledOnce();
+    // Escape closes it and gives the name its focus back.
+    name.click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(menu.hidden).toBe(true);
+    expect(document.activeElement).toBe(name);
+  });
+
   it('keeps the address in the state dot’s tooltip, not on the screen', () => {
     const ctx = makeContext();
     const header = mountHeader(ctx);
@@ -105,7 +190,7 @@ describe('header', () => {
       agents: [makeAgent({ agent_key: 'claude-1' }), makeAgent({ agent_key: 'codex-1', status: 'DISCONNECTED' })],
     });
     expect(statusSentence(board, NOW)).toBe(
-      '2 running, 3 waiting for you: 1 approval, 1 question, 1 blocked agent; 1 ready; 2 to verify; 1 failed or lost; 1 agent connected',
+      '2 running, 3 waiting for you: 1 approval, 1 question, 1 stuck agent; 1 not started; 2 to check; 1 failed or stopped; 1 agent connected',
     );
     expect(statusSentence(makeSnapshot(), NOW)).toBe('0 running, 0 waiting for you: 0 agents connected');
     // A kind the old sentence did not name (a message awaiting a reply) is named, never an empty clause.
@@ -197,7 +282,7 @@ describe('header', () => {
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'inbox' });
     const settings = header.el.querySelector('[aria-label="Settings"]') as HTMLButtonElement;
     settings.click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', drawer: null });
   });
 
   it('the More menu opens Project memory, the Code graph and About (Settings at its About section)', () => {
@@ -226,7 +311,7 @@ describe('header', () => {
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'graph' });
     more.click();
     item('about').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'about' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'about', drawer: null });
     expect(ctx.store.select('ui').activeView).toBe('settings');
   });
 
@@ -315,8 +400,9 @@ describe('banners', () => {
     expect(configChanged(makeSnapshot({ config: { loaded_hash: 'a', current_hash: 'b' } }))).toBe(false);
     expect(configChanged(makeSnapshot())).toBe(false);
     expect(configChanged(null)).toBe(false);
+    // Each setting by what it is, not by its key in config.yaml (2026-11-17).
     expect(configBannerText({ applied: [], restart_needed: ['daemon.port'], error: null })).toBe(
-      'config.yaml changed: daemon.port needs a restart to apply.',
+      'The project’s settings changed: the port Friday answers on needs a restart to apply.',
     );
     expect(
       configBannerText({
@@ -324,7 +410,22 @@ describe('banners', () => {
         restart_needed: ['daemon.port', 'leases.lease_ttl_ms'],
         error: null,
       }),
-    ).toBe('config.yaml changed: scopes.api applied; daemon.port and leases.lease_ttl_ms need a restart to apply.');
+    ).toBe(
+      'The project’s settings changed: the named scopes applied; the port Friday answers on and how long Friday waits for an agent that went quiet need a restart to apply.',
+    );
+    // Two keys of one setting are said once; a key Friday has no name for is shown as written.
+    expect(
+      configBannerText({
+        applied: [],
+        restart_needed: ['providers.anthropic.allow_remote', 'providers.anthropic.daily_budget_usd', 'future.key'],
+        error: null,
+      }),
+    ).toBe(
+      'The project’s settings changed: planning with an Anthropic key, the project’s spending limit for planning with a key and future.key need a restart to apply.',
+    );
+    expect(configBannerKeys({ applied: ['scopes.api'], restart_needed: ['daemon.port'], error: null })).toBe(
+      'In .friday/config.yaml: scopes.api, daemon.port',
+    );
     const ctx = makeContext({ snapshot: portChanged() });
     const open = vi.spyOn(ctx.platform, 'openInEditor');
     const banners = mountBanners(ctx);
@@ -332,14 +433,18 @@ describe('banners', () => {
     const banner = banners.el.querySelector('.sh-banner-warn') as HTMLElement;
     expect(banner.hidden).toBe(false);
     expect(banner.textContent).toContain(
-      'config.yaml changed: scopes.frontend.write applied; daemon.port needs a restart to apply.',
+      'The project’s settings changed: the named scopes applied; the port Friday answers on needs a restart to apply.',
+    );
+    // The keys themselves are one hover away.
+    expect((banner.querySelector('.sh-banner-config-text') as HTMLElement).title).toBe(
+      'In .friday/config.yaml: scopes.frontend.write, daemon.port',
     );
     expect(banner.textContent).toContain(RESTART_HINT_BROWSER);
     expect(banner.querySelector('.sh-banner-restart')).toBeNull();
     (banner.querySelector('button') as HTMLButtonElement).click();
     expect(open).toHaveBeenCalledWith('C:/demo/shop/.friday/config.yaml');
     (banner.querySelector('.sh-banner-settings') as HTMLButtonElement).click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'friday' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'friday', drawer: null });
     // Friday restarted (or the key was changed back): nothing waits, so nothing is said.
     ctx.board(
       makeSnapshot({

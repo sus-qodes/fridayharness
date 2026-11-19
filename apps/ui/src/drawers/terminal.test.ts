@@ -103,7 +103,7 @@ describe('the terminal drawer', () => {
     expect(all[1]).not.toContain(BIDI);
     expect(all[2]).toContain(LONG);
     expect(drawer.el.querySelector('.dr-term-head')?.textContent).toContain(`Pricing ${IMG}`);
-    expect(drawer.el.querySelector('.dr-term-head')?.textContent).toContain('Claude Code · spawn');
+    expect(drawer.el.querySelector('.dr-term-head')?.textContent).toContain('Claude Code · started by Friday');
     expect(drawer.el.querySelector('[role="log"]')).not.toBeNull();
     drawer.destroy();
   });

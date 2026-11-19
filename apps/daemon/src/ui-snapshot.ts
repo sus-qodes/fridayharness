@@ -12,14 +12,21 @@ import type {
   SnapshotInboxItem,
   SnapshotList,
   SnapshotTask,
+  TaskAttention,
+  TaskView,
   UiSnapshot,
   UsageView,
   VerificationView,
 } from '@friday/protocol';
+import { promptTokens } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState, MemoryActor } from '@friday/state';
 import type { BrainHandle } from './brain.js';
 import { escalationView, liveVersion } from './brain-routes.js';
+import { answersOf } from './direct-goal.js';
+import { goalWork, landedGoals } from './land.js';
+import { notStartedFacts, whyNotStarted } from './not-started.js';
+import { whyChosen } from './why-chosen.js';
 
 /** The interface API version this daemon speaks; a page built for another asks to be reloaded (plan §5.3). */
 export const UI_API_VERSION = 1;
@@ -58,6 +65,8 @@ export interface UiSnapshotInfo {
   config: UiSnapshot['config'];
   /** Claims are verified automatically (`verification.auto_on_completion`, once trusted). */
   auto_verification: boolean;
+  /** When verified work lands without a click (`landing.mode`, once trusted); null: a person lands it. */
+  auto_landing?: 'goal' | 'task' | null;
   /**
    * Whether the effective policy's loosening applies on this clone (`EffectivePolicy.trusted`).
    * Left out, the snapshot reports nothing untrusted: the daemon that knows its policy says so.
@@ -171,13 +180,22 @@ export function buildUiSnapshot(deps: {
   // From the event log, so the count is the same after a reload (review R13); only the events
   // since the last read are counted.
   const toolCalls = countToolCalls(state, pid, head, deps.toolCalls ?? toolCallTally());
-  const tasks: SnapshotTask[] = shownTasks.map((t) => ({
-    ...t,
-    agent_key: agentKey(t.assigned_agent_id),
-    waiting_note: t.status === 'WAITING' ? latestReason(state, pid, t.task_id, 'task.waiting') : null,
-    delegation_note: t.status === 'READY' ? delegationNote(state, t.task_id) : null,
-    tool_calls: toolCalls.get(t.task_id) ?? 0,
-  }));
+  // Why each task that has not started is not at work, from the state as it is now (2026-11-18).
+  const facts = notStartedFacts(state, pid, deps.nowMs);
+  const tasks: SnapshotTask[] = shownTasks.map((t) => {
+    const waits = whyNotStarted(state, pid, t, facts);
+    const run = t.current_run_id ? state.q.findRun(t.current_run_id) : state.q.runs(t.task_id).at(-1);
+    return {
+      ...t,
+      why: run || t.assigned_agent_id ? whyChosen(state, pid, t, run) : null,
+      agent_key: agentKey(t.assigned_agent_id),
+      waiting_note: t.status === 'WAITING' ? latestReason(state, pid, t.task_id, 'task.waiting') : null,
+      delegation_note: waits?.text ?? null,
+      waits_for: waits?.code ?? null,
+      attention: attentionOf(state, pid, t),
+      tool_calls: toolCalls.get(t.task_id) ?? 0,
+    };
+  });
 
   const runs: Record<string, RunView> = {};
   const verifications: Record<string, VerificationView> = {};
@@ -206,6 +224,33 @@ export function buildUiSnapshot(deps: {
   );
   const goalProgress: UiSnapshot['goal_progress'] = {};
   for (const g of goals) goalProgress[g.goal_id] = counted[g.goal_id] ?? { total: 0, completed: 0 };
+  // What keeps a host out of work now: a failed sign-in (until cleared), a bench (until it expires).
+  const hostBlocks: NonNullable<UiSnapshot['host_blocks']> = [];
+  for (const e of state.q.readinessEvidence(pid, { limit: 200 })) {
+    if (e.status !== 'failed') continue;
+    const kind = e.stage === 'authenticated' ? 'sign_in' : e.stage === 'benched' ? 'benched' : null;
+    if (!kind) continue;
+    if (e.expires_at && Date.parse(e.expires_at) <= deps.nowMs) continue;
+    // The newest record of a host, model and kind is the one that counts (they come newest first).
+    if (hostBlocks.some((b) => b.host === e.host && b.model === e.model && b.kind === kind)) continue;
+    hostBlocks.push({
+      host: e.host,
+      model: e.model,
+      kind,
+      detail: e.detail,
+      since: e.checked_at,
+      until: e.expires_at,
+    });
+  }
+  // A completed goal's card says "Landed into main", or that its work is already in the folder.
+  const landed = landedGoals(state, pid);
+  const goalLanding: NonNullable<UiSnapshot['goal_landing']> = {};
+  for (const g of goals) {
+    // A question has nothing to land.
+    if (g.status !== 'COMPLETED' || g.mode === 'ask') continue;
+    const l = landed.get(g.goal_id);
+    goalLanding[g.goal_id] = { work: goalWork(state, pid, g.goal_id), landed: l ? { into: l.into, at: l.at } : null };
+  }
   const plans: UiSnapshot['plans'] = {};
   for (const g of goals) {
     if (!g.plan_id) continue;
@@ -278,13 +323,18 @@ export function buildUiSnapshot(deps: {
     },
     config: info.config,
     control: state.q.control(pid),
+    landing: { mode: info.auto_landing ?? 'ask', requested: project.config.landing.mode },
     verification: {
       checks: project.config.verification.checks.map((c) => ({ name: c.name, kind: c.kind, required: c.required })),
       auto_on_completion: info.auto_verification,
+      auto_requested: project.config.verification.auto_on_completion === true,
     },
     counts: state.q.statusCounts(pid),
     goals,
     goal_progress: goalProgress,
+    goal_landing: goalLanding,
+    answers: answersOf(state, pid, goals),
+    host_blocks: hostBlocks,
     plans,
     tasks,
     runs,
@@ -315,11 +365,40 @@ function latestReason(state: FridayState, pid: string, taskId: string, type: str
   return typeof reason === 'string' && reason ? reason.slice(0, 1000) : null;
 }
 
-/** Why delegation left a READY task waiting: its latest decision when nobody took it. */
-function delegationNote(state: FridayState, taskId: string): string | null {
-  const last = state.q.assignments(taskId).at(-1);
-  if (!last || last.agent_key) return null;
-  return last.reason ? String(last.reason).slice(0, 500) : null;
+/**
+ * What a running task's agent last did, when that agent is one its person runs and it is not at
+ * work (`SnapshotTask.attention`): the newest of its turn ending, a tool call Friday judged and a
+ * tool call that finished. A turn that ended last: it stopped. A call Friday answered "ask" last:
+ * its host is asking the person in its own window. Anything else: it works.
+ */
+function attentionOf(state: FridayState, pid: string, t: TaskView): TaskAttention | null {
+  if (t.status !== 'RUNNING' || !t.current_run_id) return null;
+  const run = state.q.findRun(t.current_run_id);
+  const h = run ? state.q.findHarness(run.harness_id) : undefined;
+  // An agent Friday starts is watched by its adapter: its turns and its questions are Friday's own.
+  if (!h || h.attach_mode === 'spawn') return null;
+  const e = state.store.readByRef(pid, 'task', t.task_id, {
+    types: ['agent.turn_ended', 'policy.evaluated', 'agent.event', 'run.paths_observed'],
+    limit: 1,
+    desc: true,
+  })[0];
+  if (!e || (run?.accepted_at && e.occurred_at < run.accepted_at)) return null;
+  const p = (e.payload ?? {}) as Record<string, unknown>;
+  const text = (v: unknown, max: number) => (typeof v === 'string' && v ? v.slice(0, max) : null);
+  if (e.type === 'agent.turn_ended') {
+    return { kind: 'stopped', at: e.occurred_at, reason: text(p.reason, 80), error: text(p.error, 400) };
+  }
+  if (e.type === 'policy.evaluated' && p.decision === 'ask') {
+    const targets = Array.isArray(p.targets) ? p.targets.filter((x): x is string => typeof x === 'string') : [];
+    return {
+      kind: 'asking',
+      at: e.occurred_at,
+      tool: text(p.tool, 80),
+      target: text(targets[0], 400),
+      rule: text(p.reason, 300),
+    };
+  }
+  return null;
 }
 
 /** The last usage a host reported for each listed run, from the most recent agent events. */
@@ -331,9 +410,18 @@ function lastUsage(state: FridayState, pid: string, runIds: Set<string>): Record
     if (p.event_type !== 'host.usage' || !p.run_id || !runIds.has(p.run_id) || out[p.run_id]) continue;
     const d = p.data ?? {};
     const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    const run = state.q.findRun(p.run_id);
+    const codex = run ? state.q.findHarness(run.harness_id)?.vendor === 'codex' : false;
     out[p.run_id] = {
       cost_usd: num(d.cost_usd),
-      input_tokens: num(d.input_tokens),
+      // The whole prompt, the cache included, for every host alike (2026-11-18).
+      input_tokens: promptTokens({
+        input_tokens: num(d.input_tokens),
+        output_tokens: num(d.output_tokens),
+        cache_read_input_tokens: num(d.cache_read_input_tokens),
+        cache_creation_input_tokens: num(d.cache_creation_input_tokens),
+        input_includes_cache: d.input_includes_cache === true || codex,
+      }),
       output_tokens: num(d.output_tokens),
       at: e.occurred_at,
     };
