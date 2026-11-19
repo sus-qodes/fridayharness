@@ -622,7 +622,9 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     ...(advisoryFailed ? [`${advisoryFailed} advisory check(s) failed`] : []),
     ...(warnings ? [`${warnings} warning(s)`] : []),
     ...(configured.length === 0
-      ? ["your project has no checks of its own set; Friday checked that only the task's files changed and that no passwords or keys were added"]
+      ? [
+          "your project has no checks of its own set; Friday checked that only the task's files changed and that no passwords or keys were added",
+        ]
       : checks.length === 0
         ? [`none of your project's checks is for ${task.kind} tasks`]
         : []),
