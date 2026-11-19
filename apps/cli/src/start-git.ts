@@ -195,7 +195,7 @@ export function startGit(root: string, limits = LIMITS): GitStart {
         os
           .hostname()
           .toLowerCase()
-          .replace(/[^a-z0-9.-]/g, '-') || 'localhost';
+          .replace(/[^a-z0-9.-]/g, '-') || 'this-computer';
       identity = { name: name || user, email: email || `${user.toLowerCase().replace(/[^a-z0-9._-]/g, '-')}@${host}` };
       git(root, ['config', 'user.name', identity.name]);
       git(root, ['config', 'user.email', identity.email]);
