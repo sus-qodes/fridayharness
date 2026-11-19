@@ -144,6 +144,7 @@ export function wireHook(h: NormalizedHook): Record<string, unknown> {
   put('stop_hook_active', h.stop_hook_active);
   put('reason', h.reason);
   put('error', h.error);
+  put('prompt', h.prompt);
   return out;
 }
 

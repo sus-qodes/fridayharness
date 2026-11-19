@@ -40,6 +40,19 @@ interface HookBody {
 type Outcome = HookJudgment | { decision: 'allow'; reason: string };
 
 /**
+ * Whether a prompt is the `/friday` command (2026-11-19): typed as such, or as Antigravity may pass
+ * it, expanded into Friday's skill (its marker, or the sentence it opens with). Nothing else counts.
+ */
+export function isFridayCommand(prompt: string): boolean {
+  const p = prompt.trimStart();
+  return (
+    /^\/friday(\s|$)/i.test(p) ||
+    p.includes('<!-- friday:skill -->') ||
+    /^The user asked you to work on their Friday task\./.test(p)
+  );
+}
+
+/**
  * Daemon routes for every host's hooks (plan M1.10, M8b.1): POST
  * /api/v1/projects/:pid/hooks/:vendor/:event with the bootstrap token, `:event` in Friday's names.
  * Friday only restricts: "allow" returns no decision, so the host's own permission rules still
@@ -262,6 +275,42 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
             renderContextMarkdown(packet, project.config.context.session_start_max_chars - shadowNote.length) +
             shadowNote;
           return reply({ decision: 'context', text: additionalContext });
+        }
+
+        case 'UserPromptSubmit': {
+          // `/friday` with nothing to take (2026-11-19, U8/F21): it cost a model call, about 1.3k
+          // tokens, for the agent to find out and say so. Now the turn ends before the model is
+          // called, with Friday's words. Anything else, and any doubt, goes on as before.
+          const prompt = typeof hook.prompt === 'string' ? hook.prompt : '';
+          const asked = isFridayCommand(prompt);
+          // What the host passes for a slash command is not documented: recorded, so a live
+          // session shows it (the first words of a prompt that starts with "/", nothing else).
+          if (asked || prompt.trimStart().startsWith('/')) {
+            state.recordObservation(
+              pid,
+              actor,
+              'harness.prompt_seen',
+              {
+                session_id: hook.session_id ?? null,
+                friday_command: asked,
+                starts: prompt.trimStart().slice(0, 40),
+                length: prompt.length,
+              },
+              refs(null),
+            );
+          }
+          if (!asked || !agent || !harness || spawned || harness.shadow) return none();
+          if (state.q.control(pid).paused) {
+            return reply({
+              decision: 'halt',
+              text: 'Friday: Friday is paused, so no task can be taken; the model was not called. Resume Friday in its app, then type /friday again.',
+            });
+          }
+          if (state.nextTaskFor(pid, agent.agent_id)) return none();
+          return reply({
+            decision: 'halt',
+            text: `Friday: nothing waits for ${agent.agent_key} right now, so the model was not called and no tokens were used. Friday's app tells you when a task is given to this agent; type /friday then.`,
+          });
         }
 
         case 'PreToolUse': {

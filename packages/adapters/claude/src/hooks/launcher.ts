@@ -130,7 +130,13 @@ export function failureOutput(event: string, toolName: string | undefined, why: 
  * every host's hook configuration (Claude Code: PreToolUse 5 s, SessionStart 15 s, SessionEnd 3 s),
  * so the launcher's own answer arrives before the host gives up on it.
  */
-export const LAUNCHER_BUDGET_MS: Record<string, number> = { PreToolUse: 4000, SessionStart: 12_000, SessionEnd: 2000 };
+export const LAUNCHER_BUDGET_MS: Record<string, number> = {
+  PreToolUse: 4000,
+  SessionStart: 12_000,
+  SessionEnd: 2000,
+  // Before a model call: the person waits for it (2026-11-19).
+  UserPromptSubmit: 3000,
+};
 export const LAUNCHER_DEFAULT_BUDGET_MS = 8000;
 
 function print(out: Out | undefined): void {

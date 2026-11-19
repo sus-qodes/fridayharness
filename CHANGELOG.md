@@ -2,6 +2,11 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — the trial's fault list, part 11: `/friday` costs nothing when there is nothing to take
+
+- **`/friday` in Antigravity with nothing to take no longer calls the model.** In the trial it cost a model call, about 1.3k tokens, for the agent to find out there was no task and say so. Friday now answers Antigravity's hook before each model call: when the person typed `/friday` (as typed, or as Antigravity expands Friday's skill) and nothing waits for that agent, the turn ends before the model is called, with "nothing waits for antigravity-1 right now… type /friday then"; when Friday is paused, it says that. A task waiting, any other prompt, every later step of a turn, and any doubt (Friday not running, a session it does not know) go on exactly as before. What Antigravity passes for a slash command is recorded, so the first live session shows it.
+- **Each later step of a turn costs a hook that answers by itself**, without asking Friday's service: a fraction of a second.
+
 ## Unreleased — the trial's fault list, part 10: an installer for other computers
 
 - **The installer can carry Friday itself.** `pnpm pack:desktop` makes Friday's own copy from the install archive (proving the archive installs and starts, and starting Friday from the copy once), and `cargo tauri build --config Tauri.release.toml` with `FRIDAY_RELEASE=1` makes an installer of about 11 MB that puts it beside the app. The app runs that copy on a computer that never had Friday's source; before, it asked where Friday was installed. A developer's build still runs the checkout it was built from, even with a copy left beside it.

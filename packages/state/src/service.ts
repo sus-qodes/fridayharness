@@ -707,6 +707,8 @@ const OBSERVATION_TYPES = new Set([
   'context.requested',
   'harness.session_started',
   'harness.session_ended',
+  // What a host passed for a slash command before its model was called (2026-11-19, `/friday`).
+  'harness.prompt_seen',
   'daemon.started',
   'daemon.stopped',
   'scope.violation',

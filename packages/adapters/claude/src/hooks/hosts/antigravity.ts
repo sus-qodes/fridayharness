@@ -126,9 +126,39 @@ export const antigravity: HostModule = {
     PreToolUse: [...COMMON_KEYS, 'toolCall', 'stepIdx'],
     PostToolUse: [...COMMON_KEYS, 'toolCall', 'stepIdx', 'error'],
     Stop: [...COMMON_KEYS, 'executionNum', 'terminationReason', 'error', 'fullyIdle', 'continuationActive'],
+    PreInvocation: [...COMMON_KEYS, 'invocationNum', 'initialNumSteps'],
   },
   normalize(raw, hostEvent): NormalizedHook {
     const e = hostEvent || str(raw.hook_event_name) || 'unknown';
+    // Before each model call (2026-11-19). Only the first of a turn (`invocationNum` 0) is the
+    // person's prompt; every later one is the agent's own step, answered here with nothing sent.
+    if (e === 'PreInvocation') {
+      const first = raw.invocationNum === 0;
+      const roots = Array.isArray(raw.workspacePaths) ? raw.workspacePaths : [];
+      return finish({
+        vendor: 'antigravity',
+        event: first ? 'UserPromptSubmit' : null,
+        host_event: e,
+        session_id: str(raw.conversationId),
+        tool_name: null,
+        host_tool_name: null,
+        tool_input: null,
+        cwd: str(raw.cwd),
+        project_dir: str(roots[0]),
+        host_version: null,
+        model: str(raw.modelName),
+        source: null,
+        stop_hook_active: null,
+        stop_completed: null,
+        stop_reason: null,
+        reason: null,
+        error: null,
+        judging: 'full',
+        can_ask: false,
+        shape_error: null,
+        prompt: first ? (str(raw.lastUserInput)?.slice(0, 2000) ?? null) : null,
+      });
+    }
     const call = obj(raw.toolCall);
     const hostTool = str(call.name);
     const args = obj(call.args);
@@ -191,6 +221,12 @@ export const antigravity: HostModule = {
     }
     if (e === 'Stop' && j.decision === 'continue')
       return reply({ decision: 'continue', reason: `Friday: ${j.reason}` });
+    // `/friday` with nothing to take: the turn ends before the model is called ("Stops execution
+    // immediately before calling the model"), with Friday's words. Which kind of step the person
+    // sees on a terminated turn is not documented; an error message is the one meant for them.
+    if (e === 'PreInvocation' && j.decision === 'halt') {
+      return reply({ terminationBehavior: 'terminate', injectSteps: [{ errorMessage: { errorMessage: j.text } }] });
+    }
     return { stdout: '{}', stderr: '', exit_code: 0 };
   },
 };

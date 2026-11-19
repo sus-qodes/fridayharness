@@ -21,15 +21,24 @@ export const LAUNCH_MCP_PATH = `${HARNESS_DIR}/launch-mcp.mjs`;
  * The host events Friday configures, with each hook's timeout in seconds (Antigravity's unit).
  * Each is above the launcher's own budget for its Friday event, so the launcher answers before the
  * host gives up on it: PreToolUse 5 s over 4 s, SessionStart 15 s over 12 s, the rest 10 s over 8 s.
- * PreInvocation and PostInvocation are left out: Friday has nothing to say before each model call.
+ * PreInvocation (2026-11-19): before each model call; Friday answers only the first of a turn, when
+ * the person typed `/friday` and nothing waits for the agent, by ending the turn before the model
+ * is called. 5 s over the launcher's 3 s. PostInvocation is left out: Friday has nothing to say there.
  */
-export const HOOK_TIMEOUTS_S = { SessionStart: 15, PreToolUse: 5, PostToolUse: 10, Stop: 10 } as const;
+export const HOOK_TIMEOUTS_S = {
+  SessionStart: 15,
+  PreToolUse: 5,
+  PostToolUse: 10,
+  Stop: 10,
+  PreInvocation: 5,
+} as const;
 export type AntigravityHookEvent = keyof typeof HOOK_TIMEOUTS_S;
 export const HOOK_EVENTS = Object.keys(HOOK_TIMEOUTS_S) as AntigravityHookEvent[];
 
 /** The launcher budget a host event's hook must outlast (the Friday event it becomes). */
 export function launcherBudgetMs(event: AntigravityHookEvent): number {
-  return LAUNCHER_BUDGET_MS[event] ?? LAUNCHER_DEFAULT_BUDGET_MS;
+  const friday = event === 'PreInvocation' ? 'UserPromptSubmit' : event;
+  return LAUNCHER_BUDGET_MS[friday] ?? LAUNCHER_DEFAULT_BUDGET_MS;
 }
 
 /**
@@ -80,6 +89,7 @@ export function fridayHookGroup(): Record<string, unknown> {
     PreToolUse: [{ matcher: TOOL_MATCHER, hooks: [handler('PreToolUse')] }],
     PostToolUse: [{ matcher: TOOL_MATCHER, hooks: [handler('PostToolUse')] }],
     Stop: [handler('Stop')],
+    PreInvocation: [handler('PreInvocation')],
   };
 }
 
@@ -182,7 +192,8 @@ Antigravity starts hooks in the folder of \`hooks.json\`, so Friday also writes
 lands on from there, which runs \`hook.mjs\` above.
 
 Friday also writes \`.agents/skills/friday/SKILL.md\`: type \`/friday\` in Antigravity to take your
-next Friday task. Each \`/friday\` is one task; you start the next one yourself.
+next Friday task. Each \`/friday\` is one task; you start the next one yourself. When nothing waits
+for this agent, the hook ends that turn before the model is called, so it costs no tokens.
 
 Antigravity support is experimental. Remove everything Friday added with
 \`friday harness config antigravity --remove\`.

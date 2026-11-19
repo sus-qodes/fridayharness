@@ -621,3 +621,77 @@ describe('every host, with the daemon', () => {
     expect(mismatch.status).toBe(400);
   });
 });
+
+/**
+ * `/friday` in Antigravity with nothing to take (2026-11-19, the fix list's C3; the trial's U8 and
+ * F21): it cost a model call, 1.3k tokens, for the agent to find out and say so. Friday answers
+ * Antigravity's PreInvocation hook for the first model call of a turn: a `/friday` prompt with no
+ * task for the agent ends the turn before the model is called. Anything else goes on as before.
+ */
+describe('/friday in Antigravity, before the model is called', () => {
+  it('ends the turn with Friday’s words when nothing waits for the agent, and only then', async () => {
+    const td = await startTestDaemon(ws(), {
+      extensions: [claudeCodeHooks()],
+      extraConfig: [
+        'routing:',
+        '  models:',
+        '    - { id: antigravity-test-model, vendors: [antigravity] }',
+        '  role_candidates:',
+        '    backend_engineer:',
+        '      - { model: antigravity-test-model, harness: antigravity }',
+      ].join('\n'),
+    });
+    const w = ws();
+    const pid = td.project.project_id;
+    const client = new GenericHarnessClient(td.bootstrap, {
+      harness_key: `antigravity:${pid}:pid:${process.pid}`,
+      vendor: 'antigravity',
+      name: 'antigravity',
+      attach_mode: 'attach',
+      project_id: pid,
+      capabilities: { hooks: true },
+      agent_key: 'ag-1',
+      host: { pid: process.pid, session_id: 'conv-fixture-1' },
+      enforcement_level: 'L1',
+    });
+    await client.register();
+    // Its hooks reach Friday, as at the start of a session.
+    expect((await run(w, 'antigravity', 'SessionStart')).code).toBe(0);
+    const prompt = (lastUserInput: string, invocationNum = 0) =>
+      run(w, 'antigravity', 'PreInvocation', { lastUserInput, invocationNum });
+
+    // Nothing waits for ag-1: the turn ends before the model is called.
+    const halted = await prompt('/friday');
+    expect(halted.code).toBe(0);
+    expect(halted.json).toMatchObject({ terminationBehavior: 'terminate' });
+    expect(JSON.stringify(halted.json)).toContain('nothing waits for ag-1 right now');
+    // The command as Antigravity may pass it: expanded into Friday's skill.
+    const expanded = await prompt('---\nname: friday\n---\n<!-- friday:skill -->\n# Friday\n\nThe user asked you…');
+    expect(expanded.json).toMatchObject({ terminationBehavior: 'terminate' });
+    // Any other prompt, and every later model call of a turn, go on as before.
+    expect((await prompt('fix the login page')).stdout).toBe('{}');
+    expect((await prompt('/fridays-list')).stdout).toBe('{}');
+    expect((await prompt('/friday', 3)).stdout).toBe('{}');
+    // What the host passed for a slash command is recorded: a live session shows its shape.
+    const seen = td.daemon.state.store
+      .readSince(pid, 0, { types: ['harness.prompt_seen'], limit: 10 })
+      .map((e) => e.payload as { friday_command: boolean; starts: string });
+    expect(seen.map((s) => [s.friday_command, s.starts.slice(0, 8)])).toEqual([
+      [true, '/friday'],
+      [true, '---\nname'],
+      [false, '/fridays'],
+    ]);
+
+    // A task for ag-1: the turn goes on, and the model takes it as the skill says.
+    await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Work for antigravity',
+      scope: { write: ['src/antigravity/**'], read: [] },
+      assign_agent_key: 'ag-1',
+    });
+    expect((await prompt('/friday')).stdout).toBe('{}');
+
+    // Paused, nothing can be taken: said so, still before the model is called.
+    await td.operator.post(td.operator.projectPath('/control/pause'), {});
+    expect(JSON.stringify((await prompt('/friday')).json)).toContain('Friday is paused');
+  });
+});

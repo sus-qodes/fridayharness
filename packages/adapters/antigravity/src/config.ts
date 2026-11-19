@@ -192,7 +192,7 @@ export function planAntigravity(opts: AntigravityConfigOptions): FileChange[] {
   addJson(
     path.join(agentsDir, 'hooks.json'),
     (e) => mergeHooks(e, install),
-    'Friday hooks (SessionStart, PreToolUse, PostToolUse, Stop)',
+    'Friday hooks (SessionStart, PreToolUse, PostToolUse, Stop, PreInvocation)',
   );
   addJson(
     path.join(agentsDir, 'mcp_config.json'),

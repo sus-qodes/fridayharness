@@ -76,15 +76,17 @@ describe('Antigravity hook templates', () => {
   it('configures exactly the host events the launcher module reads, each above the launcher budget', () => {
     expect([...HOOK_EVENTS].sort()).toEqual(Object.keys(HOST_MODULES.antigravity.knownKeys).sort());
     for (const event of HOOK_EVENTS) {
-      const budget = LAUNCHER_BUDGET_MS[event] ?? LAUNCHER_DEFAULT_BUDGET_MS;
+      // PreInvocation becomes Friday's UserPromptSubmit, whose budget the launcher keeps.
+      const friday = event === 'PreInvocation' ? 'UserPromptSubmit' : event;
+      const budget = LAUNCHER_BUDGET_MS[friday] ?? LAUNCHER_DEFAULT_BUDGET_MS;
       expect(HOOK_TIMEOUTS_S[event] * 1000, event).toBeGreaterThan(budget);
     }
-    expect(HOOK_TIMEOUTS_S).toEqual({ SessionStart: 15, PreToolUse: 5, PostToolUse: 10, Stop: 10 });
+    expect(HOOK_TIMEOUTS_S).toEqual({ SessionStart: 15, PreToolUse: 5, PostToolUse: 10, Stop: 10, PreInvocation: 5 });
   });
 
   it('runs the tracked launcher with the antigravity argument and matches every tool', () => {
     const group = fridayHookGroup() as Record<string, unknown[]>;
-    expect(Object.keys(group)).toEqual(['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop']);
+    expect(Object.keys(group)).toEqual(['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop', 'PreInvocation']);
     for (const event of ['PreToolUse', 'PostToolUse'] as const) {
       expect(group[event]).toEqual([
         {
@@ -93,7 +95,7 @@ describe('Antigravity hook templates', () => {
         },
       ]);
     }
-    for (const event of ['SessionStart', 'Stop'] as const)
+    for (const event of ['SessionStart', 'Stop', 'PreInvocation'] as const)
       expect(group[event]).toEqual([{ type: 'command', command: hookCommand(event), timeout: HOOK_TIMEOUTS_S[event] }]);
     expect(hookCommand('PreToolUse')).toBe('node .friday/harness/antigravity/hook.mjs antigravity PreToolUse');
     expect(TOOL_MATCHER).toBe('*');

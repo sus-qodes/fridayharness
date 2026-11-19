@@ -179,6 +179,8 @@ export const FRIDAY_HOOK_EVENTS = [
   'PostToolUseFailure',
   'Stop',
   'SessionEnd',
+  // Before the model is called for a person's prompt (Antigravity's PreInvocation, 2026-11-19).
+  'UserPromptSubmit',
 ] as const;
 export type FridayHookEvent = (typeof FRIDAY_HOOK_EVENTS)[number];
 
@@ -249,6 +251,11 @@ export interface NormalizedHook {
   can_ask: boolean;
   /** Why the module could not read this call's input; a write it cannot read is declined. */
   shape_error: string | null;
+  /**
+   * UserPromptSubmit: the person's prompt as the host gives it (Antigravity's `lastUserInput`),
+   * cut short; absent elsewhere.
+   */
+  prompt?: string | null;
 }
 
 /**
@@ -269,7 +276,12 @@ export type HookJudgment =
   /** SessionStart: text for the session. `brief` marks a one-line note rather than the context packet. */
   | { decision: 'context'; text: string; brief?: boolean }
   /** Stop: keep the agent working once, with this message. */
-  | { decision: 'continue'; reason: string };
+  | { decision: 'continue'; reason: string }
+  /**
+   * UserPromptSubmit: end the turn before the model is called, with this message for the person
+   * (2026-11-19: `/friday` with nothing to take cost a model call, 1.3k tokens, to say so).
+   */
+  | { decision: 'halt'; text: string };
 
 /** What the launcher prints and how it exits, for one host. */
 export interface HostReply {
