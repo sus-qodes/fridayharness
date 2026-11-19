@@ -313,14 +313,14 @@ describe('waiting items: work to verify and goals to land (review of 2026-11-16)
       goal_landing: { goal_done: { work: 'branch', landed: null } },
     });
     const sentence = statusSentence(board, NOW);
-    expect(sentence).toContain('2 waiting for you: 1 task to verify, 1 goal to land; 1 to verify');
+    expect(sentence).toContain('2 waiting for you: 1 task to check, 1 goal to land; 1 to check');
   });
 });
 
 describe('the status sentence (the Running count’s tooltip and the tray’s line)', () => {
   it('counts what runs and what waits for you, then what is ready and who is connected', () => {
     expect(statusSentence(makeScenario(), NOW)).toBe(
-      '1 running, 3 waiting for you: 1 approval, 1 question, 1 blocked agent; 1 ready; 2 agents connected',
+      '1 running, 3 waiting for you: 1 approval, 1 question, 1 stuck agent; 1 not started; 2 agents connected',
     );
     expect(runningCount(makeScenario())).toBe(1);
     expect(runningCount(null)).toBe(0);
@@ -334,7 +334,7 @@ describe('the status sentence (the Running count’s tooltip and the tray’s li
       escalations: [makeEscalation({ status: 'answered' })],
     });
     expect(statusSentence(board, NOW)).toBe(
-      'Paused. 0 running, 0 waiting for you: 3 to verify; 2 failed or lost; 0 agents connected',
+      'Paused. 0 running, 0 waiting for you: 3 to check; 2 failed or stopped; 0 agents connected',
     );
     expect(statusSentence(null, NOW)).toBe('Friday is not connected');
   });

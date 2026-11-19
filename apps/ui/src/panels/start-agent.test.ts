@@ -120,8 +120,8 @@ describe('agent key prefill', () => {
   });
 
   it('says how a host is signed in, and nothing when Friday did not read it', () => {
-    expect(signInLine(claude({ sign_in: 'subscription' }), 'Claude Code')).toContain('nothing is charged per attempt');
-    expect(signInLine(claude({ sign_in: 'api_key' }), 'Claude Code')).toContain('each attempt is charged');
+    expect(signInLine(claude({ sign_in: 'subscription' }), 'Claude Code')).toContain('nothing is charged per try');
+    expect(signInLine(claude({ sign_in: 'api_key' }), 'Claude Code')).toContain('each try of a task is charged');
     expect(signInLine(claude({ sign_in: 'signed_in' }), 'Claude Code')).toBe('Signed in.');
     const none = signInLine(claude({ sign_in: 'none' }), 'Claude Code');
     expect(none).toContain('Friday found no sign-in for Claude Code');
@@ -228,8 +228,8 @@ describe('start agent modal', () => {
       (ctx.transport.to('POST', '/agent-processes')[0]?.body as { options: unknown } | undefined)?.options;
 
     const sub = await start([claude({ sign_in: 'subscription' }), codex()]);
-    expect(sub.m.el.textContent).toContain('Signed in with a subscription: nothing is charged per attempt.');
-    expect(controlBy<HTMLSelectElement>(sub.m.el, 'Spending limit per attempt').value).toBe('none');
+    expect(sub.m.el.textContent).toContain('Signed in with a subscription: nothing is charged per try.');
+    expect(controlBy<HTMLSelectElement>(sub.m.el, 'Spending limit per try').value).toBe('none');
     expect(amount(sub.m.el).disabled).toBe(true);
     buttonBy(sub.m.el, 'Start the agent').click();
     await flush();
@@ -238,7 +238,7 @@ describe('start agent modal', () => {
 
     for (const sign_in of ['api_key', 'unknown', undefined] as const) {
       const paid = await start([claude(sign_in ? { sign_in } : {}), codex()]);
-      expect(controlBy<HTMLSelectElement>(paid.m.el, 'Spending limit per attempt').value, String(sign_in)).toBe('set');
+      expect(controlBy<HTMLSelectElement>(paid.m.el, 'Spending limit per try').value, String(sign_in)).toBe('set');
       expect(amount(paid.m.el).value).toBe('5');
       buttonBy(paid.m.el, 'Start the agent').click();
       await flush();
@@ -248,11 +248,11 @@ describe('start agent modal', () => {
 
     // The person's own choice is not replaced when the hosts are checked again.
     const own = await start([claude({ sign_in: 'subscription' }), codex()]);
-    choose(controlBy<HTMLSelectElement>(own.m.el, 'Spending limit per attempt'), 'set');
+    choose(controlBy<HTMLSelectElement>(own.m.el, 'Spending limit per try'), 'set');
     type(amount(own.m.el), '12');
     buttonBy(own.m.el, 'Check again').click();
     await flush();
-    expect(controlBy<HTMLSelectElement>(own.m.el, 'Spending limit per attempt').value).toBe('set');
+    expect(controlBy<HTMLSelectElement>(own.m.el, 'Spending limit per try').value).toBe('set');
     expect(amount(own.m.el).value).toBe('12');
     own.m.destroy();
   });
@@ -517,13 +517,13 @@ describe('changing a remembered agent', () => {
     expect(controlBy(m.el, 'Agent key').value).toBe('claude-1');
     expect(controlBy(m.el, 'Role').value).toBe('backend');
     // Its own limit stands: a subscription's sign-in does not replace what a person set.
-    expect(controlBy<HTMLSelectElement>(m.el, 'Spending limit per attempt').value).toBe('set');
+    expect(controlBy<HTMLSelectElement>(m.el, 'Spending limit per try').value).toBe('set');
     expect(amount(m.el).value).toBe('1.5');
-    expect(m.el.textContent).toContain('A new spending limit applies from the agent’s next attempt.');
+    expect(m.el.textContent).toContain('A new spending limit applies from the agent’s next try.');
     expect(m.el.textContent).toContain('Everything else applies the next time it starts');
     expect(m.el.textContent).not.toContain('Open the model choices');
 
-    choose(controlBy<HTMLSelectElement>(m.el, 'Spending limit per attempt'), 'none');
+    choose(controlBy<HTMLSelectElement>(m.el, 'Spending limit per try'), 'none');
     type(controlBy(m.el, 'Role'), 'frontend');
     buttonBy(m.el, 'Save').click();
     await flush();
@@ -536,7 +536,7 @@ describe('changing a remembered agent', () => {
     expect(ctx.transport.to('POST', '/agent-processes')).toHaveLength(0);
     expect(ctx.toasts.at(-1)).toEqual({
       kind: 'success',
-      text: 'Saved. A new spending limit applies from the next attempt of claude-1; the rest from its next start (Stop, then Start again)',
+      text: 'Saved. A new spending limit applies from the next try of claude-1; the rest from its next start (Stop, then Start again)',
     });
     expect(closed).toBe(1);
     m.destroy();

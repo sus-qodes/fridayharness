@@ -134,7 +134,8 @@ describe('task card', () => {
     const note = el.querySelector('.nd-note') as HTMLElement;
     expect(note.textContent).toContain('The agent needs you');
     expect(note.textContent).not.toContain(BIDI);
-    expect(el.querySelector('.nd-status')?.textContent).toContain('blocked: needs you');
+    // One set of status words (2026-11-19): a task that waits for the person says so first.
+    expect(el.querySelector('.nd-status')?.textContent).toBe('Needs you· the agent is stuck');
     expect(el.dataset.status).toBe('WAITING');
     expect(el.getAttribute('role')).toBe('group');
     expect(el.tabIndex).toBe(0);
@@ -182,15 +183,16 @@ describe('task card', () => {
     const ctx = makeContext();
     const node = createTaskNode(ctx, taskModel({ tool_calls: 12 }));
     const tools = node.el.querySelector('.nd-tools') as HTMLElement;
-    expect(tools.textContent).toBe('12 tools');
-    expect(tools.title).toContain('Tool calls');
-    expect(tools.title).toContain('every attempt');
+    // In a person's words (2026-11-19): actions and tries, not tool calls and attempts.
+    expect(tools.textContent).toBe('12 actions');
+    expect(tools.title).toContain('Actions the agent finished');
+    expect(tools.title).toContain('every try');
     node.update(taskModel({ tool_calls: 13 }));
-    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('13 tools');
+    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('13 actions');
     node.update(taskModel({ tool_calls: 1 }));
-    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('1 tool');
+    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('1 action');
     node.update(taskModel({ tool_calls: 0 }));
-    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('0 tools');
+    expect(node.el.querySelector('.nd-tools')?.textContent).toBe('0 actions');
   });
 
   it('shows "—" until the line counts answer, then updates in place', () => {
@@ -215,7 +217,7 @@ describe('task card', () => {
     const lost = createTaskNode(ctx, taskModel({ status: 'HARNESS_LOST' }));
     expect(lost.el.style.getPropertyValue('--nd-status')).toBe('var(--color-amber)');
     expect(statusColor('RUNNING')).toBe('var(--status-running)');
-    expect(lost.el.textContent).toContain('Agent lost');
+    expect(lost.el.textContent).toContain('Agent stopped');
   });
 
   it('offers the actions each state allows', () => {
@@ -470,7 +472,7 @@ describe('goal card', () => {
       proposed: makePlan({ version: 2, status: 'PROPOSED' }),
     });
     const node = createGoalNode(ctx, { group: g });
-    expect(node.el.textContent).toContain('2 integrated · 1 conflicted');
+    expect(node.el.textContent).toContain('2 merged · 1 clashes with other work');
     expect(node.el.textContent).toContain('v2 proposed');
     click(node.el.querySelector('[data-action="land"]'));
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'land', id: g.goal.goal_id });
@@ -797,7 +799,9 @@ describe('goal card', () => {
     expect(progressPercent({ completed: 0, total: 0 })).toBe(0);
     expect(progressPercent({ completed: 2, total: 3 })).toBe(67);
     expect(integrationText({ integrated: 0, conflicted: 0, failed: 0, not_needed: 0 })).toBeNull();
-    expect(integrationText({ integrated: 0, conflicted: 0, failed: 2, not_needed: 1 })).toBe('2 failed · 1 not needed');
+    expect(integrationText({ integrated: 0, conflicted: 0, failed: 2, not_needed: 1 })).toBe(
+      '2 could not merge · 1 had nothing to merge',
+    );
   });
 });
 

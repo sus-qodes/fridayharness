@@ -97,6 +97,9 @@ export interface WorktreeRefresh {
   marked?: boolean;
 }
 
+/** The words of the commit that takes a goal's newer work into a task's folder. */
+const TAKE_IN = "Take in the goal's other work";
+
 /**
  * Merge a goal revision, then replay the recorded dirty delta without committing that delta.
  *
@@ -134,14 +137,15 @@ export async function refreshWorktree(opts: {
     .split('\n')
     .filter(Boolean);
   const content = await root.contentTree();
-  const saved = await snapshotWorktree(root.root, `Friday: preserve edits before refreshing ${opts.taskId}`);
+  // The words of these commits are a person's (2026-11-19): they can end up in the project's history.
+  const saved = await snapshotWorktree(root.root, "Work in progress, kept before taking in the goal's other work");
   if (saved) result.preserved_ref = await preserveCommit(root.root, preservedPrefix(opts.taskId), 'refresh', saved);
   const merged = await mergeJoining(root.root, from, goal);
   const head = merged.conflicts.length
     ? from
     : (await isAncestor(root.root, from, goal))
       ? goal
-      : await commitTree(root.root, merged.tree, [from, goal], `Friday: refresh ${opts.taskId} from goal ${goal}`);
+      : await commitTree(root.root, merged.tree, [from, goal], TAKE_IN);
   const replayed = saved && !merged.conflicts.length ? await mergeCommits(root.root, head, saved) : null;
   const conflicts = [...new Set([...merged.conflicts, ...(replayed?.conflicts ?? [])])];
   if (conflicts.length) {
@@ -171,9 +175,7 @@ export async function refreshWorktree(opts: {
       root.root,
       both.tree,
       [mine, goal],
-      left
-        ? `Friday: merge goal ${goal} into ${opts.taskId}, ${left} file(s) left for its agent`
-        : `Friday: refresh ${opts.taskId} from goal ${goal}`,
+      left ? `${TAKE_IN}; ${left} file(s) hold both versions, for the agent to finish` : TAKE_IN,
     );
     const now = await root.contentTree();
     if (now.head !== from || now.tree !== content.tree)
@@ -188,7 +190,7 @@ export async function refreshWorktree(opts: {
     return result;
   }
   const restored = replayed
-    ? await commitTree(root.root, replayed.tree, [head], `Friday: replay preserved edits of ${opts.taskId}`)
+    ? await commitTree(root.root, replayed.tree, [head], 'Put back the work in progress')
     : null;
   const current = await root.contentTree();
   const savedTree = saved ? (await runGit(root.root, ['rev-parse', `${saved}^{tree}`])).stdout.trim() : content.tree;

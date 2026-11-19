@@ -17,7 +17,7 @@ import { errorText, nextId, taskLine } from './common.js';
 export const RECOVERY_ACTIONS: Record<string, { label: string; explain: string }> = {
   reconnect: { label: 'Wait for the session', explain: 'The agent’s session may still come back and resume.' },
   reassign: { label: 'Reassign', explain: 'Give the task to another agent; it continues from the preserved work.' },
-  restart: { label: 'Restart', explain: 'Start a new attempt; the earlier work is preserved first.' },
+  restart: { label: 'Restart', explain: 'Start a new try; the earlier work is kept first.' },
   rebind: {
     label: 'Continue in its new session',
     explain: 'The agent came back in a new session: the task goes on there.',

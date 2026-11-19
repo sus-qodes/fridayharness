@@ -26,7 +26,7 @@ export const ONBOARDING_STEPS: readonly TourStep[] = [
     id: 'welcome',
     target: null,
     title: 'Hello, I am Friday',
-    body: 'I turn what you want into plans, tasks and verified code. I will walk you around — four stops, two minutes, and you know the whole loop.',
+    body: 'I turn what you want into plans, tasks and checked code. I will walk you around — four stops, two minutes, and you know the whole loop.',
     mood: 'happy',
   },
   {
@@ -72,7 +72,7 @@ export const ONBOARDING_STEPS: readonly TourStep[] = [
     id: 'finale',
     target: null,
     title: 'That is the loop',
-    body: 'Goal, plan, tasks, verification, ready to land. Create your first goal and I will take it from there — I will ask when I need you.',
+    body: 'Goal, plan, tasks, checks, ready to land. Create your first goal and I will take it from there — I will ask when I need you.',
     nextLabel: 'Done',
     mood: 'happy',
   },

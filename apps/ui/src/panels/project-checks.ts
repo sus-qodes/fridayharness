@@ -20,7 +20,7 @@ import type {
 import type { AppContext } from '../shell/context.js';
 import { button, h, replace } from '../ui/dom.js';
 import { icon } from '../ui/svg.js';
-import { badge, errorOf, note, plain, projectPath, type Teardown } from './common.js';
+import { badge, errorOf, note, plain, projectPath, select, type Teardown } from './common.js';
 
 /** A kind of check, as a person says it. */
 const KIND_WORDS: Record<string, string> = {
@@ -48,19 +48,39 @@ export function tookWords(ms: number | null): string {
   return s < 90 ? `${s} s` : `${Math.round(s / 60)} min`;
 }
 
+/** A time limit or a time taken, exactly: "45 s", "2 min", "1 min 56 s". */
+export function timeWords(ms: number): string {
+  if (ms < 1000) return 'under a second';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  return s % 60 ? `${m} min ${s % 60} s` : `${m} min`;
+}
+
+/** The time limits offered, in minutes (2026-11-19). */
+export const LIMIT_MINUTES = [1, 2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 45, 60] as const;
+
 /**
  * What a finished trial means, in one sentence: whether an agent's work can be judged fairly. A
- * required check that fails on the untouched project would fail every task, whatever the work.
+ * required check that fails on the untouched project would fail every task, whatever the work. One
+ * that ran out of time is said as that: it needs more time, not repair (2026-11-19).
  */
 export function trialVerdict(t: CheckTrialView): { tone: 'good' | 'warn' | 'danger'; text: string } | null {
   if (t.status === 'failed') return { tone: 'danger', text: t.problem ?? 'The checks could not be tried.' };
   if (t.status !== 'done') return null;
-  const failed = t.checks.filter((c) => c.status === 'failed');
+  const slow = t.checks.filter((c) => c.status === 'failed' && c.timed_out);
+  const failed = t.checks.filter((c) => c.status === 'failed' && !c.timed_out);
   const must = failed.filter((c) => c.required);
   if (must.length) {
     return {
       tone: 'danger',
       text: `${must.map((c) => `“${plain(c.name, 60)}”`).join(', ')} ${must.length === 1 ? 'fails' : 'fail'} before any agent has changed anything. Every task would be sent back for it, whatever the work: put it right first, or make it advisory.`,
+    };
+  }
+  if (slow.length) {
+    return {
+      tone: 'warn',
+      text: `${slow.map((c) => `“${plain(c.name, 60)}”`).join(', ')} ran out of time before finishing. Give ${slow.length === 1 ? 'it' : 'them'} a longer time limit above, then run the checks again.`,
     };
   }
   if (failed.length) {
@@ -96,6 +116,7 @@ export function projectChecksCard(ctx: AppContext, td: Teardown): HTMLElement {
   /** Follows a running trial until it ends; an older daemon has none, and then nothing is offered. */
   async function followTrial() {
     polling = null;
+    const was = trial?.status;
     try {
       const got = (await ctx.api.checkTrial()) as Partial<CheckTrialView> | null;
       trial = got && typeof got.status === 'string' && Array.isArray(got.checks) ? (got as CheckTrialView) : null;
@@ -105,6 +126,8 @@ export function projectChecksCard(ctx: AppContext, td: Teardown): HTMLElement {
     if (td.done) return;
     render();
     if (trial?.status === 'running') polling = setTimeout(() => void followTrial(), TRIAL_POLL_MS);
+    // A trial that just ended measured the checks: their times, and the limits they call for.
+    else if (was === 'running' && !busy) void load();
   }
 
   async function tryChecks() {
@@ -120,11 +143,13 @@ export function projectChecksCard(ctx: AppContext, td: Teardown): HTMLElement {
     const mark =
       c.status === 'passed'
         ? badge('passed', 'good')
-        : c.status === 'failed'
-          ? badge('failed', c.required ? 'danger' : 'warn')
-          : c.status === 'running'
-            ? badge('running…', 'info')
-            : badge('waiting', 'muted');
+        : c.status === 'failed' && c.timed_out
+          ? badge('ran out of time', 'warn')
+          : c.status === 'failed'
+            ? badge('failed', c.required ? 'danger' : 'warn')
+            : c.status === 'running'
+              ? badge('running…', 'info')
+              : badge('waiting', 'muted');
     return h(
       'li',
       { class: 'pn-item pn-pc-item pn-pc-trial-row', dataset: { status: c.status } },
@@ -201,7 +226,12 @@ export function projectChecksCard(ctx: AppContext, td: Teardown): HTMLElement {
   }
 
   async function change(
-    what: { add?: string[]; remove?: string[]; strength?: { name: string; required: boolean } },
+    what: {
+      add?: string[];
+      remove?: string[];
+      strength?: { name: string; required: boolean };
+      limit?: { name: string; minutes: number };
+    },
     success: string,
   ) {
     if (busy) return;
@@ -216,6 +246,65 @@ export function projectChecksCard(ctx: AppContext, td: Teardown): HTMLElement {
       ctx.refresh();
     }
     render();
+  }
+
+  /**
+   * A check's time limit, changed here (2026-11-19: the way out was editing config.yaml by hand),
+   * with the longest it took lately and, when that is close to the limit, a longer one in one click.
+   */
+  function timeLine(c: ProjectCheck): HTMLElement | null {
+    if (typeof c.timeout_ms !== 'number') return null;
+    const limit = c.timeout_ms;
+    const name = plain(c.name, 60);
+    const minutes: number[] = [...LIMIT_MINUTES];
+    const whole = limit % 60_000 === 0 && minutes.includes(limit / 60_000);
+    const options = [
+      ...(whole ? [] : [{ value: String(limit), label: timeWords(limit), disabled: true }]),
+      ...minutes.map((m) => ({ value: String(m * 60_000), label: `${m} min` })),
+    ];
+    const pick = select(
+      options,
+      String(limit),
+      (v) => {
+        const m = Number(v) / 60_000;
+        if (Number.isInteger(m)) void change({ limit: { name: c.name, minutes: m } }, `“${name}” now has ${m} min`);
+      },
+      { class: 'select pn-pc-limit', disabled: busy, aria: { label: `Time limit of ${name}` } },
+    );
+    const took = typeof c.took_ms === 'number' ? c.took_ms : null;
+    const want = typeof c.suggested_ms === 'number' && c.suggested_ms > limit ? c.suggested_ms : null;
+    return h(
+      'div',
+      { class: 'pn-pc-time', dataset: { limit: String(limit) } },
+      h('label', { class: 'pn-pc-time-label' }, 'Time limit', pick),
+      h(
+        'span',
+        { class: 'muted' },
+        took === null ? 'Not run yet.' : c.ran_out ? 'It ran out of time lately.' : `Took ${timeWords(took)} at most.`,
+      ),
+      want
+        ? h(
+            'div',
+            { class: 'pn-pc-suggest', dataset: { suggested: String(want) } },
+            h(
+              'span',
+              null,
+              c.ran_out
+                ? 'A longer limit lets it finish.'
+                : 'Close to its limit: checks take longer while agents work at the same time.',
+            ),
+            button(
+              `Give it ${timeWords(want)}`,
+              () =>
+                void change(
+                  { limit: { name: c.name, minutes: want / 60_000 } },
+                  `“${name}” now has ${timeWords(want)}`,
+                ),
+              { class: 'btn', disabled: busy, dataset: { action: 'use-suggested-limit' } },
+            ),
+          )
+        : null,
+    );
   }
 
   function have(c: ProjectCheck): HTMLElement {
@@ -250,6 +339,7 @@ export function projectChecksCard(ctx: AppContext, td: Teardown): HTMLElement {
         disabled: busy,
         ariaLabel: `Remove the check ${plain(c.name, 60)}`,
       }),
+      timeLine(c),
     );
   }
 

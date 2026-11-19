@@ -5,6 +5,8 @@ import {
   agentIdentity,
   type ContentTree,
   changedBetween,
+  commitMessage,
+  commitSubject,
   commitTree,
   GitRoot,
   moveRef,
@@ -27,8 +29,8 @@ import {
   relatedTests,
   scanCredentials,
   selectChecks,
-  summarizeOutcome,
 } from '@friday/verification';
+import { runCheckWithSecondTry, timedSummary } from './check-time.js';
 import {
   CLEAN_INSTALL_ARGS,
   CLEAN_INSTALL_COMMAND,
@@ -556,7 +558,12 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
           git.root,
           kept,
           [base],
-          `${task.summary}\n\nFriday task ${taskId}, verified in the project folder.`,
+          // Plain words, no ids (2026-11-19): it lands in the project's history.
+          commitMessage(
+            commitSubject(task.summary),
+            task.summary,
+            'Made in the project folder. Checked by Friday: its checks passed.',
+          ),
           agentIdentity(agentKey),
         );
         await moveRef(git.root, verifiedRef(taskId, verification_id), commit, null);
@@ -651,8 +658,10 @@ async function runConfigured(
   },
 ): Promise<boolean> {
   const { state, project, logger } = ctx;
-  // In the execution profile (ADR-0029 §6): the checks run code an agent may have written.
-  const outcome = await runCheckInProfile(
+  // In the execution profile (ADR-0029 §6): the checks run code an agent may have written. One that
+  // runs out of time is tried once more with twice the time (2026-11-19): a busy computer is not
+  // the work failing.
+  const timed = await runCheckWithSecondTry(
     ctx.profile(),
     {
       name: c.name,
@@ -665,11 +674,17 @@ async function runConfigured(
     },
     ctx.groups,
   );
+  const { outcome } = timed;
+  const said = timedSummary(c.name, timed, c.timeoutMs);
   const artifact = state.artifacts?.storeText(
     project.project_id,
     'verification',
     `$ ${c.command} ${c.args.join(' ')}\n(in ${c.cwd})\n${outcome.output}`,
   );
+  const details = {
+    ...(c.files ? { files: c.files } : {}),
+    ...(said.finding ? { findings: [said.finding] } : {}),
+  };
   c.record({
     name: c.name,
     kind: c.kind,
@@ -677,11 +692,16 @@ async function runConfigured(
     status: outcome.passed ? 'PASSED' : 'FAILED',
     exit_code: outcome.exit_code,
     artifact_ref: artifact ? `artifact:${artifact.artifact_id}` : null,
-    summary: summarizeOutcome(outcome),
+    summary: said.summary,
     duration_ms: outcome.duration_ms,
-    details: c.files ? { files: c.files } : null,
+    details: Object.keys(details).length ? details : null,
   });
-  logger.info('verification check finished', { check: c.name, passed: outcome.passed, ms: outcome.duration_ms });
+  logger.info('verification check finished', {
+    check: c.name,
+    passed: outcome.passed,
+    ms: outcome.duration_ms,
+    ...(timed.first_limit_ms !== null ? { second_try_after_ms: timed.first_limit_ms } : {}),
+  });
   return outcome.passed;
 }
 

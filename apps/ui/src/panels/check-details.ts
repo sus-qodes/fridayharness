@@ -34,6 +34,17 @@ export function findingsOf(check: Pick<VerificationCheckView, 'details'>): Verif
   return [...all].sort((a, b) => Number(b.severity === 'fail') - Number(a.severity === 'fail'));
 }
 
+/**
+ * Whether a check failed only because it ran out of time, also on Friday's second try with twice
+ * the time (2026-11-19): said as that, not as failed work.
+ */
+export function ranOutOfTime(check: Pick<VerificationCheckView, 'status' | 'details'>): boolean {
+  return (
+    check.status === 'FAILED' &&
+    (check.details?.findings ?? []).some((f) => f.rule === 'check.ran_out_of_time' && f.severity === 'fail')
+  );
+}
+
 /** Whether a check's summary only repeats its findings as rule codes ("failed: diff.outside_scope"). */
 export function summaryIsCodes(check: Pick<VerificationCheckView, 'summary' | 'details' | 'origin'>): boolean {
   return check.origin === 'friday' && findingsOf(check).length > 0;

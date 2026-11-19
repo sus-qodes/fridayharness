@@ -165,7 +165,7 @@ export function diffNotices(memory: NoticeMemory, board: UiSnapshot, now: number
       memory.seen.add(item.key);
       notices.push({
         key: item.key,
-        title: 'Work is ready for you to verify',
+        title: 'Work is ready for you to check',
         body: `${item.task.agent_key ? `${short(item.task.agent_key, 40)}: ` : ''}${short(item.task.summary)}`,
         taskId: item.taskId,
       });

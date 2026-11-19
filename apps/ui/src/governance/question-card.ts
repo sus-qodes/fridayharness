@@ -15,6 +15,7 @@ import { blockSentence, hostBlocks, hostName, liftLabel } from '../model/host-bl
 import { defaultModel, hostLabel, modelLabel, modelName, usableModels } from '../model/models.js';
 import { fixedInSettings, PLANNER_FAILURES, plannerTrouble, plannerTroubleWords } from '../model/planner-words.js';
 import { kindWord, routingBlockWords } from '../model/routing-words.js';
+import { MERGE_WORDS, wordsFor } from '../model/status.js';
 import { hasHidden, visible } from '../model/text.js';
 import { cancelTask } from '../shell/cancel-task.js';
 import { type AppContext, type Component, openDrawer, openModal } from '../shell/context.js';
@@ -388,7 +389,7 @@ function recoveryBody(kit: Kit): Built {
         h(
           'p',
           { class: 'field-hint' },
-          'Nothing runs again on its own here: another attempt at the same limit would stop at the same place.',
+          'Nothing runs again on its own here: another try at the same limit would stop at the same place.',
         ),
         h('div', { class: 'gv-actions' }, raise, other),
       ]),
@@ -977,7 +978,7 @@ function checksBody(kit: Kit): Built {
       h(
         'p',
         { class: 'field-hint' },
-        'Install the program the check needs, or correct the check in Settings. Then send the task back: the agent reports it again and it is checked. Friday sends nothing back on its own here: another attempt would end the same way.',
+        'Install the program the check needs, or correct the check in Settings. Then send the task back: the agent reports it again and it is checked. Friday sends nothing back on its own here: another try would end the same way.',
       ),
       taskId ? h('div', { class: 'gv-actions' }, open, rework, cancel) : null,
     ]),
@@ -1172,7 +1173,7 @@ function setupBody(kit: Kit): Built {
       h(
         'p',
         { class: 'field-hint' },
-        'Fix what kept it from installing (the network, a registry, a lockfile), then install again. Friday sends nothing back on its own here: another attempt would fail the same way.',
+        'Fix what kept it from installing (the network, a registry, a lockfile), then install again. Friday sends nothing back on its own here: another try would fail the same way.',
       ),
       taskId ? h('div', { class: 'gv-actions' }, install, rework, open, cancel) : null,
       result,
@@ -1333,20 +1334,21 @@ async function integrate(kit: Kit, b: HTMLButtonElement, repaired: boolean): Pro
   b.disabled = true;
   setText(
     kit.status,
-    repaired ? 'Integrating your repair… (checks may take a while)' : 'Integrating… (checks may take a while)',
+    repaired ? 'Merging your repair… (checks may take a while)' : 'Merging… (checks may take a while)',
   );
-  const r = await ctx.act(repaired ? 'Integrate the repair' : 'Integrate again', () =>
-    ctx.api.integrate(taskId, repaired),
-  );
+  const r = await ctx.act(repaired ? 'Merge the repair' : 'Merge again', () => ctx.api.integrate(taskId, repaired));
   b.disabled = false;
   if (!r) {
     setText(kit.status, '');
     return;
   }
   const s = r.integration?.status;
-  if (s === 'integrated' || s === 'not_needed') kit.done(s === 'integrated' ? 'Integrated' : 'Nothing to integrate');
+  if (s === 'integrated' || s === 'not_needed') kit.done(wordsFor(MERGE_WORDS, s));
   else {
-    setText(kit.status, `Integration ${s ?? 'ended'}: ${cleanText(r.integration?.summary ?? 'see the task')}`);
+    setText(
+      kit.status,
+      `${wordsFor(MERGE_WORDS, s ?? 'failed')}: ${cleanText(r.integration?.summary ?? 'see the task')}`,
+    );
     ctx.refresh();
   }
 }

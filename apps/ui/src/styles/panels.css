@@ -1192,6 +1192,37 @@
   border-color: rgba(245, 158, 11, 0.45);
 }
 
+/* A check's time limit, under its row (2026-11-19). */
+.pn-pc-time {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: var(--text-caption);
+}
+
+.pn-pc-time-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dim);
+}
+
+.pn-pc-limit {
+  min-width: 84px;
+  padding: 2px 6px;
+}
+
+.pn-pc-suggest {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  color: #fde68a;
+}
+
 .pn-pc-trial {
   margin: 12px 0 4px;
   padding-top: 12px;

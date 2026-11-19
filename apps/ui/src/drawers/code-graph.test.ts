@@ -150,7 +150,7 @@ describe('the code graph drawer', () => {
     expect(panel?.textContent).toContain('backend/src/checkout.ts');
     expect(panel?.textContent).toContain('Imports (1)');
     expect(panel?.textContent).toContain('Imported by (1)');
-    expect(panel?.textContent).toContain('In the write scope of');
+    expect(panel?.textContent).toContain('A file these tasks may change');
     expect(panel?.textContent).toContain(`Checkout ${IMG}`);
     expect(drawer.el.querySelector('img')).toBeNull();
     buttonNamed(drawer.el, 'Open in VS Code')?.click();

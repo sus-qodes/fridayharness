@@ -330,7 +330,7 @@ describe('agents drawer', () => {
     );
     expect(first.textContent).toContain('starts with Friday');
     // The limit in words, and Edit beside the process controls for an agent Friday remembers.
-    expect(first.textContent).toContain('stops an attempt at $1');
+    expect(first.textContent).toContain('stops a try at $1');
     expect(first.textContent).not.toContain('max budget usd');
     expect(shownButtons(first)).toEqual(['Stop', 'Edit', 'Forget']);
     expect((first.querySelector('.pn-output') as HTMLElement).hidden).toBe(false);
@@ -505,7 +505,7 @@ describe('agents drawer', () => {
     const d = agentsDrawer(ctx, { kind: 'agents' });
     await vi.advanceTimersByTimeAsync(0);
     const row = rows(d.el)[0] as HTMLElement;
-    expect(row.textContent).toContain('no spending limit per attempt');
+    expect(row.textContent).toContain('no spending limit per try');
     expect(row.textContent).not.toContain('null');
     buttonBy(row, 'Edit').click();
     // The drawer closes first: a dialog over a drawer leaves the drawer without input.

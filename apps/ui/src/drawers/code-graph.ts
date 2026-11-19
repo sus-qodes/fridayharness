@@ -97,7 +97,7 @@ export function createCodeGraph(ctx: AppContext, request: DrawerRequest): Compon
   const legend = h(
     'ul',
     { class: 'dr-legend', aria: { label: 'Colours' } },
-    h('li', null, h('span', { class: 'dr-swatch dr-g-tone-scope' }), 'In the write scope of a running task'),
+    h('li', null, h('span', { class: 'dr-swatch dr-g-tone-scope' }), 'Among the files a working task may change'),
     h('li', null, h('span', { class: 'dr-swatch dr-g-tone-contract' }), 'Shared contract'),
     h('li', null, h('span', { class: 'dr-swatch dr-g-tone-test' }), 'Test'),
   );
@@ -306,7 +306,7 @@ export function createCodeGraph(ctx: AppContext, request: DrawerRequest): Compon
         ? h(
             'div',
             { class: 'dr-graph-owners' },
-            h('span', { class: 'muted' }, 'In the write scope of: '),
+            h('span', { class: 'muted' }, 'A file these tasks may change: '),
             h(
               'ul',
               null,

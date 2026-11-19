@@ -7,6 +7,7 @@ import {
   type CheckToAdd,
   editChecksText,
   packageManagerOf,
+  setCheckLimitText,
   setCheckRequiredText,
   suggestChecks,
 } from './project-checks.js';
@@ -263,6 +264,12 @@ describe('a check made required or advisory (2026-11-18)', () => {
       ['lint', false],
     ]);
     expect(advisory.text).toContain('# Friday project configuration.');
+    // Only that one line is added: every other line, comments and their spacing, is as it was.
+    const was = before.split('\n');
+    const now = advisory.text.split('\n');
+    expect(now).toHaveLength(was.length + 1);
+    expect(was.every((l) => now.includes(l))).toBe(true);
+    expect(now.filter((l) => !was.includes(l))).toEqual(['      required: false']);
     // The same again changes nothing; back to required reads as it did before.
     expect(setCheckRequiredText(advisory.text, 'lint', false)).toEqual({ text: advisory.text, changed: false });
     const back = setCheckRequiredText(advisory.text, 'lint', true);
@@ -271,5 +278,53 @@ describe('a check made required or advisory (2026-11-18)', () => {
 
   it('refuses a check the file does not have', () => {
     expect(() => setCheckRequiredText(withTwo(), 'nope', false)).toThrow(/no check named "nope"/);
+  });
+});
+
+// The trial (F8): lint took 116 s of its 120 s while another agent worked; the way out was editing
+// config.yaml by hand. A limit is now set from the app, for one check, in whole minutes.
+describe('a check’s time limit (2026-11-19)', () => {
+  const withTwo = () =>
+    editChecksText(renderInitialConfig('proj_01hzzzzzzzzzzzzzzzzzzzzzzz', 'shop'), { add: [TESTS, LINT] }).text;
+
+  it('sets that one check’s limit, keeps every other value and the comments', () => {
+    const before = withTwo();
+    const set = setCheckLimitText(before, 'lint', 360_000);
+    expect(set.changed).toBe(true);
+    const checks = parseConfig(set.text).verification.checks;
+    expect(checks.map((c) => [c.name, c.timeout_ms])).toEqual([
+      ['tests', 120_000],
+      ['lint', 360_000],
+    ]);
+    expect(set.text).toContain('# Friday project configuration.');
+    expect(set.text).toContain('timeout_ms: 360000');
+    // One line more and nothing else: the comments keep their spacing (the YAML library re-spaced
+    // every one of them).
+    const was = before.split('\n');
+    const now = set.text.split('\n');
+    expect(now).toHaveLength(was.length + 1);
+    expect(was.every((l) => now.includes(l))).toBe(true);
+    // Changed again, the same line changes.
+    const again = setCheckLimitText(set.text, 'lint', 600_000);
+    expect(again.text).toBe(set.text.replace('timeout_ms: 360000', 'timeout_ms: 600000'));
+    // The default, unwritten, is two minutes: setting two minutes writes nothing.
+    expect(setCheckLimitText(before, 'tests', 120_000)).toEqual({ text: before, changed: false });
+    expect(setCheckLimitText(set.text, 'lint', 360_000)).toEqual({ text: set.text, changed: false });
+    const back = setCheckLimitText(set.text, 'lint', 120_000);
+    expect(parseConfig(back.text).verification.checks.map((c) => c.timeout_ms)).toEqual([120_000, 120_000]);
+  });
+
+  it('keeps a file’s Windows line ends', () => {
+    const crlf = withTwo().replace(/\n/g, '\r\n');
+    const set = setCheckLimitText(crlf, 'tests', 300_000);
+    expect(set.text.includes('\n') && !/[^\r]\n/.test(set.text)).toBe(true);
+    expect(parseConfig(set.text).verification.checks[0]?.timeout_ms).toBe(300_000);
+  });
+
+  it('refuses what is not whole minutes from 1 to 60, and a check the file does not have', () => {
+    for (const bad of [0, 30_000, 90_000, 3_660_000, 1.5, Number.NaN]) {
+      expect(() => setCheckLimitText(withTwo(), 'lint', bad)).toThrow(/whole number of minutes, from 1 to 60/);
+    }
+    expect(() => setCheckLimitText(withTwo(), 'nope', 300_000)).toThrow(/no check named "nope"/);
   });
 });

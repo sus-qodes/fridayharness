@@ -411,7 +411,7 @@ describe('checking the work automatically', () => {
     expect(sent(ctx, '/config/settings')).toHaveLength(0);
     expect(sent(ctx, '/policy/trust')).toHaveLength(1);
     ctx.board(makeSnapshot({ verification: { checks: [], auto_on_completion: true, auto_requested: true } }));
-    expect(el.textContent).toContain('Finished work is checked as soon as it is claimed.');
+    expect(el.textContent).toContain('Work is checked as soon as the agent says it is done.');
     td.run();
   });
 
@@ -481,7 +481,7 @@ describe('turning a switch off again (2026-11-17)', () => {
     buttonBy(el, 'Turn off').click();
     await flush();
     expect(sent(ctx, '/config/settings')).toEqual([{ set: { 'verification.auto_on_completion': false } }]);
-    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Finished work waits for you to click Verify' });
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Finished work waits for you to click Check' });
     expect(ctx.confirms).toHaveLength(0);
     expect(sent(ctx, '/policy/trust')).toHaveLength(0);
     expect(ctx.refreshes).toBe(1);
@@ -667,7 +667,7 @@ describe('a switch that says where it stands (2026-11-18)', () => {
     expect(on?.getAttribute('aria-checked')).toBe('true');
     expect(on?.textContent).toBe('On');
     expect(on?.getAttribute('aria-label')).toBe('Turn off');
-    expect(el.textContent).toContain('Finished work is checked as soon as it is claimed.');
+    expect(el.textContent).toContain('Work is checked as soon as the agent says it is done.');
     td.run();
   });
 });

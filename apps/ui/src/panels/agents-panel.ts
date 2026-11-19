@@ -127,8 +127,8 @@ function optionsText(o: Record<string, unknown> | undefined): string {
   for (const [k, v] of Object.entries(o)) {
     // The cap per attempt in words: an amount, or none by a person's choice or a subscription's sign-in.
     if (k === 'max_budget_usd') {
-      if (v === null) parts.push('no spending limit per attempt');
-      else if (typeof v === 'number') parts.push(`stops an attempt at $${v}`);
+      if (v === null) parts.push('no spending limit per try');
+      else if (typeof v === 'number') parts.push(`stops a try at $${v}`);
       continue;
     }
     if (v !== undefined && v !== null && v !== '') parts.push(`${k.replaceAll('_', ' ')} ${String(v)}`);
@@ -347,7 +347,7 @@ export function agentsDrawer(ctx: AppContext, request: DrawerRequest): Component
             title: `Stop ${visible(k)} while it is working?`,
             body: [
               `It is working on “${plain(busy.summary, 160)}”.`,
-              'Its attempt ends. The work so far is kept, and the task waits for a decision in “Waiting for you”: give it to another agent, or start it again.',
+              'This try ends. The work so far is kept, and the task waits for a decision in “Waiting for you”: give it to another agent, or start it again.',
             ],
             confirmLabel: 'Stop the agent',
             cancelLabel: 'Let it work',

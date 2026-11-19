@@ -213,9 +213,9 @@ export function updateBody(
 export function signInLine(info: AgentHost | undefined, label: string): string | null {
   switch (info?.sign_in) {
     case 'subscription':
-      return 'Signed in with a subscription: nothing is charged per attempt.';
+      return 'Signed in with a subscription: nothing is charged per try.';
     case 'api_key':
-      return 'Signed in with an API key or a cloud account: each attempt is charged to it.';
+      return 'Signed in with an API key or a cloud account: each try of a task is charged to it.';
     case 'signed_in':
       return 'Signed in.';
     case 'none':
@@ -360,7 +360,7 @@ export function startAgentModal(
       const limit = select<AgentForm['claude']['limit']>(
         [
           { value: 'none', label: 'No limit' },
-          { value: 'set', label: 'Stop an attempt at (USD)' },
+          { value: 'set', label: 'Stop a try at (USD)' },
         ],
         form.claude.limit,
         (v) => {
@@ -370,8 +370,8 @@ export function startAgentModal(
           update();
         },
       );
-      budgetField = field('Spending limit per attempt', limit, {
-        hint: 'A limit matters when each attempt is charged (an API key). With a subscription nothing is charged per attempt.',
+      budgetField = field('Spending limit per try', limit, {
+        hint: 'A limit matters when each try is charged (an API key). With a subscription nothing is charged per try.',
       });
       budgetField.el.append(h('div', { class: 'pn-limit-amount' }, budget));
       optionsBox.replaceChildren(h('div', { class: 'pn-grid2' }, field('Effort', effort).el, budgetField.el));
@@ -584,7 +584,7 @@ export function startAgentModal(
         onError,
         (x) =>
           x.running
-            ? `Saved. A new spending limit applies from the next attempt of ${was.agent_key}; the rest from its next start (Stop, then Start again)`
+            ? `Saved. A new spending limit applies from the next try of ${was.agent_key}; the rest from its next start (Stop, then Start again)`
             : `Saved: ${was.agent_key} starts with it next time`,
       );
       done = Boolean(r);
@@ -614,7 +614,7 @@ export function startAgentModal(
     autostartBox,
     note(
       editing
-        ? 'A new spending limit applies from the agent’s next attempt. Everything else applies the next time it starts; what it runs with now stays as it is.'
+        ? 'A new spending limit applies from the agent’s next try. Everything else applies the next time it starts; what it runs with now stays as it is.'
         : 'Friday remembers this agent; with "Start with Friday" it starts whenever Friday does.',
     ),
     options,

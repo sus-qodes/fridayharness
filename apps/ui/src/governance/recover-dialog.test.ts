@@ -113,7 +113,7 @@ describe('recovery dialog', () => {
       },
     });
     const rows = [...d.el.querySelectorAll('.gv-meta-row')].map((r) => r.textContent);
-    expect(rows[0]).toBe('StatusWaiting (agent error)');
+    expect(rows[0]).toBe('StatusWaiting (the agent hit an error)');
     expect(rows.find((r) => r?.startsWith('Session'))).toContain('claude-1 · disconnected');
     expect(d.el.querySelector('.gv-meta-row dd')?.getAttribute('title')).toBe('WAITING (agent_error)');
     d.destroy();

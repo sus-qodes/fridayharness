@@ -123,12 +123,12 @@ describe('the "Waiting for you" tray', () => {
     });
     const tray = mountDecisionsTray(ctx, host);
     const text = host.textContent ?? '';
-    expect(text).toContain('Work to verify');
+    expect(text).toContain('Work to check');
     expect(text).toContain(`claude-1 says it is done · Add ${HOSTILE}`);
     expect(text).toContain('Goal ready to land');
     expect(host.querySelector('img')).toBeNull();
     const rows = [...host.querySelectorAll<HTMLButtonElement>('.gv-tray-list button')];
-    rows.find((b) => b.textContent?.includes('Work to verify'))?.click();
+    rows.find((b) => b.textContent?.includes('Work to check'))?.click();
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'verify', id: 't1' });
     rows.find((b) => b.textContent?.includes('Goal ready to land'))?.click();
     expect(ctx.store.select('ui').modal).toEqual({ kind: 'land', id: 'goal_done' });

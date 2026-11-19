@@ -372,6 +372,41 @@ export function setCheckRequiredText(
   required: boolean,
   source = 'config.yaml',
 ): { text: string; changed: boolean } {
+  return setCheckValueText(text, name, 'required', required, (c) => c.required !== false, source);
+}
+
+/**
+ * `text` (a config.yaml) with one check's time limit set (2026-11-19), in whole minutes from one
+ * to sixty: set where the check stands and read back, as `setCheckRequiredText` does.
+ */
+export function setCheckLimitText(
+  text: string,
+  name: string,
+  timeoutMs: number,
+  source = 'config.yaml',
+): { text: string; changed: boolean } {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 60_000 || timeoutMs > 3_600_000 || timeoutMs % 60_000) {
+    throw new FridayError('invalid_request', 'a time limit set here is a whole number of minutes, from 1 to 60');
+  }
+  return setCheckValueText(
+    text,
+    name,
+    'timeout_ms',
+    timeoutMs,
+    (c) => (typeof c.timeout_ms === 'number' ? c.timeout_ms : 120_000),
+    source,
+  );
+}
+
+/** One value of one check set, or nothing written: every other value reads as it did. */
+function setCheckValueText(
+  text: string,
+  name: string,
+  key: 'required' | 'timeout_ms',
+  value: boolean | number,
+  current: (check: Raw) => unknown,
+  source: string,
+): { text: string; changed: boolean } {
   const bom = text.startsWith('﻿') ? '﻿' : '';
   const raw = bom ? text.slice(1) : text;
   const newlines = raw.match(/\r\n|\n/g) ?? [];
@@ -385,8 +420,7 @@ export function setCheckRequiredText(
   const have = rawChecks(before);
   const at = have.findIndex((c) => nameOf(c) === name);
   if (at < 0) throw new FridayError('invalid_request', `${source} has no check named "${name}"`);
-  const now = (have[at] as Raw).required !== false;
-  if (now === required) return { text, changed: false };
+  if (current(have[at] as Raw) === value) return { text, changed: false };
   const item = doc.getIn(['verification', 'checks', at], true);
   if (!isMap(item)) {
     throw new FridayError(
@@ -394,18 +428,59 @@ export function setCheckRequiredText(
       `${source}: the check "${name}" is not written as settings; correct the file by hand`,
     );
   }
-  item.set('required', required);
-  const out = doc.toString({ lineWidth: 0 });
   // The old values with exactly this one changed, or nothing is written.
-  const want = have.map((c, i) => (i === at ? { ...(c as Raw), required } : c));
+  const want = have.map((c, i) => (i === at ? { ...(c as Raw), [key]: value } : c));
   const goal = canonical({ ...before, verification: { ...(before.verification as Raw), checks: want } });
-  const got = (parseYaml(out) ?? {}) as Raw;
-  if (canonical({ ...got, verification: { ...(got.verification as Raw), checks: rawChecks(got) } }) !== goal) {
-    throw new FridayError(
-      'invalid_request',
-      `${source} could not be changed without altering other settings; correct the file by hand`,
-    );
+  const reads = (candidate: string): boolean => {
+    try {
+      const got = (parseYaml(candidate) ?? {}) as Raw;
+      const v = got.verification && typeof got.verification === 'object' ? (got.verification as Raw) : {};
+      return canonical({ ...got, verification: { ...v, checks: rawChecks(got) } }) === goal;
+    } catch {
+      return false;
+    }
+  };
+  // The one line, in the text itself, so the rest of the file stays as it was written (2026-11-19:
+  // the YAML library re-spaced every comment of it); the library only when that cannot be done.
+  let out = patchCheckValue(lf, item, key, String(value));
+  if (out === null || !reads(out)) {
+    item.set(key, value);
+    out = doc.toString({ lineWidth: 0 });
+    if (!reads(out)) {
+      throw new FridayError(
+        'invalid_request',
+        `${source} could not be changed without altering other settings; correct the file by hand`,
+      );
+    }
   }
   parseConfig(out, source);
   return { text: `${bom}${crlf ? out.replace(/\n/g, '\r\n') : out}`, changed: true };
+}
+
+type Ranged = { range?: [number, number, number] | null } | null | undefined;
+
+/**
+ * One value of a check written where it stands, in the text: replaced when the key is there, else
+ * a line of its own after the check's last line, under its other keys. Null when the check is laid
+ * out in a way this does not handle (the caller reads the result back either way).
+ */
+function patchCheckValue(text: string, item: unknown, key: string, value: string): string | null {
+  if (!isMap(item) || item.flow) return null;
+  const pair = item.items.find((p) => isScalar(p.key) && p.key.value === key);
+  if (pair) {
+    const v = pair.value as Ranged;
+    if (!isScalar(pair.value) || !v?.range || v.range[1] <= v.range[0]) return null;
+    return `${text.slice(0, v.range[0])}${value}${text.slice(v.range[1])}`;
+  }
+  const first = item.items[0]?.key as Ranged;
+  const last = item.items.at(-1);
+  if (!first?.range || !last) return null;
+  const lead = lineBefore(text, first.range[0]);
+  // The first key after the item's dash, or on a line of its own: the others stand under it.
+  if (!/^ *(- +)?$/.test(lead)) return null;
+  const end = (last.value as Ranged)?.range?.[1] ?? (last.key as Ranged)?.range?.[1];
+  if (end === undefined) return null;
+  const at = lineEndAfter(text, Math.max(first.range[0], end - 1));
+  const head = text.slice(0, at);
+  return `${head}${head.endsWith('\n') ? '' : '\n'}${' '.repeat(lead.length)}${key}: ${value}\n${text.slice(at)}`;
 }

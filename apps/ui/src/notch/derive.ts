@@ -422,13 +422,13 @@ export function runningCount(board: UiSnapshot | null): number {
 const WAITING_WORDS: Record<WaitingKind, [one: string, many: string]> = {
   approval: ['approval', 'approvals'],
   question: ['question', 'questions'],
-  waiting: ['blocked agent', 'blocked agents'],
+  waiting: ['stuck agent', 'stuck agents'],
   turn: ['task for an agent you run', 'tasks for an agent you run'],
   quiet: ['agent that has gone quiet', 'agents that have gone quiet'],
   stopped: ['agent that has stopped', 'agents that have stopped'],
   asking: ['agent asking you in its window', 'agents asking you in their windows'],
   plan: ['proposed plan', 'proposed plans'],
-  verify: ['task to verify', 'tasks to verify'],
+  verify: ['task to check', 'tasks to check'],
   answer: ['answer to read', 'answers to read'],
   land: ['goal to land', 'goals to land'],
   message: ['message to reply to', 'messages to reply to'],
@@ -481,9 +481,9 @@ export function statusSentence(board: UiSnapshot | null, now: number): string {
   // Those listed above as waiting for the person are not counted a second time here.
   const toVerify = Math.max(0, count('READY_FOR_VERIFICATION') - (byKind.get('verify') ?? 0)) + count('VERIFYING');
   const failed = count('FAILED') + count('HARNESS_LOST');
-  if (ready) parts.push(`${ready} ready`);
-  if (toVerify) parts.push(`${toVerify} to verify`);
-  if (failed) parts.push(`${failed} failed or lost`);
+  if (ready) parts.push(`${ready} not started`);
+  if (toVerify) parts.push(`${toVerify} to check`);
+  if (failed) parts.push(`${failed} failed or stopped`);
   const agents = board.agents.filter((a) => a.status !== 'DISCONNECTED' && a.status !== 'TERMINATED').length;
   parts.push(`${plural(agents, 'agent')} connected`);
   return `${head}: ${parts.join('; ')}`;

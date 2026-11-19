@@ -308,13 +308,22 @@ async function changedSince(root: GitRoot, previous: CodeGraph, identity: Source
   return changed;
 }
 
+/**
+ * Whether a path is in one of Friday's own folders (2026-11-19): its hook launcher, its lint file.
+ * They are not the project's code, and the graph leaves them out.
+ */
+export function isFridayOwn(p: string): boolean {
+  const s = p.replaceAll('\\', '/');
+  return s.startsWith('.friday/') || s.startsWith('.agents/.friday/');
+}
+
 /** Builds the graph of an execution root as it is now (ADR-0020 §6). */
 export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promise<CodeGraph> {
   const started = Date.now();
   const cache = opts.cache ?? memoryFactsCache();
   const maxBytes = opts.maxFileBytes ?? 1024 * 1024;
   const identity = opts.identity ?? (await root.identity());
-  const listed = opts.files ? [...opts.files] : await root.files();
+  const listed = (opts.files ? [...opts.files] : await root.files()).filter((f) => !isFridayOwn(f));
   const files = new Set(listed);
   const sameLimit = opts.previous && opts.previous.maxFileBytes === maxBytes;
   const byGit = sameLimit ? await changedSince(root, opts.previous as CodeGraph, identity) : null;

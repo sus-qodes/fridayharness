@@ -96,14 +96,14 @@ describe('raise the limit and continue', () => {
     });
     expect(m.title).toBe('Raise the limit');
     expect(m.el.textContent).toContain(
-      'claude-1 stopped “Add discount codes” at its spending limit of $5 per attempt. The attempt had cost $5.03. The work so far is kept: the next attempt continues from it.',
+      'claude-1 stopped “Add discount codes” at its spending limit of $5 per try. This try had cost $5.03. The work so far is kept: the next try goes on from it.',
     );
     const go = buttonBy(m.el, 'Raise the limit and continue');
     // Nothing can be sent before Friday knows what it remembers of the agent.
     expect(go.disabled).toBe(true);
     await flush();
     expect(go.disabled).toBe(false);
-    expect(controlBy<HTMLSelectElement>(m.el, 'New spending limit per attempt').value).toBe('set');
+    expect(controlBy<HTMLSelectElement>(m.el, 'New spending limit per try').value).toBe('set');
     expect(amount(m.el).value).toBe('10');
     // The same limit again would stop at the same place: said, and not sent.
     type(amount(m.el), '5');
@@ -119,7 +119,7 @@ describe('raise the limit and continue', () => {
     });
     expect(ctx.transport.to('POST', `/tasks/${TASK}/recover`)[0]?.body).toEqual({
       action: 'reassign',
-      reason: "the agent's spending limit per attempt was raised: a limit of $12.5",
+      reason: "the agent's spending limit per try was raised: a limit of $12.5",
     });
     // The limit first, the task after: a task continued at the old limit would stop again.
     const order = ctx.transport.calls.filter((c) => c.method === 'POST').map((c) => c.path.split('/').at(-1));
@@ -139,7 +139,7 @@ describe('raise the limit and continue', () => {
       [`POST /tasks/${TASK}/recover`]: { task: {}, preserved_ref: null },
     });
     await flush();
-    choose(controlBy<HTMLSelectElement>(m.el, 'New spending limit per attempt'), 'none');
+    choose(controlBy<HTMLSelectElement>(m.el, 'New spending limit per try'), 'none');
     expect(amount(m.el).disabled).toBe(true);
     // A wrong amount left in the box does not hold back "No limit".
     buttonBy(m.el, 'Raise the limit and continue').click();

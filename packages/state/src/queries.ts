@@ -475,6 +475,31 @@ export class Queries {
     return toVerificationView(row, checks);
   }
 
+  /**
+   * How long each of the project's own checks took lately (2026-11-19): per name, the longest of
+   * its last ten runs, and whether one of them ran out of time. Targeted runs and Friday's own
+   * checks are left out: they say nothing about a check's time limit.
+   */
+  checkTimes(projectId: string): Map<string, { longest_ms: number; ran_out: boolean; runs: number }> {
+    const rows = this.db
+      .prepare(
+        `SELECT name, duration_ms, details_json FROM verification_checks
+          WHERE project_id = ? AND origin = 'configured' AND duration_ms IS NOT NULL
+          ORDER BY rowid DESC LIMIT 400`,
+      )
+      .all<{ name: string; duration_ms: number; details_json: string | null }>(projectId);
+    const out = new Map<string, { longest_ms: number; ran_out: boolean; runs: number }>();
+    for (const r of rows) {
+      const seen = out.get(r.name) ?? { longest_ms: 0, ran_out: false, runs: 0 };
+      if (seen.runs >= 10) continue;
+      seen.runs += 1;
+      seen.longest_ms = Math.max(seen.longest_ms, r.duration_ms);
+      if (r.details_json?.includes('"check.ran_out_of_time"')) seen.ran_out = true;
+      out.set(r.name, seen);
+    }
+    return out;
+  }
+
   /** The newest packet compiled for an agent about a task: what that agent was given (LESSONS D-49). */
   deliveredPacketId(projectId: string, taskId: string, agentId: string): string | undefined {
     return this.db

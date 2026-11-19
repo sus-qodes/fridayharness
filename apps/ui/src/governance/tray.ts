@@ -186,7 +186,7 @@ export function mountDecisionsTray(
         return { label: `Proposed plan v${item.version}`, sub: truncate(cleanText(item.request), 110) };
       case 'verify':
         return {
-          label: 'Work to verify',
+          label: 'Work to check',
           sub: `${visible(item.task.agent_key ?? 'An agent')} says it is done · ${truncate(cleanText(item.task.summary), 90)}`,
         };
       case 'answer':

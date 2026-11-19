@@ -124,6 +124,14 @@ export interface ProjectCheck {
   command: string;
   args: string[];
   required: boolean;
+  /** Its time limit (2026-11-19; absent from an older daemon). */
+  timeout_ms?: number;
+  /** The longest it took lately (work checked, and the last trial); null when never run. */
+  took_ms?: number | null;
+  /** It ran out of time lately. */
+  ran_out?: boolean;
+  /** The limit those times call for, when longer than the one it has. */
+  suggested_ms?: number | null;
 }
 
 /** One check of a trial of the project's checks. */
@@ -134,6 +142,9 @@ export interface CheckTrialRow {
   status: 'waiting' | 'running' | 'passed' | 'failed';
   summary: string | null;
   duration_ms: number | null;
+  /** It was stopped at its time limit (2026-11-19). */
+  timed_out?: boolean;
+  timeout_ms?: number;
   output_tail: string | null;
 }
 
@@ -596,11 +607,14 @@ export class FridayApi {
     remove?: string[];
     /** One check made required (it must pass) or advisory (shown, and holds nothing back). */
     strength?: { name: string; required: boolean };
+    /** One check's time limit, in whole minutes (2026-11-19). */
+    limit?: { name: string; minutes: number };
   }): Promise<ProjectChecksView & { added: string[]; removed: string[] }> {
     return this.post('/config/checks', {
       add: change.add ?? [],
       remove: change.remove ?? [],
       ...(change.strength ? { strength: change.strength } : {}),
+      ...(change.limit ? { limit: change.limit } : {}),
     });
   }
 

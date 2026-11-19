@@ -12,6 +12,8 @@ import {
   changedBetween,
   checkoutForVerification,
   commitContent,
+  commitMessage,
+  commitSubject,
   commitTree,
   GitRoot,
   isAncestor,
@@ -24,6 +26,31 @@ import {
 } from './index.js';
 
 const ws = useTestWorkspace();
+
+// What Friday leaves in a project's history reads as a person writes it (2026-11-19).
+describe('the words of a commit', () => {
+  it('makes one short line of a person’s words, cut at a word', () => {
+    expect(commitSubject('Raise a to 2')).toBe('Raise a to 2');
+    expect(commitSubject('  Add the login\n  and signup screens  ')).toBe('Add the login and signup screens');
+    expect(commitSubject('')).toBe('Work done with Friday');
+    const long = 'Scaffold apps/owner-web and build the login and signup screens with their tests and routes';
+    const cut = commitSubject(long);
+    expect(cut.length).toBeLessThanOrEqual(72);
+    expect(cut).toBe('Scaffold apps/owner-web and build the login and signup screens with…');
+    // One long word is cut where it must be.
+    expect(commitSubject('x'.repeat(100))).toBe(`${'x'.repeat(71)}…`);
+  });
+
+  it('keeps what the first line left out, then the lines given', () => {
+    expect(commitMessage('Raise a to 2', 'Raise a to 2', 'Checked by Friday.')).toBe(
+      'Raise a to 2\n\nChecked by Friday.',
+    );
+    const long = 'word '.repeat(30).trim();
+    expect(commitMessage(commitSubject(long), long, '', 'Checked by Friday.')).toBe(
+      `${commitSubject(long)}\n\n${long}\n\nChecked by Friday.`,
+    );
+  });
+});
 
 /** A repository with `base`, and branches `one` and `two` that change a.txt and b.txt. */
 async function repo() {

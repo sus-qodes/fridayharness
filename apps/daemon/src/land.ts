@@ -1,6 +1,6 @@
 import { existsSync, rmSync } from 'node:fs';
 import path from 'node:path';
-import { runGit } from '@friday/git';
+import { commitMessage, commitSubject, runGit } from '@friday/git';
 import { type Actor, FridayError } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
@@ -597,9 +597,20 @@ export async function landGoal(
       return result;
     }
 
-    const summary = (state.q.findGoal(pid, goalId)?.objective ?? state.q.findGoal(pid, goalId)?.request ?? '')
-      .replace(/\s+/g, ' ')
-      .slice(0, 72);
+    // Plain words, no ids (2026-11-19): what the goal was, and what its tasks did.
+    const goal = state.q.findGoal(pid, goalId);
+    const objective = goal?.objective ?? goal?.request ?? '';
+    const done = state.q
+      .goalTasks(pid, goalId)
+      .filter((t) => t.status === 'COMPLETED')
+      .map((t) => `- ${commitSubject(t.summary, 100)}`);
+    const message = commitMessage(
+      commitSubject(`Merge: ${objective}`),
+      objective,
+      done.length
+        ? `The work of ${done.length === 1 ? 'one task' : `${done.length} tasks`}, checked by Friday:\n${done.slice(0, 12).join('\n')}${done.length > 12 ? `\n- and ${done.length - 12} more` : ''}`
+        : '',
+    );
     // Files the folder already holds with the goal's content are told to git as such (staged as
     // they are), so the branch moves forward over them without rewriting or refusing them. If the
     // merge does not happen they are unstaged again: the folder is as it was.
@@ -612,7 +623,7 @@ export async function landGoal(
     await stage(['--literal-pathspecs', 'add', '-A']);
     let merge: { code: number; stdout: string; stderr: string };
     try {
-      merge = await runGit(root, ['merge', '--no-edit', '-m', `Land goal ${goalId}: ${summary}`, plan.branch], {
+      merge = await runGit(root, ['merge', '--no-edit', '-m', message, plan.branch], {
         okCodes: [1, 2, 128],
         timeoutMs: MERGE_TIMEOUT_MS,
       });

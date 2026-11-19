@@ -47,14 +47,15 @@ describe('verification wording (FD-29)', () => {
     ]);
     expect(w).toEqual({
       button: 'Run checks',
-      detail: "Runs the project's checks (tests, lint (advisory)), then Friday's scope and credential checks.",
+      detail:
+        "Runs your project's checks (tests, lint (advisory)), then Friday's own: that only the files it was given changed, with no passwords or keys in them.",
       configured: true,
     });
   });
 
   it('says what runs without project checks', () => {
     expect(checksWording([]).detail).toBe(
-      "No project checks are configured: Friday's scope and credential checks will run.",
+      'Your project has no checks of its own set: Friday checks that the agent changed only the files it was given and left no passwords or keys in them.',
     );
   });
 });
@@ -108,13 +109,13 @@ describe('verification panel', () => {
     });
     const m = verifyModal(ctx, { kind: 'verify', id: TID }, () => undefined);
     await flush();
-    expect(m.el.textContent).toContain("Runs the project's checks (tests)");
+    expect(m.el.textContent).toContain("Runs your project's checks (tests)");
     buttonBy(m.el, 'Run checks').click();
     await flush();
     const call = ctx.transport.to('POST', `/tasks/${TID}/verify`)[0];
     expect(call?.body).toEqual({});
     expect(call?.opts?.timeoutMs).toBeGreaterThanOrEqual(300_000);
-    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Verification Passed' });
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Checks passed' });
     expect(m.el.querySelector('.pn-result')?.textContent).toContain('Passed');
     m.destroy();
   });
@@ -243,7 +244,7 @@ describe('verification panel', () => {
     expect(m.el.querySelector('.pn-folder-gone')).toBeNull();
     buttonBy(m.el, 'Run checks').click();
     await flush();
-    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Verification Passed' });
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Checks passed' });
     m.destroy();
   });
 
@@ -276,7 +277,7 @@ describe('verification panel', () => {
     });
     await flush();
     const close = () => [...m.el.querySelectorAll('button')].find((b) => b.textContent === 'Close');
-    expect(m.el.querySelector('.pn-status')?.textContent).toBe('Ready for verification');
+    expect(m.el.querySelector('.pn-status')?.textContent).toBe('Done, to be checked');
     expect(close()?.hidden).toBe(true);
     ctx.board(
       makeSnapshot({
@@ -284,7 +285,7 @@ describe('verification panel', () => {
         tasks: [makeTask({ task_id: TID, status: 'COMPLETED', summary: 'Add discount codes' })],
       }),
     );
-    expect(m.el.querySelector('.pn-status')?.textContent).toBe('Completed');
+    expect(m.el.querySelector('.pn-status')?.textContent).toBe('Done');
     expect(buttonBy(m.el, "Run Friday's checks").disabled).toBe(true);
     close()?.click();
     expect(closed).toBe(1);
@@ -296,7 +297,7 @@ describe('verification panel', () => {
     const m = verifyModal(ctx, { kind: 'verify', id: TID }, () => undefined);
     await flush();
     expect(m.el.textContent).toContain(
-      "No project checks are configured: Friday's scope and credential checks will run.",
+      'Your project has no checks of its own set: Friday checks that the agent changed only the files it was given and left no passwords or keys in them.',
     );
     expect(buttonBy(m.el, "Run Friday's checks").disabled).toBe(false);
     expect(m.el.textContent).toContain('verification:');
@@ -356,11 +357,11 @@ describe('verification panel', () => {
     expect(ctx.store.select('ui').drawer).toEqual({
       kind: 'diff',
       id: TID,
-      back: { modal: { kind: 'verify', id: TID }, label: 'Back to verification' },
+      back: { modal: { kind: 'verify', id: TID }, label: 'Back to the checks' },
     });
     buttonBy(m.el, 'Open config.yaml in VS Code').click();
     expect(opened).toEqual(['C:/demo/shop/.friday/config.yaml']);
-    expect(m.el.textContent).toContain('new checks judge the next verification');
+    expect(m.el.textContent).toContain('new checks are used the next time work is checked');
     m.destroy();
   });
 
@@ -393,9 +394,9 @@ describe('verification panel', () => {
     expect(text).toContain('⟨U+202E⟩');
     expect(text).toContain('⟨U+200B⟩');
     expect(text).not.toContain('\u202E');
-    expect(text).toContain('Claimed but unchanged');
+    expect(text).toContain('It says it changed these, but they did not change');
     expect(text).toContain('src/claimed-only.ts');
-    expect(text).toContain('Changed but not claimed');
+    expect(text).toContain('Changed, but it did not say so');
     expect(m.el.querySelector('.hidden-warning')).not.toBeNull();
     m.destroy();
   });
@@ -411,7 +412,7 @@ describe('verification panel', () => {
     });
     const m = verifyModal(ctx, { kind: 'verify', id: TID }, () => undefined);
     await flush();
-    expect(m.el.textContent).toContain('No completion claim is recorded');
+    expect(m.el.textContent).toContain('The agent has not said it is done in this try yet');
     expect(m.el.textContent).toContain('Could not read the diff: git is not available');
     m.destroy();
   });
@@ -436,7 +437,7 @@ describe('the diff from the verification panel (review R3)', () => {
       expect(drawer?.querySelector('.diff-stub')).not.toBeNull();
       expect(layers.modalOpen()).toBe(false);
       expect(layers.top()?.el).toBe(drawer);
-      buttonBy(drawers.el, 'Back to verification').click();
+      buttonBy(drawers.el, 'Back to the checks').click();
       expect(ctx.store.select('ui').drawer).toBeNull();
       expect(ctx.store.select('ui').modal).toEqual({ kind: 'verify', id: TID });
       expect(drawers.el.querySelector('[role="dialog"]')).toBeNull();

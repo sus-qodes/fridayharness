@@ -239,9 +239,9 @@ function taskEditor(ctx: AppContext, o: TaskEditorOptions): TaskEditor {
   const deps = group('Depends on', depsBox, depsError);
 
   const write = scopePicker(ctx, {
-    label: 'Write scope',
+    label: 'Files it may change',
     value: t.scope.write,
-    emptyText: 'No write scope: only review and research tasks may be read-only.',
+    emptyText: 'None: only review and research tasks may change nothing.',
     onChange: (globs) => {
       // "The whole project" and a folder together would still be the whole project: a folder
       // added to it narrows the task to that folder, and the whole project added to folders
@@ -259,9 +259,9 @@ function taskEditor(ctx: AppContext, o: TaskEditorOptions): TaskEditor {
     },
   });
   const read = scopePicker(ctx, {
-    label: 'Read scope',
+    label: 'Files it may read',
     value: t.scope.read,
-    emptyText: 'No read scope: the agent reads what its context gives it.',
+    emptyText: 'None set: the agent reads what its brief points it to.',
     onChange: (globs) => {
       t.scope.read = globs;
       o.onInput();
@@ -359,7 +359,7 @@ function taskEditor(ctx: AppContext, o: TaskEditorOptions): TaskEditor {
     h(
       'div',
       null,
-      h('div', { class: 'field-label' }, 'Read scope'),
+      h('div', { class: 'field-label' }, 'Files it may read'),
       h('div', { class: 'field-hint' }, 'What the agent is pointed at to read; empty leaves it to its context.'),
       read.el,
     ),
@@ -377,7 +377,7 @@ function taskEditor(ctx: AppContext, o: TaskEditorOptions): TaskEditor {
     h(
       'div',
       null,
-      h('div', { class: 'field-label' }, 'Write scope'),
+      h('div', { class: 'field-label' }, 'Files it may change'),
       h(
         'div',
         { class: 'field-hint' },

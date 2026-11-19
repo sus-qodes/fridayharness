@@ -301,7 +301,7 @@ describe('notifications (plan FD-25)', () => {
     });
     const notices = diffNotices(memory, board, NOW);
     expect(notices.map((n) => [n.title, n.body, n.taskId])).toEqual([
-      ['Work is ready for you to verify', `claude-1: Add the API ${HOSTILE}`, 't1'],
+      ['Work is ready for you to check', `claude-1: Add the API ${HOSTILE}`, 't1'],
       ['A goal is ready to land', 'Add discount codes', null],
     ]);
     expect(diffNotices(memory, board, NOW)).toEqual([]);

@@ -113,7 +113,7 @@ export const HUB_PAGES: HubPageDef[] = [
     group: 'Planning and agents',
     icon: 'check',
     title: 'Checks',
-    subtitle: 'What Friday runs to verify an agent’s work, and whether it runs on its own.',
+    subtitle: 'What Friday runs to check an agent’s work, and whether it runs on its own.',
   },
   {
     id: 'policy',
@@ -1059,7 +1059,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
       const ok = await ctx.confirm({
         title: 'Stop Friday?',
         body: [
-          'Friday stops for this project: agents it started disconnect, and nothing is assigned or verified until it runs again.',
+          'Friday stops for this project: agents it started disconnect, and nothing is given to agents or checked until it runs again.',
           desktop
             ? 'The work in the task folders is kept. Start Friday again here, or from the tray’s menu.'
             : 'The work in the task folders is kept. Start Friday again from its shortcut or the desktop app.',

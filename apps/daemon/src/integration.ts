@@ -7,6 +7,8 @@ import {
   changedBetween,
   checkoutForVerification,
   commitContent,
+  commitMessage,
+  commitSubject,
   commitTree,
   GitRoot,
   goalBranch,
@@ -24,6 +26,7 @@ import type { Actor, IntegrationView, TaskView } from '@friday/protocol';
 import type { ProjectRef } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
 import { checksForChange, selectChecks, summarizeOutcome } from '@friday/verification';
+import { runCheckWithSecondTry, timedSummary } from './check-time.js';
 import type { FileCopier } from './copy-files.js';
 import { runCheckInProfile } from './execution.js';
 import { InFlight } from './in-flight.js';
@@ -52,6 +55,10 @@ export interface CheckTrialRow {
   status: 'waiting' | 'running' | 'passed' | 'failed';
   summary: string | null;
   duration_ms: number | null;
+  /** It was stopped at its time limit (2026-11-19): said as that, not as failed work. */
+  timed_out: boolean;
+  /** The check's time limit. */
+  timeout_ms: number;
   /** The end of what a failing check printed, credentials removed. */
   output_tail: string | null;
 }
@@ -210,6 +217,8 @@ export class IntegrationManager {
         status: 'waiting',
         summary: null,
         duration_ms: null,
+        timed_out: false,
+        timeout_ms: c.timeout_ms,
         output_tail: null,
       })),
     };
@@ -256,6 +265,7 @@ export class IntegrationManager {
           row.status = outcome.passed ? 'passed' : 'failed';
           row.summary = summarizeOutcome(outcome);
           row.duration_ms = outcome.duration_ms;
+          row.timed_out = outcome.timed_out;
           row.output_tail = outcome.passed
             ? null
             : state.redactor.redactString(outcome.output.slice(-TRIAL_TAIL)).value || null;
@@ -573,11 +583,17 @@ export class IntegrationManager {
             : null,
         );
       }
+      // Plain words, no ids (2026-11-19): this commit lands in the project's history.
+      const toward = state.q.findGoal(this.pid, goalId)?.objective ?? '';
       const commit = await commitTree(
         project.root,
         merged.tree,
         [goalHead, taskCommit],
-        `Integrate ${taskId}: ${task.summary}`,
+        commitMessage(
+          commitSubject(`Merge: ${task.summary}`),
+          task.summary,
+          toward ? `Merged by Friday with the other work toward: ${commitSubject(toward, 200)}` : '',
+        ),
       );
 
       // 4. Verify the merged revision in Friday's own checkout before the goal branch moves.
@@ -630,12 +646,13 @@ export class IntegrationManager {
     const { state } = this.opts;
     const agentId = task.assigned_agent_id ?? state.q.runs(task.task_id).at(-1)?.agent_id;
     const agentKey = (agentId && state.q.findAgent(agentId)?.agent_key) || 'agent';
-    const basis = version ? `verified as ${version}` : 'passed by a human result';
+    // Plain words, no ids (2026-11-19): the task, and what passed it.
+    const basis = version ? 'Checked by Friday: its checks passed.' : 'Passed by a person in Friday.';
     return commitContent(
       dir,
       tree,
       head,
-      `${task.summary}\n\nFriday task ${task.task_id}, ${basis}.`,
+      commitMessage(commitSubject(task.summary), task.summary, basis),
       agentIdentity(agentKey),
     );
   }
@@ -695,8 +712,10 @@ export class IntegrationManager {
       lacking ? `; Friday's checkout of it lacks a file the project lists for its copies, which may be why` : '',
     ].join('');
     let failed = 0;
+    let ranOut = 0;
     for (const check of checks) {
-      const outcome = await runCheckInProfile(
+      // One that runs out of time is tried once more with twice the time (2026-11-19).
+      const timed = await runCheckWithSecondTry(
         this.opts.profile(),
         {
           name: check.name,
@@ -709,6 +728,7 @@ export class IntegrationManager {
         },
         this.opts.groups,
       );
+      const { outcome } = timed;
       const artifact = state.artifacts?.storeText(
         this.pid,
         'verification',
@@ -719,9 +739,12 @@ export class IntegrationManager {
         status: outcome.passed ? 'PASSED' : 'FAILED',
         exit_code: outcome.exit_code,
         artifact_ref: artifact ? `artifact:${artifact.artifact_id}` : null,
-        summary: summarizeOutcome(outcome),
+        summary: timedSummary(check.name, timed, check.timeout_ms).summary,
       });
-      if (!outcome.passed && check.required) failed += 1;
+      if (!outcome.passed && check.required) {
+        failed += 1;
+        if (outcome.timed_out) ranOut += 1;
+      }
     }
     const after = await checkout.contentTree();
     const altered = after.tree !== expected ? await changedBetween(project.root, expected, after.tree) : [];
@@ -745,8 +768,13 @@ export class IntegrationManager {
         ran: true,
         problem: {
           checks: results,
-          summary: `${failed} required check(s) failed on the merged revision ${commit.slice(0, 12)}${unprepared}; ${branch} was not moved`,
-          ...(unprepared ? {} : { unfit: names.slice(0, 1200) }),
+          // Checks that only ran out of time say so, and the work is not sent back to its agent for
+          // them: a busy computer is not the work (2026-11-19).
+          summary:
+            ranOut === failed
+              ? `${failed} required check(s) ran out of time on the merged revision ${commit.slice(0, 12)}, also on a second try with twice the time${unprepared}; ${branch} was not moved. Give ${failed === 1 ? 'it' : 'them'} more time in Settings → Checks, then try again`
+              : `${failed} required check(s) failed on the merged revision ${commit.slice(0, 12)}${unprepared}; ${branch} was not moved`,
+          ...(unprepared || ranOut === failed ? {} : { unfit: names.slice(0, 1200) }),
         },
       };
     }

@@ -1,7 +1,7 @@
 import type { VerificationCheckView } from '@friday/protocol';
 import { describe, expect, it } from 'vitest';
 import { makeContext } from '../test/context.js';
-import { checkName, checkOutput, findingsList, findingsOf, summaryIsCodes } from './check-details.js';
+import { checkName, checkOutput, findingsList, findingsOf, ranOutOfTime, summaryIsCodes } from './check-details.js';
 import { buttonBy, flush, HOSTILE } from './test-support.js';
 
 const REF = 'artifact:A1b2_c3-d4';
@@ -41,6 +41,22 @@ describe('a check, for a person (2026-11-17)', () => {
     expect(checkName('friday.evidence')).toBe('The work was run');
     expect(checkName('manual')).toBe('Recorded by a person');
     expect(checkName('unit tests')).toBe('unit tests');
+  });
+
+  // A check that ran out of time also on the second try with twice the time is said as that
+  // (2026-11-19); one that then passed, or failed for another reason, is what it is.
+  it('tells a check that ran out of time from one that failed', () => {
+    const out = (severity: 'fail' | 'warn', status: 'FAILED' | 'PASSED' = 'FAILED') =>
+      check({
+        name: 'lint',
+        origin: 'configured',
+        status,
+        details: { findings: [{ rule: 'check.ran_out_of_time', severity, message: 'm', paths: [] }] },
+      });
+    expect(ranOutOfTime(out('fail'))).toBe(true);
+    expect(ranOutOfTime(out('warn', 'PASSED'))).toBe(false);
+    expect(ranOutOfTime(out('warn'))).toBe(false);
+    expect(ranOutOfTime(check())).toBe(false);
   });
 
   it('lists what went wrong and what needs a look, the failures first, and nothing that is only a note', () => {

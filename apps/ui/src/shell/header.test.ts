@@ -190,7 +190,7 @@ describe('header', () => {
       agents: [makeAgent({ agent_key: 'claude-1' }), makeAgent({ agent_key: 'codex-1', status: 'DISCONNECTED' })],
     });
     expect(statusSentence(board, NOW)).toBe(
-      '2 running, 3 waiting for you: 1 approval, 1 question, 1 blocked agent; 1 ready; 2 to verify; 1 failed or lost; 1 agent connected',
+      '2 running, 3 waiting for you: 1 approval, 1 question, 1 stuck agent; 1 not started; 2 to check; 1 failed or stopped; 1 agent connected',
     );
     expect(statusSentence(makeSnapshot(), NOW)).toBe('0 running, 0 waiting for you: 0 agents connected');
     // A kind the old sentence did not name (a message awaiting a reply) is named, never an empty clause.

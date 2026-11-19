@@ -87,7 +87,7 @@ describe('approval modal (macro)', () => {
     expect(target).toContain('⟨U+200B⟩');
     expect(target).toContain('y'.repeat(5000));
     expect(m.el.querySelector('.gv-target .hidden-warning')).not.toBeNull();
-    expect(m.el.textContent).toContain('bound to this task, this attempt and this exact target');
+    expect(m.el.textContent).toContain('Allowing covers only this action, for this task');
     const reach = [...m.el.querySelectorAll('.gv-reach button')].map((b) => [
       b.textContent,
       b.getAttribute('aria-pressed'),
@@ -95,7 +95,7 @@ describe('approval modal (macro)', () => {
     // The card's words for a grant's reach (Allow once, Allow for this task…): one vocabulary.
     expect(reach).toEqual([
       ['Once', 'true'],
-      ['For this attempt', 'false'],
+      ['For this try', 'false'],
       ['For this task', 'false'],
     ]);
     m.destroy();
@@ -108,8 +108,8 @@ describe('approval modal (macro)', () => {
     await flush();
     expect(ctx.transport.calls).toHaveLength(0);
     arm(m.el);
-    buttonNamed(m.el, 'For this attempt').click();
-    buttonNamed(m.el, 'Allow for this attempt').click();
+    buttonNamed(m.el, 'For this try').click();
+    buttonNamed(m.el, 'Allow for this try').click();
     await flush();
     expect(ctx.transport.to('POST', `/approvals/${APR}/approve`)[0]?.body).toEqual({ reuse: 'run', via: 'ui' });
     expect(closed).toBe(1);

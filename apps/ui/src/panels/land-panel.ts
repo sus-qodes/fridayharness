@@ -438,7 +438,11 @@ export function landModal(
     replace(
       stepsBox,
       landBox,
-      note('Land merges the goal into the branch your folder is on, as a merge you could undo. Nothing is pushed.'),
+      // What Friday commits, and where (2026-11-19, the trial: "why does it ask to commit, does it
+      // actually commit on the branch?").
+      note(
+        `Each task’s work is already committed, in its agent’s name, on this goal’s own branch: your branch is not touched until you land. Land merges the goal into ${plan?.into ? `${visible(plan.into)}, the branch your folder is on` : 'the branch your folder is on'}, as a merge you could undo. Nothing is pushed.`,
+      ),
       h(
         'details',
         { class: 'pn-fold' },

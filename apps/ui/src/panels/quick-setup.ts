@@ -551,18 +551,18 @@ export function autoVerifySwitch(ctx: AppContext, td: Teardown): HTMLElement {
     setup: 'verify',
     setting: AUTO_VERIFY,
     title: 'Check the work automatically',
-    what: "When an agent says it is done, Friday runs the project's checks at once instead of waiting for you to click Verify. They run code the agent wrote, so Friday asks you to trust this setting first.",
+    what: "When an agent says it is done, Friday runs the project's checks at once instead of waiting for you to click Check. They run code the agent wrote, so Friday asks you to trust this setting first.",
     state: autoVerification,
-    on: 'Finished work is checked as soon as it is claimed.',
+    on: 'Work is checked as soon as the agent says it is done.',
     act: 'Check the work automatically',
     turnedOn: 'Work is now checked automatically',
-    turnedOff: 'Finished work waits for you to click Verify',
+    turnedOff: 'Finished work waits for you to click Check',
     missing: 'Automatic checks are not among the settings that wait for trust',
     // Without checks of the project's own, checking is Friday's part alone: said, so "checked" is not over-read.
     before: (board) =>
       board && board.verification.checks.length === 0
         ? note(
-            'This project has no checks of its own set yet (tests, lint, build), so Friday checks only that the changes stay in scope, hold no credentials and were run.',
+            'This project has no checks of its own set yet (tests, lint, build), so Friday checks only that the agent changed the files it was given, left no passwords or keys in them, and ran its work.',
           )
         : null,
   });

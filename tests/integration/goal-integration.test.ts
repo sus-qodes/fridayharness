@@ -722,6 +722,43 @@ describe('agents at work at the same time (2026-11-18)', () => {
     expect(pending(td)).toEqual([]);
   });
 
+  // A check that only ran out of time on the merged work (2026-11-19, the trial's F8): a busy
+  // computer, not the work. It gets a second try with twice the time; still out of time, the person
+  // is asked, in those words, and the work is not sent back to its agent.
+  it('asks the person, and sends nothing back, when a check only ran out of time on the merged work', async () => {
+    const SLOW = [
+      "const fs = require('node:fs');",
+      "const num = (f) => Number(/= (\\d+)/.exec(fs.readFileSync(f, 'utf8'))[1]);",
+      // Quick alone; with both raised it never ends.
+      "if (num('src/a.mjs') + num('src/b.mjs') > 3) setInterval(() => {}, 1000); else process.exit(0);",
+      '',
+    ].join('\n');
+    const td = await project(
+      '  checks:\n    - name: slow\n      command: node\n      args: ["scripts/slow.cjs"]\n      timeout_ms: 1500\n',
+      { 'scripts/slow.cjs': SLOW },
+    );
+    const { ids } = await goalWith(td, [
+      { key: 'raise-a', summary: 'Raise a to 2', write: ['src/a.mjs'] },
+      { key: 'raise-b', summary: 'Raise b to 2', write: ['src/b.mjs'] },
+    ]);
+    const ra = await begin(td, 'be-1', ids['raise-a'] as string);
+    const rb = await begin(td, 'be-2', ids['raise-b'] as string);
+    await finish(td, ra, { 'src/a.mjs': 'export const a = 2;\n' });
+    expect((await integrationOf(td, ids['raise-a'] as string)).status).toBe('integrated');
+    await finish(td, rb, { 'src/b.mjs': 'export const b = 2;\n' });
+    const raiseB = ids['raise-b'] as string;
+    const failed = await integrationOf(td, raiseB);
+    expect(failed.status).toBe('failed');
+    expect(failed.summary).toMatch(
+      /^1 required check\(s\) ran out of time on the merged revision [0-9a-f]{12}, also on a second try with twice the time/,
+    );
+    expect(failed.summary).toContain('more time in Settings → Checks');
+    expect(failed.checks?.[0]?.summary).toBe('ran out of time twice: stopped at its 2 s limit, then at 3 s');
+    expect(reworks(td, raiseB)).toEqual([]);
+    expect(pending(td).map(([, task]) => task)).toEqual([raiseB]);
+    expect((await taskOf(td, raiseB)).status).toBe('COMPLETED');
+  }, 120_000);
+
   it('asks the person once the work went back as often as the setting says, with a button that sends it again', async () => {
     const td = await project(CHECKS, {}, 'integration:\n  back_to_agent: 1\n');
     const { goalId, ids } = await goalWith(td, [
@@ -916,7 +953,14 @@ describe('landing a completed goal', () => {
     expect(text('src/a.mjs')).toBe('export const a = 2;\n');
     expect(text('src/b.mjs')).toBe('export const b = 0;\n');
     expect((await git(['rev-list', '--parents', '-n', '1', 'HEAD'])).trim().split(' ')).toHaveLength(3);
-    expect((await git(['log', '-1', '--format=%s'])).trim()).toContain(`Land goal ${goalId}`);
+    // In plain words, with none of Friday's ids (2026-11-19, the trial: "Integrate
+    // task_1rsz5wbks9145nqfgnkqa1k4pg: …"): what the goal was, and what its tasks did.
+    const message = (await git(['log', '-1', '--format=%B'])).trim();
+    expect(message).toMatch(/^Merge: \S/);
+    expect(message).toContain('The work of one task, checked by Friday:\n- Raise a to 2');
+    const history = await git(['log', '--format=%B', `${mine}..HEAD`]);
+    expect(history).toContain('Checked by Friday: its checks passed.');
+    expect(history).not.toMatch(/\b(goal|task|run|ver)_[0-9a-z]{6,}|friday\/goal-|verified as/);
 
     // A second goal, merged by the person in their own terminal: Friday records it when asked, once.
     const { goalId: second, ids } = await goalWith(td, [{ key: 'raise-b', summary: 'Raise b', write: ['src/b.mjs'] }]);

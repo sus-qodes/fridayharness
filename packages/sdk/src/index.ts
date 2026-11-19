@@ -68,6 +68,7 @@ export {
   writePrivateFile,
 } from './discovery.js';
 export { dpapiAvailable } from './dpapi.js';
+export { ensureLintSkip, LINT_SKIP, LINT_SKIP_FILE, LINT_SKIP_FOLDERS } from './lint-skip.js';
 export {
   POLICY_DIR,
   PolicyFile,
@@ -82,6 +83,7 @@ export {
   packageManagerOf,
   type SuggestedCheck,
   type SuggestedKind,
+  setCheckLimitText,
   setCheckRequiredText,
   suggestChecks,
 } from './project-checks.js';

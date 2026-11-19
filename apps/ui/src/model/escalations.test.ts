@@ -187,7 +187,7 @@ describe('classifyEscalation', () => {
 
   it('titles every known kind and humanizes unknown ones', () => {
     expect(classifyEscalation(makeEscalation({ kind: 'integration_conflict' }), READY).title).toBe(
-      'Integration conflict',
+      'A task’s work clashes with other work of its goal',
     );
     expect(classifyEscalation(makeEscalation({ kind: 'brand_new.kind' }), READY).title).toBe('Brand new kind');
   });

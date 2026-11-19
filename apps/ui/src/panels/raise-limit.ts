@@ -93,9 +93,9 @@ export function raiseLimitModal(
     { class: 'pn-raise-what' },
     `${who} stopped`,
     task ? [' “', truncate(cleanText(task.summary), 120), '”'] : ' the task',
-    stop.capUsd === null ? ' at its spending limit.' : ` at its spending limit of ${dollars(stop.capUsd)} per attempt.`,
-    stop.costUsd === null ? '' : ` The attempt had cost ${dollars(stop.costUsd)}.`,
-    ' The work so far is kept: the next attempt continues from it.',
+    stop.capUsd === null ? ' at its spending limit.' : ` at its spending limit of ${dollars(stop.capUsd)} per try.`,
+    stop.costUsd === null ? '' : ` This try had cost ${dollars(stop.costUsd)}.`,
+    ' The work so far is kept: the next try goes on from it.',
   );
   const amountInput = input({
     type: 'number',
@@ -111,7 +111,7 @@ export function raiseLimitModal(
   });
   const limit = select<'set' | 'none'>(
     [
-      { value: 'set', label: 'Stop an attempt at (USD)' },
+      { value: 'set', label: 'Stop a try at (USD)' },
       { value: 'none', label: 'No limit' },
     ],
     choice,
@@ -120,8 +120,8 @@ export function raiseLimitModal(
       update();
     },
   );
-  const limitField = field('New spending limit per attempt', limit, {
-    hint: 'It applies from the agent’s next attempt; the agent keeps running. You can change it again under Agents → Edit.',
+  const limitField = field('New spending limit per try', limit, {
+    hint: 'It applies from the agent’s next try; the agent keeps running. You can change it again under Agents → Edit.',
   });
   limitField.el.append(h('div', { class: 'pn-limit-amount' }, amountInput));
   const body = h('div', { class: 'pn-raise-body' });
@@ -201,7 +201,7 @@ export function raiseLimitModal(
           taskId,
           'reassign',
           was
-            ? `the agent's spending limit per attempt was raised: ${said}`
+            ? `the agent's spending limit per try was raised: ${said}`
             : 'continued after a stop at the spending limit',
         );
       },

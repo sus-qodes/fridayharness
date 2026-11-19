@@ -331,6 +331,102 @@ describe('a check’s strength, and trying the checks on the untouched project (
     expect(tookWords(300_000)).toBe('5 min');
   });
 
+  // The trial (F8): lint took 116 s of its 120 s while another agent worked, and the only way to give
+  // it more time was editing config.yaml by hand (2026-11-19).
+  it('shows each check’s time limit and what it took, changes it, and offers the longer one its times call for', async () => {
+    const timed = (name: string, over: Record<string, unknown>) => ({ ...have(name), timeout_ms: 120_000, ...over });
+    const ctx = makeContext({
+      answers: {
+        'GET /config/checks': view({
+          checks: [
+            timed('tests', { took_ms: 64_000, ran_out: false, suggested_ms: 240_000 }),
+            timed('lint', { took_ms: 25_000, ran_out: false, suggested_ms: null }),
+            timed('build', { took_ms: null, timeout_ms: 90_000 }),
+          ],
+          suggested: [],
+        }),
+        'GET /config/checks/trial': idle,
+        'POST /config/checks': view({
+          checks: [timed('tests', { timeout_ms: 240_000, took_ms: 64_000 })],
+          suggested: [],
+        }),
+      },
+    });
+    const td = new Teardown();
+    const el = projectChecksCard(ctx, td);
+    await flush();
+    const lines = [...el.querySelectorAll('.pn-pc-time')];
+    expect(lines.map((l) => l.getAttribute('data-limit'))).toEqual(['120000', '120000', '90000']);
+    expect(lines[0]?.textContent).toContain('Took 1 min 4 s at most.');
+    expect(lines[0]?.textContent).toContain('Close to its limit');
+    expect(lines[1]?.textContent).toContain('Took 25 s at most.');
+    expect(lines[1]?.querySelector('.pn-pc-suggest')).toBeNull();
+    expect(lines[2]?.textContent).toContain('Not run yet.');
+    // A limit written by hand that is not whole minutes is shown as it is, and cannot be picked again.
+    const odd = lines[2]?.querySelector('select') as HTMLSelectElement;
+    expect(odd.value).toBe('90000');
+    expect(odd.selectedOptions[0]?.textContent).toBe('1 min 30 s');
+    expect(odd.selectedOptions[0]?.disabled).toBe(true);
+    // The suggestion, with one click.
+    buttonBy(lines[0] as HTMLElement, 'Give it 4 min').click();
+    await flush();
+    expect(sent(ctx)).toEqual([{ add: [], remove: [], limit: { name: 'tests', minutes: 4 } }]);
+    expect(ctx.toasts.at(-1)?.text).toBe('“tests” now has 4 min');
+    // Or any limit, picked.
+    const pick = el.querySelector('.pn-pc-time select') as HTMLSelectElement;
+    expect(pick.getAttribute('aria-label')).toBe('Time limit of tests');
+    pick.value = '600000';
+    pick.dispatchEvent(new Event('change'));
+    await flush();
+    expect(sent(ctx).at(-1)).toEqual({ add: [], remove: [], limit: { name: 'tests', minutes: 10 } });
+    td.run();
+  });
+
+  it('says a check that ran out of time as that, in the run and in its one sentence', async () => {
+    const slow = { ...row('tests', 'failed'), timed_out: true, timeout_ms: 120_000, duration_ms: 120_000 };
+    const verdict = trialVerdict({ ...idle, status: 'done', checks: [slow, row('lint', 'passed')] } as never);
+    expect(verdict).toEqual({
+      tone: 'warn',
+      text: '“tests” ran out of time before finishing. Give it a longer time limit above, then run the checks again.',
+    });
+    // A real failure still comes first.
+    expect(trialVerdict({ ...idle, status: 'done', checks: [slow, row('lint', 'failed')] } as never)?.tone).toBe(
+      'danger',
+    );
+    const ctx = makeContext({
+      answers: {
+        'GET /config/checks': view({ checks: [have('tests')], suggested: [] }),
+        'GET /config/checks/trial': { ...idle, status: 'done', commit: 'abc', checks: [slow] },
+      },
+    });
+    const td = new Teardown();
+    const el = projectChecksCard(ctx, td);
+    await flush();
+    expect(el.querySelector('[data-list="trial"] .badge')?.textContent).toBe('ran out of time');
+    td.run();
+  });
+
+  it('reads the checks again when a run ends, for the times it measured', async () => {
+    let step = 0;
+    const running = { ...idle, status: 'running', running: 'tests', checks: [row('tests', 'running')] };
+    const ctx = makeContext({
+      answers: {
+        'GET /config/checks': view({ checks: [have('tests')], suggested: [] }),
+        'GET /config/checks/trial': () =>
+          step === 0 ? running : { ...idle, status: 'done', checks: [row('tests', 'passed')] },
+      },
+    });
+    const td = new Teardown();
+    projectChecksCard(ctx, td);
+    await flush();
+    expect(ctx.transport.to('GET', '/config/checks')).toHaveLength(1);
+    step = 1;
+    await new Promise((r) => setTimeout(r, 1700));
+    await flush();
+    expect(ctx.transport.to('GET', '/config/checks')).toHaveLength(2);
+    td.run();
+  });
+
   it('offers no run where there is no check, nor on a daemon that has none to offer', async () => {
     const none = makeContext({ answers: { 'GET /config/checks': view(), 'GET /config/checks/trial': idle } });
     const td = new Teardown();

@@ -18,9 +18,18 @@ import type {
   VerificationView,
 } from '@friday/protocol';
 import { modelName } from '../model/models.js';
-import { notStartedText, PRIORITY, RISK, TASK_KIND, WAITING_REASON } from '../model/status.js';
+import {
+  CHECK_WORDS,
+  MERGE_WORDS,
+  notStartedText,
+  PRIORITY,
+  RISK,
+  TASK_KIND,
+  WAITING_REASON,
+  wordsFor,
+} from '../model/status.js';
 import { visible } from '../model/text.js';
-import { checkName, checkOutput, findingsList, summaryIsCodes } from '../panels/check-details.js';
+import { checkName, checkOutput, findingsList, ranOutOfTime, summaryIsCodes } from '../panels/check-details.js';
 import { cancelTask } from '../shell/cancel-task.js';
 import { type AppContext, type Component, type DrawerRequest, openDrawer, openModal } from '../shell/context.js';
 import { append, button, type Child, h, replace } from '../ui/dom.js';
@@ -303,7 +312,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
   }
 
   function renderVerification(ver: VerificationView | null): Child {
-    if (!ver) return empty('Not verified yet.');
+    if (!ver) return empty('Not checked yet.');
     const run = ver.checks.filter((c) => !NOT_RUN.has(c.status));
     const passed = run.filter((c) => c.status === 'PASSED').length;
     // Friday's own checks alone (scope, credentials, evidence): none of the project's ran, because
@@ -313,7 +322,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
       h(
         'div',
         { class: 'row-wrap' },
-        badge(humanize(ver.status), TONE_OF_CHECK[ver.status] ?? 'muted'),
+        badge(wordsFor(CHECK_WORDS, ver.status), TONE_OF_CHECK[ver.status] ?? 'muted'),
         h('span', null, `${passed} passed of ${run.length} run`),
         ver.ended_at ? h('span', { class: 'muted', title: ver.ended_at }, timeAgo(ver.ended_at, ctx.now())) : null,
       ),
@@ -333,7 +342,9 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
               h(
                 'li',
                 { class: 'dr-check' },
-                badge(humanize(c.status), TONE_OF_CHECK[c.status] ?? 'muted'),
+                ranOutOfTime(c)
+                  ? badge('Ran out of time', 'warn')
+                  : badge(wordsFor(CHECK_WORDS, c.status), TONE_OF_CHECK[c.status] ?? 'muted'),
                 // Friday's own checks by what they check; the name as the daemon has it in the tooltip.
                 h(
                   'span',
@@ -357,12 +368,12 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
   }
 
   function renderIntegration(i: IntegrationView | null): Child {
-    if (!i) return empty('Not integrated into a goal branch yet.');
+    if (!i) return empty('Not merged into its goal yet.');
     return [
       h(
         'div',
         { class: 'row-wrap' },
-        badge(humanize(i.status), INTEGRATION_TONE[i.status]),
+        badge(wordsFor(MERGE_WORDS, i.status), INTEGRATION_TONE[i.status]),
         i.branch ? mono(i.branch) : null,
         i.merged_commit ? h('span', { class: 'muted' }, `at ${shortSha(i.merged_commit)}`) : null,
       ),
@@ -440,13 +451,14 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
             )
           : empty('No acceptance criteria.'),
       ),
-      section('Verification', renderVerification(v.verification)),
+      // Section titles in a person's words (2026-11-19): Verification, Scope, Integration were Friday's.
+      section('Checks', renderVerification(v.verification)),
       section(
-        'Scope',
+        'Files it may change',
         h(
           'div',
           { class: 'dr-scope' },
-          h('span', { class: 'muted' }, 'write'),
+          h('span', { class: 'muted' }, 'may change'),
           scope.write.length
             ? h(
                 'span',
@@ -454,7 +466,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
                 scope.write.map((g) => h('span', { class: 'pill dr-pill-write' }, visible(g))),
               )
             : h('span', { class: 'muted' }, 'nothing'),
-          h('span', { class: 'muted' }, 'read'),
+          h('span', { class: 'muted' }, 'may read'),
           scope.read.length
             ? h(
                 'span',
@@ -472,7 +484,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
       ),
       dependents.length ? section('Needed by', h('ul', { class: 'dr-deps' }, dependents.map(taskLink))) : null,
       grantsSection(),
-      section('Integration', renderIntegration(v.integration)),
+      section('Merging into the goal', renderIntegration(v.integration)),
       section(
         'Timing',
         facts([
@@ -732,7 +744,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
   function renderChangesInfo(v: View): void {
     const run = v.run;
     if (!run) {
-      replace(changesInfo, empty('No attempt yet: the task has no folder of its own.'));
+      replace(changesInfo, empty('Not tried yet: the task has no folder of its own.'));
       return;
     }
     const root = run.execution_root;
@@ -740,7 +752,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
       changesInfo,
       facts([
         [
-          'Attempt',
+          'Try',
           `${run.attempt} · ${humanize(run.status)}${run.workspace === 'pending' ? ' · its folder is being prepared' : ''}`,
         ],
         ['Branch', run.branch_ref ? mono(run.branch_ref) : '—'],
@@ -768,7 +780,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
                 { class: 'dr-mono', title: v.verification.commit_sha },
                 `${shortSha(v.verification.commit_sha)} (verified)`,
               )
-            : h('span', { class: 'muted' }, 'not verified yet'),
+            : h('span', { class: 'muted' }, 'not checked yet'),
         ],
         ['Model', run.model_observed ?? run.model_requested ?? '—'],
       ]),

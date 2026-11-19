@@ -265,7 +265,7 @@ describe('plan editor, first plan', () => {
     for (const label of ['Key', 'Kind', 'Role', 'Priority', 'Risk']) {
       expect(advanced.contains(controlBy(task, label)), label).toBe(true);
     }
-    expect(advanced.textContent).toContain('Read scope');
+    expect(advanced.textContent).toContain('Files it may read');
     // What a person fills in stays in view.
     for (const label of ['Summary', 'Description', 'Acceptance criteria', 'Assign to']) {
       expect(advanced.contains(controlBy(task, label)), label).toBe(false);
@@ -292,7 +292,7 @@ describe('plan editor, first plan', () => {
     const page = m.el.querySelector('.pn-errors-page') as HTMLElement;
     expect(page.hidden).toBe(false);
     expect(page.textContent).toMatch(/the summary needs at least 5 characters/);
-    expect(page.textContent).toMatch(/must declare a write scope/);
+    expect(page.textContent).toMatch(/must say which files it may change/);
     const summary = controlBy<HTMLTextAreaElement>(m.el, 'Summary');
     expect(summary.getAttribute('aria-invalid')).toBe('true');
     // Live once tried: fixing a field clears its error.

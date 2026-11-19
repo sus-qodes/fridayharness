@@ -353,7 +353,10 @@ function taskIssues(t: DraftTask, prefix: string, label: string): DraftIssue[] {
     if (bad) add(`scope.${side}`, bad);
   }
   if (t.scope.write.length === 0 && !READ_ONLY_KINDS.includes(t.kind)) {
-    add('scope.write', `${label} must declare a write scope (only review and research tasks may be read-only)`);
+    add(
+      'scope.write',
+      `${label} must say which files it may change (only review and research tasks may change nothing)`,
+    );
   }
   if (!(PRIORITIES as readonly string[]).includes(t.priority)) add('priority', `"${t.priority}" is not a priority`);
   if (!(RISKS as readonly string[]).includes(t.risk_level)) add('risk_level', `"${t.risk_level}" is not a risk level`);

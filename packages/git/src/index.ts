@@ -25,6 +25,8 @@ export {
   changedBetween,
   checkoutForVerification,
   commitContent,
+  commitMessage,
+  commitSubject,
   commitTree,
   FRIDAY_IDENTITY,
   goalBranch,

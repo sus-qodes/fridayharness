@@ -119,7 +119,7 @@ export function inboxDrawer(ctx: AppContext, request: DrawerRequest): Component 
       m.facts?.length
         ? h('ul', { class: 'gv-facts' }, ...m.facts.slice(0, 20).map((f) => h('li', null, cleanText(f.fact))))
         : null,
-      h('p', { class: 'field-hint' }, 'Messages are information from an agent; they never grant anything.'),
+      h('p', { class: 'field-hint' }, 'Messages are information from an agent; they never allow anything.'),
       actionsBox,
     );
     renderActions(item);

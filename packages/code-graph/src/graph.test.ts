@@ -8,7 +8,27 @@ import { openDatabase } from '@friday/db';
 import { GitRoot } from '@friday/git';
 import { deterministicGit, FIXTURE_BASE_EPOCH, useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
-import { buildGraph, type CodeGraph, memoryFactsCache, openFactsCache, stripJsonComments } from './index.js';
+import {
+  buildGraph,
+  type CodeGraph,
+  isFridayOwn,
+  memoryFactsCache,
+  openFactsCache,
+  stripJsonComments,
+} from './index.js';
+
+// Friday's hook launcher and lint file are not the project's code (2026-11-19).
+describe("Friday's own folders", () => {
+  it('are left out of the graph, and nothing else is', () => {
+    expect(isFridayOwn('.friday/eslint.config.mjs')).toBe(true);
+    expect(isFridayOwn('.friday/harness/claude-code/hook.mjs')).toBe(true);
+    expect(isFridayOwn('.agents/.friday/harness/antigravity/hook.mjs')).toBe(true);
+    expect(isFridayOwn('.agents\\.friday\\eslint.config.mjs')).toBe(true);
+    expect(isFridayOwn('.agents/skills/x.ts')).toBe(false);
+    expect(isFridayOwn('src/.friday.ts')).toBe(false);
+    expect(isFridayOwn('app/.friday/x.ts')).toBe(false);
+  });
+});
 
 const ws = useTestWorkspace();
 const REPO = fileURLToPath(new URL('../../../', import.meta.url));

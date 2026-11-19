@@ -19,7 +19,8 @@ export interface AntigravityCliIo {
   /** Renders doctor checks as the other hosts' doctors are rendered. */
   render?(checks: AntigravityCheck[]): string;
   /** Changes the command makes for every host (`.friday/.gitignore`), applied and listed with Antigravity's own. */
-  extraChanges?(root: string): FileChange[];
+  /** On removal, `remove` names the host taken away: what is Friday's alone then goes too. */
+  extraChanges?(root: string, remove?: { host: string }): FileChange[];
 }
 
 export interface AntigravityConfigFlags {
@@ -73,7 +74,7 @@ export function antigravityConfigCli(
     ...(flags.agent ? { agentKey: flags.agent } : {}),
     ...(flags.remove ? { remove: true } : {}),
   });
-  if (!flags.remove) changes.push(...(io.extraChanges?.(ref.root) ?? []));
+  changes.push(...(io.extraChanges?.(ref.root, flags.remove ? { host: 'antigravity' } : undefined) ?? []));
   if (!flags.print) applyAntigravityPlan(changes);
   const agentLine = changes.find((c) => c.display.startsWith('(private)'))?.note;
   const summary = {

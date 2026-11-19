@@ -227,6 +227,27 @@ export async function mergeJoining(root: string, ours: string, theirs: string): 
   }
 }
 
+/**
+ * A commit's first line from a person's words (2026-11-19): one line, spaces as one, at most `max`
+ * characters, cut at a word with "…". What Friday leaves in a project's history reads as a person
+ * would write it, with none of Friday's ids (the trial: "Integrate task_1rsz5wbks9145nqfgnkqa1k4pg:
+ * …", in a project whose rules ask for plain short sentences).
+ */
+export function commitSubject(text: string, max = 72): string {
+  const one = text.replace(/\s+/g, ' ').trim() || 'Work done with Friday';
+  if (one.length <= max) return one;
+  const cut = one.slice(0, max - 1);
+  const at = cut.lastIndexOf(' ');
+  return `${(at > max / 2 ? cut.slice(0, at) : cut).replace(/[\s,.;:–-]+$/, '')}…`;
+}
+
+/** A commit message: the subject, then what the subject left out of `text`, then the lines given. */
+export function commitMessage(subject: string, text: string, ...lines: string[]): string {
+  const one = text.replace(/\s+/g, ' ').trim();
+  const cut = subject.endsWith('…') && one.length > 0;
+  return [subject, ...(cut ? [one] : []), ...lines.filter(Boolean)].join('\n\n');
+}
+
 /** Records a commit of `tree` on top of `parents`. */
 export async function commitTree(
   root: string,

@@ -261,8 +261,19 @@ describe('what Settings sets besides (2026-11-17)', () => {
 
     const added = await td.operator.post<Checks>(P('/config/checks'), { add: ['tests'] });
     expect(added.added).toEqual(['tests']);
+    // With its time limit, and what it took (nothing yet) (2026-11-19).
     expect(added.checks).toEqual([
-      { name: 'tests', kind: 'test', command: 'npm', args: ['run', 'test'], required: true },
+      {
+        name: 'tests',
+        kind: 'test',
+        command: 'npm',
+        args: ['run', 'test'],
+        required: true,
+        timeout_ms: 120_000,
+        took_ms: null,
+        ran_out: false,
+        suggested_ms: null,
+      },
     ]);
     expect(added.suggested.map((s) => s.name)).toEqual(['lint']);
     // Only the line of the list changed, into the lines of the check.
@@ -284,6 +295,23 @@ describe('what Settings sets besides (2026-11-17)', () => {
     await expect(td.operator.post(P('/config/checks'), { add: ['lint', 'deploy'] })).rejects.toThrow();
     expect(readFileSync(file, 'utf8')).toBe(held);
 
+    // Its time limit, set from the app in whole minutes (2026-11-19: the way out was editing the
+    // file by hand); a bad one, or a check that is not there, changes nothing.
+    const limited = await td.operator.post<Checks>(P('/config/checks'), { limit: { name: 'tests', minutes: 5 } });
+    expect(limited.checks[0]).toMatchObject({ name: 'tests', timeout_ms: 300_000 });
+    expect(readFileSync(file, 'utf8')).toContain('timeout_ms: 300000');
+    const longer = readFileSync(file, 'utf8');
+    await expect(td.operator.post(P('/config/checks'), { limit: { name: 'tests', minutes: 0 } })).rejects.toThrow();
+    await expect(td.operator.post(P('/config/checks'), { limit: { name: 'tests', minutes: 61 } })).rejects.toThrow();
+    await expect(td.operator.post(P('/config/checks'), { limit: { name: 'nope', minutes: 5 } })).rejects.toThrow(
+      /no check named "nope"/,
+    );
+    expect(readFileSync(file, 'utf8')).toBe(longer);
+    // The board's checks are read from the file each time: the next verification gets five minutes.
+    expect(
+      (await td.operator.get<Checks>(P('/config/checks'))).checks.map((c) => (c as { timeout_ms?: number }).timeout_ms),
+    ).toEqual([300_000]);
+
     const removed = await td.operator.post<Checks>(P('/config/checks'), { remove: ['tests', 'nope'] });
     expect(removed).toMatchObject({ removed: ['tests'], checks: [] });
     expect(removed.suggested.map((s) => s.name)).toEqual(['tests', 'lint']);
@@ -294,6 +322,7 @@ describe('what Settings sets besides (2026-11-17)', () => {
       .map((e) => e.payload);
     expect(recorded).toEqual([
       { changed: ['verification.checks'], added: ['tests'], removed: [] },
+      { changed: ['verification.checks'], limit: { name: 'tests', timeout_ms: 300_000 } },
       { changed: ['verification.checks'], added: [], removed: ['tests'] },
     ]);
     // The operator only.

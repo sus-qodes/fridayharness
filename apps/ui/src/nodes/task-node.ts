@@ -16,7 +16,17 @@ import type {
   VerificationView,
 } from '@friday/protocol';
 import { assignableAgents, CRITERIA_SHOWN, checksSummary, conflictOf, TERMINAL_STATUSES } from '../model/board.js';
-import { notStartedText, PRIORITY, RISK, statusLook, TASK_KIND, WAITING_REASON } from '../model/status.js';
+import {
+  MERGE_WORDS,
+  notStartedText,
+  PRIORITY,
+  RISK,
+  statusLook,
+  statusWords,
+  TASK_KIND,
+  WAITING_REASON,
+  wordsFor,
+} from '../model/status.js';
 import { visible } from '../model/text.js';
 import { cancelTask } from '../shell/cancel-task.js';
 import { type AppContext, openDrawer, openModal } from '../shell/context.js';
@@ -122,8 +132,7 @@ const STATUS_ICON: Record<string, IconName | LocalIcon> = {
 };
 
 /** What the card's tool count is (`tool_calls` in the snapshot, counted from the event log). */
-const TOOL_CALLS_TITLE =
-  'Tool calls the agent’s host reported finishing for this task, over every attempt (calls Friday refused never ran)';
+const TOOL_CALLS_TITLE = 'Actions the agent finished for this task, over every try (actions Friday stopped never ran)';
 
 const PRIORITY_TONE: Record<string, Tone> = { urgent: 'danger', high: 'warn', normal: 'muted', low: 'muted' };
 const RISK_TONE: Record<string, Tone> = { low: 'good', medium: 'warn', high: 'danger' };
@@ -303,9 +312,9 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
           break;
         case 'verify':
           buttons.push(
-            actionButton('Verify', 'check', () => openModal(ctx, { kind: 'verify', id: t.task_id }), {
+            actionButton('Check', 'check', () => openModal(ctx, { kind: 'verify', id: t.task_id }), {
               action: a,
-              title: 'Open the verification panel',
+              title: 'Run the checks on what the agent did',
             }),
           );
           break;
@@ -325,21 +334,21 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
                         : (r.reason ?? 'The agent was not continued'),
                   )
                   .then(() => ctx.refresh()),
-              { action: a, busyLabel: 'Continuing…', title: 'Restart the agent in the same run' },
+              { action: a, busyLabel: 'Continuing…', title: 'The agent goes on in the same session' },
             ),
           );
           break;
         case 'rework':
           buttons.push(
             actionButton(
-              'Rework',
+              'Redo',
               'rework',
               () =>
                 ctx
                   .act(
-                    'Send the task back for rework',
+                    'Send the task back to be redone',
                     () => ctx.api.taskAction(t.task_id, 'rework'),
-                    'Sent back for rework',
+                    'Sent back to be redone',
                   )
                   .then(() => ctx.refresh()),
               { action: a, busyLabel: 'Sending…' },
@@ -361,24 +370,24 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
           buttons.push(
             actionButton('Recover', 'rework', () => openModal(ctx, { kind: 'recover', id: t.task_id }), {
               action: a,
-              title: 'Open the recovery dialog',
+              title: 'Give it to another agent, or start it again; the work so far is kept',
             }),
           );
           break;
         case 'integrate':
           buttons.push(
             actionButton(
-              'Integrate',
+              'Merge',
               'branch',
               () =>
                 ctx
                   .act(
-                    'Integrate the task',
+                    'Merge the task into its goal',
                     () => ctx.api.integrate(t.task_id),
-                    (r) => `Integration: ${r.integration?.status ?? 'done'}`,
+                    (r) => wordsFor(MERGE_WORDS, r.integration?.status ?? 'integrated'),
                   )
                   .then(() => ctx.refresh()),
-              { action: a, busyLabel: 'Integrating…', title: 'Integrate the verified work into the goal branch again' },
+              { action: a, busyLabel: 'Merging…', title: 'Merge the checked work into its goal again' },
             ),
           );
           break;
@@ -403,7 +412,6 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
   function renderBody(): void {
     const m = model;
     const t = m.task;
-    const look = statusLook(t.status);
     const kind = TASK_KIND[t.kind] ?? { label: t.kind, color: 'var(--color-slate-400)' };
     const priority = PRIORITY[t.priority]?.label ?? t.priority;
     const risk = RISK[t.risk_level]?.label ?? t.risk_level;
@@ -515,7 +523,7 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
         'span',
         { class: 'nd-tools', title: TOOL_CALLS_TITLE },
         nodeIcon('terminal', 11),
-        typeof t.tool_calls === 'number' ? plural(t.tool_calls, 'tool') : '—',
+        typeof t.tool_calls === 'number' ? plural(t.tool_calls, 'action') : '—',
       ),
       h('span', { title: 'Changed files' }, nodeIcon('file', 11), m.files === null ? '—' : plural(m.files, 'file')),
       // The figure is the card's door to the diff (review M9k); without an attempt there is none.
@@ -533,14 +541,14 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
       'div',
       { class: 'nd-status' },
       nodeIcon(statusIcon(t.status), 13),
-      h('span', { class: 'nd-status-label' }, look.label),
+      h('span', { class: 'nd-status-label' }, statusWords(t)),
       reason ? h('span', { class: 'nd-status-reason' }, `· ${reason}`) : null,
     );
     replace(foot, stats, bar);
 
     el.dataset.status = t.status;
     setVar(el, '--nd-status', statusColor(t.status));
-    el.setAttribute('aria-label', `${look.label} task: ${truncate(cleanText(t.summary), 120)}`);
+    el.setAttribute('aria-label', `${statusWords(t)} task: ${truncate(cleanText(t.summary), 120)}`);
   }
 
   function render(force = false): void {

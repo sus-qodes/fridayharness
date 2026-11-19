@@ -193,6 +193,8 @@ describe('friday harness config antigravity', () => {
     const changes = configure({ agentKey: 'ag-1' });
     expect(changes.map((c) => c.display).sort()).toEqual([
       '(private) agent.json',
+      // Keeps Friday's folder out of the project's lint (2026-11-19, the trial's F18).
+      '.agents/.friday/eslint.config.mjs',
       '.agents/.friday/harness/antigravity/hook.mjs',
       '.agents/hooks.json',
       '.agents/mcp_config.json',

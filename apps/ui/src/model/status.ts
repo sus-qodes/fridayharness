@@ -29,26 +29,75 @@ export interface StatusLook {
   terminal: boolean;
 }
 
+/**
+ * One set of words for where a task stands, the same on every screen (2026-11-19, the trial's
+ * U4/U12: "Ready for verification", "Rework", "Agent lost", "claimed" were Friday's own terms).
+ * Not started → Starting → Working → (Needs you) → Done, to be checked → Checking → Done; or
+ * Checks failed → Being redone; Agent stopped when its session ended midway.
+ */
 export const TASK_STATUS: Record<TaskStatus, StatusLook> = {
-  PROPOSED: { label: 'Proposed', color: 'var(--status-proposed)', short: 'proposed', terminal: false },
-  READY: { label: 'Ready', color: 'var(--status-ready)', short: 'ready', terminal: false },
-  ASSIGNED: { label: 'Assigned', color: 'var(--status-assigned)', short: 'assigned', terminal: false },
-  RUNNING: { label: 'Running', color: 'var(--status-running)', short: 'running', terminal: false },
+  PROPOSED: { label: 'Not started', color: 'var(--status-proposed)', short: 'not started', terminal: false },
+  READY: { label: 'Not started', color: 'var(--status-ready)', short: 'not started', terminal: false },
+  ASSIGNED: { label: 'Starting', color: 'var(--status-assigned)', short: 'starting', terminal: false },
+  RUNNING: { label: 'Working', color: 'var(--status-running)', short: 'working', terminal: false },
   WAITING: { label: 'Waiting', color: 'var(--status-waiting)', short: 'waiting', terminal: false },
   READY_FOR_VERIFICATION: {
-    label: 'Ready for verification',
+    label: 'Done, to be checked',
     color: 'var(--status-claimed)',
-    short: 'claimed',
+    short: 'to check',
     terminal: false,
   },
-  VERIFYING: { label: 'Verifying', color: 'var(--status-verifying)', short: 'verifying', terminal: false },
-  COMPLETED: { label: 'Completed', color: 'var(--status-completed)', short: 'done', terminal: true },
-  FAILED: { label: 'Failed', color: 'var(--status-failed)', short: 'failed', terminal: false },
-  REWORK: { label: 'Rework', color: 'var(--status-rework)', short: 'rework', terminal: false },
-  HARNESS_LOST: { label: 'Agent lost', color: 'var(--status-lost)', short: 'lost', terminal: false },
+  VERIFYING: { label: 'Checking', color: 'var(--status-verifying)', short: 'checking', terminal: false },
+  COMPLETED: { label: 'Done', color: 'var(--status-completed)', short: 'done', terminal: true },
+  FAILED: { label: 'Checks failed', color: 'var(--status-failed)', short: 'failed', terminal: false },
+  REWORK: { label: 'Being redone', color: 'var(--status-rework)', short: 'redo', terminal: false },
+  HARNESS_LOST: { label: 'Agent stopped', color: 'var(--status-lost)', short: 'stopped', terminal: false },
   CANCELLED: { label: 'Cancelled', color: 'var(--status-cancelled)', short: 'cancelled', terminal: true },
-  ABANDONED: { label: 'Abandoned', color: 'var(--status-cancelled)', short: 'abandoned', terminal: true },
+  ABANDONED: { label: 'Given up', color: 'var(--status-cancelled)', short: 'given up', terminal: true },
 };
+
+/** A goal's status in words (2026-11-19). */
+export const GOAL_WORDS: Record<string, string> = {
+  OPEN: 'Not started',
+  ACTIVE: 'In progress',
+  COMPLETED: 'Done',
+  CANCELLED: 'Cancelled',
+};
+
+/** The checks of a task, or one check, in words (2026-11-19). */
+export const CHECK_WORDS: Record<string, string> = {
+  NOT_REQUESTED: 'Not run',
+  QUEUED: 'Waiting to run',
+  RUNNING: 'Running',
+  PASSED: 'Passed',
+  FAILED: 'Failed',
+  BLOCKED: 'Could not run',
+  CANCELLED: 'Stopped',
+};
+
+/** Bringing a task's work into its goal, in words (2026-11-19: "integrated", "conflicted"). */
+export const MERGE_WORDS: Record<string, string> = {
+  integrated: 'Merged into the goal',
+  conflicted: 'Clashes with other work',
+  failed: 'Could not merge',
+  not_needed: 'Nothing to merge',
+};
+
+/** A word of one of these tables, or the value itself made readable. */
+export function wordsFor(table: Record<string, string>, value: string): string {
+  return (
+    table[value] ??
+    value
+      .replace(/_/g, ' ')
+      .toLowerCase()
+      .replace(/^./, (c) => c.toUpperCase())
+  );
+}
+
+/** A task's status in words, with "Needs you" for one that waits for the person. */
+export function statusWords(task: Pick<SnapshotTask, 'status' | 'waiting_reason'>): string {
+  return waitsForHuman(task) ? 'Needs you' : statusLook(task.status).label;
+}
 
 export function statusLook(status: string): StatusLook {
   return (
@@ -62,11 +111,11 @@ export function statusLook(status: string): StatusLook {
 }
 
 export const WAITING_REASON: Record<string, string> = {
-  blocked: 'blocked: needs you',
-  context_required: 'needs context',
-  human_approval: 'waits for an approval',
-  dependency_wait: 'waits for a dependency',
-  agent_error: 'agent error',
+  blocked: 'the agent is stuck',
+  context_required: 'the agent needs more to go on',
+  human_approval: 'waits for your permission',
+  dependency_wait: 'waits for another task',
+  agent_error: 'the agent hit an error',
 };
 
 export const TASK_KIND: Record<string, { label: string; color: `var(--${string})` }> = {

@@ -637,11 +637,11 @@ describe('question cards by kind (plan FD-21)', () => {
       arm(card.el);
       buttonNamed(card.el, 'Try again').click();
       await flush();
-      expect(card.el.textContent).toContain('Integration conflicted');
+      expect(card.el.textContent).toContain('Clashes with other work');
       buttonNamed(card.el, 'I repaired it myself').click();
       await flush();
       expect(ctx.transport.to('POST', `/tasks/${TASK}/integrate`).map((c) => c.body)).toEqual([{}, { repaired: true }]);
-      expect(card.el.textContent).toContain('Integrated');
+      expect(card.el.textContent).toContain('Merged into the goal');
       card.destroy();
     });
 

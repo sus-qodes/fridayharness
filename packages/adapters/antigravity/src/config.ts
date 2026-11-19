@@ -10,7 +10,7 @@ import { existsSync, readFileSync, rmdirSync } from 'node:fs';
 import path from 'node:path';
 import { applyPlan, bundledHookSource, type FileChange } from '@friday/adapter-claude';
 import { FridayError } from '@friday/protocol';
-import { loadProject, privateDirFor } from '@friday/sdk';
+import { LINT_SKIP, LINT_SKIP_FILE, loadProject, privateDirFor } from '@friday/sdk';
 import {
   AGENTS_MD_BLOCK,
   fridayHookGroup,
@@ -163,6 +163,14 @@ export function planAntigravity(opts: AntigravityConfigOptions): FileChange[] {
     install ? HOOK_SHIM : null,
     true,
     'runs the hook launcher from .agents (where Antigravity starts hooks)',
+    true,
+  );
+  // The project's lint skips Friday's folder in `.agents` (2026-11-19, the trial's F18); removed with it.
+  add(
+    path.join(root, '.agents', '.friday', LINT_SKIP_FILE),
+    install ? LINT_SKIP : null,
+    true,
+    "keeps Friday's files out of the project's lint (ESLint 10 and later)",
     true,
   );
   add(path.join(harnessDir, 'launch-mcp.mjs'), install ? LAUNCH_MCP : null, true, 'starts the friday MCP server', true);

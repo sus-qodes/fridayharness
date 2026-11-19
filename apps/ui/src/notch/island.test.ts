@@ -356,7 +356,7 @@ describe('mounted Notch in a page: the pill alone (review §4, owner decision 1)
     const tag = q<HTMLButtonElement>('.nt-compact-open');
     expect(tag.getAttribute('aria-disabled')).toBe('false');
     expect(tag.tabIndex).toBe(0);
-    expect(tag.getAttribute('aria-label')).toBe('Inspect api: Running');
+    expect(tag.getAttribute('aria-label')).toBe('Inspect api: Working');
     expect(q('.nt-tag').textContent).toBe('api');
     tag.click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'inspector', id: 't1' });
@@ -767,7 +767,7 @@ describe('mounted Notch: the expanded card', () => {
     expect(ctx.transport.to('GET', '/models')).toHaveLength(0);
     expect(q('.nt-studio').getAttribute('aria-label')).toBe('Open this in Studio (Space)');
     expect(q('.nt-banner').hidden).toBe(false);
-    expect(q('.nt-banner-status').textContent).toBe('Running');
+    expect(q('.nt-banner-status').textContent).toBe('Working');
     expect(q('.nt-banner-tag').textContent).toBe('api');
     expect(q('.nt-meta-checks').textContent).toBe('No checks run yet');
     expect(q('.nt-banner').classList.contains('nt-banner-slim')).toBe(true);

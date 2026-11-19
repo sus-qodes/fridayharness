@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { Clock, IdGenerator } from '@friday/core';
 import { closeDatabase, openDatabase } from '@friday/db';
 import { type ExecutionProfile, ProcessGroups } from '@friday/execution';
-import { GitRoot, rootKey, worktreesDir } from '@friday/git';
+import { GitRoot, rootKey, runGit, worktreesDir } from '@friday/git';
 import type { PlannerModel } from '@friday/planner';
 import { type Actor, API_VERSION, type ContextPacket, FridayError, PROTOCOL_VERSIONS } from '@friday/protocol';
 import {
@@ -19,10 +19,12 @@ import {
 } from '@friday/routing';
 import {
   type DaemonDiscovery,
+  ensureLintSkip,
   ensurePrivateDir,
   FRIDAY_DIR,
   FRIDAY_VERSION,
   type FridayConfig,
+  LINT_SKIP_FOLDERS,
   loadProject,
   type ProjectRef,
   privateDirFor,
@@ -928,6 +930,22 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   if (brain && !(opts.brain && opts.brain.autoStart === false)) brain.brain.start();
   // A project initialized without its graph gets it once, now, in the background.
   void setup.start().catch((e) => logger.warn('setup did not finish', { message: (e as Error).message }));
+  // Friday's own folders are kept out of the project's lint (2026-11-19, the trial's F18): an
+  // agent in the project folder ran `eslint .`, failed on Friday's hook launcher, and changed the
+  // project's eslint.config.js to get past it. Projects set up before this get it at their start,
+  // in a folder git does not track (nothing then shows as changed in theirs); where git tracks the
+  // folder, setup writes it, among Friday's files to commit.
+  void (async () => {
+    const tracked = new Set<string>();
+    for (const folder of LINT_SKIP_FOLDERS) {
+      const r = await runGit(project.root, ['ls-files', '-z', '--', folder], { okCodes: [128] }).catch(() => null);
+      if (r && r.code === 0 && r.stdout.length > 0) tracked.add(folder);
+    }
+    const wrote = ensureLintSkip(project.root, (folder) => tracked.has(folder));
+    if (wrote.length) logger.info("Friday's folders kept out of the project's lint", { files: wrote });
+  })().catch((e) =>
+    logger.warn("Friday's folders could not be kept out of the project's lint", { message: (e as Error).message }),
+  );
 
   async function close(reason = 'shutdown'): Promise<void> {
     if (closing) return closing;

@@ -36,16 +36,16 @@ export interface ApprovalModalOptions {
 
 // The reach words are the card's and the Allow button's (`REACH_LABEL`): one vocabulary for a grant's reach.
 const REACHES: { reach: Reach; label: string; explain: string }[] = [
-  { reach: 'once', label: 'Once', explain: 'This one call, then the agent asks again.' },
+  { reach: 'once', label: 'Once', explain: 'This one time; the agent asks again the next time.' },
   {
     reach: 'run',
-    label: 'For this attempt',
-    explain: 'The same call on this exact target for the rest of this attempt.',
+    label: 'For this try',
+    explain: 'The same action on the same file or command, until this try of the task ends.',
   },
   {
     reach: 'task',
     label: 'For this task',
-    explain: 'The same call on this exact target for every attempt of this task.',
+    explain: 'The same action on the same file or command, until the task is done.',
   },
 ];
 
@@ -120,20 +120,15 @@ export function approvalModal(
     h('div', { class: 'gv-meta-row' }, h('dt', null, 'Agent'), h('dd', { class: 'mono' }, visible(agent))),
     h('div', { class: 'gv-meta-row' }, h('dt', null, 'Task'), h('dd', null, taskLine(board, a.task_id))),
     a.task_id && board?.runs[a.task_id]?.run_id === a.run_id
-      ? h(
-          'div',
-          { class: 'gv-meta-row' },
-          h('dt', null, 'Attempt'),
-          h('dd', null, String(board.runs[a.task_id]?.attempt)),
-        )
+      ? h('div', { class: 'gv-meta-row' }, h('dt', null, 'Try'), h('dd', null, String(board.runs[a.task_id]?.attempt)))
       : null,
     h('div', { class: 'gv-meta-row' }, h('dt', null, 'Asked'), h('dd', null, timeAgo(a.created_at, ctx.now()))),
   );
   const bound = h(
     'p',
     { class: 'gv-policy-note' },
-    'A grant is bound to this task, this attempt and this exact target, and ends with its reach or its expiry. ' +
-      'Nothing here changes the project policy.',
+    'Allowing covers only this action, for this task, and ends as chosen above or when the request runs out. ' +
+      'Your project’s rules do not change.',
   );
 
   // ---- file context
@@ -222,7 +217,7 @@ export function approvalModal(
     h(
       'div',
       { class: 'field gv-reach-field' },
-      h('span', { class: 'field-label', id: reachId }, 'Reach of the grant'),
+      h('span', { class: 'field-label', id: reachId }, 'How long to allow it'),
       reachGroup,
       reachExplain,
     ),
@@ -298,7 +293,7 @@ export function approvalModal(
           { class: 'field-hint' },
           riskOf(a) === 'high'
             ? 'High risk: hold the button (or hold Space on it) for 1.2 seconds.'
-            : 'A grant for the whole task: hold the button (or hold Space on it) for 1.2 seconds.',
+            : 'For the whole task: hold the button (or hold Space on it) for 1.2 seconds.',
         ),
       );
     } else {
@@ -349,7 +344,7 @@ export function approvalModal(
         title: 'Reject and release the task?',
         body: [
           'The request is rejected with your feedback, and the task goes back to READY.',
-          'The agent’s attempt ends; its folder and commits are kept for the next attempt.',
+          'The agent stops this try; its folder and work are kept for the next one.',
         ],
         confirmLabel: 'Reject and release',
         danger: true,
@@ -363,7 +358,7 @@ export function approvalModal(
         await ctx.act(
           'Release the task',
           () => ctx.api.taskAction(taskId, 'release'),
-          'The task is ready for another attempt',
+          'The task is ready to be tried again',
         );
         ctx.refresh();
         busy = false;

@@ -158,3 +158,41 @@ describe('a verification that could not finish', () => {
     expect(state.q.verificationsWithStatus(PROJECT, 'RUNNING')).toEqual([]);
   });
 });
+
+// The time limit Settings suggests is read from these (2026-11-19, the trial's F8).
+describe('how long each check took lately', () => {
+  it('keeps the longest of its last ten runs, and whether one ran out of time, for the project’s own checks only', () => {
+    const taskId = claimed();
+    const { verification_id } = state.startVerification(PROJECT, human, taskId, revision);
+    const rec = (name: string, ms: number | undefined, over: Record<string, unknown> = {}) =>
+      state.recordVerificationCheck(PROJECT, human, verification_id, {
+        name,
+        kind: 'lint',
+        status: 'PASSED',
+        exit_code: 0,
+        artifact_ref: null,
+        summary: 'ok',
+        ...(ms === undefined ? {} : { duration_ms: ms }),
+        ...over,
+      });
+    // Lint: an old slow run, then ten quick ones; only the last ten count.
+    rec('lint', 200_000);
+    for (let i = 0; i < 10; i += 1) rec('lint', 25_000 + i);
+    rec('tests', 64_000);
+    rec('tests', 93_000, {
+      details: {
+        findings: [{ rule: 'check.ran_out_of_time', severity: 'warn', message: 'second try', paths: [] }],
+      },
+    });
+    // Left out: Friday's own, a targeted run, one with no time.
+    rec('friday.diff', 500_000, { origin: 'friday' });
+    rec('tests (targeted)', 400_000, { origin: 'targeted' });
+    rec('build', undefined);
+    const times = state.q.checkTimes(PROJECT);
+    expect(Object.fromEntries(times)).toEqual({
+      lint: { longest_ms: 25_009, ran_out: false, runs: 10 },
+      tests: { longest_ms: 93_000, ran_out: true, runs: 2 },
+    });
+    expect(state.q.checkTimes('proj_00000000000000000000000002').size).toBe(0);
+  });
+});

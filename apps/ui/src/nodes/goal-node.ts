@@ -11,10 +11,11 @@
  */
 import type { AnswerView, GoalSummary, UiSnapshot } from '@friday/protocol';
 import type { GoalGroup } from '../model/board.js';
+import { GOAL_WORDS, wordsFor } from '../model/status.js';
 import { type StoryLine, storyOfGoal } from '../model/story.js';
 import { type AppContext, openModal } from '../shell/context.js';
 import { button, h, replace, setVar, toggleClass } from '../ui/dom.js';
-import { cleanText, compact, humanize, plural, truncate, usd } from '../ui/format.js';
+import { cleanText, compact, plural, truncate, usd } from '../ui/format.js';
 import { actionButton, badge, fingerprint, type NodeView, nodeIcon, pill, type Tone } from './common.js';
 
 export interface GoalCardModel {
@@ -168,13 +169,13 @@ export function progressPercent(p: { completed: number; total: number }): number
   return p.total > 0 ? Math.round((p.completed / p.total) * 100) : 0;
 }
 
-/** "2 integrated · 1 conflicted", or null when nothing was integrated yet. */
+/** "2 merged · 1 clashes", or null when nothing was merged into the goal yet. */
 export function integrationText(i: GoalGroup['integration']): string | null {
   const parts: string[] = [];
-  if (i.integrated) parts.push(`${i.integrated} integrated`);
-  if (i.conflicted) parts.push(`${i.conflicted} conflicted`);
-  if (i.failed) parts.push(`${i.failed} failed`);
-  if (i.not_needed) parts.push(`${i.not_needed} not needed`);
+  if (i.integrated) parts.push(`${i.integrated} merged`);
+  if (i.conflicted) parts.push(`${i.conflicted} ${i.conflicted === 1 ? 'clashes' : 'clash'} with other work`);
+  if (i.failed) parts.push(`${i.failed} could not merge`);
+  if (i.not_needed) parts.push(`${i.not_needed} had nothing to merge`);
   return parts.length ? parts.join(' · ') : null;
 }
 
@@ -381,7 +382,7 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
         nodeIcon('target', 14),
         h('span', { class: 'nd-id', title: `Goal ${goal.goal_id}` }, asked ? 'Question' : 'Goal'),
         h('span', { class: 'spacer' }),
-        badge(humanize(goal.status), GOAL_TONE[goal.status] ?? 'muted'),
+        badge(wordsFor(GOAL_WORDS, goal.status), GOAL_TONE[goal.status] ?? 'muted'),
       ),
       h(
         'p',

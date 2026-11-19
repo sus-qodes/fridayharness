@@ -166,7 +166,7 @@ describe('the task inspector: Overview', () => {
     expect(el.textContent).toContain('1 passed of 2 run');
     expect(el.textContent).toContain('4.2 s');
     expect(el.textContent).toContain('advisory');
-    expect(el.textContent).toContain('Conflicted');
+    expect(el.textContent).toContain('Clashes with other work');
     drawer.destroy();
   });
 

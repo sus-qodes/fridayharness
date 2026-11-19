@@ -3,6 +3,7 @@ import {
   buildGraph,
   type CodeGraph,
   type FactsCache,
+  isFridayOwn,
   type MerkleStore,
   openFactsCache,
   openMerkleStore,
@@ -91,7 +92,8 @@ export class GraphService {
     // The Merkle tree (ADR-0037 §2): a stat per file, nothing read when nothing changed. When git
     // could not vouch for the checkout, an unchanged tree keeps the last graph, and a changed one
     // says which files to read again.
-    const files = await git.files();
+    // Friday's own folders are not the project's code (2026-11-19).
+    const files = (await git.files()).filter((f) => !isFridayOwn(f));
     const scan = await this.merkle().scan(git.root, files);
     if (e.latest && e.latest.treeHash === scan.root_hash && identity.basis !== 'content') return e.latest;
     // The last graph of this checkout is the starting point: files git says are unchanged keep

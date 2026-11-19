@@ -30,6 +30,7 @@ import {
   type ProjectRef,
   packageManagerOf,
   parseConfig,
+  setCheckLimitText,
   setCheckRequiredText,
   suggestChecks,
 } from '@friday/sdk';
@@ -50,6 +51,7 @@ import { ZodError, z } from 'zod';
 import { backupCode } from './backup-code.js';
 import type { BrainHandle } from './brain.js';
 import { escalationView, mountBrainRoutes } from './brain-routes.js';
+import { suggestedLimit } from './check-time.js';
 import type { CompileInput, ContextService } from './context.js';
 import type { ControlManager } from './control.js';
 import { findSettingsFiles } from './copy-files.js';
@@ -566,8 +568,30 @@ export function buildApp(deps: AppDeps): Hono<Env> {
   const checksView = () => {
     const have = parseConfig(readFileSync(configFile, 'utf8'), `${FRIDAY_DIR}/${CONFIG_FILE}`).verification.checks;
     const names = new Set(have.map((k) => k.name));
+    // How long each took lately, in work checked and in the last "Run the checks now", and the
+    // time limit those times call for (2026-11-19).
+    const times = state.q.checkTimes(pid);
+    const tried = deps.integration?.checkTrial().checks ?? [];
+    const timing = (k: (typeof have)[number]) => {
+      const seen = times.get(k.name);
+      const trial = tried.find((t) => t.name === k.name && t.duration_ms !== null);
+      const longest = Math.max(seen?.longest_ms ?? 0, trial?.duration_ms ?? 0) || null;
+      return {
+        timeout_ms: k.timeout_ms,
+        took_ms: longest,
+        ran_out: Boolean(seen?.ran_out || trial?.timed_out),
+        suggested_ms: suggestedLimit(k.timeout_ms, longest),
+      };
+    };
     return {
-      checks: have.map((k) => ({ name: k.name, kind: k.kind, command: k.command, args: k.args, required: k.required })),
+      checks: have.map((k) => ({
+        name: k.name,
+        kind: k.kind,
+        command: k.command,
+        args: k.args,
+        required: k.required,
+        ...timing(k),
+      })),
       suggested: suggestChecks(project.root).filter((s) => !names.has(s.name)),
       manager: packageManagerOf(project.root),
     };
@@ -581,8 +605,31 @@ export function buildApp(deps: AppDeps): Hono<Env> {
         remove: Names,
         // One check made required (it must pass) or advisory (it is shown, and holds nothing back).
         strength: z.object({ name: z.string().min(1).max(60), required: z.boolean() }).optional(),
+        // One check's time limit, in whole minutes (2026-11-19).
+        limit: z.object({ name: z.string().min(1).max(60), minutes: z.number().int().min(1).max(60) }).optional(),
       })
       .parse(await json(c));
+    if (body.limit) {
+      const set = setCheckLimitText(
+        readFileSync(configFile, 'utf8'),
+        body.limit.name,
+        body.limit.minutes * 60_000,
+        `${FRIDAY_DIR}/${CONFIG_FILE}`,
+      );
+      if (set.changed) {
+        await writeConfig(set.text);
+        state.recordObservation(
+          pid,
+          humanOf(c),
+          'config.edited',
+          {
+            changed: ['verification.checks'],
+            limit: { name: body.limit.name, timeout_ms: body.limit.minutes * 60_000 },
+          },
+          [],
+        );
+      }
+    }
     if (body.strength) {
       const set = setCheckRequiredText(
         readFileSync(configFile, 'utf8'),

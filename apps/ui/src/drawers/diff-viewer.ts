@@ -457,7 +457,7 @@ export function createDiffViewer(ctx: AppContext, request: DrawerRequest): Compo
       h(
         'div',
         { class: 'dr-banner dr-banner-warn', role: 'note' },
-        h('strong', null, 'Discrepancy between the agent’s claim and what Friday saw'),
+        h('strong', null, 'What the agent says differs from what Friday saw'),
         d.claimedNotSeen.length
           ? h(
               'div',
