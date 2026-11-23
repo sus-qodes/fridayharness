@@ -1,21 +1,44 @@
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { findCredentials } from '@friday/events';
-import { type ContentTree, changedBetween, GitRoot, sameRepository } from '@friday/git';
+import {
+  agentIdentity,
+  type ContentTree,
+  changedBetween,
+  commitMessage,
+  commitSubject,
+  commitTree,
+  GitRoot,
+  moveRef,
+  sameRepository,
+  treeOf,
+  verifiedRef,
+} from '@friday/git';
 import { aboveCeiling, matchesAny, patternsOverlap, sensitiveClassOf } from '@friday/policy';
 import { type Actor, FridayError, isFridayError, type RunView, type VerificationFinding } from '@friday/protocol';
 import {
   analyzeDiff,
   checkReservations,
+  checksForChange,
   checksVersion,
+  documentsOnly,
   type Finding,
+  type FittedChecks,
   isBuildArtifact,
   ownChanges,
   relatedTests,
   scanCredentials,
   selectChecks,
-  summarizeOutcome,
 } from '@friday/verification';
+import { runCheckWithSecondTry, timedSummary } from './check-time.js';
+import {
+  CLEAN_INSTALL_ARGS,
+  CLEAN_INSTALL_COMMAND,
+  CLEAN_INSTALL_TIMEOUT_MS,
+  judgeCleanInstall,
+  lockRoots,
+} from './clean-install.js';
+import { leftMarked, stillMarked } from './collisions.js';
 import type { DaemonContext } from './daemon.js';
 import { runCheckInProfile } from './execution.js';
 
@@ -69,6 +92,8 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
   const base = run?.base_commit ?? null;
   const shared = samePath(root, project.root);
   const checks = selectChecks(configured, task.kind);
+  let fitted: FittedChecks<(typeof checks)[number]> = { run: checks, skipped: [], why: null };
+  const question = Boolean(task.goal_id && state.q.findGoal(pid, task.goal_id)?.mode === 'ask');
   // What is verified must be read from git: every task worktree, and the main checkout of a project
   // kept in git. A checkout git cannot read is not verified at all (review F05); only a project
   // outside git is judged without a diff.
@@ -222,6 +247,18 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
             paths: [],
           },
         ];
+    // A task that only reads (a question, a review without files of its own) changed something.
+    if ((task.kind === 'research' || task.kind === 'review') && (task.scope?.write ?? []).length === 0 && since) {
+      const touched = changes.map((c) => c.path);
+      if (touched.length) {
+        findings.push({
+          rule: 'diff.read_only_task',
+          severity: 'fail',
+          message: `this task only reads, and it changed ${touched.length} file(s): ${touched.slice(0, 10).join(', ')}${touched.length > 10 ? ` (and ${touched.length - 10} more)` : ''}`,
+          paths: touched.slice(0, 20),
+        });
+      }
+    }
     if (artifacts.length) {
       findings.push({
         rule: 'diff.artifacts',
@@ -234,9 +271,28 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       findings.push({
         rule: 'diff.uncommitted',
         severity: 'info',
-        message: `the verified code includes ${before.files} uncommitted change(s); integration needs them committed`,
+        // In the project folder Friday keeps this task's own files for the goal and leaves the
+        // folder as it is; in a task worktree it commits the verified work itself.
+        message:
+          shared && task.goal_id
+            ? `the project folder has ${before.files} uncommitted change(s); Friday keeps this task's own files for the goal and leaves the rest as it is`
+            : `the verified code includes ${before.files} uncommitted change(s); integration needs them committed`,
         paths: before.paths.slice(0, 20),
       });
+    }
+    // A file Friday left with two versions marked, when it merged the goal's other work into this
+    // folder, is not finished while the marks are in it (2026-11-18): the claim is refused with
+    // their names, whatever the checks say (a document passes every check with marks in it).
+    if (!shared) {
+      const unfinished = stillMarked(root, leftMarked(state, pid, taskId));
+      if (unfinished.length) {
+        findings.push({
+          rule: 'diff.unfinished_merge',
+          severity: 'fail',
+          message: `${unfinished.length} file(s) still hold two versions from the merge with the goal's other work: ${unfinished.slice(0, 20).join(', ')}. In each, keep what both meant and remove the lines that start with "<<<<<<<", "=======" and ">>>>>>>"`,
+          paths: unfinished.slice(0, 20),
+        });
+      }
     }
     // Conflict-prone files (ADR-0025): a change to what another task holds fails; free ones are taken.
     if (since && ctx.policy().reservations_mode !== 'off') {
@@ -265,6 +321,7 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
         changes.filter((c) => c.change !== 'deleted').map((c) => c.path),
         {
           testsOf: (f) => graph.testsOf(f),
+          testsReaching: (f) => graph.testsReaching(f),
           isSource: (f) => graph.nodes.has(f),
           isTest: (f) => graph.nodes.get(f)?.test === true,
         },
@@ -274,7 +331,7 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
         findings.push({
           rule: 'tests.none_related',
           severity: 'warn',
-          message: `no test imports these changed files: ${rel.untested.slice(0, 20).join(', ')}${rel.untested.length > 20 ? ` (and ${rel.untested.length - 20} more)` : ''}`,
+          message: `no test uses these changed files, directly or through another file: ${rel.untested.slice(0, 20).join(', ')}${rel.untested.length > 20 ? ` (and ${rel.untested.length - 20} more)` : ''}. Worth a look, not a failure`,
           paths: rel.untested.slice(0, 20),
         });
       }
@@ -327,11 +384,27 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       true,
     );
 
+    // The checks this change calls for (2026-11-18): none when nothing changed, the lint checks
+    // alone for a change to documents only.
+    const changedPaths = changes.flatMap((c) =>
+      c.origPath && c.origPath !== c.path ? [c.path, c.origPath] : [c.path],
+    );
+    fitted = checksForChange(checks, since ? changedPaths : null, task.kind);
+    // A question is checked for one thing, that nothing changed: none of the project's checks is
+    // its judge, and none runs for it, so it needs no trust to be checked by itself.
+    if (question) fitted = { run: [], skipped: [], why: null };
+
     // 3. Evidence that the work was run, when no configured check judges it (a configured check is
     // that evidence, run by Friday itself). A claim made after a minute with an untested edit is
     // the common way an implementation task is lost: the claim names the checks the session ran
     // (with their outcome), or the attempt ran a test, build or lint command the hooks saw.
-    if (task.kind === 'implementation' && checks.length === 0) {
+    // A change to nothing, or to documents only, has nothing that could have been run.
+    if (
+      task.kind === 'implementation' &&
+      checks.length === 0 &&
+      changedPaths.length > 0 &&
+      !documentsOnly(changedPaths)
+    ) {
       const ev = evidenceOfRunning({
         claimed: claimChecks(run),
         executed: run ? executedCommands(state, pid, taskId, run) : [],
@@ -351,8 +424,67 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
       );
     }
 
+    // 3a. The files that list the project's packages changed: a clean install must still work
+    // (2026-11-18, `clean-install.ts`). The checks below run where the packages are already
+    // installed, so a lockfile `npm ci` refuses passed every one of them and landed.
+    const listed = changes.filter((c) => c.change !== 'deleted').map((c) => c.path);
+    for (const at of lockRoots(root, listed)) {
+      const cwd = at.dir ? path.resolve(root, at.dir) : root;
+      const outcome = await runCheckInProfile(
+        ctx.profile(),
+        {
+          name: 'friday.clean_install',
+          command: CLEAN_INSTALL_COMMAND,
+          args: CLEAN_INSTALL_ARGS,
+          root,
+          cwd,
+          env: { CI: 'true' },
+          timeoutMs: CLEAN_INSTALL_TIMEOUT_MS,
+        },
+        ctx.groups,
+      );
+      const judged = judgeCleanInstall(outcome, at);
+      const artifact =
+        judged.verdict === 'ok'
+          ? null
+          : state.artifacts?.storeText(
+              pid,
+              'verification',
+              `$ ${CLEAN_INSTALL_COMMAND} ${CLEAN_INSTALL_ARGS.join(' ')}\n(in ${cwd})\n${outcome.output}`,
+            );
+      const where = at.dir ? `${at.dir}/${at.lockfile}` : at.lockfile;
+      record(
+        {
+          name: 'friday.clean_install',
+          kind: 'install',
+          origin: 'friday',
+          // What npm could not judge is a warning on a passed check: the work is not failed for it.
+          status: judged.verdict === 'out_of_step' ? 'FAILED' : 'PASSED',
+          exit_code: outcome.exit_code,
+          artifact_ref: artifact ? `artifact:${artifact.artifact_id}` : null,
+          summary: judged.summary,
+          duration_ms: outcome.duration_ms,
+          details:
+            judged.verdict === 'ok'
+              ? null
+              : {
+                  findings: [
+                    {
+                      rule: judged.verdict === 'out_of_step' ? 'install.lockfile_out_of_step' : 'install.not_checked',
+                      severity: judged.verdict === 'out_of_step' ? 'fail' : 'warn',
+                      message: judged.summary,
+                      paths: [where],
+                    },
+                  ] as VerificationFinding[],
+                },
+        },
+        true,
+      );
+      logger.info('clean install checked', { task_id: taskId, lockfile: where, verdict: judged.verdict });
+    }
+
     // 4. The configured checks for this kind of task, in the checkout it worked in.
-    for (const check of checks) {
+    for (const check of fitted.run) {
       const cwd = check.cwd ? path.resolve(root, check.cwd) : root;
       if (check.targeted_args?.length && related.length) {
         const files = related.map((t) => path.relative(cwd, path.join(root, t)).split(path.sep).join('/'));
@@ -395,18 +527,46 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
         const after = await git.identity();
         const afterContent = await git.contentTree();
         if (after.version !== before.version || afterContent.head !== content.head) {
-          reason = `the code changed while it was verified (${before.version} became ${after.version}); verify it again`;
+          reason = 'the code changed while it was being checked; check it again';
         } else if (afterContent.tree !== content.tree) {
           const paths = await changedBetween(git.root, content.tree, afterContent.tree).catch(() => []);
-          reason = `the code changed while it was verified (${paths.slice(0, 5).join(', ') || 'its files'} changed); verify it again`;
+          reason = `the code changed while it was being checked (${paths.slice(0, 5).join(', ') || 'its files'} changed); check it again`;
         }
       } catch (e) {
-        reason = `git could not read the checkout after the checks: ${(e as Error).message}; verify it again`;
+        reason = `git could not read the task's files after the checks: ${(e as Error).message}; check it again`;
       }
       if (reason) {
         logger.warn('verification interrupted', { task_id: taskId, reason });
         const interrupted = state.interruptVerification(pid, actor, verification_id, reason);
         return { task: interrupted, verification: state.q.verification(verification_id) };
+      }
+    }
+    // 5a. Work made in the project folder itself is kept as a commit of its own (2026-11-17): this
+    // task's files only (those Friday's hooks saw it write, or its claim lists), on the commit the
+    // attempt began at, under a ref named after this verification. Integration brings that commit
+    // to the goal branch, so a task that depends on this one starts with its work. The folder, its
+    // index and its branch are not touched, and nobody else's edits are taken. Before, such work
+    // stayed uncommitted in the folder, and every task folder was cut without it.
+    if (shared && git && base && task.goal_id && requiredFailed === 0) {
+      const mine = [
+        ...new Set(changes.flatMap((c) => (c.origPath && c.origPath !== c.path ? [c.path, c.origPath] : [c.path]))),
+      ];
+      const kept = mine.length ? await git.pathsTree(base, mine) : null;
+      if (kept && kept !== (await treeOf(git.root, base))) {
+        const agentKey = (run && state.q.findAgent(run.agent_id)?.agent_key) || 'agent';
+        const commit = await commitTree(
+          git.root,
+          kept,
+          [base],
+          // Plain words, no ids (2026-11-19): it lands in the project's history.
+          commitMessage(
+            commitSubject(task.summary),
+            task.summary,
+            'Made in the project folder. Checked by Friday: its checks passed.',
+          ),
+          agentIdentity(agentKey),
+        );
+        await moveRef(git.root, verifiedRef(taskId, verification_id), commit, null);
       }
     }
   } catch (e) {
@@ -429,21 +589,44 @@ export async function runVerification(ctx: DaemonContext, taskId: string, actor:
     const now = ctx.policy().version;
     const reason =
       now !== policy.version
-        ? `the project's policy changed while the work was verified (${policy.version.slice(0, 12)} became ${now.slice(0, 12)}); verify it again under the new one`
-        : 'an approval this verification relied on changed while the work was verified; verify it again';
+        ? 'the project’s rules changed while the work was being checked; check it again under the new ones'
+        : 'something you allowed, which these checks relied on, changed while the work was being checked; check it again';
     logger.warn('verification interrupted', { task_id: taskId, reason });
     const interrupted = state.interruptVerification(pid, actor, verification_id, reason);
     return { task: interrupted, verification: state.q.verification(verification_id) };
   }
   const ok = requiredFailed === 0;
+  // A project check that failed where the folder's dependencies were never installed is said as
+  // what it most likely is; the question that follows offers to run the install again.
+  const last = ok ? null : state.latestWorktreeSetup(pid, taskId);
+  const notInstalled =
+    last &&
+    (last.setup.status === 'failed' || last.setup.status === 'refused') &&
+    state.q.verification(verification_id)?.checks.some((c) => c.status === 'FAILED' && c.origin !== 'friday')
+      ? last.setup.reason
+      : null;
   const parts = [
     `${requiredRan - requiredFailed}/${requiredRan} required checks passed`,
+    ...(notInstalled
+      ? [
+          `the project's dependencies were not installed in this task's folder (${notInstalled}), so a failing check may be the setup and not the work`,
+        ]
+      : []),
+    ...(fitted.why === 'nothing_changed'
+      ? [`nothing was changed, so the project's checks were not run (${fitted.skipped.map((c) => c.name).join(', ')})`]
+      : fitted.why === 'documents_only'
+        ? [
+            `only documents were changed, so ${fitted.skipped.map((c) => c.name).join(', ')} ${fitted.skipped.length === 1 ? 'was' : 'were'} not run`,
+          ]
+        : []),
     ...(advisoryFailed ? [`${advisoryFailed} advisory check(s) failed`] : []),
     ...(warnings ? [`${warnings} warning(s)`] : []),
     ...(configured.length === 0
-      ? ["no project checks are configured; Friday's scope and credential checks ran"]
+      ? [
+          "your project has no checks of its own set; Friday checked that only the task's files changed and that no passwords or keys were added",
+        ]
       : checks.length === 0
-        ? [`no configured check applies to ${task.kind} tasks`]
+        ? [`none of your project's checks is for ${task.kind} tasks`]
         : []),
   ];
   // The outcome counts with others judged by the same checks (review F15).
@@ -477,8 +660,10 @@ async function runConfigured(
   },
 ): Promise<boolean> {
   const { state, project, logger } = ctx;
-  // In the execution profile (ADR-0029 §6): the checks run code an agent may have written.
-  const outcome = await runCheckInProfile(
+  // In the execution profile (ADR-0029 §6): the checks run code an agent may have written. One that
+  // runs out of time is tried once more with twice the time (2026-11-19): a busy computer is not
+  // the work failing.
+  const timed = await runCheckWithSecondTry(
     ctx.profile(),
     {
       name: c.name,
@@ -491,11 +676,17 @@ async function runConfigured(
     },
     ctx.groups,
   );
+  const { outcome } = timed;
+  const said = timedSummary(c.name, timed, c.timeoutMs);
   const artifact = state.artifacts?.storeText(
     project.project_id,
     'verification',
     `$ ${c.command} ${c.args.join(' ')}\n(in ${c.cwd})\n${outcome.output}`,
   );
+  const details = {
+    ...(c.files ? { files: c.files } : {}),
+    ...(said.finding ? { findings: [said.finding] } : {}),
+  };
   c.record({
     name: c.name,
     kind: c.kind,
@@ -503,11 +694,16 @@ async function runConfigured(
     status: outcome.passed ? 'PASSED' : 'FAILED',
     exit_code: outcome.exit_code,
     artifact_ref: artifact ? `artifact:${artifact.artifact_id}` : null,
-    summary: summarizeOutcome(outcome),
+    summary: said.summary,
     duration_ms: outcome.duration_ms,
-    details: c.files ? { files: c.files } : null,
+    details: Object.keys(details).length ? details : null,
   });
-  logger.info('verification check finished', { check: c.name, passed: outcome.passed, ms: outcome.duration_ms });
+  logger.info('verification check finished', {
+    check: c.name,
+    passed: outcome.passed,
+    ms: outcome.duration_ms,
+    ...(timed.first_limit_ms !== null ? { second_try_after_ms: timed.first_limit_ms } : {}),
+  });
   return outcome.passed;
 }
 
@@ -587,8 +783,10 @@ const EXECUTING_CLASSES = new Set(['test.local', 'build.local', 'lint.local']);
 
 /**
  * Evidence that the work was run: a test, build or lint command the hooks saw, or a check the claim
- * names with an outcome. A claimed check whose command matches no command seen is a warning, not a
- * failure: the claim is the agent's word, bounded by what the hooks recorded.
+ * names as passed. A claimed check whose command matches no command seen is a warning, not a
+ * failure: the claim is the agent's word, bounded by what the hooks recorded. A check the claim
+ * itself reports as failed is no evidence that the work is done (2026-11-17: it used to count as
+ * one, so a claim saying "tests: failed" passed for the want of anything else).
  */
 export function evidenceOfRunning(input: { claimed: readonly ClaimedCheck[]; executed: readonly ExecutedCommand[] }): {
   ok: boolean;
@@ -596,11 +794,21 @@ export function evidenceOfRunning(input: { claimed: readonly ClaimedCheck[]; exe
   findings: Finding[];
 } {
   const ran = input.executed.filter((c) => c.command_class !== null && EXECUTING_CLASSES.has(c.command_class));
-  const claimed = input.claimed.filter((c) => c.outcome !== 'skipped');
+  const named = input.claimed.filter((c) => c.outcome !== 'skipped');
+  const claimed = named.filter((c) => c.outcome !== 'failed');
+  const failedByClaim = named.filter((c) => c.outcome === 'failed');
   const findings: Finding[] = [];
+  for (const c of failedByClaim) {
+    findings.push({
+      rule: 'evidence.claimed_failed',
+      severity: 'warn',
+      message: `the claim itself reports its check "${c.name}" as failed`,
+      paths: [],
+    });
+  }
   const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
   const seen = input.executed.map((c) => norm(c.text));
-  const unconfirmed = claimed.filter((c) => {
+  const unconfirmed = named.filter((c) => {
     if (!c.command) return false;
     const cmd = norm(c.command);
     return !seen.some((t) => t.includes(cmd) || cmd.includes(t));
@@ -617,17 +825,22 @@ export function evidenceOfRunning(input: { claimed: readonly ClaimedCheck[]; exe
     findings.push({
       rule: 'evidence.none',
       severity: 'fail',
-      message:
-        'no evidence the work was run: the claim lists no check, and no test, build or lint command ran in this attempt. Run the code or its tests, then claim again, listing what you ran under checks',
+      message: failedByClaim.length
+        ? `no evidence the work is done: the only check(s) the claim lists failed by its own word (${failedByClaim.map((c) => c.name).join(', ')}), and no test, build or lint command ran in this attempt. Make them pass, then claim again`
+        : 'no evidence the work was run: the claim lists no check, and no test, build or lint command ran in this attempt. Run the code or its tests, then claim again, listing what you ran under checks',
       paths: [],
     });
-    return { ok: false, summary: 'nothing shows the work was run', findings };
+    return {
+      ok: false,
+      summary: failedByClaim.length ? "the claim's own checks failed" : 'nothing shows the work was run',
+      findings,
+    };
   }
   const parts = [
     ...(ran.length ? [`${ran.length} test, build or lint command(s) ran`] : []),
-    ...(claimed.length
+    ...(named.length
       ? [
-          `the claim names ${claimed.length} check(s)${unconfirmed.length ? `, ${unconfirmed.length} not seen run` : ''}`,
+          `the claim names ${named.length} check(s)${failedByClaim.length ? `, ${failedByClaim.length} failed by its own word` : ''}${unconfirmed.length ? `, ${unconfirmed.length} not seen run` : ''}`,
         ]
       : []),
   ];

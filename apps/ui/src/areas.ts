@@ -16,7 +16,7 @@ import type { AreaSet } from './shell/app.js';
 
 /** What the Notch shows, built by the areas that own each card (the Notch imports none of them). */
 export const notchSlots: NotchSlots = {
-  approval: (ctx, a, o) => approvalCard(ctx, a, { compact: o.compact }),
+  approval: (ctx, a, o) => approvalCard(ctx, a, { compact: o.compact, ...(o.onFull ? { onFull: o.onFull } : {}) }),
   question: (ctx, e, o) => questionCard(ctx, e, { compact: o.compact, onLater: o.onLater }),
   waiting: (ctx, t, o) => waitingCard(ctx, t, { compact: o.compact }),
   quickPrompt: (ctx, o) => quickPrompt(ctx, { onDone: o.onDone }),

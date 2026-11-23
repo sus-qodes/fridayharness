@@ -186,6 +186,22 @@ describe('tests related to a change', () => {
       untested: ['src/b.ts'],
     });
   });
+
+  // A task added tests that import its module through an index (2026-11-18), and was warned
+  // that no test imports it. A test that reaches a file through others counts as testing it; the
+  // tests a targeted run is given stay the direct importers.
+  it('counts a test that reaches a file through another as testing it, and still lists the untested', () => {
+    const graph = {
+      testsOf: (f: string) => (f === 'src/a.ts' ? ['test/a.test.ts'] : []),
+      testsReaching: (f: string) => (f === 'src/money.ts' ? ['test/index.test.ts'] : []),
+      isSource: (f: string) => f.endsWith('.ts'),
+      isTest: (f: string) => f.includes('.test.'),
+    };
+    expect(relatedTests(['src/a.ts', 'src/money.ts', 'src/lonely.ts'], graph)).toEqual({
+      tests: ['test/a.test.ts'],
+      untested: ['src/lonely.ts'],
+    });
+  });
 });
 
 describe('the credential scan', () => {

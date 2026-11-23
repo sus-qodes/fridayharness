@@ -7,8 +7,8 @@
  *   `Friday — <project>` when nothing waits; `opts.title` replaces the base.
  * - **Notifications:** only when the Settings toggle is on (`prefs.notifications`, asked from a
  *   user gesture there), the browser granted permission, and the tab is hidden. Triggers: a new
- *   approval, question, proposed plan, blocked agent, message awaiting the human's reply, failure,
- *   and Friday stopping. One per item, at most `MAX_PER_UPDATE` per board (the rest summed up in
+ *   approval, question, proposed plan, blocked agent, work to verify, goal ready to land, message
+ *   awaiting the human's reply, failure, and Friday stopping. One per item, at most `MAX_PER_UPDATE` per board (the rest summed up in
  *   one); items present when the notifier starts are not announced. Clicking one focuses the window
  *   and selects the item's task; a message's click also opens the Messages drawer at the delivery.
  *   A notification whose approval, question or message leaves the list closes by itself.
@@ -17,8 +17,9 @@
  * module against the shell's `notify`, so the same rules hold there.
  */
 import type { SnapshotInboxItem, SnapshotTask, UiSnapshot } from '@friday/protocol';
+import { capabilityWords } from '../model/capability-words.js';
 import { visible } from '../model/text.js';
-import { nextExpiryIn, waitingItems } from '../notch/derive.js';
+import { attentionWords, nextExpiryIn, turnHost, turnPrompt, waitingItems } from '../notch/derive.js';
 import { realTimers, type TimerApi } from '../notch/island-fsm.js';
 import { type AppContext, type DrawerRequest, openDrawer } from '../shell/context.js';
 import type { Connection } from '../store/state.js';
@@ -89,10 +90,17 @@ function failedTasks(board: UiSnapshot): SnapshotTask[] {
   return board.tasks.filter((t) => t.status === 'FAILED' || t.status === 'HARNESS_LOST');
 }
 
-function planKeys(board: UiSnapshot): { key: string; goalId: string }[] {
-  const out: { key: string; goalId: string }[] = [];
+function planKeys(board: UiSnapshot): { key: string; goalId: string; own: boolean }[] {
+  const out: { key: string; goalId: string; own: boolean }[] = [];
   for (const [goalId, p] of Object.entries(board.plans)) {
-    if (p.proposed) out.push({ key: `plan:${p.proposed.plan_id}:${p.proposed.version}`, goalId });
+    if (p.proposed) {
+      out.push({
+        key: `plan:${p.proposed.plan_id}:${p.proposed.version}`,
+        goalId,
+        // Written by a person in the plan editor: they are looking at it.
+        own: p.proposed.proposed_by?.kind === 'human',
+      });
+    }
   }
   return out;
 }
@@ -116,7 +124,7 @@ function short(text: string | null | undefined, max = 160): string {
 /** Who sent a message, as the Messages drawer names them. */
 function sender(m: SnapshotInboxItem): string {
   if (m.from.kind === 'agent') return m.from.agent_key ?? m.from.id;
-  if (m.from.kind === 'master_brain') return 'Master Brain';
+  if (m.from.kind === 'master_brain') return 'Friday’s planner';
   if (m.from.kind === 'system') return 'Friday';
   return m.from.kind;
 }
@@ -139,7 +147,7 @@ export function diffNotices(memory: NoticeMemory, board: UiSnapshot, now: number
       notices.push({
         key: item.key,
         title: a.risk === 'high' ? 'High-risk approval needed' : 'Approval needed',
-        body: `${truncate(visible(a.capability), 60)}${target}`,
+        body: `${capabilityWords(a.capability)}${target}`,
         taskId: a.task_id,
       });
     } else if (item.kind === 'question') {
@@ -152,11 +160,59 @@ export function diffNotices(memory: NoticeMemory, board: UiSnapshot, now: number
         body: short(item.escalation.question),
         taskId: item.taskId,
       });
+    } else if (item.kind === 'verify') {
+      if (memory.seen.has(item.key)) continue;
+      memory.seen.add(item.key);
+      notices.push({
+        key: item.key,
+        title: 'Work is ready for you to check',
+        body: `${item.task.agent_key ? `${short(item.task.agent_key, 40)}: ` : ''}${short(item.task.summary)}`,
+        taskId: item.taskId,
+      });
+    } else if (item.kind === 'stopped' || item.kind === 'asking') {
+      if (memory.seen.has(item.key)) continue;
+      memory.seen.add(item.key);
+      const w = attentionWords(item, turnHost(item.host));
+      notices.push({ key: item.key, title: w.title, body: short(w.line), taskId: item.taskId });
+    } else if (item.kind === 'quiet') {
+      if (memory.seen.has(item.key)) continue;
+      memory.seen.add(item.key);
+      notices.push({
+        key: item.key,
+        title: `${short(item.agentKey, 40)} has gone quiet`,
+        body: `Look at ${turnHost(item.host)}: ${short(item.task.summary)}`,
+        taskId: item.taskId,
+      });
+    } else if (item.kind === 'turn') {
+      if (memory.seen.has(item.key)) continue;
+      memory.seen.add(item.key);
+      notices.push({
+        key: item.key,
+        title: `Your turn in ${turnHost(item.host)}`,
+        body: `Type ${turnPrompt(item.host)} there: ${short(item.task.summary)}`,
+        taskId: item.taskId,
+      });
+    } else if (item.kind === 'land') {
+      if (memory.seen.has(item.key)) continue;
+      memory.seen.add(item.key);
+      notices.push({ key: item.key, title: 'A goal is ready to land', body: short(item.request), taskId: null });
+    } else if (item.kind === 'answer') {
+      if (memory.seen.has(item.key)) continue;
+      memory.seen.add(item.key);
+      notices.push({
+        key: item.key,
+        title: item.failed ? 'A question got no answer' : 'Your answer is ready',
+        body: short(item.question),
+        taskId: null,
+      });
     }
   }
   for (const p of planKeys(board)) {
     if (memory.seen.has(p.key)) continue;
     memory.seen.add(p.key);
+    // A plan a person proposed themselves is not announced to them (2026-11-17): it said "A plan
+    // waits for your review" the moment they pressed Propose. It still waits in the list.
+    if (p.own) continue;
     const goal = board.goals.find((g) => g.goal_id === p.goalId);
     notices.push({
       key: p.key,

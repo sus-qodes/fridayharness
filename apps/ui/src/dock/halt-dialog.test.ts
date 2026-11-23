@@ -78,7 +78,7 @@ describe('halt dialog', () => {
     const text = dialog?.el.textContent ?? '';
     for (const line of [...HALT_DOES, ...HALT_DOES_NOT]) expect(text).toContain(line);
     expect(text).toMatch(/never|not/);
-    expect(text).toContain('Cancel any task, remove any worktree');
+    expect(text).toContain('Cancel any task, remove any task folder');
     expect(text).toContain('keep running, but cannot change anything while Friday is paused');
   });
 
@@ -165,12 +165,12 @@ describe('halt dialog', () => {
     expect(text).toContain('Friday is halted and paused. 3 tasks released.');
     expect(text).toContain('Agents Friday started: 2 tasks');
     expect(text).toContain('stop sent');
-    expect(text).toContain('Sessions attached in an editor: 1 task');
+    expect(text).toContain('Agents connected from an editor: 1 task');
     expect(text).toContain('cannot be stopped (held by the pause)');
     expect(text).toContain('2 operations stopped');
     expect(text).toContain('refs/friday/preserved/task_api/attempt-1');
     expect(text).toContain('Add the subscription API');
-    expect(text).toContain('Sessions attached in VS Code need a prompt there to continue.');
+    expect(text).toContain('Agents connected from VS Code continue when you prompt them there.');
     // "Stop sent" is not "stopped": no agent is reported stopped.
     expect(text).not.toMatch(/(agents?|tasks?|sessions?) (were |was )?stopped/i);
     // After the halt, Enter and Escape close the dialog.
@@ -225,7 +225,7 @@ describe('haltSummary', () => {
       { host: 'spawned', label: 'Agents Friday started', stop: 'stop sent', count: 2 },
       {
         host: 'attached',
-        label: 'Sessions attached in an editor',
+        label: 'Agents connected from an editor',
         stop: 'cannot be stopped (held by the pause)',
         count: 1,
       },
@@ -243,7 +243,7 @@ describe('haltSummary', () => {
       { ...RESULT, tasks: [], operations_stopped: 0 },
       makeSnapshot({ harnesses: [makeHarness({ attach_mode: 'attach' })] }),
     );
-    expect(attached.notes).toEqual(['Sessions attached in VS Code need a prompt there to continue.']);
+    expect(attached.notes).toEqual(['Agents connected from VS Code continue when you prompt them there.']);
   });
 
   it('renders hostile task summaries and refs as text', () => {

@@ -69,10 +69,20 @@ export async function runCheck(spec: CheckSpec): Promise<CheckOutcome> {
   return { name: spec.name, passed: o.exit_code === 0 && !o.timed_out && !o.spawn_error, ...o };
 }
 
+/** A length of time as a person says it: "under a second", "45 s", "2 min", "1 min 56 s". */
+export function durationWords(ms: number): string {
+  if (ms < 1000) return 'under a second';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  return s % 60 ? `${m} min ${s % 60} s` : `${m} min`;
+}
+
 /** Short human summary of a check outcome (one line). */
 export function summarizeOutcome(o: CheckOutcome): string {
   if (o.spawn_error) return `could not start: ${o.spawn_error}`;
-  if (o.timed_out) return `timed out after ${Math.round(o.duration_ms / 1000)} s`;
+  // Said as what it is (2026-11-19): the check was stopped at its time limit, it did not fail.
+  if (o.timed_out) return `ran out of time: stopped at its time limit, after ${durationWords(o.duration_ms)}`;
   const lines = o.output
     .split(/\r?\n/)
     .map((l) => l.trim())

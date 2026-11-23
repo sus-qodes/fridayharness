@@ -10,12 +10,14 @@ import {
   bootDesktopStudio,
   type DaemonStatus,
   type DesktopEnv,
+  STOPPED_HERE,
   type StudioTarget,
   sendableLink,
   statusScreen,
   studioLink,
   trayState,
   untilReady,
+  updateNotice,
 } from './boot.js';
 
 const INFO = {
@@ -98,6 +100,40 @@ describe('waiting for Friday in the desktop app', () => {
     expect(failed.querySelector('b')).toBeNull();
     expect(statusScreen({ state: 'starting' }, start).querySelector('button')).toBeNull();
   });
+
+  it('offers the folder picker while no project is open, and the files that say why a start failed', () => {
+    const choose = vi.fn();
+    const open = vi.fn();
+    const none = statusScreen({ state: 'no_project' }, null, { onChoose: choose, onOpen: open });
+    expect(none.textContent).toContain('Choose the folder of the project');
+    expect(none.textContent).not.toContain('--project');
+    const buttons = (el: HTMLElement) => [...el.querySelectorAll('button')].map((b) => b.textContent);
+    expect(buttons(none)).toEqual(['Choose a project folder…']);
+    none.querySelector('button')?.click();
+    expect(choose).toHaveBeenCalledOnce();
+    const failed = statusScreen({ state: 'failed', message: 'exit code 1: config.yaml: bad' }, () => undefined, {
+      onChoose: choose,
+      onOpen: open,
+    });
+    expect(buttons(failed)).toEqual(['Start Friday', 'Open config.yaml', 'Open the log']);
+    for (const b of [...failed.querySelectorAll('button')].slice(1)) b.click();
+    expect(open.mock.calls).toEqual([['config'], ['log']]);
+    // Without the shell's commands (a test, an older shell) the screen is as before.
+    expect(buttons(statusScreen({ state: 'no_project' }, null))).toEqual([]);
+  });
+
+  it('asks the shell for the folder picker from the screen it shows while no project is open', async () => {
+    const waiting: DaemonStatus[] = Array.from({ length: 200 }, () => ({ state: 'no_project' as const }));
+    const shell = fakeShell([...waiting, { state: 'ready' }]);
+    const root = document.createElement('div');
+    const done = untilReady(shell.env, root);
+    await settle();
+    const choose = [...root.querySelectorAll('button')].find((b) => b.textContent === 'Choose a project folder…');
+    expect(choose).toBeTruthy();
+    choose?.click();
+    expect(shell.calls.some((c) => c.cmd === 'choose_project_folder')).toBe(true);
+    await done;
+  });
 });
 
 describe('the desktop Studio', () => {
@@ -141,6 +177,134 @@ describe('the desktop Studio', () => {
   });
 });
 
+describe('the app opened another project (2026-11-17)', () => {
+  it('loads the Studio again, so it finds the new project through the waiting screen', async () => {
+    const shell = fakeShell([{ state: 'ready' }]);
+    let reloads = 0;
+    shell.env.reload = () => {
+      reloads += 1;
+    };
+    const root = document.createElement('div');
+    document.body.append(root);
+    await bootDesktopStudio(root, shell.env);
+    await settle();
+    // Other words from the shell load nothing again.
+    shell.emit('daemon-status', { state: 'ready' });
+    expect(reloads).toBe(0);
+    shell.emit('project-changed', {});
+    expect(reloads).toBe(1);
+  });
+
+  it('loads the Notch window again too', async () => {
+    const shell = fakeShell([{ state: 'ready' }]);
+    let reloads = 0;
+    shell.env.reload = () => {
+      reloads += 1;
+    };
+    const root = document.createElement('div');
+    document.body.append(root);
+    await bootDesktopNotch(root, shell.env);
+    await settle();
+    shell.emit('project-changed', {});
+    expect(reloads).toBe(1);
+  });
+});
+
+/**
+ * The live test of 2026-11-23: "Cancel the goal?" opened in the Notch, outside its island, where the
+ * window let every click through to the editor and had no keyboard; it could not be closed.
+ */
+describe('a confirmation in the Notch', () => {
+  it('takes the whole window and the keyboard while it is open, and gives them back after', async () => {
+    const shell = fakeShell([{ state: 'ready' }]);
+    const root = document.createElement('div');
+    document.body.append(root);
+    await bootDesktopNotch(root, shell.env);
+    await settle();
+    const host = root.querySelector('.sh-confirm-host') as HTMLElement;
+    expect(host).not.toBeNull();
+    const rects = () => shell.calls.filter((c) => c.cmd === 'notch_rect').map((c) => c.args);
+    const keyboard = () => shell.calls.filter((c) => c.cmd === 'notch_keyboard').map((c) => c.args?.take);
+    const before = rects().length;
+    // A card asks: the confirmation's box is put in the host.
+    const box = document.createElement('div');
+    box.append(Object.assign(document.createElement('button'), { className: 'sh-confirm-cancel' }));
+    host.append(box);
+    await settle();
+    // Every report while it is open, the island's own included, is the whole window.
+    const whole = { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight };
+    expect(rects().length).toBeGreaterThan(before);
+    for (const r of rects().slice(before)) expect(r).toEqual(whole);
+    expect(keyboard().at(-1)).toBe(true);
+    expect(document.activeElement).toBe(box.querySelector('.sh-confirm-cancel'));
+    // Answered: the clicks go through again, and the editor gets its keyboard back.
+    box.remove();
+    await settle();
+    expect(keyboard().at(-1)).toBe(false);
+    expect(rects().at(-1)).not.toEqual(whole);
+  });
+});
+
+describe('a Friday that stopped while the Studio is open', () => {
+  it('says so at once on the strip, and Start Friday starts it through the shell', async () => {
+    const shell = fakeShell([{ state: 'ready' }, { state: 'stopped' }, { state: 'ready' }]);
+    const root = document.createElement('div');
+    document.body.append(root);
+    await bootDesktopStudio(root, shell.env);
+    await settle();
+    const strip = root.querySelector('.sh-strip') as HTMLElement;
+    expect(strip.hidden).toBe(true);
+    // The shell's watchdog saw the daemon go.
+    shell.emit('daemon-status', { state: 'stopped', message: 'Friday stopped.' });
+    await settle();
+    expect(strip.hidden).toBe(false);
+    expect(strip.textContent).toContain(STOPPED_HERE);
+    expect(strip.textContent).not.toContain('shortcut');
+    const start = strip.querySelector('button') as HTMLButtonElement;
+    expect(start.textContent).toBe('Start Friday');
+    start.click();
+    await settle();
+    expect(shell.calls.some((c) => c.cmd === 'restart_daemon')).toBe(true);
+  });
+});
+
+// An update while Friday runs (2026-11-19): the service kept the code it started with.
+describe('Friday updated while agents work', () => {
+  it('says so with a way to restart now, and says when the new version runs', async () => {
+    const shell = fakeShell([{ state: 'ready', outdated: true }]);
+    const root = document.createElement('div');
+    document.body.append(root);
+    await bootDesktopStudio(root, shell.env);
+    await settle();
+    const toast = [...root.querySelectorAll('.sh-toast')].find((t) => t.textContent?.includes('Friday was updated'));
+    expect(toast?.textContent).toContain('It restarts with the new one by itself once they are done');
+    const now = toast?.querySelector('.sh-toast-action') as HTMLButtonElement;
+    expect(now.textContent).toBe('Restart now');
+    now.click();
+    await settle();
+    expect(shell.calls.some((c) => c.cmd === 'restart_daemon')).toBe(true);
+    // The shell restarted it (by the button, or by itself once idle).
+    shell.emit('daemon-status', { state: 'ready' });
+    await settle();
+    expect(root.textContent).toContain('Friday now runs the new version');
+    expect(root.textContent).not.toContain('Friday was updated');
+  });
+
+  it('is said only while the service is ready and outdated', () => {
+    const restart = () => undefined;
+    expect(updateNotice({ state: 'ready', outdated: true }, false, restart)).toMatchObject({
+      kind: 'info',
+      key: 'friday-updated',
+      timeoutMs: 0,
+      action: { label: 'Restart now' },
+    });
+    expect(updateNotice({ state: 'ready', outdated: true }, false, null)).not.toHaveProperty('action');
+    expect(updateNotice({ state: 'ready' }, true, restart)).toMatchObject({ kind: 'success', key: 'friday-updated' });
+    expect(updateNotice({ state: 'ready' }, false, restart)).toBeNull();
+    expect(updateNotice({ state: 'starting', outdated: true }, false, restart)).toBeNull();
+  });
+});
+
 describe('deep links from the Notch window (deep review R7)', () => {
   /** A Studio window's context with the drawers the links name. */
   function studio() {
@@ -155,9 +319,9 @@ describe('deep links from the Notch window (deep review R7)', () => {
   it('opens the drawer each Notch target names, with its tab and file', () => {
     const ctx = studio();
     applyDeepLink(ctx, across(studioLink({ panel: 'settings' })));
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', drawer: null });
     applyDeepLink(ctx, across(studioLink({ panel: 'settings', tab: 'routing' })));
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'routing' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'routing', drawer: null });
     applyDeepLink(ctx, across(studioLink({ task_id: 't1', panel: 'diff', path: 'backend/src/checkout.ts' })));
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: 't1', path: 'backend/src/checkout.ts' });
     // A panel's own id goes before the task's: the Messages drawer opens on the delivery.
@@ -171,7 +335,7 @@ describe('deep links from the Notch window (deep review R7)', () => {
   it('drops a tab or a file path of an unexpected form', () => {
     const ctx = studio();
     applyDeepLink(ctx, { panel: 'settings', tab: '<b>routing</b>' });
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', drawer: null });
     applyDeepLink(ctx, { panel: 'diff', id: 't1', path: `a${String.fromCharCode(7)}b.ts` });
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'diff', id: 't1' });
     applyDeepLink(ctx, { panel: 'diff', id: 't1', path: 'x'.repeat(2000) });
@@ -202,7 +366,7 @@ describe('deep links from the Notch window (deep review R7)', () => {
     try {
       q<HTMLButtonElement>('.nt-foot-btn').click();
       deliver();
-      expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
+      expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', drawer: null });
       // The card's Routing badge left with M9k.2: the pins live in Settings → Routing.
       expect(root.querySelector('.nt-routing')).toBeNull();
 

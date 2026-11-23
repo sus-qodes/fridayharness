@@ -72,7 +72,7 @@ export function createCodeGraph(ctx: AppContext, request: DrawerRequest): Compon
   });
   const reindexButton = button([icon('rework', 14), 'Reindex'], () => void reindex(), {
     class: 'btn',
-    title: 'Rebuild the code graph of the main checkout',
+    title: 'Rebuild the code graph of your project folder',
   });
   const form = h(
     'form',
@@ -97,7 +97,7 @@ export function createCodeGraph(ctx: AppContext, request: DrawerRequest): Compon
   const legend = h(
     'ul',
     { class: 'dr-legend', aria: { label: 'Colours' } },
-    h('li', null, h('span', { class: 'dr-swatch dr-g-tone-scope' }), 'In the write scope of a running task'),
+    h('li', null, h('span', { class: 'dr-swatch dr-g-tone-scope' }), 'Among the files a working task may change'),
     h('li', null, h('span', { class: 'dr-swatch dr-g-tone-contract' }), 'Shared contract'),
     h('li', null, h('span', { class: 'dr-swatch dr-g-tone-test' }), 'Test'),
   );
@@ -108,7 +108,7 @@ export function createCodeGraph(ctx: AppContext, request: DrawerRequest): Compon
       'p',
       { class: 'dr-note' },
       icon('graph', 14),
-      " This is the main checkout's code graph (TS/JS files). Changes still in task worktrees are not in it.",
+      ' This is the code graph of your project folder (TS/JS files). Changes still in task folders are not in it.',
     ),
     form,
     legend,
@@ -306,7 +306,7 @@ export function createCodeGraph(ctx: AppContext, request: DrawerRequest): Compon
         ? h(
             'div',
             { class: 'dr-graph-owners' },
-            h('span', { class: 'muted' }, 'In the write scope of: '),
+            h('span', { class: 'muted' }, 'A file these tasks may change: '),
             h(
               'ul',
               null,
@@ -368,7 +368,7 @@ export function createCodeGraph(ctx: AppContext, request: DrawerRequest): Compon
     input.value = p;
     selected = p;
     const mine = ++token;
-    replace(status, 'Reading the code graph… (it is rebuilt when the main checkout changed)');
+    replace(status, 'Reading the code graph… (it is rebuilt when your project folder changed)');
     replace(canvas, loading('Reading the code graph…'));
     try {
       const answer = graphOf(await ctx.api.graphQuery(p, 2));
@@ -388,7 +388,17 @@ export function createCodeGraph(ctx: AppContext, request: DrawerRequest): Compon
       query = null;
       layout = null;
       replace(status);
-      replace(canvas, errorNote('Could not read the code graph', e));
+      // A file the graph does not hold is no error (2026-11-18): it may be one a task made in its
+      // own copy and that is not landed, or not a TypeScript or JavaScript file. The panel showed
+      // "COS-1000 … is not in the code graph (only TS/JS files git sees are)".
+      replace(
+        canvas,
+        e instanceof Error && /is not in the code graph/.test(e.message)
+          ? empty(
+              `Nothing to show for ${visible(p)} yet. The code graph shows your project folder, and this file is not in it: work a task made in its own copy appears once the goal is landed. Only TypeScript and JavaScript files are drawn.`,
+            )
+          : errorNote('Could not read the code graph', e),
+      );
       replace(panel);
     }
   }

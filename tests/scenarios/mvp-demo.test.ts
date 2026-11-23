@@ -548,7 +548,11 @@ describe('the MVP demonstration (Part 12 §18)', () => {
     for (const key of ['discount-contract', 'discount-service', 'discount-docs'] as const) {
       const v = await verify(td, ids[key]);
       expect(v.task.status, JSON.stringify(v.verification.checks).slice(0, 1500)).toBe('COMPLETED');
-      expect(v.verification.checks.find((c) => c.name === 'tests')?.status).toBe('PASSED');
+      // The docs task changed the README only: the tests do not read it, and are not run for it
+      // (2026-11-18, checks that fit the change).
+      expect(v.verification.checks.find((c) => c.name === 'tests')?.status).toBe(
+        key === 'discount-docs' ? undefined : 'PASSED',
+      );
       expect((await integrationOf(td, ids[key])).status).toBe('integrated');
     }
 

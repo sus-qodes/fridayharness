@@ -8,11 +8,11 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'nod
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { claudeCodeHooks, LAUNCHER_VERSION } from '@friday/adapter-claude';
+import { ANTIGRAVITY_NO_DECISION, claudeCodeHooks, LAUNCHER_VERSION } from '@friday/adapter-claude';
 import { GenericHarnessClient } from '@friday/adapter-generic';
 import type { TaskView, Vendor } from '@friday/protocol';
 import { loadProject, privateDirFor, writePrivateFile } from '@friday/sdk';
-import { type TestWorkspace, useTestWorkspace } from '@friday/test-support';
+import { FakeClock, type TestWorkspace, useTestWorkspace } from '@friday/test-support';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { initTestProject, startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
 import { bundleLauncher, decisionOf, postHook, runLauncher, toolHook } from '../helpers/hooks.js';
@@ -67,6 +67,9 @@ function decided(vendor: OtherVendor, r: HostRun): { decision: string | null; re
   if (vendor === 'cursor') {
     return { decision: (j.permission as string | undefined) ?? null, reason: String(j.agent_message ?? '') };
   }
+  // Antigravity has no reply without a decision (it reads one as a denial): a call Friday did not
+  // judge is `ask` there, the person and their own permissions deciding. It is no decision of Friday's.
+  if (vendor === 'antigravity' && r.stdout === ANTIGRAVITY_NO_DECISION) return { decision: null, reason: '' };
   const d = (j.decision as string | undefined) ?? null;
   return { decision: d === 'force_ask' ? 'ask' : d, reason: String(j.reason ?? '') };
 }
@@ -157,7 +160,7 @@ describe('every host, with no daemon', () => {
     expect((await run(w, 'cursor', 'preToolUse.read')).stdout).toBe('{}');
     await expectRun('antigravity', 'PreToolUse.write_to_file', 'deny', 'edits are paused');
     expect((await expectRun('antigravity', 'PreToolUse.run_command', 'ask')).json?.decision).toBe('force_ask');
-    expect((await run(w, 'antigravity', 'PreToolUse.invoke_subagent')).stdout).toBe('{}');
+    expect((await run(w, 'antigravity', 'PreToolUse.invoke_subagent')).stdout).toBe(ANTIGRAVITY_NO_DECISION);
     expect((await expectRun('gemini', 'BeforeTool.replace', 'deny', 'edits are paused')).code).toBe(2);
     await expectRun('gemini', 'BeforeTool.run_shell_command', 'ask', 'a human must confirm');
     await expectRun('gemini', 'BeforeTool.mcp', 'ask');
@@ -195,7 +198,7 @@ describe('every host, with no daemon', () => {
     mkdirSync(other, { recursive: true });
     for (const [vendor, name, empty] of [
       ['cursor', 'preToolUse.write', '{}'],
-      ['antigravity', 'PreToolUse.write_to_file', '{}'],
+      ['antigravity', 'PreToolUse.write_to_file', ANTIGRAVITY_NO_DECISION],
       ['gemini', 'BeforeTool.write_file', ''],
     ] as const) {
       const f = hostFixture(vendor, name, other);
@@ -468,13 +471,21 @@ describe('every host, with the daemon', () => {
     };
     for (const vendor of OTHER_VENDORS) {
       const out = await outside[vendor]();
-      expect(decided(vendor, out), vendor).toEqual({
-        decision: 'deny',
-        reason: expect.stringContaining(`outside the scope of ${s[vendor]?.task.task_id}`),
-      });
+      const verdict = decided(vendor, out);
+      expect(verdict.decision, vendor).toBe('deny');
+      // Where the host's hook can ask its own person, the agent is told how to ask; where it
+      // cannot, Friday asks the person for that file itself and says so (2026-11-18).
+      const reason = String(verdict.reason);
+      if (reason.includes('outside the files this task may change')) {
+        expect(reason, vendor).toMatch(/The person was asked in Friday \(approval apr_/);
+      } else {
+        expect(reason, vendor).toContain(`outside the scope of ${s[vendor]?.task.task_id}`);
+      }
       if (vendor !== 'antigravity') expect(out.code, vendor).toBe(2);
       const ok = await inside[vendor]();
-      expect([ok.code, decided(vendor, ok).decision], vendor).toEqual([0, null]);
+      // No decision of Friday's, except in Antigravity, which takes no reply without one: there a
+      // write inside the task's scope is told to go ahead.
+      expect([ok.code, decided(vendor, ok).decision], vendor).toEqual([0, vendor === 'antigravity' ? 'allow' : null]);
     }
     // One rule decided all four, each recorded once with the session's agent as the actor.
     const evaluated = td.daemon.state.store
@@ -537,7 +548,7 @@ describe('every host, with the daemon', () => {
     const fetch1 = await run(w, 'cursor', 'preToolUse.webfetch');
     expect(decided('cursor', fetch1)).toEqual({
       decision: 'deny',
-      reason: expect.stringMatching(/A human decides this \(approval [a-z]+_[0-9a-z]+\)/),
+      reason: expect.stringMatching(/The person was asked in Friday \(approval [a-z]+_[0-9a-z]+\)/),
     });
     const fetch2 = await run(w, 'cursor', 'preToolUse.webfetch');
     expect(decided('cursor', fetch2).reason).toBe(decided('cursor', fetch1).reason);
@@ -610,3 +621,190 @@ describe('every host, with the daemon', () => {
     expect(mismatch.status).toBe(400);
   });
 });
+
+/**
+ * `/friday` in Antigravity with nothing to take (2026-11-19, the fix list's C3; the trial's U8 and
+ * F21): it cost a model call, 1.3k tokens, for the agent to find out and say so. Friday answers
+ * Antigravity's PreInvocation hook for the first model call of a turn: a `/friday` prompt with no
+ * task for the agent ends the turn before the model is called. Anything else goes on as before.
+ */
+describe('/friday in Antigravity, before the model is called', () => {
+  it('ends the turn with Friday’s words when nothing waits for the agent, and only then', async () => {
+    const td = await startTestDaemon(ws(), {
+      extensions: [claudeCodeHooks()],
+      extraConfig: [
+        'routing:',
+        '  models:',
+        '    - { id: antigravity-test-model, vendors: [antigravity] }',
+        '  role_candidates:',
+        '    backend_engineer:',
+        '      - { model: antigravity-test-model, harness: antigravity }',
+      ].join('\n'),
+    });
+    const w = ws();
+    const pid = td.project.project_id;
+    const client = new GenericHarnessClient(td.bootstrap, {
+      harness_key: `antigravity:${pid}:pid:${process.pid}`,
+      vendor: 'antigravity',
+      name: 'antigravity',
+      attach_mode: 'attach',
+      project_id: pid,
+      capabilities: { hooks: true },
+      agent_key: 'ag-1',
+      host: { pid: process.pid, session_id: 'conv-fixture-1' },
+      enforcement_level: 'L1',
+    });
+    await client.register();
+    // Its hooks reach Friday, as at the start of a session.
+    expect((await run(w, 'antigravity', 'SessionStart')).code).toBe(0);
+    const prompt = (lastUserInput: string, invocationNum = 0) =>
+      run(w, 'antigravity', 'PreInvocation', { lastUserInput, invocationNum });
+
+    // Nothing waits for ag-1: the turn ends before the model is called, in the exact shape of
+    // Antigravity's guide. A reply with one unknown field is rejected whole and the model is called
+    // anyway: that is what every live session did until 2026-11-23.
+    const halted = await prompt('/friday');
+    expect(halted.code).toBe(0);
+    expect(halted.json).toEqual({
+      terminationBehavior: 'terminate',
+      injectSteps: [{ errorMessage: { userMessage: expect.stringContaining('nothing waits for ag-1 right now') } }],
+    });
+    expectAntigravityContract('PreInvocation', halted.json);
+    // The command as Antigravity may pass it: expanded into Friday's skill.
+    const expanded = await prompt('---\nname: friday\n---\n<!-- friday:skill -->\n# Friday\n\nThe user asked you…');
+    expect(expanded.json).toMatchObject({ terminationBehavior: 'terminate' });
+    expectAntigravityContract('PreInvocation', expanded.json);
+    // Any other prompt, and every later model call of a turn, go on as before.
+    expect((await prompt('fix the login page')).stdout).toBe('{}');
+    expect((await prompt('/fridays-list')).stdout).toBe('{}');
+    expect((await prompt('/friday', 3)).stdout).toBe('{}');
+    // What the host passed for a slash command is recorded: a live session shows its shape.
+    const seen = td.daemon.state.store
+      .readSince(pid, 0, { types: ['harness.prompt_seen'], limit: 10 })
+      .map((e) => e.payload as { friday_command: boolean; starts: string });
+    expect(seen.map((s) => [s.friday_command, s.starts.slice(0, 8)])).toEqual([
+      [true, '/friday'],
+      [true, '---\nname'],
+      [false, '/fridays'],
+    ]);
+
+    // A task for ag-1: the turn goes on, and the model takes it as the skill says.
+    await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Work for antigravity',
+      scope: { write: ['src/antigravity/**'], read: [] },
+      assign_agent_key: 'ag-1',
+    });
+    expect((await prompt('/friday')).stdout).toBe('{}');
+
+    // Paused, nothing can be taken: said so, still before the model is called.
+    await td.operator.post(td.operator.projectPath('/control/pause'), {});
+    const paused = await prompt('/friday');
+    expect(JSON.stringify(paused.json)).toContain('Friday is paused');
+    expectAntigravityContract('PreInvocation', paused.json);
+  });
+
+  /**
+   * The first `/friday` of a new session came before the session's MCP server had connected: the
+   * model ran without Friday's tools and spent about 1k tokens to say "type /friday again" (live
+   * test, 2026-11-23). With a task waiting, the hooks say so themselves; once the server has taken
+   * the session over, or a minute on, the model goes on as before.
+   */
+  it('says Friday’s tools are still starting when a task waits and the session’s MCP server has not connected', async () => {
+    const td = await agDaemon();
+    const w = ws();
+    const prompt = (lastUserInput: string) =>
+      run(w, 'antigravity', 'PreInvocation', { lastUserInput, invocationNum: 0 });
+    // Hooks first, as Antigravity starts them: they register the session, with no tools yet.
+    expect((await run(w, 'antigravity', 'SessionStart')).code).toBe(0);
+    await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Work for antigravity',
+      scope: { write: ['src/antigravity/**'], read: [] },
+      assign_agent_key: 'ag-1',
+    });
+    const starting = await prompt('/friday');
+    expect(starting.json).toEqual({
+      terminationBehavior: 'terminate',
+      injectSteps: [{ errorMessage: { userMessage: expect.stringContaining("Friday's tools are still starting") } }],
+    });
+    expectAntigravityContract('PreInvocation', starting.json);
+    // Anything else typed meanwhile goes on.
+    expect((await prompt('fix the login page')).stdout).toBe('{}');
+
+    // The session's MCP server connects and takes the session over: the model takes the task.
+    const pid = td.project.project_id;
+    await new GenericHarnessClient(td.bootstrap, {
+      harness_key: `antigravity:${pid}:pid:${process.pid + 1}`,
+      vendor: 'antigravity',
+      name: 'antigravity',
+      attach_mode: 'attach',
+      project_id: pid,
+      capabilities: { mcp_tools: true, hooks: true },
+      agent_key: 'ag-1',
+      host: { pid: process.pid + 1, session_id: 'conv-fixture-1' },
+      enforcement_level: 'L1',
+    }).register();
+    expect((await prompt('/friday')).stdout).toBe('{}');
+  });
+
+  it('leaves /friday to the model a minute after the hooks registered, if the MCP server never connects', async () => {
+    const clock = new FakeClock(new Date().toISOString());
+    const td = await agDaemon(clock);
+    const w = ws();
+    expect((await run(w, 'antigravity', 'SessionStart')).code).toBe(0);
+    await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Work for antigravity',
+      scope: { write: ['src/antigravity/**'], read: [] },
+      assign_agent_key: 'ag-1',
+    });
+    clock.advance(61_000);
+    const late = await run(w, 'antigravity', 'PreInvocation', { lastUserInput: '/friday', invocationNum: 0 });
+    expect(late.stdout).toBe('{}');
+  });
+});
+
+/** A daemon with Friday's hooks and an Antigravity agent `ag-1` named on this machine. */
+async function agDaemon(clock?: FakeClock): Promise<TestDaemon> {
+  const td = await startTestDaemon(ws(), {
+    ...(clock ? { clock } : {}),
+    extensions: [claudeCodeHooks()],
+    extraConfig: [
+      'routing:',
+      '  models:',
+      '    - { id: antigravity-test-model, vendors: [antigravity] }',
+      '  role_candidates:',
+      '    backend_engineer:',
+      '      - { model: antigravity-test-model, harness: antigravity }',
+    ].join('\n'),
+  });
+  // Antigravity's name on this machine, as `friday harness config antigravity` writes it.
+  const w = ws();
+  writePrivateFile(
+    privateDirFor(loadProject(w.projectDir), { FRIDAY_STATE_DIR: w.stateDir }),
+    'agent.json',
+    JSON.stringify({ hosts: { antigravity: 'ag-1' } }),
+  );
+  return td;
+}
+
+/**
+ * Antigravity's reply contract, from the hooks guide shipped with its CLI
+ * (`agy-customizations/docs/hooks.md`): the keys each event reads, and the four kinds of injected
+ * step. Antigravity rejects a reply with any other field, whole.
+ */
+function expectAntigravityContract(event: 'PreInvocation' | 'SessionStart', reply: unknown): void {
+  const keys = { PreInvocation: ['injectSteps', 'terminationBehavior'], SessionStart: ['injectSteps'] }[event];
+  const r = reply as Record<string, unknown>;
+  for (const k of Object.keys(r)) expect(keys, `unknown field "${k}" in ${event}'s reply`).toContain(k);
+  if ('terminationBehavior' in r) expect(['', 'terminate']).toContain(r.terminationBehavior);
+  for (const step of (r.injectSteps ?? []) as Record<string, unknown>[]) {
+    const kinds = Object.keys(step);
+    expect(kinds).toHaveLength(1);
+    const [kind] = kinds as [string];
+    const body = step[kind];
+    if (kind === 'userMessage' || kind === 'ephemeralMessage') expect(typeof body).toBe('string');
+    else if (kind === 'errorMessage') expect(Object.keys(body as object)).toEqual(['userMessage']);
+    else if (kind === 'systemMessage') {
+      for (const k of Object.keys(body as object)) expect(['systemMessage', 'metadata']).toContain(k);
+    } else expect.fail(`unknown step "${kind}" in ${event}'s reply`);
+  }
+}

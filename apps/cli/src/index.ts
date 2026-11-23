@@ -8,6 +8,7 @@ import './plugins.js';
 
 export { type ChildSpec, cliEntry, createAgentLauncher, harnessKeyOf, type LauncherOptions } from './agent-launcher.js';
 export { AgentProfiles, optionFlags, validateOptions } from './agent-profiles.js';
+export { antigravitySetupExtension } from './antigravity-setup-ext.js';
 export { claudeSetupExtension } from './claude-setup-ext.js';
 export { type GlobalOptions, UsageError } from './context.js';
 export { type CheckResult, doctor, extraDoctorChecks, renderDoctor } from './doctor.js';

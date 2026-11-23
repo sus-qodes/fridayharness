@@ -50,6 +50,26 @@ describe('desktopPlatform', () => {
     ]);
   });
 
+  it('reports a file the editor could not open, instead of doing nothing', async () => {
+    const failures: unknown[] = [];
+    const core: Pick<TauriCore, 'invoke'> = {
+      invoke: (async (cmd: string) => {
+        if (cmd === 'open_in_editor') throw refusal(500, 'DESKTOP-2004', 'Windows has no handler for vscode:// links');
+        return null;
+      }) as TauriCore['invoke'],
+    };
+    const platform = desktopPlatform(core, { writeText: async () => undefined }, (e) => failures.push(e));
+    platform.openInEditor('C:/demo/shop/.friday/config.yaml');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toBeInstanceOf(ApiError);
+    expect((failures[0] as ApiError).code).toBe('DESKTOP-2004');
+    // Without a listener it stays quiet, as before.
+    desktopPlatform(core).openInEditor('x');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(failures).toHaveLength(1);
+  });
+
   it('answers false when the human cancels the native dialog, and passes other refusals on as errors', async () => {
     const cancelled = refusal(400, DIALOG_CANCELLED, 'you cancelled it in the confirmation dialog');
     const { desktop } = shell({
@@ -101,6 +121,35 @@ describe('desktopPlatform', () => {
     refuse = { status: 0, body: { error: { code: 'DESKTOP-2000', name: 'offline', message: 'Friday did not start' } } };
     await expect(desktop.restart()).rejects.toThrow('Friday did not start');
     expect(calls.map((c) => c.cmd)).toEqual(['restart_daemon', 'restart_daemon', 'restart_daemon']);
+  });
+
+  it('asks the shell to open another project, and passes its refusal on', async () => {
+    let refuse: unknown = null;
+    const { desktop, calls } = shell({
+      open_another_project: () => {
+        if (refuse) throw refuse;
+        return null;
+      },
+    });
+    await expect(desktop.openProject()).resolves.toBeUndefined();
+    expect(calls).toEqual([{ cmd: 'open_another_project' }]);
+    refuse = { status: 500, body: { error: { code: 'DESKTOP-2006', name: 'cli_failed', message: 'no picker' } } };
+    await expect(desktop.openProject()).rejects.toThrow('no picker');
+  });
+
+  // The names are the shell's (lib.rs, build.rs): a misspelt one would be refused by its ACL.
+  it('lists the recent projects and opens one by its folder (2026-11-18)', async () => {
+    const list = [{ root: 'C:/RestroSarthi', name: 'RestroSarthi', current: false, running: true, missing: false }];
+    const { desktop, calls } = shell({ recent_projects: () => list, open_recent_project: () => null });
+    expect(await desktop.recentProjects?.()).toEqual(list);
+    await expect(desktop.openRecent?.('C:/RestroSarthi')).resolves.toBeUndefined();
+    expect(calls).toEqual([
+      { cmd: 'recent_projects' },
+      { cmd: 'open_recent_project', args: { root: 'C:/RestroSarthi' } },
+    ]);
+    // Anything but a list is no list.
+    const odd = shell({ recent_projects: () => 'nope' });
+    expect(await odd.desktop.recentProjects?.()).toEqual([]);
   });
 
   it('sends a test notification and answers whether Windows took it', async () => {

@@ -12,6 +12,7 @@ import {
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { FridayError } from '@friday/protocol';
 import { protectPrivateDir } from './access.js';
 import { type FridayConfig, loadConfig } from './config.js';
@@ -211,4 +212,106 @@ export function readInstallInfo(env: NodeJS.ProcessEnv = process.env): InstallIn
   } catch {
     return undefined;
   }
+}
+
+/** Where the MCP server's launcher sits inside a copy of Friday, a checkout or an installed archive. */
+const MCP_ENTRY_IN_COPY = ['packages', 'mcp-server', 'bin', 'friday-mcp.mjs'];
+
+/**
+ * The MCP server launcher of the copy of Friday this code runs from: the nearest folder above this
+ * module that holds one. A checkout and the installed archive share one layout and a bundle sits
+ * inside it, so the same walk finds it from `packages/sdk`, from `apps/cli/dist` and from sources.
+ * It is the path `friday setup`, run by this copy, records as `mcp_server_entry`.
+ */
+export function ownMcpEntry(from: string = fileURLToPath(import.meta.url)): string | undefined {
+  let dir = path.dirname(path.resolve(from));
+  for (let up = 0; up < 8; up += 1) {
+    const entry = path.join(dir, ...MCP_ENTRY_IN_COPY);
+    if (existsSync(entry)) return entry;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return undefined;
+}
+
+/** Whether two paths name one file: by real path where it exists (links resolved), and without case on Windows. */
+export function samePath(a: string, b: string): boolean {
+  const norm = (p: string): string => {
+    const real = realpath(path.resolve(p));
+    return process.platform === 'win32' ? real.toLowerCase() : real;
+  };
+  return norm(a) === norm(b);
+}
+
+const MONTHS = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/** `31 October 2026` for a recorded time, in this machine's time zone; undefined when it is not a time. */
+function plainDate(iso: unknown): string | undefined {
+  const at = typeof iso === 'string' ? new Date(iso) : undefined;
+  if (!at || Number.isNaN(at.getTime())) return undefined;
+  return `${at.getDate()} ${MONTHS[at.getMonth()]} ${at.getFullYear()}`;
+}
+
+/** The folder of the copy of Friday an MCP server entry belongs to; the entry itself when it sits anywhere else. */
+function copyOf(entry: string): string {
+  const home = path.resolve(entry, '..', '..', '..', '..');
+  return samePath(path.join(home, ...MCP_ENTRY_IN_COPY), entry) ? home : path.resolve(entry);
+}
+
+/** What a host's setup check says about `install.json`: the status and words of its check, and the entry found. */
+export interface InstallCheck {
+  status: 'ok' | 'warn' | 'fail';
+  message: string;
+  fix?: string;
+  /** The MCP server entry the apps a person opens themselves start; undefined when none is on disk. */
+  entry?: string;
+}
+
+/**
+ * The machine's install entry as a host's setup check reports it (`friday harness doctor <host>`).
+ * The apps a person opens themselves start Friday's MCP server through a launcher that reads
+ * `install.json` each time it runs, so a file written by another copy of Friday leaves them on that
+ * copy while this one runs the daemon (seen 2026-11-17: a session that registered under the wrong
+ * name, showed as two agents and was refused work). That is a warning in plain words.
+ *
+ * `named` is `FRIDAY_MCP_ENTRY` as the caller reads it: an entry someone named by hand, which is
+ * used as it is and compared with nothing. `own` is the entry of the copy that asks (this code's
+ * own copy unless given; null for none, which compares nothing).
+ */
+export function installCheck(
+  opts: { env?: NodeJS.ProcessEnv; named?: string | undefined; own?: string | null | undefined } = {},
+): InstallCheck {
+  const info = readInstallInfo(opts.env);
+  const entry = opts.named ?? info?.mcp_server_entry ?? undefined;
+  if (!entry || !existsSync(entry)) {
+    return {
+      status: 'fail',
+      message: 'Friday is not set up on this machine (install.json has no MCP server entry)',
+      fix: 'run "pnpm build" in the Friday repository, then "friday setup"',
+    };
+  }
+  const own = opts.own === undefined ? ownMcpEntry() : opts.own;
+  if (opts.named === undefined && own && !samePath(entry, own)) {
+    const when = plainDate(info?.written_at);
+    return {
+      status: 'warn',
+      message: `Apps you open yourself start another copy of Friday (${copyOf(entry)}${when ? `, set up on ${when}` : ''}), not this one. Open the Friday desktop app once, or run friday setup, to switch them to this copy.`,
+      entry,
+    };
+  }
+  return { status: 'ok', message: `MCP server entry: ${entry}`, entry };
 }

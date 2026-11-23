@@ -1,0 +1,15 @@
+# The installer for other computers (2026-11-19, the fix list's G3), merged over Tauri.toml:
+#   pnpm pack:desktop                                   (in the repository: Friday's own copy)
+#   FRIDAY_RELEASE=1 cargo tauri build --config Tauri.release.toml   (here: the installer)
+# FRIDAY_RELEASE=1 keeps the build machine's checkout out of the app (build.rs), so the copy carried
+# here is the one it runs.
+# The installer carries the copy of Friday `pnpm pack:desktop` makes in target/friday-bundle and puts
+# it beside the app as friday\, where the app looks first (`daemon::bundled_home`). Node.js and Git
+# are not carried: the app sends a person without them to their download pages.
+
+[bundle]
+active = true
+targets = ["nsis"]
+
+[bundle.resources]
+"target/friday-bundle/" = "friday/"

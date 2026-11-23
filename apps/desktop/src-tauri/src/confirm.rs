@@ -83,6 +83,57 @@ fn shown(v: Option<&str>) -> String {
     }
 }
 
+/// What a project setting allows, in a person's words (2026-11-17), for the settings Settings
+/// turns on and the ones a project most often asks for; the same words as the page's
+/// `looseningWords`. None for a setting this dialog cannot put into words: it is shown as written.
+pub(crate) fn loosening_words(setting: &str, to: &str) -> Option<String> {
+    match setting {
+        "verification.auto_on_completion" => return Some("Finished work is checked automatically".into()),
+        "master_brain.auto_approve" => return Some("Plans start without waiting for your approval".into()),
+        "sandbox" => {
+            return Some(
+                "This folder is treated as disposable: commands that would wait for your approval run on their own".into(),
+            )
+        }
+        _ => {}
+    }
+    let class = setting.strip_prefix("autonomy.")?;
+    let what = match class {
+        "file.write" => "run commands that change files Friday cannot name",
+        "git.mutate" => "commit and change branches",
+        "package.install" => "install packages",
+        "fs.destructive" => "delete files with a command",
+        "process.kill" => "stop running programs",
+        "network.fetch" => "download with a command",
+        "unknown" => "run commands Friday does not recognise",
+        "git.push" => "push to a remote",
+        "git.force" => "force-push",
+        "network.publish" => "publish a package",
+        _ => return None,
+    };
+    match to {
+        "auto" => Some(format!("Agents may {what} without asking")),
+        "review" => Some(format!("Agents may {what} once you approve it in Friday")),
+        _ => None,
+    }
+}
+
+/// One line of the list: the words, then the exact setting and its file; without words, the exact
+/// setting alone. Trust is recorded in exactly what the line shows last.
+fn loosening_line(l: &Value) -> String {
+    let exact = format!(
+        "{}: {} → {} (in {})",
+        shown(field(l, "setting")),
+        shown(field(l, "from")),
+        shown(field(l, "to")),
+        shown(field(l, "source"))
+    );
+    match loosening_words(field(l, "setting").unwrap_or(""), field(l, "to").unwrap_or("")) {
+        Some(words) => format!("- {words}\n    {exact}"),
+        None => format!("- {exact}"),
+    }
+}
+
 fn text_field(body: Option<&Value>, name: &str, max: usize) -> Result<Option<String>, CmdError> {
     match body.and_then(|b| b.get(name)) {
         None | Some(Value::Null) => Ok(None),
@@ -191,11 +242,35 @@ pub fn approval_dialog(approval: &Value, reuse: &str) -> Result<Option<Dialog>, 
     }))
 }
 
+/// Whether new options let an agent spend more per attempt than its old ones: a limit taken away,
+/// or a higher one. Options that say nothing about a limit change nothing about it.
+fn raises_limit(before: Option<&Value>, after: Option<&Value>) -> bool {
+    let limit = |o: Option<&Value>| o.and_then(|v| v.get("max_budget_usd")).cloned();
+    let Some(new) = limit(after) else { return false };
+    let old = limit(before);
+    match (old.as_ref().and_then(Value::as_f64), new.as_f64()) {
+        // No limit now, where there was one.
+        (Some(_), None) => true,
+        (Some(a), Some(b)) => b > a,
+        // There was none: any limit only lowers what it may spend.
+        (None, _) => false,
+    }
+}
+
 fn options_text(options: Option<&Value>) -> String {
     match options.and_then(Value::as_object) {
         Some(m) if !m.is_empty() => m
             .iter()
             .map(|(k, v)| {
+                // The spending limit in words: an amount, or none. Anything else under that name is
+                // shown as it is, so nothing the daemon would read differently is dressed up.
+                if k == "max_budget_usd" {
+                    match v {
+                        Value::Null => return "no spending limit per attempt".to_string(),
+                        Value::Number(n) => return format!("spending limit per attempt: ${n}"),
+                        _ => {}
+                    }
+                }
                 let v = match v {
                     Value::String(s) => s.clone(),
                     other => other.to_string(),
@@ -236,6 +311,57 @@ pub fn prepare(
                 })?;
             Ok(Prepared { body: sent, dialog: approval_dialog(&approval, &reuse)? })
         }
+        // Single settings, by their own ids (2026-11-18): a person who switched one thing on is
+        // asked about that one thing, and only it is sent. An id that names no setting of the
+        // project now (the files changed since, or the value did) refuses the whole request.
+        Some(Confirm::Trust) if body.is_some_and(|b| b.get("items").is_some()) => {
+            let ids: Vec<String> = match body.and_then(|b| b.get("items")).and_then(Value::as_array) {
+                Some(a) if !a.is_empty() && a.len() <= 100 => a
+                    .iter()
+                    .map(|v| match v {
+                        Value::String(s) if !s.is_empty() && s.len() <= 64 => Ok(s.clone()),
+                        _ => Err(CmdError::bad_request("items must be setting ids")),
+                    })
+                    .collect::<Result<_, _>>()?,
+                _ => return Err(CmdError::bad_request("items must name at least one setting")),
+            };
+            let policy = get(&format!("{base}policy"))?;
+            let p = policy.get("policy").cloned().unwrap_or(Value::Null);
+            let all = p.get("loosening").and_then(Value::as_array).cloned().unwrap_or_default();
+            let mut lines = Vec::new();
+            for id in &ids {
+                match all.iter().find(|l| field(l, "id") == Some(id.as_str())) {
+                    Some(l) => lines.push(loosening_line(l)),
+                    None => {
+                        return Err(CmdError::shell(
+                            409,
+                            CHANGED,
+                            "changed",
+                            "the project's settings changed since they were shown; look at them again",
+                        ))
+                    }
+                }
+            }
+            let list = lines.join("\n");
+            too_long(&[&list])?;
+            let one = ids.len() == 1;
+            Ok(Prepared {
+                body: json!({ "items": ids }),
+                dialog: Some(Dialog {
+                    title: if one { "Friday: trust this setting?".into() } else { "Friday: trust these settings?".into() },
+                    text: format!(
+                        "A file of this project asks to let Friday or its agents do more than the defaults:\n\n{}\n\nAnyone who can change that file chose {}. {} applies on this computer only once you trust {}; nothing else is trusted by this.\n\nTrust {} on this computer?",
+                        list,
+                        if one { "it" } else { "them" },
+                        if one { "It" } else { "Each" },
+                        if one { "it" } else { "it" },
+                        if one { "exactly this setting" } else { "exactly these settings" },
+                    ),
+                    confirm: if one { "Trust this setting".into() } else { "Trust these settings".into() },
+                    danger: true,
+                }),
+            })
+        }
         Some(Confirm::Trust) => {
             let hash = match body.and_then(|b| b.get("loosening_hash")) {
                 Some(Value::String(h)) if !h.is_empty() && h.len() <= 200 => h.clone(),
@@ -248,34 +374,22 @@ pub fn prepare(
                     409,
                     CHANGED,
                     "changed",
-                    "the project's policy changed since it was shown; look at it again",
+                    "the project's settings changed since they were shown; look at them again",
                 ));
             }
             let items: Vec<String> = p
                 .get("loosening")
                 .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .map(|l| {
-                            format!(
-                                "- {} from {} to {} (in {})",
-                                shown(field(l, "setting")),
-                                shown(field(l, "from")),
-                                shown(field(l, "to")),
-                                shown(field(l, "source"))
-                            )
-                        })
-                        .collect()
-                })
+                .map(|a| a.iter().map(loosening_line).collect())
                 .unwrap_or_default();
             let list = items.join("\n");
             too_long(&[&list])?;
             Ok(Prepared {
                 body: json!({"loosening_hash": hash}),
                 dialog: Some(Dialog {
-                    title: "Friday: trust this project's policy?".into(),
+                    title: "Friday: trust this project's settings?".into(),
                     text: format!(
-                        "Files tracked in this repository loosen Friday's policy on this computer:\n\n{}\n\nAnyone who can change those files chose these settings. Trust exactly these settings for this clone?",
+                        "This project's files ask to let Friday or its agents do more than the defaults:\n\n{}\n\nAnyone who can change those files chose these settings. None of them applies on this computer until you trust them. Trust exactly these settings on this computer?",
                         if list.is_empty() { "(nothing listed)".to_string() } else { list }
                     ),
                     confirm: "Trust these settings".into(),
@@ -283,15 +397,11 @@ pub fn prepare(
                 }),
             })
         }
-        Some(Confirm::Halt) => Ok(Prepared {
-            body: reason_body(body)?,
-            dialog: Some(Dialog {
-                title: "Friday: halt every agent?".into(),
-                text: "Halting pauses Friday and stops every running attempt. Work in the worktrees is kept and the tasks go back to READY; no task is cancelled.\n\nHalt now?".into(),
-                confirm: "Halt".into(),
-                danger: true,
-            }),
-        }),
+        // Halting is asked once, in the Halt dialog of the page, which says what it does and takes
+        // the reason (2026-11-18). The shell asked the same again: two answers for an emergency
+        // stop. Halting only stops and pauses; nothing is cancelled, allowed or merged by it, so
+        // the route keeps its place here (only what it takes is sent) without a second question.
+        Some(Confirm::Halt) => Ok(Prepared { body: reason_body(body)?, dialog: None }),
         Some(Confirm::RecoverCancel) => {
             let tid = checked.param("tid").unwrap_or_default().to_string();
             let detail = get(&format!("{base}tasks/{tid}"))?;
@@ -308,7 +418,7 @@ pub fn prepare(
                 dialog: Some(Dialog {
                     title: "Friday: cancel this task?".into(),
                     text: format!(
-                        "Task {}: {}\n\nRecovery cancels the task: a cancelled task does not run again. Its worktree is kept until you prune it.\n\nCancel the task?",
+                        "Task {}: {}\n\nRecovery cancels the task: a cancelled task does not run again. Its folder is kept until you clean it up (Settings, Friday).\n\nCancel the task?",
                         visible(&tid),
                         shown(summary)
                     ),
@@ -322,12 +432,27 @@ pub fn prepare(
             let detail = get(&format!("{base}tasks/{tid}"))?;
             let summary = detail.pointer("/task/summary").and_then(Value::as_str);
             too_long(&[summary.unwrap_or("")])?;
+            // What becomes of the tasks that depend on it, as the person chose in the page: one of
+            // two words, sent on as it is and said here; anything else is left out.
+            let dependents = body
+                .and_then(|b| b.get("dependents"))
+                .and_then(Value::as_str)
+                .filter(|d| matches!(*d, "cancel" | "release"));
+            let mut sent = reason_body(body)?;
+            if let (Some(d), Some(m)) = (dependents, sent.as_object_mut()) {
+                m.insert("dependents".into(), Value::String(d.to_string()));
+            }
+            let also = match dependents {
+                Some("cancel") => "\n\nThe unfinished tasks that depend on it are cancelled too.",
+                Some("release") => "\n\nThe tasks that depend on it are kept, and no longer wait for it.",
+                _ => "",
+            };
             Ok(Prepared {
-                body: reason_body(body)?,
+                body: sent,
                 dialog: Some(Dialog {
                     title: "Friday: cancel this task?".into(),
                     text: format!(
-                        "Task {}: {}\n\nA cancelled task does not run again. Its worktree is kept until you prune it.\n\nCancel the task?",
+                        "Task {}: {}\n\nA cancelled task does not run again. Its folder is kept until you clean it up (Settings, Friday).{also}\n\nCancel the task?",
                         visible(&tid),
                         shown(summary)
                     ),
@@ -347,12 +472,116 @@ pub fn prepare(
                 dialog: Some(Dialog {
                     title: "Friday: cancel this goal?".into(),
                     text: format!(
-                        "Goal {}: {}\n\nIts open tasks are cancelled too. Work already in worktrees is kept.\n\nCancel the goal?",
+                        "Goal {}: {}\n\nIts open tasks are cancelled too. Work already in the task folders is kept.\n\nCancel the goal?",
                         visible(&gid),
                         shown(text)
                     ),
                     confirm: "Cancel the goal".into(),
                     danger: true,
+                }),
+            })
+        }
+        Some(Confirm::LandGoal) | Some(Confirm::LandGoalAside) => {
+            let gid = checked.param("gid").unwrap_or_default().to_string();
+            let detail = get(&format!("{base}goals/{gid}"))?;
+            let goal = detail.get("goal").cloned().unwrap_or(Value::Null);
+            let text = field(&goal, "objective").or_else(|| field(&goal, "request"));
+            // What landing would do, read now (`GET goals/{gid}/land`): the branch it lands into by
+            // name, or that nothing would merge. Only a merge is asked about: a goal already on that
+            // branch, or one the daemon refuses with its reason (changes in the way, a merge of the
+            // person's in progress, work that is already in the folder), is sent without a dialog,
+            // since it changes nothing in the folder.
+            let plan = get(&format!("{base}goals/{gid}/land"))?;
+            // Files in the way that the landing sets aside first (2026-11-18): asked about with
+            // their number. Only on the route that does it, and only when the daemon says they
+            // can be set aside; a plan that is ready is the ordinary merge, asked as one.
+            let in_the_way = plan
+                .get("in_the_way")
+                .filter(|_| what == Some(Confirm::LandGoalAside) && field(&plan, "state") == Some("blocked"))
+                .and_then(|w| w.get("count"))
+                .and_then(Value::as_u64)
+                .filter(|n| *n > 0);
+            if field(&plan, "state") != Some("ready") && in_the_way.is_none() {
+                return Ok(Prepared { body: json!({}), dialog: None });
+            }
+            let into = field(&plan, "into").unwrap_or("your branch").to_string();
+            let diff = get(&format!("{base}goals/{gid}/diff?stat=1"))?;
+            let branch = field(&diff, "branch").map(str::to_string).unwrap_or_else(|| format!("friday/goal-{gid}"));
+            let commits = diff.get("commits_ahead").and_then(Value::as_array).map_or(0, Vec::len);
+            let files = diff.get("files").and_then(Value::as_array).map_or(0, Vec::len);
+            too_long(&[text.unwrap_or(""), &branch, &into])?;
+            if let Some(n) = in_the_way {
+                let (files_word, they, them) = if n == 1 { ("file", "it is", "it") } else { ("files", "they are", "them") };
+                return Ok(Prepared {
+                    body: json!({}),
+                    dialog: Some(Dialog {
+                        title: "Friday: set files aside and land this goal?".into(),
+                        text: format!(
+                            "Goal {}: {}
+
+{} {} in your project folder {} changed without being committed, and this goal changes {} too.
+
+Friday keeps a copy of {} exactly as {} now, puts the folder back to your last commit for {}, and then merges {} into {}. Afterwards you can put your copy back from this goal's landing.
+
+If git cannot merge cleanly, your {} {} written back and nothing is changed.
+
+Set {} aside and land the goal?",
+                            visible(&gid),
+                            shown(text),
+                            n,
+                            files_word,
+                            if n == 1 { "is" } else { "are" },
+                            them,
+                            them,
+                            they,
+                            them,
+                            visible(&branch),
+                            visible(&into),
+                            files_word,
+                            if n == 1 { "is" } else { "are" },
+                            them,
+                        ),
+                        confirm: "Set aside and land".into(),
+                        danger: false,
+                    }),
+                });
+            }
+            // Agents at work in the project folder now (2026-11-18): landing changes files under
+            // them, so the question names them, and the person decides with that in view.
+            let busy: Vec<String> = plan
+                .get("busy")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).take(5).map(visible).collect())
+                .unwrap_or_default();
+            let warning = if busy.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n\n{} {} working in your project folder right now. Landing changes files under {}: it is best to land when that work is done.",
+                    busy.join(" and "),
+                    if busy.len() == 1 { "is" } else { "are" },
+                    if busy.len() == 1 { "it" } else { "them" },
+                )
+            };
+            Ok(Prepared {
+                // The land route takes nothing: what it merges is the goal's own branch.
+                body: json!({}),
+                dialog: Some(Dialog {
+                    title: "Friday: land this goal?".into(),
+                    text: format!(
+                        "Goal {}: {}\n\nThis merges {} ({} {}, {} {}) into {}, the branch your project folder has checked out, as \"git merge\" there would. If git cannot merge cleanly, nothing is changed.{}\n\nLand the goal?",
+                        visible(&gid),
+                        shown(text),
+                        visible(&branch),
+                        commits,
+                        if commits == 1 { "commit" } else { "commits" },
+                        files,
+                        if files == 1 { "file" } else { "files" },
+                        visible(&into),
+                        warning,
+                    ),
+                    confirm: if busy.is_empty() { "Land the goal".into() } else { "Land anyway".into() },
+                    danger: false,
                 }),
             })
         }
@@ -373,6 +602,12 @@ pub fn prepare(
             let role = field(&b, "role");
             let opts = options_text(b.get("options"));
             too_long(&[host.unwrap_or(""), key.unwrap_or(""), role.unwrap_or(""), &opts])?;
+            // The person has just pressed "Start the agent" in a dialog that shows all of this
+            // (2026-11-18): asking the same again was a second question about one decision. Asked
+            // again only where it gives the agent the whole machine.
+            if !danger {
+                return Ok(Prepared { body: b, dialog: None });
+            }
             Ok(Prepared {
                 body: b.clone(),
                 dialog: Some(Dialog {
@@ -402,6 +637,10 @@ pub fn prepare(
                 .unwrap_or(Value::Null);
             let profile_danger = crate::routes::asks_for_danger(&profile);
             let opts = options_text(profile.get("options"));
+            // Started again as it was set up and confirmed before: only full access is asked about.
+            if !(profile_danger || danger) {
+                return Ok(Prepared { body: json!({}), dialog: None });
+            }
             Ok(Prepared {
                 body: json!({}),
                 dialog: Some(Dialog {
@@ -415,6 +654,70 @@ pub fn prepare(
                         if profile_danger || danger { DANGER_NOTE } else { "" }
                     ),
                     confirm: "Start the agent".into(),
+                    danger: true,
+                }),
+            })
+        }
+        Some(Confirm::UpdateAgent) => {
+            let key = checked.param("key").unwrap_or_default().to_string();
+            let view = get(&format!("{base}agent-processes"))?;
+            let profile = view
+                .get("profiles")
+                .and_then(Value::as_array)
+                .and_then(|a| a.iter().find(|p| field(p, "agent_key") == Some(key.as_str())))
+                .cloned()
+                .ok_or_else(|| CmdError::shell(404, NOT_PENDING, "agent_not_found", "Friday does not remember this agent"))?;
+            // Only what the route changes is sent: the role, the options and whether it starts with
+            // Friday. What the body leaves out stays as it is, and is shown as it is.
+            let mut sent = Map::new();
+            if let Some(r) = text_field(body, "role", 64)? {
+                sent.insert("role".into(), Value::String(r));
+            }
+            match body.and_then(|b| b.get("options")) {
+                None => {}
+                Some(o @ Value::Object(_)) => {
+                    sent.insert("options".into(), o.clone());
+                }
+                Some(_) => return Err(CmdError::bad_request("options must be an object")),
+            }
+            match body.and_then(|b| b.get("autostart")) {
+                None => {}
+                Some(Value::Bool(a)) => {
+                    sent.insert("autostart".into(), Value::Bool(*a));
+                }
+                Some(_) => return Err(CmdError::bad_request("autostart must be true or false")),
+            }
+            let role = sent.get("role").and_then(Value::as_str).or_else(|| field(&profile, "role"));
+            let options = sent.get("options").or_else(|| profile.get("options"));
+            let autostart = sent
+                .get("autostart")
+                .and_then(Value::as_bool)
+                .unwrap_or_else(|| profile.get("autostart") == Some(&Value::Bool(true)));
+            let opts = options_text(options);
+            let before = options_text(profile.get("options"));
+            too_long(&[&key, role.unwrap_or(""), &opts, &before])?;
+            let asks_danger = options.is_some_and(crate::routes::asks_for_danger);
+            // A change made in the agent's own dialog is asked about again only where it lets the
+            // agent do or spend more: full access, or a spending limit raised or taken away.
+            let more = raises_limit(profile.get("options"), sent.get("options"));
+            if !(asks_danger || danger || more) {
+                return Ok(Prepared { body: Value::Object(sent), dialog: None });
+            }
+            Ok(Prepared {
+                body: Value::Object(sent.clone()),
+                dialog: Some(Dialog {
+                    title: "Friday: change this agent?".into(),
+                    text: format!(
+                        "Agent: {}\nHost: {}\nRole: {}\nOptions: {}\nStarts with Friday: {}\n\nIts options until now: {}{}\n\nA spending limit applies from the agent's next attempt; everything else the next time it starts. An agent may spend on its provider account.\n\nSave the change?",
+                        visible(&key),
+                        shown(field(&profile, "host")),
+                        shown(role),
+                        opts,
+                        if autostart { "yes" } else { "no" },
+                        before,
+                        if asks_danger || danger { DANGER_NOTE } else { "" }
+                    ),
+                    confirm: "Save the change".into(),
                     danger: true,
                 }),
             })
@@ -445,7 +748,7 @@ pub fn prepare(
 pub fn restart_dialog() -> Dialog {
     Dialog {
         title: "Friday: restart Friday?".into(),
-        text: "Friday stops for this project and starts again: agents lose their connection for a moment and spawned agents stop. Work in worktrees is kept.\n\nRestart Friday?".into(),
+        text: "Friday stops for this project and starts again: agents lose their connection for a moment, and the agents Friday started stop. The work in the task folders is kept.\n\nRestart Friday?".into(),
         confirm: "Restart Friday".into(),
         danger: true,
     }
@@ -454,7 +757,7 @@ pub fn restart_dialog() -> Dialog {
 pub fn stop_dialog() -> Dialog {
     Dialog {
         title: "Friday: stop Friday?".into(),
-        text: "Friday stops for this project: agents lose their connection and spawned agents stop. Work in worktrees is kept.\n\nStop Friday?".into(),
+        text: "Friday stops for this project: agents lose their connection, and the agents Friday started stop. The work in the task folders is kept.\n\nStop Friday?".into(),
         confirm: "Stop Friday".into(),
         danger: true,
     }
@@ -566,7 +869,188 @@ mod tests {
     }
 
     #[test]
-    fn halt_cancel_stop_and_starting_agents_always_ask() {
+    fn the_trust_list_says_what_each_setting_allows_and_keeps_the_exact_setting() {
+        assert_eq!(
+            loosening_words("verification.auto_on_completion", "true").as_deref(),
+            Some("Finished work is checked automatically")
+        );
+        assert_eq!(
+            loosening_words("master_brain.auto_approve", "true").as_deref(),
+            Some("Plans start without waiting for your approval")
+        );
+        assert_eq!(
+            loosening_words("autonomy.package.install", "auto").as_deref(),
+            Some("Agents may install packages without asking")
+        );
+        assert_eq!(
+            loosening_words("autonomy.git.push", "review").as_deref(),
+            Some("Agents may push to a remote once you approve it in Friday")
+        );
+        // What it cannot put into words is shown as written.
+        assert_eq!(loosening_words("autonomy.package.install", "manual"), None);
+        assert_eq!(loosening_words("autonomy.something", "auto"), None);
+        assert_eq!(loosening_words("risk.file.delete", "low"), None);
+
+        let policy = json!({"policy": {"loosening_hash": "h1", "loosening": [
+            {"source": "config.yaml", "setting": "autonomy.package.install", "from": "review", "to": "auto"},
+            {"source": "config.yaml", "setting": "risk.file.delete", "from": "high", "to": "low"}]}});
+        let get = move |_: &str| Ok(policy.clone());
+        let body = json!({"loosening_hash": "h1"});
+        let (c, what) = checked("policy/trust", Some(&body));
+        let d = prepare(what, &c, PID, Some(&body), &get).unwrap().dialog.unwrap();
+        assert_eq!(d.title, "Friday: trust this project's settings?");
+        assert!(d.text.contains(
+            "- Agents may install packages without asking\n    autonomy.package.install: review → auto (in config.yaml)"
+        ));
+        assert!(d.text.contains("- risk.file.delete: high → low (in config.yaml)"));
+        assert!(d.text.contains("Trust exactly these settings on this computer?"));
+    }
+
+    #[test]
+    fn trusting_one_setting_asks_about_that_setting_and_sends_only_it() {
+        let get = |path: &str| -> Result<Value, CmdError> {
+            assert!(path.ends_with("/policy"), "{path}");
+            Ok(json!({"policy": {"loosening_hash": "h_all", "trusted": false, "loosening": [
+                {"id": "id_install", "trusted": false, "source": "config.yaml", "setting": "autonomy.package.install", "from": "review", "to": "auto"},
+                {"id": "id_land", "trusted": false, "source": "config.yaml", "setting": "landing.mode", "from": "ask", "to": "goal"},
+                {"id": "id_files", "trusted": true, "source": "config.yaml", "setting": "worktrees.files", "from": "none", "to": ".env"}
+            ]}}))
+        };
+        let body = json!({"items": ["id_install"], "loosening_hash": "h_all", "junk": 1});
+        let (c, what) = checked("policy/trust", Some(&body));
+        assert_eq!(what, Some(Confirm::Trust));
+        let p = prepare(what, &c, PID, Some(&body), &get).unwrap();
+        // Only the ids go on: neither the whole list's name nor anything else of the page's body.
+        assert_eq!(p.body, json!({"items": ["id_install"]}));
+        let d = p.dialog.expect("a dialog");
+        assert_eq!(d.title, "Friday: trust this setting?");
+        assert_eq!(d.confirm, "Trust this setting");
+        assert!(d.text.contains("Agents may install packages without asking"), "{}", d.text);
+        // What else waits is neither shown nor trusted.
+        assert!(!d.text.contains("landing.mode"), "{}", d.text);
+        assert!(!d.text.contains("worktrees.files"), "{}", d.text);
+        assert!(d.text.contains("nothing else is trusted by this"), "{}", d.text);
+        // Two at once are said as two.
+        let two = json!({"items": ["id_install", "id_land"]});
+        let (c, what) = checked("policy/trust", Some(&two));
+        let d = prepare(what, &c, PID, Some(&two), &get).unwrap().dialog.unwrap();
+        assert_eq!(d.title, "Friday: trust these settings?");
+        assert!(d.text.contains("landing.mode: ask → goal"), "{}", d.text);
+        // An id that names nothing the project asks for now refuses all of it; so does a body
+        // of the wrong shape.
+        let gone = json!({"items": ["id_install", "id_old"]});
+        let (c, what) = checked("policy/trust", Some(&gone));
+        assert!(prepare(what, &c, PID, Some(&gone), &get).is_err());
+        for bad in [json!({"items": []}), json!({"items": "id_install"}), json!({"items": [1]}), json!({"items": [""]})] {
+            let (c, what) = checked("policy/trust", Some(&bad));
+            assert!(prepare(what, &c, PID, Some(&bad), &get).is_err(), "{bad}");
+        }
+    }
+
+    /// In the trial a goal landed into the project folder while Antigravity worked there, and
+    /// nothing said so (2026-11-18): the question names who is at work, once, and lets the person
+    /// decide.
+    #[test]
+    fn landing_while_an_agent_works_in_the_folder_says_who_and_asks_once() {
+        let get = |path: &str| -> Result<Value, CmdError> {
+            if path.ends_with("/goals/g1") {
+                Ok(json!({"goal": {"objective": "Menu screens"}}))
+            } else if path.ends_with("/goals/g1/land") {
+                Ok(json!({"state": "ready", "into": "main", "commits": 1, "busy": ["antigravity-1\u{202E}"]}))
+            } else if path.ends_with("/goals/g1/diff?stat=1") {
+                Ok(json!({"branch": "friday/goal-g1", "commits_ahead": [{"sha": "a"}], "files": []}))
+            } else {
+                panic!("unexpected read {path}")
+            }
+        };
+        let (c, what) = checked("goals/g1/land", None);
+        let d = prepare(what, &c, PID, None, &get).unwrap().dialog.expect("a dialog");
+        assert!(
+            d.text.contains("antigravity-1⟨U+202E⟩ is working in your project folder right now"),
+            "{}",
+            d.text
+        );
+        assert!(d.text.contains("best to land when that work is done"), "{}", d.text);
+        assert_eq!(d.confirm, "Land anyway");
+    }
+
+    #[test]
+    fn landing_a_goal_asks_before_a_merge_and_says_what_it_merges_into() {
+        let reads = |state: &'static str| {
+            move |path: &str| -> Result<Value, CmdError> {
+                if path.ends_with("/goals/g1") {
+                    Ok(json!({"goal": {"objective": "Discount\u{202E} codes"}}))
+                } else if path.ends_with("/goals/g1/land") {
+                    Ok(json!({"state": state, "into": "ma\u{202E}in", "commits": 2}))
+                } else if path.ends_with("/goals/g1/diff?stat=1") {
+                    Ok(json!({"branch": "friday/goal-g1", "commits_ahead": [{"sha": "a"}, {"sha": "b"}],
+                        "files": [{"path": "README.md"}]}))
+                } else {
+                    panic!("unexpected read {path}")
+                }
+            }
+        };
+        let body = json!({"force": true});
+        let (c, what) = checked("goals/g1/land", Some(&body));
+        assert_eq!(what, Some(Confirm::LandGoal));
+        let p = prepare(what, &c, PID, Some(&body), &reads("ready")).unwrap();
+        // Nothing of the page's body is sent: the route merges the goal's own branch.
+        assert_eq!(p.body, json!({}));
+        let d = p.dialog.expect("a dialog");
+        assert!(d.text.contains("Discount⟨U+202E⟩ codes"));
+        assert!(d.text.contains("friday/goal-g1 (2 commits, 1 file) into ma⟨U+202E⟩in,"), "{}", d.text);
+        assert_eq!(d.confirm, "Land the goal");
+        // Nothing would merge (already there, or the daemon refuses with its reason): no question
+        // is asked about a merge that will not happen, and the daemon's answer is what the person reads.
+        for state in ["landed", "blocked", "in_folder", "not_completed"] {
+            let p = prepare(what, &c, PID, Some(&body), &reads(state)).unwrap();
+            assert!(p.dialog.is_none(), "{state}");
+            assert_eq!(p.body, json!({}), "{state}");
+        }
+        // Files in the way: the route that sets them aside asks with their number; the plain
+        // landing route asks nothing about a plan that is blocked, as before.
+        let aside_reads = |state: &'static str, count: u64| {
+            move |path: &str| -> Result<Value, CmdError> {
+                if path.ends_with("/goals/g1") {
+                    Ok(json!({"goal": {"objective": "Discount codes"}}))
+                } else if path.ends_with("/goals/g1/land") {
+                    Ok(json!({"state": state, "into": "main", "in_the_way": {"count": count, "left": count, "left_by": ["antigravity-1"], "working": []}}))
+                } else if path.ends_with("/goals/g1/diff?stat=1") {
+                    Ok(json!({"branch": "friday/goal-g1", "commits_ahead": [{"sha": "a"}], "files": [{"path": "README.md"}]}))
+                } else {
+                    panic!("unexpected read {path}")
+                }
+            }
+        };
+        let (ca, aside) = checked("goals/g1/land/set-aside", Some(&body));
+        assert_eq!(aside, Some(Confirm::LandGoalAside));
+        let p = prepare(aside, &ca, PID, Some(&body), &aside_reads("blocked", 32)).unwrap();
+        assert_eq!(p.body, json!({}));
+        let d = p.dialog.expect("a dialog about the files");
+        assert!(d.text.contains("32 files in your project folder are changed without being committed"), "{}", d.text);
+        assert!(d.text.contains("merges friday/goal-g1 into main"), "{}", d.text);
+        assert!(d.text.contains("your files are written back and nothing is changed"), "{}", d.text);
+        assert_eq!(d.confirm, "Set aside and land");
+        let one = prepare(aside, &ca, PID, Some(&body), &aside_reads("blocked", 1)).unwrap().dialog.unwrap();
+        assert!(one.text.contains("1 file in your project folder is changed"), "{}", one.text);
+        assert!(one.text.contains("Set it aside and land the goal?"), "{}", one.text);
+        // A plan that became ready meanwhile is the ordinary merge, and is asked as one.
+        let ready = prepare(aside, &ca, PID, Some(&body), &aside_reads("ready", 0)).unwrap().dialog.unwrap();
+        assert_eq!(ready.confirm, "Land the goal");
+        // The plain route never sets anything aside, whatever the plan says.
+        let plain = prepare(what, &c, PID, Some(&body), &aside_reads("blocked", 32)).unwrap();
+        assert!(plain.dialog.is_none());
+        // Blocked by something else (no files to set aside): nothing is asked, the daemon refuses.
+        let p = prepare(aside, &ca, PID, Some(&body), &reads("blocked")).unwrap();
+        assert!(p.dialog.is_none());
+        assert!(crate::routes::for_request("POST", &format!("{PREFIX}{PID}/goals/g1/land/set-aside"), None, PID, 4310).is_err());
+        // Only confirm_and_send sends the merge; the plan is an ordinary read.
+        assert!(crate::routes::for_request("POST", &format!("{PREFIX}{PID}/goals/g1/land"), None, PID, 4310).is_err());
+        assert!(crate::routes::for_request("GET", &format!("{PREFIX}{PID}/goals/g1/land"), None, PID, 4310).is_ok());
+    }
+
+    #[test]
+    fn cancel_stop_and_an_agent_with_full_access_always_ask() {
         let get = |path: &str| -> Result<Value, CmdError> {
             if path.ends_with("/tasks/t1") {
                 Ok(json!({"task": {"summary": "Fix\u{202E} the cart"}}))
@@ -579,7 +1063,15 @@ mod tests {
                 panic!("unexpected read {path}")
             }
         };
-        for rest in ["control/halt", "tasks/t1/cancel", "goals/g1/cancel", "daemon/stop", "agent-processes/codex-1/start"] {
+        // Halting is asked once, by the page's own Halt dialog: the shell sends it on, with only
+        // what the route takes.
+        let halt_body = json!({"reason": "because", "junk": 1});
+        let (c, what) = checked("control/halt", Some(&halt_body));
+        assert_eq!(what, Some(Confirm::Halt));
+        let halt = prepare(what, &c, PID, Some(&halt_body), &get).unwrap();
+        assert!(halt.dialog.is_none());
+        assert_eq!(halt.body, json!({"reason": "because"}));
+        for rest in ["tasks/t1/cancel", "goals/g1/cancel", "daemon/stop", "agent-processes/codex-1/start"] {
             let body = json!({"reason": "because", "junk": 1});
             let (c, what) = checked(rest, Some(&body));
             let p = prepare(what, &c, PID, Some(&body), &get).unwrap();
@@ -592,6 +1084,80 @@ mod tests {
                 assert!(d.text.contains("WARNING: danger-full-access"));
             }
         }
+        // What becomes of the tasks that depend on a cancelled one is the person's choice: one of two
+        // words goes on to the daemon and is said in the dialog; anything else is dropped.
+        for (word, said) in [
+            ("cancel", Some("are cancelled too")),
+            ("release", Some("no longer wait for it")),
+            ("everything", None),
+        ] {
+            let body = json!({"reason": "because", "dependents": word});
+            let (c, what) = checked("tasks/t1/cancel", Some(&body));
+            let p = prepare(what, &c, PID, Some(&body), &get).unwrap();
+            let d = p.dialog.expect("a dialog");
+            match said {
+                Some(text) => {
+                    assert_eq!(p.body, json!({"reason": "because", "dependents": word}));
+                    assert!(d.text.contains(text), "{word}: {}", d.text);
+                }
+                None => {
+                    assert_eq!(p.body, json!({"reason": "because"}));
+                    assert!(!d.text.contains("depend on it"), "{}", d.text);
+                }
+            }
+        }
+        // Changing a remembered agent shows what it will run with beside what it had, sends only
+        // what the route changes, and says a spending limit in words.
+        let claude = |path: &str| -> Result<Value, CmdError> {
+            assert!(path.ends_with("/agent-processes"), "{path}");
+            Ok(json!({"profiles": [{"agent_key": "claude-1", "host": "claude-code", "role": "developer",
+                "autostart": true, "options": {"max_budget_usd": 5}}]}))
+        };
+        let change = json!({"options": {"max_budget_usd": null, "effort": "high"}, "junk": 1, "host": "codex"});
+        let (c, what) = checked("agent-processes/claude-1/update", Some(&change));
+        assert_eq!(what, Some(Confirm::UpdateAgent));
+        let p = prepare(what, &c, PID, Some(&change), &claude).unwrap();
+        assert_eq!(p.body, json!({"options": {"max_budget_usd": null, "effort": "high"}}));
+        let d = p.dialog.expect("a dialog");
+        assert_eq!(d.title, "Friday: change this agent?");
+        assert!(d.text.contains("Agent: claude-1\nHost: claude-code\nRole: developer\n"), "{}", d.text);
+        assert!(d.text.contains("no spending limit per attempt"), "{}", d.text);
+        assert!(d.text.contains("Its options until now: spending limit per attempt: $5"), "{}", d.text);
+        assert!(d.text.contains("Starts with Friday: yes"), "{}", d.text);
+        assert!(!d.text.contains("WARNING"), "{}", d.text);
+        // A part left out is kept and shown as it is; a changed one is shown as it will be.
+        let part = json!({"role": "back\u{202E}end", "autostart": false});
+        let (c, what) = checked("agent-processes/claude-1/update", Some(&part));
+        let p = prepare(what, &c, PID, Some(&part), &claude).unwrap();
+        assert_eq!(p.body, part);
+        // It lets the agent do no more than before: saved without a second question (2026-11-18).
+        assert!(p.dialog.is_none());
+        // A higher limit is asked about, with what it was; a lower one is not.
+        let higher = json!({"role": "back\u{202E}end", "autostart": false, "options": {"max_budget_usd": 9}});
+        let (c, what) = checked("agent-processes/claude-1/update", Some(&higher));
+        let d = prepare(what, &c, PID, Some(&higher), &claude).unwrap().dialog.expect("a dialog");
+        assert!(d.text.contains("Role: back⟨U+202E⟩end"), "{}", d.text);
+        assert!(d.text.contains("Options: spending limit per attempt: $9\nStarts with Friday: no"), "{}", d.text);
+        assert!(d.text.contains("Its options until now: spending limit per attempt: $5"), "{}", d.text);
+        let lower = json!({"options": {"max_budget_usd": 2}});
+        let (c, what) = checked("agent-processes/claude-1/update", Some(&lower));
+        assert!(prepare(what, &c, PID, Some(&lower), &claude).unwrap().dialog.is_none());
+        assert!(raises_limit(Some(&json!({"max_budget_usd": 5})), Some(&json!({"max_budget_usd": null}))));
+        assert!(!raises_limit(Some(&json!({})), Some(&json!({"max_budget_usd": 5}))));
+        assert!(!raises_limit(Some(&json!({"max_budget_usd": 5})), Some(&json!({"effort": "high"}))));
+        assert!(!raises_limit(Some(&json!({"max_budget_usd": 5})), None));
+        // Full access asked for by a change is said as loudly as at a start.
+        let full = json!({"options": {"sandbox": "danger-full-access"}});
+        let (c, what) = checked("agent-processes/codex-1/update", Some(&full));
+        let p = prepare(what, &c, PID, Some(&full), &get).unwrap();
+        assert!(p.dialog.unwrap().text.contains("WARNING: danger-full-access"));
+        // An agent Friday does not remember, or a body of the wrong shape, is refused before any dialog.
+        let (c, what) = checked("agent-processes/nobody/update", Some(&change));
+        assert!(prepare(what, &c, PID, Some(&change), &claude).is_err());
+        for bad in [json!({"options": "none"}), json!({"autostart": "yes"}), json!({"role": 5})] {
+            let (c, what) = checked("agent-processes/claude-1/update", Some(&bad));
+            assert!(prepare(what, &c, PID, Some(&bad), &claude).is_err(), "{bad}");
+        }
         let launch = json!({"host": "codex", "agent_key": "codex-2", "role": "implementer",
             "options": {"sandbox": "danger-full-access"}, "autostart": true});
         let (c, what) = checked("agent-processes", Some(&launch));
@@ -603,8 +1169,19 @@ mod tests {
         let plain = json!({"host": "codex", "agent_key": "codex-3", "role": "developer"});
         let (c, what) = checked("agent-processes", Some(&plain));
         let p = prepare(what, &c, PID, Some(&plain), &get).unwrap();
-        assert!(p.dialog.unwrap().text.contains("Starts with Friday: yes"));
+        // Started from its own dialog, with no full access asked for: no second question, and
+        // what is sent still says that it starts with Friday.
+        assert!(p.dialog.is_none());
         assert_eq!(p.body["autostart"], json!(true));
+        // An agent started again as it was, without full access, is not asked about either.
+        let quiet = |path: &str| -> Result<Value, CmdError> {
+            assert!(path.ends_with("/agent-processes"), "{path}");
+            Ok(json!({"profiles": [{"agent_key": "claude-1", "host": "claude-code", "role": "developer", "options": {}}]}))
+        };
+        let (c, what) = checked("agent-processes/claude-1/start", None);
+        let p = prepare(what, &c, PID, None, &quiet).unwrap();
+        assert!(p.dialog.is_none());
+        assert_eq!(p.body, json!({}));
     }
 
     #[test]

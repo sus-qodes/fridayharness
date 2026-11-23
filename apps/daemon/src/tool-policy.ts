@@ -5,6 +5,7 @@ import {
   type CommandClass,
   DEFAULT_RISK,
   evaluate,
+  matchesAny,
   mcpLevel,
   type OtherWriter,
   type PolicyAction,
@@ -30,6 +31,13 @@ export interface ToolJudgeInput {
    * approval is recorded for exactly this action, and the host is told no until it is granted.
    */
   askHuman?: boolean;
+  /**
+   * The agent asks ahead for a command, through `friday_request_permission` (2026-11-18): judged
+   * exactly as the hook will judge it, so the request is filed under the capability and target the
+   * hook looks for, and is the same card as the one the hook made. Nothing runs: a grant that
+   * would cover it is not spent, and the request carries the agent's own reason and reach.
+   */
+  request?: { justification: string; reuse?: 'once' | 'run' | 'task' | undefined; ttl_s?: number | undefined };
 }
 
 export interface ToolJudgement {
@@ -108,6 +116,7 @@ export function createToolJudge(deps: {
     task: TaskView,
     toolName: string,
     result: PolicyResult,
+    request?: ToolJudgeInput['request'],
   ): string | null => {
     if (!result.grant) return null;
     const { capability, target } = result.grant;
@@ -116,7 +125,9 @@ export function createToolJudge(deps: {
       { capability, target, task_id: task.task_id, run_id: task.current_run_id, agent_id: caller.agent_id },
       state.clock.now(),
     );
-    if (pending) return pending.approval_id;
+    // The hook asking again changes nothing; the agent asking in its own words adds its reason
+    // to the card that waits (`requestPermission` does that, and makes no second one).
+    if (pending && !request) return pending.approval_id;
     const effective = deps.policy?.();
     return state.requestPermission(
       pid,
@@ -126,9 +137,10 @@ export function createToolJudge(deps: {
         ...(task.current_run_id ? { run_id: task.current_run_id } : {}),
         action_class: capability,
         resource: target,
-        justification: `${toolName}: ${result.reason}`.slice(0, 1000),
-        ttl_s: 3600,
-        reuse: 'once',
+        justification: (request?.justification ?? `${toolName}: ${result.reason}`).slice(0, 1000),
+        ttl_s: request?.ttl_s ?? 3600,
+        // A file is rarely finished in one edit: leave for it holds for the task.
+        reuse: request?.reuse ?? (result.rule === 'write.outside_scope' ? 'task' : 'once'),
       },
       {
         capability,
@@ -140,7 +152,7 @@ export function createToolJudge(deps: {
     ).approval_id;
   };
 
-  return ({ harness, agent, action, actor, decidedLocally, askHuman }) => {
+  return ({ harness, agent, action, actor, decidedLocally, askHuman, request }) => {
     const toolName = action.tool;
     const task = heldTask(agent?.agent_id);
     const root = executionRoot(harness, task);
@@ -198,6 +210,35 @@ export function createToolJudge(deps: {
       // Third-party MCP tools: the project's level for the server and tool (ADR-0030 §3).
       mcp: (server, tool) => (effective ? mcpLevel(effective, server, tool) : 'review'),
     });
+    // An edit outside the task's own files, by an agent Friday started (2026-11-18): the person is
+    // asked on its behalf, with the file named, and the agent goes on with the rest meanwhile. It
+    // was refused and told how to ask; agents rarely asked. In the trial one put lint rules into
+    // another file than the project's documents name, and nobody was told it had been stopped.
+    // Not where the project's own policy or the role's team scope keeps the file as well, and not
+    // again after the person said no for this task.
+    if (askHuman && task && result.decision === 'deny' && result.rule === 'write.outside_scope' && result.grant) {
+      const rel = result.grant.target;
+      const windows = process.platform === 'win32';
+      const teams = (agent?.role ? effective?.teams[agent.role] : undefined) ?? [];
+      const keptElsewhere =
+        (effective?.deny.write.length ? matchesAny(rel, effective.deny.write, windows) : false) ||
+        teams.some((t) => t.write.length > 0 && !matchesAny(rel, t.write, windows));
+      if (!keptElsewhere) {
+        const refused = state.q
+          .approvals(pid, 'denied', { task_id: task.task_id })
+          .some((a) => a.capability === 'file.write' && a.target === rel);
+        result = refused
+          ? {
+              ...result,
+              reason: `${rel} is outside the files of ${task.task_id}, and the person said no to changing it for this task. Do the task without it, and say in your final answer what that leaves undone.`,
+            }
+          : {
+              ...result,
+              decision: 'ask',
+              reason: `${rel} is outside the files this task may change (${(task.scope?.write ?? []).join(', ')}).`,
+            };
+      }
+    }
     // A task worktree belongs to its task: a session that does not hold it (a stale attempt after
     // recovery, or one that never claimed it) may not write there (ADR-0026 §2).
     const tree = action.kind === 'write' && result.decision !== 'deny' ? state.q.worktreeAt(pid, root) : undefined;
@@ -283,7 +324,8 @@ export function createToolJudge(deps: {
       );
     }
     // Approvals the allowed action relied on are used up now (ADR-0027 §5).
-    if (result.decision === 'allow' && result.relied_on?.length) {
+    // A request ahead of the act spends nothing: the grant is used when the command really runs.
+    if (!request && result.decision === 'allow' && result.relied_on?.length) {
       const uses = result.relied_on
         .map((r) => ({ approval_id: approvalFor(r.capability, r.target), tool: toolName, target: r.target }))
         .filter((u): u is { approval_id: string; tool: string; target: string } => Boolean(u.approval_id));
@@ -300,7 +342,7 @@ export function createToolJudge(deps: {
     }
     const approvalId =
       askHuman && result.decision === 'ask' && task && agent && harness
-        ? pendingApproval({ agent_id: agent.agent_id, harness_id: harness.harness_id }, task, toolName, result)
+        ? pendingApproval({ agent_id: agent.agent_id, harness_id: harness.harness_id }, task, toolName, result, request)
         : null;
     return { result, task, approval_id: approvalId };
   };

@@ -32,12 +32,16 @@ export {
 } from './config/templates.js';
 export {
   type ClaudeInstall,
+  claudeCandidates,
+  claudeVersionOf,
   compareVersions,
   DEGRADED_MIN,
+  type DetectSystem,
   detectClaudeCode,
   ENFORCING_MIN,
   type HookLevel,
   hookLevel,
+  programOfShim,
   SPAWN_MIN,
 } from './detect.js';
 export {

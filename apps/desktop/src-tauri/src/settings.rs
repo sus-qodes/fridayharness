@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 pub struct Settings {
     /// The project folder opened last.
     pub last_project: Option<PathBuf>,
+    /// The project folders opened lately, newest first (2026-11-18): the project menu lists them.
+    pub recent_projects: Vec<PathBuf>,
     /// The tray's "Show Notch".
     pub show_notch: bool,
     /// Shortcut id -> accelerator ("Ctrl+Alt+Shift+F"); missing ids use the defaults.
@@ -23,13 +25,44 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { last_project: None, show_notch: true, shortcuts: BTreeMap::new(), notch_monitor: None }
+        Settings {
+            last_project: None,
+            recent_projects: Vec::new(),
+            show_notch: true,
+            shortcuts: BTreeMap::new(),
+            notch_monitor: None,
+        }
     }
+}
+
+/// How many recent projects the menu lists.
+pub const RECENT_MAX: usize = 8;
+
+/// The same folder, as Windows compares paths: without regard to case or a trailing separator.
+fn same_folder(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| {
+        let s = p.to_string_lossy().replace('/', "\\");
+        let s = s.trim_end_matches('\\').to_string();
+        if cfg!(windows) { s.to_lowercase() } else { s }
+    };
+    norm(a) == norm(b)
 }
 
 pub const FILE: &str = "desktop.json";
 
 impl Settings {
+    /// Puts a project first among the recent ones, once, and keeps `RECENT_MAX` of them.
+    pub fn remember(&mut self, root: &Path) {
+        self.recent_projects.retain(|p| !same_folder(p, root));
+        self.recent_projects.insert(0, root.to_path_buf());
+        self.recent_projects.truncate(RECENT_MAX);
+    }
+
+    /// Whether a folder is one of the recent projects.
+    pub fn is_recent(&self, root: &Path) -> bool {
+        self.recent_projects.iter().any(|p| same_folder(p, root))
+    }
+
     /// Reads the settings; a missing or broken file gives the defaults.
     pub fn load(dir: &Path) -> Settings {
         fs::read_to_string(dir.join(FILE))
@@ -51,6 +84,24 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_projects_are_newest_first_once_each_and_few() {
+        let mut s = Settings::default();
+        for i in 0..10 {
+            s.remember(&PathBuf::from(format!(r"C:\\work\\p{i}")));
+        }
+        assert_eq!(s.recent_projects.len(), RECENT_MAX);
+        assert_eq!(s.recent_projects[0], PathBuf::from(r"C:\\work\\p9"));
+        // The same folder again, in other letters or with a trailing separator: moved first, not added.
+        s.remember(&PathBuf::from(r"C:\\WORK\\p5\\"));
+        assert_eq!(s.recent_projects.len(), RECENT_MAX);
+        assert!(s.is_recent(&PathBuf::from(r"c:\\work\\p5")));
+        assert!(!s.is_recent(&PathBuf::from(r"C:\\work\\p0")));
+        // An older settings file without the list reads as an empty list.
+        let old: Settings = serde_json::from_str(r#"{"last_project": "C:\\\\x", "show_notch": true}"#).unwrap();
+        assert!(old.recent_projects.is_empty());
+    }
 
     #[test]
     fn settings_round_trip_and_survive_a_broken_file() {

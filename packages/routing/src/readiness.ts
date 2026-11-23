@@ -152,7 +152,8 @@ export function assessReadiness(
         stage,
         status,
         status === 'missing'
-          ? `${label} is not ${WORDS[stage]}: no session is connected and no doctor check has seen it`
+          ? // Not "is not installed" (2026-11-17): it may well be installed; Friday has only not seen it.
+            `${label} has not been seen here yet: no session of it is connected, and no setup check has looked for it`
           : status === 'stale'
             ? `the check that ${label} is ${WORDS[stage]} expired at ${e?.expires_at}`
             : `${label} is not ${WORDS[stage]}${e?.detail ? `: ${e.detail}` : ''}`,

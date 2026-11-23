@@ -424,7 +424,9 @@ describe('friday-mcp over stdio', () => {
     });
     expect(asked).toBe(1);
     expect(commit.structured).toMatchObject({ status: 'pending' });
-    expect(commit.text).toContain('waiting for a human');
+    // It still waits, and the agent is told it will hear of the decision (2026-11-18).
+    expect(commit.text).toContain('waits: The person was asked in Friday');
+    expect(commit.text).toContain('you get a message when they decide');
     expect(commit.text).not.toContain('rejected');
     const id = commit.structured.approval_id as string;
     const pending = await td.operator.get<{ approvals: { approval_id: string; status: string }[] }>(

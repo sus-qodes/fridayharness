@@ -81,3 +81,40 @@ describe('the cheapest capable agent (plan M13.3)', () => {
     expect(d.reason).not.toMatch(/cheapest/);
   });
 });
+
+describe('the role the plan names comes before starting by itself (2026-11-18)', () => {
+  it('keeps a frontend task for the frontend agent its person runs, though a backend agent starts by itself', () => {
+    const d = delegate(
+      task({ role: 'frontend', write: ['frontend/src/a.ts'] }),
+      [agent('be-1', { role: 'backend' }), agent('fe-1', { role: 'frontend', waits_for_person: true })],
+      [],
+    );
+    expect(d.agent_key).toBe('fe-1');
+  });
+
+  it('keeps it for a generalist its person runs before an agent of another speciality that starts by itself', () => {
+    const d = delegate(
+      task({ role: 'frontend', write: ['frontend/src/a.ts'] }),
+      [agent('cx-1', { role: 'backend' }), agent('fe-1', { role: 'developer', waits_for_person: true })],
+      [],
+    );
+    expect(d.agent_key).toBe('fe-1');
+    // Among agents that fit, the one that starts by itself still goes first.
+    expect(
+      delegate(
+        task({ role: 'frontend', write: ['frontend/src/a.ts'] }),
+        [agent('claude-1', { role: 'developer' }), agent('fe-1', { role: 'developer', waits_for_person: true })],
+        [],
+      ).agent_key,
+    ).toBe('claude-1');
+  });
+
+  it('still gives a task any agent may do to the one that starts by itself', () => {
+    const d = delegate(
+      task({ role: 'developer' }),
+      [agent('antigravity-1', { role: 'developer', waits_for_person: true }), agent('claude-1', { role: 'developer' })],
+      [],
+    );
+    expect(d.agent_key).toBe('claude-1');
+  });
+});

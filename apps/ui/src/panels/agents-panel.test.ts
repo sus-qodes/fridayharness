@@ -2,9 +2,19 @@ import type { AgentProcess, AgentProfile } from '@friday/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { enforcementWords } from '../model/status.js';
 import { ApiError } from '../platform/transport.js';
+import { openDrawer } from '../shell/context.js';
 import { makeContext } from '../test/context.js';
-import { makeAgent, makeHarness, makeSnapshot } from '../test/fixtures.js';
-import { agentRows, agentsDrawer, claudeCodeStatus, isConnected, PROCESS_POLL_MS, rowStatus } from './agents-panel.js';
+import { makeAgent, makeHarness, makeSnapshot, makeTask } from '../test/fixtures.js';
+import {
+  agentRows,
+  agentsDrawer,
+  antigravityStatus,
+  attachedPlace,
+  claudeCodeStatus,
+  isConnected,
+  PROCESS_POLL_MS,
+  rowStatus,
+} from './agents-panel.js';
 import { BIDI, buttonBy, HOSTILE, LONG } from './test-support.js';
 
 function proc(over: Partial<AgentProcess> = {}): AgentProcess {
@@ -130,6 +140,18 @@ describe('agents helpers', () => {
       hooksSeen: false,
     });
   });
+
+  it('reads the Antigravity status from its own attached sessions only', () => {
+    const claude = makeHarness({ attach_mode: 'attach', enforcement_status: 'enforcing' });
+    expect(antigravityStatus([claude])).toMatchObject({ connected: false, harness: null });
+    const ag = makeHarness({ vendor: 'antigravity', attach_mode: 'attach', enforcement_status: 'unverified' });
+    expect(antigravityStatus([claude, ag])).toMatchObject({ connected: true, hooksSeen: true, harness: ag });
+    expect(claudeCodeStatus([ag])).toMatchObject({ connected: false, harness: null });
+    // A spawned session would be one Friday started: Antigravity has none, and one is not counted.
+    expect(antigravityStatus([makeHarness({ vendor: 'antigravity' })]).harness).toBeNull();
+    expect(attachedPlace('antigravity')).toBe('Antigravity');
+    expect(attachedPlace('claude-code')).toBe('VS Code');
+  });
 });
 
 describe('agents drawer', () => {
@@ -213,6 +235,33 @@ describe('agents drawer', () => {
     d.destroy();
   });
 
+  it('asks before stopping an agent in the middle of a task, and says what it is working on (2026-11-17)', async () => {
+    const ctx = makeContext({
+      snapshot: makeSnapshot({
+        tasks: [makeTask({ status: 'RUNNING', agent_key: 'claude-1', summary: 'Add discount codes' })],
+      }),
+      answers: {
+        ...quiet,
+        'GET /agent-processes': { processes: [proc()], profiles: [profile()] },
+        'POST /agent-processes/claude-1/stop': { process: proc({ status: 'stopping' }) },
+      },
+    });
+    const d = agentsDrawer(ctx, { kind: 'agents' });
+    await vi.advanceTimersByTimeAsync(0);
+    ctx.confirmAnswer = false;
+    buttonBy(d.el, 'Stop').click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ctx.confirms.at(-1)?.title).toBe('Stop claude-1 while it is working?');
+    expect([ctx.confirms.at(-1)?.body].flat().join(' ')).toContain('It is working on “Add discount codes”.');
+    expect(ctx.confirms.at(-1)?.cancelLabel).toBe('Let it work');
+    expect(ctx.transport.to('POST', '/agent-processes/claude-1/stop')).toHaveLength(0);
+    ctx.confirmAnswer = true;
+    buttonBy(d.el, 'Stop').click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ctx.transport.to('POST', '/agent-processes/claude-1/stop')).toHaveLength(1);
+    d.destroy();
+  });
+
   it('shows a 409 as the daemon wrote it', async () => {
     const message = 'claude-1 is held by a live harness: Claude Code in VS Code (harness_hh01)';
     const ctx = makeContext({
@@ -269,21 +318,27 @@ describe('agents drawer', () => {
     expect(first.querySelector('.pn-agent-key')?.textContent).toBe('claude-1');
     expect(first.textContent).toContain('started by Friday');
     // The pod's words, not the level codes: the same session reads the same one click apart.
-    expect(shownBadges(first)).toEqual(['connected', 'running', 'Reported']);
+    expect(shownBadges(first)).toEqual(['connected', 'running', 'Friday watches only']);
     expect(first.textContent).not.toContain('L1 reported');
     expect(first.querySelector('.badge-info')?.getAttribute('title')).toBe(enforcementWords('L1', 'reported').title);
     expect(first.textContent).toContain('busy');
     expect(first.textContent).toContain('model claude-haiku-5-5');
-    expect(first.textContent).toContain('pid 4242');
+    // The process id is for whoever looks for it: the tooltip of the line, not the line.
+    expect(first.textContent).not.toContain('4242');
+    expect([...first.querySelectorAll<HTMLElement>('[title]')].some((e) => e.title.includes('process 4242'))).toBe(
+      true,
+    );
     expect(first.textContent).toContain('starts with Friday');
-    expect(first.textContent).toContain('max budget usd 1');
-    expect(shownButtons(first)).toEqual(['Stop', 'Forget']);
+    // The limit in words, and Edit beside the process controls for an agent Friday remembers.
+    expect(first.textContent).toContain('stops a try at $1');
+    expect(first.textContent).not.toContain('max budget usd');
+    expect(shownButtons(first)).toEqual(['Stop', 'Edit', 'Forget']);
     expect((first.querySelector('.pn-output') as HTMLElement).hidden).toBe(false);
     // The person attached claude-2 in VS Code: connected, enforcement and model shown, no process
     // state and none of Friday's process controls.
     expect(second.querySelector('.pn-agent-key')?.textContent).toBe('claude-2');
-    expect(second.textContent).toContain('attached in VS Code');
-    expect(shownBadges(second)).toEqual(['connected', 'Enforced']);
+    expect(second.textContent).toContain('connected from VS Code');
+    expect(shownBadges(second)).toEqual(['connected', 'Checked by Friday']);
     expect(second.textContent).not.toContain('L1 enforcing');
     expect(second.textContent).toContain('role reviewer');
     expect(second.textContent).toContain('model claude-sonnet-5');
@@ -296,7 +351,7 @@ describe('agents drawer', () => {
     expect(third.textContent).toContain('started by Friday');
     expect(shownBadges(third)).toEqual(['not connected', 'not running']);
     expect(third.textContent).toContain('started by hand');
-    expect(shownButtons(third)).toEqual(['Start again', 'Forget']);
+    expect(shownButtons(third)).toEqual(['Start again', 'Edit', 'Forget']);
     // Start agent above the list, the Claude Code card below it.
     const order = Array.from(d.el.querySelectorAll('.section-title, .pn-actions .btn-primary')).map(
       (x) => x.textContent,
@@ -391,7 +446,9 @@ describe('agents drawer', () => {
     const [processRow, shadowRow] = rows(d.el) as [HTMLElement, HTMLElement];
     expect(shownBadges(shadowRow)).toContain('shadow');
     expect(shownBadges(processRow)).not.toContain('shadow');
-    expect(shadowRow.textContent).toContain('another session holds this key');
+    expect(shadowRow.textContent).toContain(
+      'another session is connected under this name, so this one cannot take tasks',
+    );
     // Log lines are shortened (cleanText + truncate), never cut mid-character.
     const log = d.el.querySelector('.pn-log')?.textContent ?? '';
     expect(log).toContain(`${'L'.repeat(1999)}…`);
@@ -426,12 +483,59 @@ describe('agents drawer', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(d.el.textContent).toContain('No agent yet');
     ctx.board(makeSnapshot({ harnesses: [makeHarness({ attach_mode: 'attach', enforcement_status: 'enforcing' })] }));
-    expect(d.el.querySelector('.pn-claude')?.textContent).toContain('Enforced');
+    expect(d.el.querySelector('.pn-claude')?.textContent).toContain('Checked by Friday');
     expect(d.el.querySelector('.pn-claude')?.textContent).not.toContain('L1 enforcing');
-    expect(d.el.querySelector('.pn-claude .badge')?.getAttribute('title')).toMatch(
-      /^Enforcement level L1 \(enforcing\)/,
-    );
+    expect(d.el.querySelector('.pn-claude .badge')?.getAttribute('title')).toContain('(level L1, enforcing');
     expect(d.el.textContent).not.toContain('No agent yet');
+    d.destroy();
+  });
+
+  it('opens a remembered agent for editing, and says its limit in words', async () => {
+    const ctx = makeContext({
+      answers: {
+        ...quiet,
+        'GET /agent-processes': {
+          // What runs has its own options (decided at its start); the remembered ones are the profile's.
+          processes: [proc({ options: { max_budget_usd: null } })],
+          profiles: [profile()],
+        },
+      },
+    });
+    openDrawer(ctx, { kind: 'agents' });
+    const d = agentsDrawer(ctx, { kind: 'agents' });
+    await vi.advanceTimersByTimeAsync(0);
+    const row = rows(d.el)[0] as HTMLElement;
+    expect(row.textContent).toContain('no spending limit per try');
+    expect(row.textContent).not.toContain('null');
+    buttonBy(row, 'Edit').click();
+    // The drawer closes first: a dialog over a drawer leaves the drawer without input.
+    expect(ctx.store.select('ui').drawer).toBeNull();
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'edit-agent', id: 'claude-1' });
+    d.destroy();
+  });
+
+  it('connects Antigravity from its own card, which offers no way to start it', async () => {
+    const ctx = makeContext({ answers: { ...quiet, 'GET /agent-processes': { processes: [], profiles: [] } } });
+    const d = agentsDrawer(ctx, { kind: 'agents', tab: 'antigravity' });
+    const card = d.el.querySelector('.pn-antigravity')?.closest('section');
+    expect(card?.textContent).toContain('You open Antigravity yourself');
+    expect(card?.textContent).toContain('never launches it');
+    expect([...(card?.querySelectorAll('button') ?? [])].map((b) => b.textContent)).toEqual(['Connect']);
+    buttonBy(d.el, 'Connect').click();
+    expect(ctx.store.select('ui').modal).toEqual({ kind: 'antigravity-setup' });
+    await vi.advanceTimersByTimeAsync(0);
+    ctx.board(
+      makeSnapshot({
+        harnesses: [makeHarness({ vendor: 'antigravity', attach_mode: 'attach', enforcement_status: 'unverified' })],
+      }),
+    );
+    expect(d.el.querySelector('.pn-antigravity')?.textContent).toContain('yes: it connected');
+    // The Claude Code card is another host's: an Antigravity session does not show there.
+    expect(d.el.querySelector('.pn-claude')?.textContent).toContain('not seen yet');
+    expect(rows(d.el)).toHaveLength(1);
+    expect(rows(d.el)[0]?.textContent).toContain('connected from Antigravity');
+    // Friday did not start it, so the row offers no Stop, Start again or Forget.
+    expect(shownButtons(rows(d.el)[0] as HTMLElement)).toEqual([]);
     d.destroy();
   });
 
@@ -439,7 +543,7 @@ describe('agents drawer', () => {
     for (const tab of ['pins', 'routing']) {
       const ctx = makeContext({ answers: { ...quiet, 'GET /agent-processes': {} } });
       const d = agentsDrawer(ctx, { kind: 'agents', tab });
-      expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'routing' });
+      expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'routing', drawer: null });
       expect(d.el.textContent).not.toContain('Routing pins');
       expect(() => buttonBy(d.el, /^Pin$/)).toThrow();
       d.destroy();

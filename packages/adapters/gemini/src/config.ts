@@ -151,8 +151,11 @@ export function planGemini(opts: GeminiConfigOptions): FileChange[] {
     const agentFile = path.join(privateDirFor(ref), 'agent.json');
     const before = read(agentFile);
     let current: string | undefined;
+    // Another host's own name in the file (`hosts`, Antigravity's) is kept.
+    let existing: Record<string, unknown> = {};
     try {
-      current = (readSettings(before, agentFile).value.agent_key as string | undefined) ?? undefined;
+      existing = readSettings(before, agentFile).value;
+      current = (existing.agent_key as string | undefined) ?? undefined;
     } catch {
       current = undefined;
     }
@@ -160,7 +163,7 @@ export function planGemini(opts: GeminiConfigOptions): FileChange[] {
     if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(agentKey)) {
       throw new FridayError('invalid_request', `invalid agent key "${agentKey}"`);
     }
-    const after = stringify({ agent_key: agentKey });
+    const after = stringify({ ...existing, agent_key: agentKey });
     if (before !== after) {
       changes.push({
         path: agentFile,

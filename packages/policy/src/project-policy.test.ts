@@ -214,6 +214,7 @@ describe('the worktree install (plan Phase 7)', () => {
     const trusted = projectPolicy([own], untrusted.loosening_hash);
     expect(trusted.sandbox).toBe(true);
     expect(trusted.autonomy).toEqual({
+      'file.write': 'auto',
       'git.mutate': 'auto',
       'package.install': 'auto',
       'fs.destructive': 'auto',
@@ -225,5 +226,49 @@ describe('the worktree install (plan Phase 7)', () => {
     // git push, publishing and secrets are not reviewable: untouched.
     expect(trusted.autonomy['git.push']).toBeUndefined();
     expect(trusted.autonomy['secrets.read']).toBeUndefined();
+  });
+});
+
+describe('files from outside version control in every copy (2026-11-17)', () => {
+  it('holds the list until this clone trusts it, and names each file a person is asked about', () => {
+    const own = {
+      name: 'config.yaml',
+      worktree_files: [{ from: '.env.agents.local', to: '.env' }, { from: 'apps/api/.env.local' }],
+    };
+    const untrusted = projectPolicy([own], null);
+    expect(untrusted.loosening.map((l) => [l.setting, l.from, l.to])).toEqual([
+      ['worktrees.files', 'none', '.env.agents.local as .env'],
+      ['worktrees.files', 'none', 'apps/api/.env.local'],
+    ]);
+    expect(untrusted.worktree_files).toEqual([]);
+    expect(untrusted.worktree_files_held).toEqual([
+      { source: 'config.yaml', from: '.env.agents.local', to: '.env' },
+      { source: 'config.yaml', from: 'apps/api/.env.local', to: 'apps/api/.env.local' },
+    ]);
+
+    const trusted = projectPolicy([own], untrusted.loosening_hash);
+    expect(trusted.worktree_files).toEqual(untrusted.worktree_files_held);
+    expect(trusted.worktree_files_held).toEqual([]);
+
+    // Another file is another list: the trust given does not cover it.
+    const more = projectPolicy(
+      [{ name: 'config.yaml', worktree_files: [...own.worktree_files, { from: '.env' }] }],
+      untrusted.loosening_hash,
+    );
+    expect(more.trusted).toBe(false);
+    expect(more.worktree_files).toEqual([]);
+  });
+
+  it('gives one name in the copy once: the first that asks for it', () => {
+    const p = projectPolicy(
+      [{ name: 'config.yaml', worktree_files: [{ from: '.env.agents.local', to: '.env' }, { from: '.env' }] }],
+      null,
+    );
+    expect(p.worktree_files_held).toEqual([{ source: 'config.yaml', from: '.env.agents.local', to: '.env' }]);
+  });
+
+  it('asks for nothing when no file is listed', () => {
+    const p = projectPolicy([{ name: 'config.yaml' }], null);
+    expect(p).toMatchObject({ trusted: true, worktree_files: [], worktree_files_held: [] });
   });
 });

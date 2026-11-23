@@ -30,6 +30,9 @@ describe('escalation kinds → cards (plan FD-21)', () => {
     ['budget_exceeded', 'brain'],
     ['plan_rejected', 'brain'],
     ['action_failed', 'brain'],
+    ['setup_failed', 'setup'],
+    ['check_not_run', 'checks'],
+    ['folder_conflict', 'folder'],
     ['something_new', 'brain'],
   ];
   it.each(table)('%s → %s', (kind, card) => {
@@ -107,6 +110,31 @@ describe('classifyEscalation', () => {
     ]);
   });
 
+  it('check_not_run sends the task back or cancels it, and is not a plan revision', () => {
+    const s = classifyEscalation(
+      makeEscalation({ kind: 'check_not_run', requested_by_kind: 'master_brain', goal_id: 'goal_1' }),
+      READY,
+    );
+    expect(s.card).toBe('checks');
+    expect(s.title).toBe('A check could not be run on this computer');
+    expect(s.actions).toEqual(['rework-task', 'cancel-task', 'later']);
+  });
+
+  it('setup_failed runs the install again, sends the task back or cancels it: never a plan revision', () => {
+    const s = classifyEscalation(
+      makeEscalation({ kind: 'setup_failed', requested_by_kind: 'master_brain', goal_id: 'goal_1', options: ['x'] }),
+      READY,
+    );
+    expect(s.card).toBe('setup');
+    expect(s.title).toBe("A task's dependencies were not installed");
+    expect(s.actions).toEqual(['install-again', 'rework-task', 'cancel-task', 'later']);
+    expect(s.choices).toEqual([]);
+    expect(s.cliHints).toEqual(['x']);
+    expect(classifyEscalation(makeEscalation({ kind: 'setup_failed', task_id: null }), READY).actions).toEqual([
+      'later',
+    ]);
+  });
+
   it('routing kinds explain, pin a model and cancel the task', () => {
     for (const kind of ['routing_blocked', 'routing_violated']) {
       expect(classifyEscalation(makeEscalation({ kind }), READY).actions).toEqual([
@@ -159,7 +187,7 @@ describe('classifyEscalation', () => {
 
   it('titles every known kind and humanizes unknown ones', () => {
     expect(classifyEscalation(makeEscalation({ kind: 'integration_conflict' }), READY).title).toBe(
-      'Integration conflict',
+      'A task’s work clashes with other work of its goal',
     );
     expect(classifyEscalation(makeEscalation({ kind: 'brand_new.kind' }), READY).title).toBe('Brand new kind');
   });

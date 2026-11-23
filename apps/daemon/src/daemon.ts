@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { Clock, IdGenerator } from '@friday/core';
 import { closeDatabase, openDatabase } from '@friday/db';
 import { type ExecutionProfile, ProcessGroups } from '@friday/execution';
-import { GitRoot, rootKey, worktreesDir } from '@friday/git';
+import { GitRoot, rootKey, runGit, worktreesDir } from '@friday/git';
 import type { PlannerModel } from '@friday/planner';
 import { type Actor, API_VERSION, type ContextPacket, FridayError, PROTOCOL_VERSIONS } from '@friday/protocol';
 import {
@@ -19,10 +19,12 @@ import {
 } from '@friday/routing';
 import {
   type DaemonDiscovery,
+  ensureLintSkip,
   ensurePrivateDir,
   FRIDAY_DIR,
   FRIDAY_VERSION,
   type FridayConfig,
+  LINT_SKIP_FOLDERS,
   loadProject,
   type ProjectRef,
   privateDirFor,
@@ -36,13 +38,15 @@ import { type BrainHandle, createMasterBrain } from './brain.js';
 import { reloadingConfig } from './config-reload.js';
 import { type CompileInput, createContextService } from './context.js';
 import { ControlManager } from './control.js';
+import { fileCopier } from './copy-files.js';
 import { DependencyCache, dependencyCacheDir } from './dependency-cache.js';
 import { profileCache } from './execution.js';
 import { GraphService } from './graph-service.js';
 import { IntegrationManager } from './integration.js';
+import { landGoal, landingWatch } from './land.js';
 import { createLogger, type Level, type Logger, silentLogger } from './log.js';
 import { OperationManager } from './operations.js';
-import { type EffectivePolicy, loadEffectivePolicy, reloadingPolicy, writePolicyTrust } from './policy.js';
+import { type EffectivePolicy, loadEffectivePolicy, reloadingPolicy, settleTrust, trustSettings } from './policy.js';
 import { RecoveryManager } from './recovery.js';
 import { RoutingService } from './routing.js';
 import { SetupManager } from './setup.js';
@@ -91,6 +95,8 @@ export interface DaemonOptions {
         autoStart?: boolean;
         /** The installed Claude Code and the environment it signs in with, for `master_brain.provider: claude-code` (the CLI finds it). */
         claudeCode?: { command: string; args?: readonly string[]; env?: NodeJS.ProcessEnv };
+        /** The installed Codex and the environment it signs in with, for `master_brain.provider: codex` (the CLI finds it). */
+        codex?: { command: string; args?: readonly string[]; env?: NodeJS.ProcessEnv };
       };
   /** The interface's built bundle (`apps/ui/dist`), served at /ui/ (M9); `friday run` passes it. */
   uiDir?: string;
@@ -263,6 +269,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   // The project's own policy (ADR-0028): what tracked files tighten applies now, what they loosen
   // only once this clone trusted exactly that.
   let policy = loadEffectivePolicy(project, privateDir);
+  // The trust file follows the policy in force: a setting that is gone loses its trust.
+  settleTrust(privateDir, policy);
   // A fixed port from the tracked config applies once this clone trusts it (plan M9 §5.13).
   const listenPort = policy.daemon_port ?? 0;
 
@@ -318,12 +326,16 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
 
   // Read again whenever the policy files change, so what they tighten applies at once (LESSONS D-43).
   let policyReason: string | null = null;
+  // Set once automatic verification is wired (below): runs when a reload turns it on.
+  let autoVerificationTurnedOn: (() => void) | null = null;
   const policies = reloadingPolicy({
     projectRoot: project.root,
     initial: policy,
     load: () => loadEffectivePolicy(project, privateDir),
     onLoad: (p, why) => {
+      const turnedOn = !policy.auto_verification && p.auto_verification;
       policy = p;
+      settleTrust(privateDir, p);
       (state.config as { enforcementRequired: StateConfig['enforcementRequired'] }).enforcementRequired =
         p.enforcement_required;
       logger.info('policy reloaded', {
@@ -332,6 +344,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
         trusted: p.trusted,
         errors: p.errors.length,
       });
+      if (turnedOn) autoVerificationTurnedOn?.();
     },
   });
 
@@ -416,6 +429,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   // Task worktrees: prepared as soon as a run needs one, released when its task ends (ADR-0023).
   // Set once the execution profile exists (below): a fresh worktree's dependencies (plan Phase 7).
   let worktreeSetup: WorktreeSetup | undefined;
+  // Files the project keeps out of version control and lists for its copies (a settings file).
+  const copyFiles = fileCopier({ root: project.root, policy: currentPolicy, logger });
   const workspaces = new WorkspaceManager({
     state,
     project,
@@ -424,6 +439,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     quiesce: (taskId) => quiesce(taskId, 'a new attempt needs its worktree'),
     setup: (w, ids) => (worktreeSetup ? worktreeSetup.run(w, ids) : Promise.resolve(null)),
     setupFailure: () => project.config.worktrees.setup.on_failure,
+    files: (dir, ids) => copyFiles(dir, ids),
   });
   // Installed trees kept per lockfile beside the worktrees folder: a worktree whose lockfile was
   // installed before gets the tree back as hard links instead of installing again.
@@ -450,7 +466,17 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     cache: dependencyCache,
   });
   // A completed goal task's verified work goes to its goal branch before its worktree is released (ADR-0025).
-  const integration = new IntegrationManager({ state, project, logger, workspaces, profile, groups });
+  const integration = new IntegrationManager({
+    state,
+    project,
+    logger,
+    workspaces,
+    profile,
+    groups,
+    // The merged revision's checkout gets its dependencies as a task worktree does, cache included.
+    setup: (w, ids) => (worktreeSetup ? worktreeSetup.run(w, ids) : Promise.resolve(null)),
+    files: (dir, ids) => copyFiles(dir, ids),
+  });
   const stopWorkspaces = state.transport.subscribe(
     { project_id: project.project_id, types: ['run.created', 'task.cancelled', 'task.completed'] },
     (e) => {
@@ -474,6 +500,60 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
               .then(() => workspaces.release(taskId, 'the task was cancelled'));
       void Promise.resolve(done).catch((err) =>
         logger.warn('finishing a task worktree failed', { task_id: taskId, message: (err as Error).message }),
+      );
+    },
+  );
+  // Landing without a click (2026-11-17). A person chose it: for the project (`landing.mode`, a
+  // loosening this clone trusted) or for one goal (the tick on Approve). `goal`: when the goal is
+  // complete; `task`: each time a task's work reaches the goal branch. Only in a project with a
+  // required check, never while Friday is paused, and with every refusal of a landing by hand
+  // (a file of the person's in the way, a merge in progress): then nothing is touched, the reason
+  // is recorded, and the goal waits for its Land button as before.
+  const landingFor = (goalId: string): 'ask' | 'goal' | 'task' => {
+    const own = state.store
+      .readSince(project.project_id, 0, { types: ['goal.landing_choice'], limit: 2000 })
+      .filter((e) => (e.payload as { goal_id?: unknown }).goal_id === goalId)
+      .at(-1)?.payload as { mode?: unknown } | undefined;
+    if (own?.mode === 'ask' || own?.mode === 'goal' || own?.mode === 'task') return own.mode;
+    return currentPolicy().auto_landing ?? 'ask';
+  };
+  const landItself = async (goalId: string): Promise<void> => {
+    const goal = state.q.findGoal(project.project_id, goalId);
+    if (!goal) return;
+    // A question has nothing to land.
+    if (goal.mode === 'ask') return;
+    const mode = landingFor(goalId);
+    const whole = goal.status === 'COMPLETED';
+    if (mode === 'ask' || (mode === 'goal' && !whole) || (!whole && goal.status !== 'ACTIVE')) return;
+    if (state.q.control(project.project_id).paused) return;
+    if (!project.config.verification.checks.some((c) => c.required)) return;
+    try {
+      const r = await landGoal(state, project, goalId, { kind: 'system', id: 'friday' }, { partial: !whole });
+      logger.info('goal landed without a click', { goal_id: goalId, mode, status: r.status, head: r.head });
+    } catch (e) {
+      const reason = (e as Error).message.slice(0, 600);
+      logger.info('landing by itself was held', { goal_id: goalId, mode, reason });
+      state.recordObservation(
+        project.project_id,
+        { kind: 'system', id: 'friday' },
+        'goal.landing_held',
+        { goal_id: goalId, mode, reason },
+        [],
+      );
+    }
+  };
+  const stopLanding = state.transport.subscribe(
+    { project_id: project.project_id, types: ['goal.status_changed', 'integration.completed'] },
+    (e) => {
+      const p = e.payload as {
+        goal_id?: string;
+        transition?: { to?: string };
+        integration?: { goal_id?: string };
+      };
+      const goalId = e.type === 'goal.status_changed' ? p.goal_id : p.integration?.goal_id;
+      if (!goalId || (e.type === 'goal.status_changed' && p.transition?.to !== 'COMPLETED')) return;
+      void landItself(goalId).catch((err) =>
+        logger.warn('landing by itself failed', { goal_id: goalId, message: (err as Error).message }),
       );
     },
   );
@@ -560,13 +640,19 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   // With no project checks Friday's own checks judge the claim (diff, evidence, credentials): a
   // project that trusts automatic verification gets it whether or not it configured checks.
   const autoVerifies = () => currentPolicy().auto_verification;
+  // A question a person asked (2026-11-18) is checked the moment it is answered, trusted or not:
+  // its check runs none of the project's code (verify.ts), only that nothing was changed.
+  const isQuestion = (taskId: string): boolean => {
+    const goalId = state.q.findTask(project.project_id, taskId)?.goal_id;
+    return Boolean(goalId && state.q.findGoal(project.project_id, goalId)?.mode === 'ask');
+  };
   const paused = () => state.q.control(project.project_id).paused;
   const stopAutoVerify = state.transport.subscribe(
     { project_id: project.project_id, types: ['task.completion_claimed'] },
     (e) => {
       const taskId = (e.payload as { task_id?: string }).task_id;
       // A claim made while Friday is paused is recorded; its checks run after the resume (plan M9 §5.5).
-      if (taskId && autoVerifies() && !paused()) void autoVerify(taskId);
+      if (taskId && (autoVerifies() || isQuestion(taskId)) && !paused()) void autoVerify(taskId);
     },
   );
   // A human resumed Friday: what waited for it runs now, as after a restart.
@@ -574,10 +660,8 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     { project_id: project.project_id, types: ['control.resumed'] },
     () => {
       void (async () => {
-        if (autoVerifies()) {
-          for (const t of state.q.tasks(project.project_id, { statuses: ['READY_FOR_VERIFICATION'] })) {
-            await autoVerify(t.task_id);
-          }
+        for (const t of state.q.tasks(project.project_id, { statuses: ['READY_FOR_VERIFICATION'] })) {
+          if (autoVerifies() || isQuestion(t.task_id)) await autoVerify(t.task_id);
         }
         await integration.sweep();
       })().catch((err) =>
@@ -585,14 +669,28 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       );
     },
   );
-  if (autoVerifies() && !paused()) {
-    // Claims made while the daemon was down, or whose verification it interrupted.
-    void (async () => {
-      for (const t of state.q.tasks(project.project_id, { statuses: ['READY_FOR_VERIFICATION'] })) {
-        await autoVerify(t.task_id);
-      }
-    })();
+  /** Verifies every claim that waits: after a start, and when automatic verification is turned on. */
+  const verifyWaitingClaims = async (only: (taskId: string) => boolean = () => true) => {
+    for (const t of state.q.tasks(project.project_id, { statuses: ['READY_FOR_VERIFICATION'] })) {
+      if (only(t.task_id)) await autoVerify(t.task_id);
+    }
+  };
+  if (!paused()) {
+    // Claims made while the daemon was down, or whose verification it interrupted; without the
+    // trust that automatic verification needs, the answered questions alone.
+    void verifyWaitingClaims(autoVerifies() ? undefined : isQuestion);
   }
+  // A person turned automatic verification on (and trusted it) while work already waited: it is
+  // checked now, not at the next restart or resume (2026-11-17). Off the reload's own call stack.
+  autoVerificationTurnedOn = () => {
+    setImmediate(() => {
+      if (autoVerifies() && !paused()) {
+        void verifyWaitingClaims().catch((err) =>
+          logger.warn('verifying what waited failed', { message: (err as Error).message }),
+        );
+      }
+    });
+  };
 
   const brain =
     opts.brain === false
@@ -606,6 +704,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
           modelFit: (task, agentId) => routing.fitFor(task, agentId),
           ...(opts.brain && opts.brain.model !== undefined ? { model: opts.brain.model } : {}),
           ...(opts.brain && opts.brain.claudeCode ? { claudeCode: opts.brain.claudeCode } : {}),
+          ...(opts.brain?.codex ? { codex: opts.brain.codex } : {}),
         });
 
   let closing: Promise<void> | undefined;
@@ -624,6 +723,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
         worktrees_mode: worktreeMode,
         config: { loaded_hash: configHash.loaded, current_hash: configHash.current(), changes: configs.changes() },
         auto_verification: autoVerifies(),
+        auto_landing: currentPolicy().auto_landing,
         // Whether the project's loosening applies on this clone: the rail's "Policy change not yet
         // trusted" row and the checklist's item rest on it (M9k.8).
         policy_trusted: currentPolicy().trusted,
@@ -649,13 +749,45 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
     graph,
     context,
     workspaces,
+    // The install of a task's worktree, run again at a person's word.
+    setupWorktree: async (taskId, actor) => {
+      const task = state.q.task(project.project_id, taskId);
+      const tree = state.q.worktreeForTask(taskId);
+      if (!tree || !existsSync(tree.path)) {
+        throw new FridayError('invalid_request', `${taskId} has no folder of its own to install into`);
+      }
+      if (!worktreeSetup)
+        throw new FridayError('capability_unsupported', 'this daemon installs no worktree dependencies');
+      // Never under an agent that works there now.
+      if (task.status === 'ASSIGNED' || task.status === 'RUNNING') {
+        throw new FridayError(
+          'invalid_state_transition',
+          `an agent is working in the folder of ${taskId} now; run the install once it has stopped`,
+        );
+      }
+      const run_id = state.q.runs(taskId).at(-1)?.run_id ?? null;
+      const outcome = await worktreeSetup.run(
+        { path: tree.path },
+        { task_id: taskId, run_id: run_id ?? '' },
+        { again: true },
+      );
+      state.recordObservation(
+        project.project_id,
+        actor,
+        'worktree.setup_ran',
+        { task_id: taskId, run_id, setup: outcome },
+        [{ kind: 'task', id: taskId }],
+      );
+      return outcome;
+    },
     integration,
     recovery,
     stateDir: path.dirname(path.dirname(privateDir)),
     policy: currentPolicy,
     reloadPolicy: () => ctx.reloadPolicy(),
-    trustPolicy: (hash: string) => {
-      writePolicyTrust(privateDir, hash, 'human');
+    // The whole list as the person was shown it, or the settings they clicked, by id (2026-11-18).
+    trustPolicy: (what: { all: true } | { items: readonly string[] }) => {
+      trustSettings(project, privateDir, what, 'human');
       return ctx.reloadPolicy();
     },
     operations,
@@ -787,9 +919,45 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       : undefined;
   const sweep = setInterval(() => state.bus.sweepIdempotency(), 60 * 60 * 1000);
   sweep.unref();
+  // A goal merged into the open branch outside Friday is recorded as landed (2026-11-18).
+  const noticeLandings = landingWatch(state, project);
+  const notice = () =>
+    void noticeLandings()
+      .then((ids) => {
+        if (ids.length) logger.info('goals found landed outside Friday', { goal_ids: ids });
+      })
+      .catch((e) => logger.warn('looking for goals landed by hand failed', { message: (e as Error).message }));
+  const landingTimer = tickMs > 0 ? setInterval(notice, 30_000) : undefined;
+  landingTimer?.unref();
+  if (tickMs > 0) notice();
   if (brain && !(opts.brain && opts.brain.autoStart === false)) brain.brain.start();
   // A project initialized without its graph gets it once, now, in the background.
   void setup.start().catch((e) => logger.warn('setup did not finish', { message: (e as Error).message }));
+  // Questions left open by goals cancelled before a cancelled goal closed all of its questions
+  // (2026-11-23): one stayed in "Waiting for you" for good.
+  try {
+    const closed = state.settleQuestionsOfCancelledGoals(project.project_id);
+    if (closed) logger.info('questions of cancelled goals closed', { closed });
+  } catch (e) {
+    logger.warn('questions of cancelled goals were not closed', { message: (e as Error).message });
+  }
+
+  // Friday's own folders are kept out of the project's lint (2026-11-19, the trial's F18): an
+  // agent in the project folder ran `eslint .`, failed on Friday's hook launcher, and changed the
+  // project's eslint.config.js to get past it. Projects set up before this get it at their start,
+  // in a folder git does not track (nothing then shows as changed in theirs); where git tracks the
+  // folder, setup writes it, among Friday's files to commit.
+  void (async () => {
+    const tracked = new Set<string>();
+    for (const folder of LINT_SKIP_FOLDERS) {
+      const r = await runGit(project.root, ['ls-files', '-z', '--', folder], { okCodes: [128] }).catch(() => null);
+      if (r && r.code === 0 && r.stdout.length > 0) tracked.add(folder);
+    }
+    const wrote = ensureLintSkip(project.root, (folder) => tracked.has(folder));
+    if (wrote.length) logger.info("Friday's folders kept out of the project's lint", { files: wrote });
+  })().catch((e) =>
+    logger.warn("Friday's folders could not be kept out of the project's lint", { message: (e as Error).message }),
+  );
 
   async function close(reason = 'shutdown'): Promise<void> {
     if (closing) return closing;
@@ -805,7 +973,9 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
       if (brain) await brain.brain.stop().catch(() => undefined);
       if (timer) clearInterval(timer);
       clearInterval(sweep);
+      if (landingTimer) clearInterval(landingTimer);
       stopWorkspaces();
+      stopLanding();
       stopAutoVerify();
       stopResumeSweep();
       // Integrations and worktree jobs in flight finish first, within a bound: no git process the

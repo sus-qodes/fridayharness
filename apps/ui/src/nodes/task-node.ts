@@ -6,6 +6,7 @@
  * coloured by status with the waiting reason, and the agent's note while it is blocked. Hover (or
  * focus) reveals the actions that apply to the task's state, *Changes* among them.
  */
+
 import type {
   FileReservationView,
   HarnessEntry,
@@ -15,11 +16,22 @@ import type {
   VerificationView,
 } from '@friday/protocol';
 import { assignableAgents, CRITERIA_SHOWN, checksSummary, conflictOf, TERMINAL_STATUSES } from '../model/board.js';
-import { notStartedText, PRIORITY, RISK, statusLook, TASK_KIND, WAITING_REASON } from '../model/status.js';
+import {
+  MERGE_WORDS,
+  notStartedText,
+  PRIORITY,
+  RISK,
+  statusLook,
+  statusWords,
+  TASK_KIND,
+  WAITING_REASON,
+  wordsFor,
+} from '../model/status.js';
 import { visible } from '../model/text.js';
+import { cancelTask } from '../shell/cancel-task.js';
 import { type AppContext, openDrawer, openModal } from '../shell/context.js';
 import { button, h, replace, setVar, toggleClass } from '../ui/dom.js';
-import { cleanText, duration, plural, shortId, truncate } from '../ui/format.js';
+import { cleanText, duration, plural, truncate } from '../ui/format.js';
 import type { IconName } from '../ui/svg.js';
 import {
   actionButton,
@@ -120,8 +132,7 @@ const STATUS_ICON: Record<string, IconName | LocalIcon> = {
 };
 
 /** What the card's tool count is (`tool_calls` in the snapshot, counted from the event log). */
-const TOOL_CALLS_TITLE =
-  'Tool calls the agent’s host reported finishing for this task, over every attempt (calls Friday refused never ran)';
+const TOOL_CALLS_TITLE = 'Actions the agent finished for this task, over every try (actions Friday stopped never ran)';
 
 const PRIORITY_TONE: Record<string, Tone> = { urgent: 'danger', high: 'warn', normal: 'muted', low: 'muted' };
 const RISK_TONE: Record<string, Tone> = { low: 'good', medium: 'warn', high: 'danger' };
@@ -192,17 +203,31 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
     const agents = assignableAgents(ctx.store.select('board'), t);
     const items: HTMLElement[] = agents.map((a) =>
       button(
-        [h('span', { class: 'mono' }, visible(a.agent_key)), h('span', { class: 'muted' }, ` ${visible(a.role)}`)],
+        [
+          h('span', { class: 'mono' }, visible(a.agent_key)),
+          h('span', { class: 'muted' }, ` ${visible(a.role)}`),
+          a.host === 'antigravity' ? h('span', { class: 'muted' }, ' · Antigravity') : null,
+          a.connected ? null : h('span', { class: 'muted' }, ' · waits'),
+        ],
         () => {
           closeMenu();
           void ctx
-            .act('Assign the task', () => ctx.api.assign(t.task_id, a.agent_key), `Given to ${a.agent_key}`)
+            .act(
+              'Assign the task',
+              () => ctx.api.assign(t.task_id, a.agent_key),
+              (r) => (r.mode === 'reserved' ? `Reserved for ${a.agent_key}: ${a.note}` : `Given to ${a.agent_key}`),
+            )
             .then(() => ctx.refresh());
         },
-        { class: 'nd-menu-item', role: 'menuitem', dataset: { agent: a.agent_key } },
+        {
+          class: 'nd-menu-item',
+          role: 'menuitem',
+          dataset: { agent: a.agent_key },
+          title: `${visible(a.label)}: ${a.note}`,
+        },
       ),
     );
-    if (!agents.length) items.push(h('div', { class: 'nd-menu-empty' }, 'No other agent is connected'));
+    if (!agents.length) items.push(h('div', { class: 'nd-menu-empty' }, 'Friday knows no other agent yet'));
     if (t.status === 'ASSIGNED') {
       items.push(
         button(
@@ -287,9 +312,9 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
           break;
         case 'verify':
           buttons.push(
-            actionButton('Verify', 'check', () => openModal(ctx, { kind: 'verify', id: t.task_id }), {
+            actionButton('Check', 'check', () => openModal(ctx, { kind: 'verify', id: t.task_id }), {
               action: a,
-              title: 'Open the verification panel',
+              title: 'Run the checks on what the agent did',
             }),
           );
           break;
@@ -309,21 +334,21 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
                         : (r.reason ?? 'The agent was not continued'),
                   )
                   .then(() => ctx.refresh()),
-              { action: a, busyLabel: 'Continuing…', title: 'Restart the agent in the same run' },
+              { action: a, busyLabel: 'Continuing…', title: 'The agent goes on in the same session' },
             ),
           );
           break;
         case 'rework':
           buttons.push(
             actionButton(
-              'Rework',
+              'Redo',
               'rework',
               () =>
                 ctx
                   .act(
-                    'Send the task back for rework',
+                    'Send the task back to be redone',
                     () => ctx.api.taskAction(t.task_id, 'rework'),
-                    'Sent back for rework',
+                    'Sent back to be redone',
                   )
                   .then(() => ctx.refresh()),
               { action: a, busyLabel: 'Sending…' },
@@ -331,9 +356,11 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
           );
           break;
         case 'reassign': {
-          const b = actionButton('Reassign', 'swap', () => openMenu(b), {
+          // A task no agent holds yet is assigned; one an agent holds or waits for is reassigned.
+          const held = Boolean(t.agent_key || t.reserved_for_agent_key);
+          const b = actionButton(held ? 'Reassign' : 'Assign', 'swap', () => openMenu(b), {
             action: a,
-            title: 'Give the task to another agent',
+            title: held ? 'Give the task to another agent' : 'Give the task to an agent',
           });
           b.setAttribute('aria-haspopup', 'menu');
           buttons.push(b);
@@ -343,24 +370,24 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
           buttons.push(
             actionButton('Recover', 'rework', () => openModal(ctx, { kind: 'recover', id: t.task_id }), {
               action: a,
-              title: 'Open the recovery dialog',
+              title: 'Give it to another agent, or start it again; the work so far is kept',
             }),
           );
           break;
         case 'integrate':
           buttons.push(
             actionButton(
-              'Integrate',
+              'Merge',
               'branch',
               () =>
                 ctx
                   .act(
-                    'Integrate the task',
+                    'Merge the task into its goal',
                     () => ctx.api.integrate(t.task_id),
-                    (r) => `Integration: ${r.integration?.status ?? 'done'}`,
+                    (r) => wordsFor(MERGE_WORDS, r.integration?.status ?? 'integrated'),
                   )
                   .then(() => ctx.refresh()),
-              { action: a, busyLabel: 'Integrating…', title: 'Integrate the verified work into the goal branch again' },
+              { action: a, busyLabel: 'Merging…', title: 'Merge the checked work into its goal again' },
             ),
           );
           break;
@@ -370,19 +397,7 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
               'Cancel',
               'cross',
               async () => {
-                const ok = await ctx.confirm({
-                  title: 'Cancel this task?',
-                  body: [
-                    truncate(cleanText(t.summary), 200),
-                    'The task stops for good; its worktree and branch are kept.',
-                  ],
-                  confirmLabel: 'Cancel the task',
-                  cancelLabel: 'Keep it',
-                  danger: true,
-                });
-                if (!ok) return;
-                await ctx.act('Cancel the task', () => ctx.api.taskAction(t.task_id, 'cancel'), 'Task cancelled');
-                ctx.refresh();
+                await cancelTask(ctx, t);
               },
               { action: a, cls: 'nd-act-danger', busyLabel: 'Cancelling…' },
             ),
@@ -397,7 +412,6 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
   function renderBody(): void {
     const m = model;
     const t = m.task;
-    const look = statusLook(t.status);
     const kind = TASK_KIND[t.kind] ?? { label: t.kind, color: 'var(--color-slate-400)' };
     const priority = PRIORITY[t.priority]?.label ?? t.priority;
     const risk = RISK[t.risk_level]?.label ?? t.risk_level;
@@ -405,8 +419,12 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
     const head = h(
       'div',
       { class: 'nd-head', dataset: { dragHandle: '' } },
-      h('span', { class: 'pill nd-kind', ref: (k) => setVar(k, '--nd-kind', kind.color) }, kind.label),
-      h('span', { class: 'nd-id mono', title: t.task_id }, shortId(t.task_id)),
+      // The id is for whoever looks for it (a terminal, a report): the tooltip, and the inspector.
+      h(
+        'span',
+        { class: 'pill nd-kind', title: `Task ${t.task_id}`, ref: (k) => setVar(k, '--nd-kind', kind.color) },
+        kind.label,
+      ),
       h('span', { class: 'spacer' }),
       badge(priority, PRIORITY_TONE[t.priority] ?? 'muted'),
       h('span', { class: `badge badge-${RISK_TONE[t.risk_level] ?? 'muted'} nd-risk` }, nodeIcon('shield', 10), risk),
@@ -462,7 +480,7 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
         h('span', { class: 'nd-note-label' }, t.waiting_reason === 'blocked' ? 'The agent needs you' : 'Waiting'),
         h('span', { class: 'nd-note-text' }, truncate(cleanText(t.waiting_note), 400)),
       );
-    } else if (t.status === 'READY' && t.delegation_note) {
+    } else if ((t.status === 'READY' || t.status === 'PROPOSED') && t.delegation_note) {
       note = h('div', { class: 'nd-note nd-note-quiet' }, truncate(notStartedText(cleanText(t.delegation_note)), 160));
     }
 
@@ -505,7 +523,7 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
         'span',
         { class: 'nd-tools', title: TOOL_CALLS_TITLE },
         nodeIcon('terminal', 11),
-        typeof t.tool_calls === 'number' ? plural(t.tool_calls, 'tool') : '—',
+        typeof t.tool_calls === 'number' ? plural(t.tool_calls, 'action') : '—',
       ),
       h('span', { title: 'Changed files' }, nodeIcon('file', 11), m.files === null ? '—' : plural(m.files, 'file')),
       // The figure is the card's door to the diff (review M9k); without an attempt there is none.
@@ -523,14 +541,14 @@ export function createTaskNode(ctx: AppContext, initial: TaskCardModel): NodeVie
       'div',
       { class: 'nd-status' },
       nodeIcon(statusIcon(t.status), 13),
-      h('span', { class: 'nd-status-label' }, look.label),
+      h('span', { class: 'nd-status-label' }, statusWords(t)),
       reason ? h('span', { class: 'nd-status-reason' }, `· ${reason}`) : null,
     );
     replace(foot, stats, bar);
 
     el.dataset.status = t.status;
     setVar(el, '--nd-status', statusColor(t.status));
-    el.setAttribute('aria-label', `${look.label} task: ${truncate(cleanText(t.summary), 120)}`);
+    el.setAttribute('aria-label', `${statusWords(t)} task: ${truncate(cleanText(t.summary), 120)}`);
   }
 
   function render(force = false): void {

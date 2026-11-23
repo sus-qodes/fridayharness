@@ -91,7 +91,7 @@ export function planCounts(plan: Pick<LivePlanVersion, 'tasks'>): {
 
 export function proposer(plan: Pick<LivePlanVersion, 'proposed_by'>): string {
   const kind = plan.proposed_by?.kind;
-  if (kind === 'master_brain') return 'the Master Brain';
+  if (kind === 'master_brain') return 'Friday’s planner';
   if (kind === 'human') return 'a human';
   return kind ? humanize(kind) : 'someone';
 }
@@ -300,6 +300,12 @@ export function createPlanGhost(ctx: AppContext, initial: GhostCardModel): NodeV
     foot,
   );
 
+  /** The task a rework applies to, by its name when the board holds it. */
+  function reworked(taskId: string): string {
+    const t = ctx.store.select('board')?.tasks.find((x) => x.task_id === taskId);
+    return t ? `“${truncate(cleanText(t.summary), 60)}”` : shortId(taskId);
+  }
+
   function render(force = false): void {
     const g = model.ghost;
     const pt = g.planTask;
@@ -342,7 +348,7 @@ export function createPlanGhost(ctx: AppContext, initial: GhostCardModel): NodeV
         'span',
         { class: 'muted nd-ghost-note', ...(note ? { title: truncate(note, 1000) } : {}) },
         g.change === 'rework' && g.taskId
-          ? `Rework of ${shortId(g.taskId)}${note ? `: ${truncate(note, 80)}` : ''}`
+          ? `Rework of ${reworked(g.taskId)}${note ? `: ${truncate(note, 80)}` : ''}`
           : `Proposed in plan v${g.version}${note ? `: ${truncate(note, 80)}` : ''}`,
       ),
       h('span', { class: 'spacer' }),

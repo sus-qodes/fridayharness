@@ -3,7 +3,7 @@
  * Features:
  * - Round left panel layout (.hub-side) with 3 categorized groups:
  *   1. General (Look & Friday, Notifications, Sound)
- *   2. AI & Governance (Planner, Routing & Pins, Policy & Trust)
+ *   2. AI & Governance (Planner, Models, Checks, Permissions)
  *   3. System & Desktop (Friday Engine, Desktop Shell, About)
  * - Animated Friday mascot in the brand header and hero banner
  * - Live daemon status indicator dot and address at bottom
@@ -14,29 +14,40 @@ import type { UiSnapshot } from '@friday/protocol';
 import { playSound } from '../audio/index.js';
 import { pruneWorktrees } from '../dock/commands.js';
 import { createFridayMascot } from '../mascot/index.js';
+import { looseningExact, looseningLine, looseningWords } from '../model/loosening-words.js';
+import { keyWords, plannerWords } from '../model/planner-words.js';
 import { visible } from '../model/text.js';
 import { clearSession } from '../platform/session.js';
 import type { AppContext, Component, DesktopShortcut, NotificationAnswer } from '../shell/context.js';
-import { UI_API, UI_VERSION } from '../shell/version.js';
+import { builtWords, UI_API, UI_VERSION, versionWords } from '../shell/version.js';
 import type { Prefs } from '../store/state.js';
 import { button, h, replace, setText } from '../ui/dom.js';
-import { usd } from '../ui/format.js';
+import { cleanText, usd } from '../ui/format.js';
 import { type IconName, icon } from '../ui/svg.js';
+import { agentPermissionsCard } from './agent-permissions.js';
 import {
   badge,
   checkbox,
   copyLine,
   errorOf,
   field,
+  fold,
   input,
   note,
   plain,
   plannerState,
   projectPath,
+  restartBlocked,
   segmented,
   select,
   Teardown,
 } from './common.js';
+import { copyFilesCard } from './copy-files.js';
+import { plannerModelRow } from './planner-model.js';
+import { plannerChoices, plannerRequestsCard } from './planner-choices.js';
+import { plannerSpendingCard } from './planner-spending.js';
+import { projectChecksCard } from './project-checks.js';
+import { autoApproveSwitch, autoVerifySwitch, landingChoice, plannerQuickSetup } from './quick-setup.js';
 import { routingPins } from './routing-pins.js';
 import {
   clampNumber,
@@ -49,7 +60,7 @@ import {
   worktreesInUse,
 } from './settings.js';
 
-export type HubGroup = 'General' | 'AI & Governance' | 'System & Desktop';
+export type HubGroup = 'General' | 'Planning and agents' | 'This computer';
 
 export interface HubPageDef {
   id: string;
@@ -65,68 +76,75 @@ export const HUB_PAGES: HubPageDef[] = [
     id: 'look',
     group: 'General',
     icon: 'palette',
-    title: 'Look & Friday',
-    subtitle: 'Friday wardrobe outfits, reduced motion, and Notch auto-collapse timings.',
+    title: 'Appearance',
+    subtitle: 'What Friday wears, how much moves on screen, and when the Notch folds away.',
   },
   {
     id: 'notifications',
     group: 'General',
     icon: 'bell',
     title: 'Notifications',
-    subtitle: 'System alerts and desktop notifications for approvals, questions, and task failures.',
+    subtitle: 'When Friday tells you that something waits for you.',
   },
   {
     id: 'sound',
     group: 'General',
     icon: 'sound',
     title: 'Sound',
-    subtitle: 'Synthesizer audio cues, reaction chirps, and output master volume.',
+    subtitle: 'The sounds Friday makes, and how loud they are.',
   },
 
   // AI & Governance
   {
     id: 'planner',
-    group: 'AI & Governance',
+    group: 'Planning and agents',
     icon: 'brain',
     title: 'Planner',
-    subtitle: 'Anthropic planner model status, terminal key storage, and daily spending budget limits.',
+    subtitle: 'Who writes the plans, on which model, what it may spend, and whether plans wait for you.',
   },
   {
     id: 'routing',
-    group: 'AI & Governance',
+    group: 'Planning and agents',
     icon: 'compass',
-    title: 'Routing & Pins',
-    subtitle: 'Task-to-model routing rules, role pins, and reasoning fallbacks.',
+    title: 'Models',
+    subtitle: 'Which model does the work: let Friday choose, or pick one.',
+  },
+  {
+    id: 'checks',
+    group: 'Planning and agents',
+    icon: 'check',
+    title: 'Checks',
+    subtitle: 'What Friday runs to check an agent’s work, and whether it runs on its own.',
   },
   {
     id: 'policy',
-    group: 'AI & Governance',
+    group: 'Planning and agents',
     icon: 'shield',
-    title: 'Policy & Trust',
-    subtitle: 'Workspace security loosening, file permission bounds, and SHA-256 trust validation.',
+    title: 'Permissions',
+    subtitle: 'What agents may do without asking, and the project settings this computer trusts.',
   },
 
   // System & Desktop
   {
     id: 'friday',
-    group: 'System & Desktop',
+    group: 'This computer',
     icon: 'terminal',
-    title: 'Friday Engine',
-    subtitle: 'Active git worktrees, clean-up pruning, daemon controls, and session state.',
+    title: 'Friday',
+    subtitle: 'The folders Friday keeps for tasks, and restarting or stopping Friday.',
   },
   {
     id: 'desktop',
-    group: 'System & Desktop',
+    group: 'This computer',
     icon: 'desktop',
-    title: 'Desktop Shell',
-    subtitle: 'Global Windows hotkeys, background execution, and start at sign-in configuration.',
+    title: 'Desktop app',
+    subtitle: 'Keyboard shortcuts that work anywhere in Windows, and starting Friday when you sign in.',
   },
   {
     id: 'about',
-    group: 'System & Desktop',
+    group: 'This computer',
     icon: 'info',
-    title: 'About Friday',
-    subtitle: 'System versions, daemon port address, local workspace root, and protocol specifications.',
+    title: 'About',
+    subtitle: 'Versions, the project’s folder, and the address Friday answers on.',
   },
 ];
 
@@ -157,7 +175,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
 
   // ── Sidebar: Categorized Page Groups ──────────────────────────────────────
   const navButtons = new Map<string, HTMLButtonElement>();
-  const groups: HubGroup[] = ['General', 'AI & Governance', 'System & Desktop'];
+  const groups: HubGroup[] = ['General', 'Planning and agents', 'This computer'];
 
   for (const groupName of groups) {
     side.append(h('div', { class: 'hub-group' }, groupName));
@@ -176,7 +194,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
   const statusDot = h('i', { class: 'dot' });
   const statusText = h('span', null, 'Connecting…');
   const statusLine = h('div', { class: 'hub-status' }, statusDot, statusText);
-  const versionLine = h('div', { class: 'hub-version' }, `Friday ${UI_VERSION} · API ${UI_API}`);
+  const versionLine = h('div', { class: 'hub-version', title: `Interface API ${UI_API}` }, versionWords());
 
   side.append(h('div', { class: 'spacer' }), statusLine, versionLine);
 
@@ -188,7 +206,8 @@ export function mountSettingsHub(ctx: AppContext): Component {
     if (sys.connection === 'live') {
       statusDot.style.background = 'var(--hub-green)';
       statusDot.style.color = 'var(--hub-green)';
-      statusText.textContent = port ? `Ready · ${port}` : 'Ready · Connected';
+      statusText.textContent = 'Friday is running';
+      statusLine.title = port ? `Friday answers on ${port}` : '';
     } else if (sys.connection === 'reconnecting') {
       statusDot.style.background = 'var(--hub-amber)';
       statusDot.style.color = 'var(--hub-amber)';
@@ -215,8 +234,31 @@ export function mountSettingsHub(ctx: AppContext): Component {
   heroMascotWrap.append(heroMascot.el);
 
   const heroBanner = h('div', { class: 'hub-hero' }, heroCopy, heroMascotWrap);
+  // The way back to the dialog Settings was opened from (2026-11-18): "Open the model choices" in
+  // Start an agent left the person here with nothing to go back by.
+  const backBar = h('div', { class: 'hub-back', hidden: true });
+  const renderBack = () => {
+    const back = ctx.store.select('ui').settingsBack ?? null;
+    const shown = ctx.store.select('ui').activeView === 'settings' && back;
+    backBar.hidden = !shown;
+    if (!shown || !back) {
+      backBar.replaceChildren();
+      return;
+    }
+    backBar.replaceChildren(
+      button(
+        [icon('chevronLeft', 14), cleanText(back.label)],
+        () => {
+          ctx.store.patch('ui', { settingsBack: null, activeView: 'canvas', modal: { ...back.modal } });
+        },
+        { class: 'btn btn-ghost hub-back-btn', dataset: { action: 'settings-back' } },
+      ),
+    );
+  };
+  td.add(ctx.store.subscribe('ui', renderBack));
+  renderBack();
   const cardsContainer = h('div', { id: 'settings-root', class: 'hub-cards' });
-  const pageContainer = h('div', { class: 'hub-page' }, heroBanner, cardsContainer);
+  const pageContainer = h('div', { class: 'hub-page' }, backBar, heroBanner, cardsContainer);
   const scrollContainer = h('div', { class: 'hub-scroll' }, pageContainer);
   const panel = h('main', { class: 'hub-panel' }, scrollContainer);
 
@@ -235,7 +277,18 @@ export function mountSettingsHub(ctx: AppContext): Component {
     }
   }
 
+  /**
+   * What the tab now shown subscribed to (the planner switch, the pins, the automatic-checks switch
+   * follow the board). Ended when the tab is drawn again or another one is shown: they were added
+   * to the hub's own teardown before, so every redraw left one more subscriber behind for as long
+   * as the Studio ran (2026-11-17).
+   */
+  let tabTd = new Teardown();
+  td.add(() => tabTd.run());
+
   function renderActiveTab(tabId: string): void {
+    tabTd.run();
+    tabTd = new Teardown();
     currentTab = tabId;
     const def = HUB_PAGES.find((p) => p.id === tabId) ?? HUB_PAGES[0];
     if (!def) return;
@@ -267,6 +320,8 @@ export function mountSettingsHub(ctx: AppContext): Component {
         return renderPlannerTab();
       case 'routing':
         return renderRoutingTab();
+      case 'checks':
+        return renderChecksTab();
       case 'policy':
         return renderPolicyTab();
       case 'friday':
@@ -285,15 +340,15 @@ export function mountSettingsHub(ctx: AppContext): Component {
     const cardFriday = h('div', { class: 'hub-card' });
     const outfitSelect = select(OUTFITS, prefs().outfit, (v) => setPrefs({ outfit: v }));
     cardFriday.append(
-      h('div', { class: 'hub-card-title' }, 'Friday Wardrobe'),
+      h('div', { class: 'hub-card-title' }, 'Friday’s look'),
       h(
         'div',
         { class: 'hub-row' },
         h(
           'div',
           { class: 'text' },
-          h('span', { class: 'title' }, 'Character Outfit'),
-          h('span', { class: 'detail' }, 'Choose headwear and glasses for Friday across the Studio and island'),
+          h('span', { class: 'title' }, 'Outfit'),
+          h('span', { class: 'detail' }, 'What Friday wears, in this window and in the Notch.'),
         ),
         outfitSelect,
       ),
@@ -311,15 +366,19 @@ export function mountSettingsHub(ctx: AppContext): Component {
       (v) => setPrefs({ motion: v }),
     );
     cardMotion.append(
-      h('div', { class: 'hub-card-title' }, 'Motion & Animations'),
+      h('div', { class: 'hub-card-title' }, 'Motion'),
       h(
         'div',
         { class: 'hub-row' },
         h(
           'div',
           { class: 'text' },
-          h('span', { class: 'title' }, 'Reduced Motion'),
-          h('span', { class: 'detail' }, 'Limit canvas spring physics and particles for low latency or accessibility'),
+          h('span', { class: 'title' }, 'Reduce motion'),
+          h(
+            'span',
+            { class: 'detail' },
+            'Fewer things move on screen. “As the system” follows the setting of Windows.',
+          ),
         ),
         motionSegmented,
       ),
@@ -361,15 +420,16 @@ export function mountSettingsHub(ctx: AppContext): Component {
     });
 
     cardNotch.append(
-      h('div', { class: 'hub-card-title' }, 'Dynamic Island Timings'),
+      h('div', { class: 'hub-card-title' }, 'The Notch'),
+      note('The Notch is the small Friday at the top of your screen that shows what is happening.'),
       h(
         'div',
         { class: 'hub-row' },
         h(
           'div',
           { class: 'text' },
-          h('span', { class: 'title' }, 'Auto-collapse Delay'),
-          h('span', { class: 'detail' }, `Seconds before expanded cards fold back to the pill (1–120s)`),
+          h('span', { class: 'title' }, 'Fold an open card after'),
+          h('span', { class: 'detail' }, 'Seconds before a card you opened folds back (1 to 120).'),
         ),
         collapseInput,
       ),
@@ -380,8 +440,8 @@ export function mountSettingsHub(ctx: AppContext): Component {
         h(
           'div',
           { class: 'text' },
-          h('span', { class: 'title' }, 'Auto-hide Delay'),
-          h('span', { class: 'detail' }, `Seconds before the idle island hides to notch edge (5–600s)`),
+          h('span', { class: 'title' }, 'Hide the Notch after'),
+          h('span', { class: 'detail' }, 'Seconds with nothing happening before it hides at the top edge (5 to 600).'),
         ),
         hideInput,
       ),
@@ -433,15 +493,19 @@ export function mountSettingsHub(ctx: AppContext): Component {
     }
 
     card.append(
-      h('div', { class: 'hub-card-title' }, 'Desktop Alerts'),
+      h('div', { class: 'hub-card-title' }, 'Notifications'),
       h(
         'div',
         { class: 'hub-row' },
         h(
           'div',
           { class: 'text' },
-          h('span', { class: 'title' }, 'System Notifications'),
-          h('span', { class: 'detail' }, 'Receive alerts for human-in-the-loop approvals, escalations and completions'),
+          h('span', { class: 'title' }, 'Tell me when something waits'),
+          h(
+            'span',
+            { class: 'detail' },
+            'An approval, a question, a plan to review, an agent that is blocked, or a failure.',
+          ),
         ),
         notifyBox,
       ),
@@ -461,9 +525,11 @@ export function mountSettingsHub(ctx: AppContext): Component {
         if (td.done) return;
         testBtn.disabled = false;
         if (taken === true) {
-          testState.textContent = 'Notification handed to Windows notification center.';
-        } else {
-          testState.textContent = 'Could not deliver notification to Windows.';
+          testState.textContent =
+            'Friday handed a test notification to Windows. If none appeared, Windows is holding Friday’s notifications back: Do Not Disturb, Focus, or the app’s own setting (Windows Settings → System → Notifications).';
+        } else if (taken === false) {
+          testState.textContent =
+            'Friday could not prepare the notification, so Windows was not asked. Restart the desktop app and send another test.';
         }
       }
 
@@ -475,8 +541,8 @@ export function mountSettingsHub(ctx: AppContext): Component {
           h(
             'div',
             { class: 'text' },
-            h('span', { class: 'title' }, 'Test Desktop Integration'),
-            h('span', { class: 'detail' }, 'Verify that Windows action center displays toasts properly'),
+            h('span', { class: 'title' }, 'Try it'),
+            h('span', { class: 'detail' }, 'Sends one now, to see that Windows shows Friday’s notifications.'),
             testState,
           ),
           testBtn,
@@ -504,7 +570,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
     });
 
     const testChimeBtn = button(
-      [icon('sound', 14), 'Play test chime'],
+      [icon('sound', 14), 'Play a sound'],
       () => {
         playSound('approval', { force: true });
       },
@@ -512,15 +578,19 @@ export function mountSettingsHub(ctx: AppContext): Component {
     );
 
     card.append(
-      h('div', { class: 'hub-card-title' }, 'Audio Feedback'),
+      h('div', { class: 'hub-card-title' }, 'Sounds'),
       h(
         'div',
         { class: 'hub-row' },
         h(
           'div',
           { class: 'text' },
-          h('span', { class: 'title' }, 'Sound Effects'),
-          h('span', { class: 'detail' }, 'Chimes for tool completions, approvals, questions and mascot chirps'),
+          h('span', { class: 'title' }, 'Sounds'),
+          h(
+            'span',
+            { class: 'detail' },
+            'A short sound when work finishes, when an approval or a question waits, and from Friday itself.',
+          ),
         ),
         checkbox('Play sounds', !prefs().muted, (on) => setPrefs({ muted: !on })),
       ),
@@ -531,8 +601,8 @@ export function mountSettingsHub(ctx: AppContext): Component {
         h(
           'div',
           { class: 'text' },
-          h('span', { class: 'title' }, 'Master Volume'),
-          h('span', { class: 'detail' }, 'Adjust volume level of audio cues'),
+          h('span', { class: 'title' }, 'Volume'),
+          h('span', { class: 'detail' }, 'How loud those sounds are.'),
         ),
         volume,
       ),
@@ -543,8 +613,8 @@ export function mountSettingsHub(ctx: AppContext): Component {
         h(
           'div',
           { class: 'text' },
-          h('span', { class: 'title' }, 'Character sound preview'),
-          h('span', { class: 'detail' }, 'Test the authentic tactile audio chime'),
+          h('span', { class: 'title' }, 'Try it'),
+          h('span', { class: 'detail' }, 'Plays the sound of an approval waiting for you.'),
         ),
         testChimeBtn,
       ),
@@ -560,14 +630,14 @@ export function mountSettingsHub(ctx: AppContext): Component {
     const st = plannerState(brain);
 
     cardStatus.append(
-      h('div', { class: 'hub-card-title' }, 'Autonomous Planner Status'),
+      h('div', { class: 'hub-card-title' }, 'The planner'),
       h(
         'div',
         { class: 'hub-row' },
         h(
           'div',
           { class: 'text' },
-          h('span', { class: 'title' }, 'Provider Readiness'),
+          h('span', { class: 'title' }, 'Can Friday write plans?'),
           h('span', { class: 'detail' }, st.text),
         ),
         badge(st.ready ? 'ready' : 'not ready', st.ready ? 'good' : 'warn'),
@@ -578,18 +648,30 @@ export function mountSettingsHub(ctx: AppContext): Component {
       const kv = h(
         'dl',
         { class: 'hub-kv' },
-        h('dt', null, 'Provider'),
-        h('dd', null, `${plain(brain.provider, 40)} · ${plain(brain.model, 80)}${brain.remote ? ' (remote)' : ''}`),
-        h('dt', null, 'Key Status'),
-        h('dd', null, brain.key),
-        h('dt', null, 'Spent Today'),
-        h(
-          'dd',
-          null,
-          `${usd(brain.spent_today_usd)} of ${Number.isFinite(brain.daily_budget_usd) ? usd(brain.daily_budget_usd) : 'no limit'}`,
-        ),
+        h('dt', null, 'Plans are written by'),
+        h('dd', { title: `${plain(brain.provider, 40)} · ${plain(brain.model, 80)}` }, plannerWords(brain)),
+        h('dt', null, 'API key'),
+        h('dd', null, keyWords(brain.key)),
+        // A planner Friday knows no price for (Codex, a key service) is counted in requests, and
+        // nothing is said in dollars. Through Claude Code the figure is what the planning would
+        // cost at list prices, not a bill.
+        ...(brain.requests
+          ? [
+              h('dt', null, 'Requests today'),
+              h('dd', { dataset: { role: 'requests' } }, `${brain.requests.today} of ${brain.requests.limit}`),
+            ]
+          : [
+              h('dt', null, brain.provider === 'claude-code' ? 'Used today (estimate)' : 'Spent today'),
+              h(
+                'dd',
+                null,
+                `${usd(brain.spent_today_usd)} of ${Number.isFinite(brain.daily_budget_usd) ? usd(brain.daily_budget_usd) : 'no limit'}`,
+              ),
+            ]),
       );
       cardStatus.append(h('div', { class: 'hub-divider' }), kv);
+      const modelRow = plannerModelRow(ctx, brain);
+      if (modelRow) cardStatus.append(h('div', { class: 'hub-divider' }), modelRow);
     }
 
     const cardActions = h('div', { class: 'hub-card' });
@@ -619,6 +701,41 @@ export function mountSettingsHub(ctx: AppContext): Component {
     const native = ctx.platform.desktop ?? null;
     const keyBtn = button([icon('shield', 14), 'Store the key…'], () => void storeKey(), { class: 'hub-btn' });
     const spendBtn = button('', () => void allowSpending(), { class: 'hub-btn' });
+    // The project's part (2026-11-17): it was a line to write into config.yaml by hand.
+    const projectBtn = button('Allow it for this project…', () => void allowForProject(), { class: 'hub-btn' });
+    /** Whether the project allows planning with a key: config.yaml as it is now, or as Friday started with it. */
+    const projectAllows = () =>
+      !!brain?.allow_remote ||
+      (ctx.store.select('board')?.config.changes?.restart_needed ?? []).includes('providers.anthropic.allow_remote');
+    async function allowForProject() {
+      const ok = await ctx.confirm({
+        title: 'Allow planning with an Anthropic key in this project?',
+        body: [
+          'To plan, Friday sends the goal and a summary of the project to Anthropic, with the key stored on this computer.',
+          'Whether a project allows that is the project’s own setting, in .friday/config.yaml, which your team shares. Turning it on changes that file: commit it to share it. Each person still stores their own key and allows the spending on their own computer.',
+        ],
+        confirmLabel: 'Allow it for this project',
+      });
+      if (!ok) return;
+      projectBtn.disabled = true;
+      const set = await ctx.act(
+        'Allow planning with a key',
+        () => ctx.api.editSettings({ 'providers.anthropic.allow_remote': true }),
+        'The project allows it: Friday reads that when it restarts',
+      );
+      if (set && native && !restartBlocked(ctx)) {
+        await ctx.act(
+          'Restart Friday',
+          () => native.restart(),
+          (done) => (done ? 'Friday restarts with the new setting' : ''),
+        );
+      }
+      if (!td.done) {
+        projectBtn.disabled = false;
+        ctx.refresh();
+        renderSteps();
+      }
+    }
     // A cancelled dialog answers false: nothing changed, nothing to say. Once done, the board is read
     // again, and the page follows the planner's new state (below).
     async function storeKey() {
@@ -635,9 +752,11 @@ export function mountSettingsHub(ctx: AppContext): Component {
       if (!native) return;
       spendBtn.disabled = true;
       const amount = budget;
-      const done = await ctx.act('Allow this clone to spend', () => native.allowSpending(amount));
+      // The provider the planner runs: the shell approves Anthropic when none is named.
+      const provider = brain?.provider === 'claude-code' ? 'claude-code' : undefined;
+      const done = await ctx.act('Allow planning to spend', () => native.allowSpending(amount, provider));
       if (done) {
-        ctx.toast({ kind: 'success', text: `This clone may spend up to ${usd(amount)} a day` });
+        ctx.toast({ kind: 'success', text: `Planning may spend up to ${usd(amount)} a day on this computer` });
         ctx.refresh();
       }
       if (!td.done) spendBtn.disabled = false;
@@ -653,50 +772,94 @@ export function mountSettingsHub(ctx: AppContext): Component {
       // Each native step is offered while it is still needed; a planner on this machine needs neither.
       keyBtn.hidden = local || brain?.key === 'not needed' || (!!brain?.remote && brain.key !== 'missing');
       spendBtn.hidden = local || !!brain?.approved_here;
+      projectBtn.hidden = local || projectAllows();
       replace(spendBtn, icon('check', 14), `Allow spending up to ${usd(budget)} a day…`);
     }
     renderSteps();
 
     const actionParts: (HTMLElement | null)[] = [
-      h('div', { class: 'hub-card-title' }, 'Configuration & Spending Bounds'),
+      h('div', { class: 'hub-card-title' }, 'Plan with an Anthropic API key'),
       note(
         local
-          ? 'The planner runs on this machine, with no key and no spending budget. To make it ready, run this in a terminal in the project folder:'
-          : 'You can always write plans yourself. To let the Master Brain plan, run these in a terminal in the project folder:',
+          ? 'The planner runs on this computer, with no key and no spending limit. To make it ready, run this in a terminal in the project folder:'
+          : native
+            ? 'You can always write plans yourself. To let Friday plan with your own Anthropic key, take the steps below; each button does one of them.'
+            : 'You can always write plans yourself. To let Friday plan with your own Anthropic key, run these in a terminal in the project folder:',
       ),
-      local ? null : field('Daily budget (USD) for the command below', budgetInput).el,
+      local ? null : field('Daily spending limit (USD)', budgetInput).el,
       native && !local
         ? h(
             'div',
             { class: 'pn-planner-native' },
-            note(
-              'The desktop app can do the first two steps with its own dialogs; the key goes into Windows’ password prompt, never into this page.',
-            ),
-            h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, keyBtn, spendBtn),
+            note('The key goes into Windows’ own password prompt, never into this page.'),
+            h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, keyBtn, spendBtn, projectBtn),
           )
-        : null,
-      stepsList,
+        : local
+          ? null
+          : h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, projectBtn),
+      // In the desktop app the buttons do the steps: the commands are for someone who wants them.
+      native && !local ? fold('The same steps in a terminal', {}, stepsList) : stepsList,
       h('div', { style: { display: 'flex', gap: '8px' } }, openConfig),
     ];
     cardActions.append(...actionParts.filter((x): x is HTMLElement => x !== null));
 
-    // The steps are offered while the planner is not ready, as in the Settings drawer.
-    return st.ready ? [cardStatus] : [cardStatus, cardActions];
+    // No API key needed: the installed Claude Code plans, signed in as it already is.
+    const cardQuick = h('div', { class: 'hub-card' }, plannerQuickSetup(ctx, tabTd));
+    // The key-and-terminal steps are Anthropic's: beside a planner that is (or is about to be)
+    // Claude Code they led nowhere, and their button approved the wrong provider (2026-11-17).
+    const viaClaudeCode = (brain?.choice?.wanted ?? brain?.provider) === 'claude-code';
+    // What planning may spend, once it was allowed here: the limit, changed, and turned off.
+    const spending = plannerSpendingCard(ctx, tabTd, brain);
+    const cardSpending = spending ? h('div', { class: 'hub-card' }, spending) : null;
+    // Whether a proposed plan waits for a person: asked wherever there is a planner at all.
+    const cardApprove = brain ? h('div', { class: 'hub-card' }, autoApproveSwitch(ctx, tabTd)) : null;
+    // Every way to plan in one list (2026-11-23): Codex, a key of another service and a model on
+    // this computer beside Claude's two, whose own steps are shown under their rows.
+    const choices = plannerChoices(ctx, tabTd, {
+      'claude-code': cardQuick.firstElementChild as HTMLElement,
+      anthropic: cardActions,
+    });
+    if (choices) {
+      cardActions.classList.remove('hub-card');
+      const requests = plannerRequestsCard(ctx, tabTd, brain);
+      const listed: (HTMLElement | null)[] = [
+        cardStatus,
+        cardSpending,
+        requests ? h('div', { class: 'hub-card' }, requests) : null,
+        h('div', { class: 'hub-card' }, choices),
+        cardApprove,
+      ];
+      return listed.filter((x): x is HTMLElement => x !== null);
+    }
+    // The switch stays once planning works through it: it is where a person turns it off again.
+    const setup = st.ready
+      ? viaClaudeCode
+        ? [cardQuick]
+        : []
+      : viaClaudeCode
+        ? [cardQuick]
+        : [cardQuick, cardActions];
+    const all: (HTMLElement | null)[] = [cardStatus, cardSpending, ...setup, cardApprove];
+    return all.filter((x): x is HTMLElement => x !== null);
+  }
+
+  // ── Checks Tab: the project's own checks, and whether they run on their own ──
+  function renderChecksTab(): HTMLElement[] {
+    return [
+      h('div', { class: 'hub-card' }, projectChecksCard(ctx, tabTd)),
+      h('div', { class: 'hub-card' }, autoVerifySwitch(ctx, tabTd)),
+      h('div', { class: 'hub-card' }, landingChoice(ctx, tabTd)),
+      h('div', { class: 'hub-card' }, copyFilesCard(ctx, tabTd)),
+    ];
   }
 
   // ── 5. Routing & Pins Tab ─────────────────────────────────────────────────
   function renderRoutingTab(): HTMLElement[] {
     const card = h('div', { class: 'hub-card' });
-    const pins = routingPins(ctx, td);
+    const pins = routingPins(ctx, tabTd);
     pins.load();
 
-    card.append(
-      h('div', { class: 'hub-card-title' }, 'Model Assignment & Routing'),
-      note(
-        'Friday assigns each task to the most appropriate AI model. Pins force specific roles or tasks to dedicated models.',
-      ),
-      pins.el,
-    );
+    card.append(h('div', { class: 'hub-card-title' }, 'Which model does the work'), pins.el);
 
     return [card];
   }
@@ -704,7 +867,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
   // ── 6. Policy & Trust Tab ─────────────────────────────────────────────────
   function renderPolicyTab(): HTMLElement[] {
     const card = h('div', { class: 'hub-card' });
-    const policyBox = h('div', { class: 'text' }, h('span', { class: 'detail' }, 'Reading security policy…'));
+    const policyBox = h('div', { class: 'text' }, h('span', { class: 'detail' }, 'Reading the project’s settings…'));
 
     async function loadPolicy() {
       try {
@@ -714,7 +877,10 @@ export function mountSettingsHub(ctx: AppContext): Component {
       } catch (e) {
         if (td.done) return;
         const err = errorOf(e);
-        replace(policyBox, h('div', { class: 'field-error' }, `Could not read policy: ${plain(err.message, 300)}`));
+        replace(
+          policyBox,
+          h('div', { class: 'field-error' }, `The settings could not be read: ${plain(err.message, 300)}`),
+        );
       }
     }
 
@@ -722,7 +888,11 @@ export function mountSettingsHub(ctx: AppContext): Component {
       if (p.items.length === 0) {
         replace(
           policyBox,
-          h('div', { class: 'detail' }, "Nothing in the project's policy files loosens Friday's security defaults."),
+          h(
+            'div',
+            { class: 'detail' },
+            'Nothing in this project’s settings lets Friday or an agent do more than the defaults.',
+          ),
         );
         return;
       }
@@ -734,19 +904,32 @@ export function mountSettingsHub(ctx: AppContext): Component {
           h(
             'li',
             { class: 'pn-item' },
-            h('span', { class: 'mono' }, visible(l.setting)),
-            h('span', null, `${visible(l.from)} → ${visible(l.to)}`),
-            h('span', { class: 'muted pn-grow' }, visible(l.source)),
+            // What it allows, in words; the exact setting stays beside it, since trust is in that.
+            h('span', { class: 'pn-loosening-words' }, looseningWords(l) ?? looseningExact(l)),
+            looseningWords(l) ? h('span', { class: 'mono muted pn-loosening-exact' }, looseningExact(l)) : null,
+            h('span', { class: 'muted pn-loosening-source' }, `set in ${visible(l.source)}`),
+            // Each setting stands on its own (2026-11-18): trusted here, or waiting with its own button.
+            l.trusted === undefined
+              ? null
+              : l.trusted
+                ? badge('in force', 'good')
+                : button('Trust this one', () => void trustPolicy(p.hash as string, [l]), { class: 'btn' }),
           ),
         ),
       );
 
+      const waiting = p.items.filter((l) => l.trusted !== true);
       const trustBtn =
-        p.trusted || !p.hash
+        p.trusted || !p.hash || (p.items.every((l) => l.trusted !== undefined) && waiting.length < 2)
           ? null
-          : button([icon('shield', 14), 'Trust this list'], () => void trustPolicy(p.hash as string, p.items), {
-              class: 'hub-btn primary',
-            });
+          : button(
+              [
+                icon('shield', 14),
+                waiting.length === p.items.length ? 'Trust this list' : `Trust the ${waiting.length} that wait`,
+              ],
+              () => void trustPolicy(p.hash as string, waiting),
+              { class: 'hub-btn primary' },
+            );
 
       replace(
         policyBox,
@@ -756,33 +939,60 @@ export function mountSettingsHub(ctx: AppContext): Component {
           h(
             'div',
             { class: 'text' },
-            h('span', { class: 'title' }, p.trusted ? 'Policy Trusted' : 'Pending Trust Verification'),
-            p.hash ? h('span', { class: 'mono detail' }, `SHA-256: ${visible(p.hash)}`) : null,
+            h(
+              'span',
+              { class: 'title' },
+              p.trusted
+                ? 'Trusted on this computer'
+                : waiting.length < p.items.length
+                  ? `${waiting.length} of ${p.items.length} wait for your trust`
+                  : 'Waiting for your trust',
+            ),
+            h(
+              'span',
+              { class: 'detail', ...(p.hash ? { title: `This list’s fingerprint: ${visible(p.hash)}` } : {}) },
+              p.trusted
+                ? 'These apply here. A setting that is changed in the project’s files is asked about again.'
+                : waiting.length < p.items.length
+                  ? 'The ones marked “in force” apply here; the others do not yet.'
+                  : 'None of these applies here yet.',
+            ),
           ),
-          p.trusted ? badge('trusted', 'good') : badge('untrusted', 'warn'),
+          p.trusted
+            ? badge('trusted', 'good')
+            : badge(waiting.length < p.items.length ? 'some wait' : 'not in force', 'warn'),
         ),
-        note('Tracked files loosen sandbox defaults. They apply only once trusted on this clone.'),
+        note(
+          'The project’s files ask for these: each lets Friday or an agent do more than it would by default. A setting applies on this computer once you trust it, and each is trusted on its own; when a file changes one, Friday asks about that one again.',
+        ),
         list,
         trustBtn ? h('div', { style: { marginTop: '12px' } }, trustBtn) : null,
       );
     }
 
     async function trustPolicy(hash: string, items: ReturnType<typeof readLoosening>['items']) {
-      // The question lists exactly what is trusted, so nothing is trusted unseen.
-      const ok = await ctx.confirm({
-        title: 'Trust security loosening on this clone?',
-        body: [
-          ...items.map((l) => `${visible(l.setting)}: ${visible(l.from)} → ${visible(l.to)} (${visible(l.source)})`),
-          `Friday records trust in exactly this list (hash ${visible(hash)}); if policy files change, it asks again.`,
-        ],
-        confirmLabel: 'Trust Policy',
-        danger: true,
-      });
-      if (!ok) return;
+      // The question lists exactly what is trusted, so nothing is trusted unseen. One question:
+      // the desktop asks in its own window (`confirm_and_send`), a browser asks here.
+      if (!ctx.platform.desktop) {
+        const ok = await ctx.confirm({
+          title: items.length === 1 ? 'Trust this setting on this computer?' : 'Trust these settings on this computer?',
+          body: [
+            ...items.map(looseningLine),
+            'Friday records trust in exactly this; if the project’s files change it, it asks again.',
+          ],
+          confirmLabel: items.length === 1 ? 'Trust it' : 'Trust them',
+          danger: true,
+        });
+        if (!ok) return;
+      }
+      const ids = items.map((l) => l.id).filter((i): i is string => typeof i === 'string');
       const r = await ctx.act(
-        'Trust policy',
-        () => ctx.api.trustPolicy(hash),
-        'Trusted: loosening applies on this clone',
+        'Trust the settings',
+        // By their own ids where the daemon gives them; the whole list as one otherwise.
+        () => (ids.length === items.length && ids.length > 0 ? ctx.api.trustSettings(ids) : ctx.api.trustPolicy(hash)),
+        items.length === 1
+          ? 'Trusted: it now applies on this computer'
+          : 'Trusted: these settings now apply on this computer',
       );
       if (r && !td.done) {
         renderPolicyContent(readLoosening(r));
@@ -792,18 +1002,34 @@ export function mountSettingsHub(ctx: AppContext): Component {
 
     void loadPolicy();
 
-    card.append(h('div', { class: 'hub-card-title' }, 'Workspace Security Policy'), policyBox);
-    return [card];
+    card.append(h('div', { class: 'hub-card-title' }, 'What this computer trusts'), policyBox);
+    // What the card lists follows what is trusted and asked for: read again when either changes
+    // (the switch above just did one of them), not only when the tab is opened.
+    const trustFacts = (b: UiSnapshot | null | undefined) =>
+      JSON.stringify([
+        b?.policy_untrusted ?? null,
+        b?.verification.auto_on_completion ?? null,
+        b?.verification.auto_requested ?? null,
+      ]);
+    let trustSeen = trustFacts(ctx.store.select('board'));
+    tabTd.add(
+      ctx.store.subscribe('board', (b) => {
+        const now = trustFacts(b);
+        if (now === trustSeen) return;
+        trustSeen = now;
+        void loadPolicy();
+      }),
+    );
+    return [h('div', { class: 'hub-card' }, agentPermissionsCard(ctx, tabTd)), card];
   }
 
   // ── 7. Friday Engine Tab ──────────────────────────────────────────────────
   function renderFridayTab(): HTMLElement[] {
     const cardWorktrees = h('div', { class: 'hub-card' });
     const count = worktreesInUse(ctx.store.select('board'));
-    const cleanBtn = button([icon('branch', 14), 'Clean up released worktrees'], () => void cleanUp(), {
+    const cleanBtn = button([icon('branch', 14), 'Clean up finished task folders'], () => void cleanUp(), {
       class: 'hub-btn',
-      title:
-        'Removes the worktrees of finished tasks that hold no uncommitted work (the same as Prune clean worktrees in the palette)',
+      title: 'Removes the folders of finished tasks that hold no uncommitted work',
     });
 
     async function cleanUp() {
@@ -813,18 +1039,18 @@ export function mountSettingsHub(ctx: AppContext): Component {
     }
 
     cardWorktrees.append(
-      h('div', { class: 'hub-card-title' }, 'Git Worktree Management'),
+      h('div', { class: 'hub-card-title' }, 'Task folders'),
       h(
         'div',
         { class: 'hub-row' },
         h(
           'div',
           { class: 'text' },
-          h('span', { class: 'title' }, `Active Worktrees (${count})`),
+          h('span', { class: 'title' }, `Task folders in use: ${count}`),
           h(
             'span',
             { class: 'detail' },
-            'Each running attempt works in its own worktree; a released one is kept until it is cleaned up.',
+            'Each task an agent works on gets its own copy of the project (a git worktree), so agents do not disturb each other or your own files. The folder of a finished task is kept until it is cleaned up.',
           ),
         ),
         cleanBtn,
@@ -838,7 +1064,7 @@ export function mountSettingsHub(ctx: AppContext): Component {
       ? button([icon('rework', 14), 'Restart Friday'], () => void restart(), { class: 'hub-btn' })
       : null;
     async function restart() {
-      if (!desktop || !restartBtn) return;
+      if (!desktop || !restartBtn || restartBlocked(ctx)) return;
       restartBtn.disabled = true;
       const done = await ctx.act('Restart Friday', () => desktop.restart());
       if (done) ctx.toast({ kind: 'success', text: 'Friday is restarting' });
@@ -859,30 +1085,36 @@ export function mountSettingsHub(ctx: AppContext): Component {
     const stopBtn = button([icon('stop', 14), 'Stop Friday'], () => void stopDaemon(), { class: 'hub-btn danger' });
     async function stopDaemon() {
       const ok = await ctx.confirm({
-        title: 'Stop Friday Daemon?',
+        title: 'Stop Friday?',
         body: [
-          'Friday stops for this project: agents it started disconnect, and nothing is assigned or verified until it runs again.',
-          'Work in worktrees is kept. Start it again from its shortcut, the desktop app, or friday run.',
+          'Friday stops for this project: agents it started disconnect, and nothing is given to agents or checked until it runs again.',
+          desktop
+            ? 'The work in the task folders is kept. Start Friday again here, or from the tray’s menu.'
+            : 'The work in the task folders is kept. Start Friday again from its shortcut or the desktop app.',
         ],
         confirmLabel: 'Stop Friday',
         danger: true,
       });
       if (!ok) return;
       stopBtn.disabled = true;
-      const r = await ctx.act('Stop Friday', () => ctx.api.stopDaemon(), 'Friday daemon is stopping');
+      const r = await ctx.act('Stop Friday', () => ctx.api.stopDaemon(), 'Friday is stopping');
       if (!td.done && !r) stopBtn.disabled = false;
     }
 
     cardLifecycle.append(
-      h('div', { class: 'hub-card-title' }, 'Daemon Lifecycle'),
+      h('div', { class: 'hub-card-title' }, 'Friday itself'),
       h(
         'div',
         { class: 'hub-row' },
         h(
           'div',
           { class: 'text' },
-          h('span', { class: 'title' }, 'Engine Controls'),
-          h('span', { class: 'detail' }, 'Manage background server processes and active sessions'),
+          h('span', { class: 'title' }, 'Restart or stop'),
+          h(
+            'span',
+            { class: 'detail' },
+            'Friday runs in the background for this project. Stopping it disconnects the agents it started; their work is kept.',
+          ),
         ),
         h('div', { style: { display: 'flex', gap: '8px' } }, restartBtn, logoutBtn, stopBtn),
       ),
@@ -903,13 +1135,15 @@ export function mountSettingsHub(ctx: AppContext): Component {
 
     if (!desktop) {
       card.append(
-        h('div', { class: 'hub-card-title' }, 'Desktop Shell'),
-        note('Desktop shortcuts and system autostart are active when running inside Friday Desktop (Tauri).'),
+        h('div', { class: 'hub-card-title' }, 'Desktop app'),
+        note(
+          'Keyboard shortcuts and starting at sign-in belong to the Friday desktop app. This page is open in a browser.',
+        ),
       );
       return [card];
     }
 
-    const shortcutList = h('div', { class: 'pn-shortcuts' }, note('Reading registered hotkeys…'));
+    const shortcutList = h('div', { class: 'pn-shortcuts' }, note('Reading the shortcuts…'));
     // Each shortcut by what it does, and why one is not active, as the shell reports it (FD-16).
     const renderShortcuts = (items: DesktopShortcut[]) => {
       if (td.done) return;
@@ -945,13 +1179,13 @@ export function mountSettingsHub(ctx: AppContext): Component {
       .shortcuts()
       .then(renderShortcuts)
       .catch(() => {
-        if (!td.done) replace(shortcutList, note('Could not read desktop hotkeys.'));
+        if (!td.done) replace(shortcutList, note('The desktop app did not say which shortcuts it has.'));
       });
 
     // The list is drawn again from what the shell answers, so a shortcut it could not register says so.
     async function setKey(id: string, accel: string) {
       if (!accel || !desktop) return;
-      const r = await ctx.act('Change shortcut', () => desktop.setShortcut(id, accel), 'Shortcut updated');
+      const r = await ctx.act('Change the shortcut', () => desktop.setShortcut(id, accel), 'Shortcut changed');
       if (r) renderShortcuts(r);
     }
 
@@ -989,8 +1223,8 @@ export function mountSettingsHub(ctx: AppContext): Component {
     }
 
     card.append(
-      h('div', { class: 'hub-card-title' }, 'Global Windows Shortcuts'),
-      note('Hotkeys trigger anywhere in Windows while Friday Desktop runs:'),
+      h('div', { class: 'hub-card-title' }, 'Keyboard shortcuts'),
+      note('These work anywhere in Windows while the app runs, for example Ctrl+Alt+Shift+F.'),
       shortcutList,
       h('div', { class: 'hub-divider' }),
       h('div', { class: 'hub-row' }, startBox),
@@ -1009,25 +1243,25 @@ export function mountSettingsHub(ctx: AppContext): Component {
     const kv = h(
       'dl',
       { class: 'hub-kv' },
-      h('dt', null, 'Friday Daemon'),
+      h('dt', null, 'Friday'),
       h('dd', null, p ? plain(p.daemon_version, 40) : '—'),
-      h('dt', null, 'Interface Studio'),
+      h('dt', null, 'This window'),
       h(
         'dd',
         null,
-        `${UI_VERSION} · API ${UI_API}${b && b.ui_api !== UI_API ? ` (Friday speaks ${String(b.ui_api)})` : ''}`,
+        `${UI_VERSION}${builtWords() ? ` · built ${builtWords()}` : ''} · API ${UI_API}${b && b.ui_api !== UI_API ? ` (Friday speaks ${String(b.ui_api)})` : ''}`,
       ),
-      h('dt', null, 'Active Project'),
+      h('dt', null, 'Project'),
       h('dd', null, p ? visible(plain(p.name, 120)) : '—'),
-      h('dt', null, 'Workspace Root'),
+      h('dt', null, 'Project folder'),
       h('dd', { class: 'mono' }, p ? visible(p.root) : '—'),
-      h('dt', null, 'Daemon Address'),
+      h('dt', null, 'Address'),
       h('dd', { class: 'mono' }, p ? `127.0.0.1:${p.port}` : '—'),
-      h('dt', null, 'Worktrees in use'),
+      h('dt', null, 'Task folders in use'),
       h('dd', null, String(worktreesInUse(b))),
     );
 
-    card.append(h('div', { class: 'hub-card-title' }, 'System & Architecture'), kv);
+    card.append(h('div', { class: 'hub-card-title' }, 'About this Friday'), kv);
     return [card];
   }
 
@@ -1043,10 +1277,14 @@ export function mountSettingsHub(ctx: AppContext): Component {
 
   // The planner page is drawn again when the planner's state changes (a key stored, spending
   // allowed, a provider configured), not on every board change, so a budget being typed stays.
-  let brainSeen = JSON.stringify(ctx.store.select('board')?.brain ?? null);
+  // `head` and `cursor` move with every event and are not shown: with them in, the page was drawn
+  // again on every event, and a budget being typed was lost (2026-11-17).
+  const brainFacts = (board: UiSnapshot | null | undefined) =>
+    JSON.stringify(board?.brain ?? null, (key, value) => (key === 'head' || key === 'cursor' ? undefined : value));
+  let brainSeen = brainFacts(ctx.store.select('board'));
   td.add(
     ctx.store.subscribe('board', (board) => {
-      const now = JSON.stringify(board?.brain ?? null);
+      const now = brainFacts(board);
       if (now === brainSeen) return;
       brainSeen = now;
       if (currentTab === 'planner') renderActiveTab('planner');

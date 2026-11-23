@@ -57,6 +57,16 @@ export interface TriggerFacts {
   roleClassificationAttempted(taskId: string): boolean;
   planner: { available: boolean; reason: string };
   limits: { escalateAfterFailures: number; maxReplans: number; autoApprove: boolean };
+  /**
+   * Why the task's last failed verification is likely the setup and not the work: its folder's
+   * dependencies were not installed, and a check of the project's own failed there. Null otherwise.
+   */
+  setupTrouble?(taskId: string): string | null;
+  /**
+   * Why the task's last failed verification judged nothing: the project's checks could not be
+   * started on this computer. Null otherwise.
+   */
+  checkTrouble?(taskId: string): string | null;
 }
 
 const transitionTo = (e: TriggerEvent) => (e.payload.transition as { to?: string } | undefined)?.to;
@@ -67,6 +77,15 @@ const transitionTo = (e: TriggerEvent) => (e.payload.transition as { to?: string
  * at the revision limit, or without a planner; otherwise a revision.
  */
 export function failureAction(task_id: string, goal_id: string, f: TriggerFacts): BrainAction {
+  // The folder's dependencies were never installed (2026-11-17): the task is not sent back to its
+  // agent, nor the plan revised, to fail the same way; a person fixes the install. Before, this
+  // counted as the work failing, was retried up to the limit, and then read "keeps failing".
+  const trouble = f.setupTrouble?.(task_id) ?? null;
+  if (trouble) return { kind: 'escalate', goal_id, task_id, reason: 'setup_failed', detail: trouble };
+  // Nor when the checks could not even start here: nothing of the work was judged, and no agent can
+  // install a missing program on the person's computer by trying again.
+  const unstarted = f.checkTrouble?.(task_id) ?? null;
+  if (unstarted) return { kind: 'escalate', goal_id, task_id, reason: 'check_not_run', detail: unstarted };
   const failures = f.failuresOf(task_id);
   if (failures >= f.limits.escalateAfterFailures) {
     return {
@@ -125,6 +144,9 @@ export function triggersFor(e: TriggerEvent, f: TriggerFacts): BrainAction[] {
     case 'task.released':
     case 'task.reservation_released':
     case 'harness.registered':
+    // What kept a host out was lifted (a person cleared it, or its agent started again): the tasks
+    // that waited for it are offered again now, not at the next unrelated event.
+    case 'readiness.invalidated':
     // A human resumed Friday: delegation, and the planning lane, start again (plan M9 §5.5).
     case 'control.resumed':
       return [{ kind: 'delegate' }];

@@ -22,7 +22,8 @@ export interface SetupOptions {
   run?: (args: string[]) => Promise<string>;
 }
 
-function runCli(args: string[]): Promise<string> {
+/** Runs this CLI in a child process and answers the JSON it printed (shared with the Antigravity setup). */
+export function runSetupCli(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       process.execPath,
@@ -41,7 +42,7 @@ export function claudeSetupExtension(opts: SetupOptions = {}) {
   return (app: App, ctx: DaemonContext) => {
     const pid = ctx.project.project_id;
     const P = `/api/v1/projects/${pid}`;
-    const run = opts.run ?? runCli;
+    const run = opts.run ?? runSetupCli;
     const base = ['--project', ctx.project.root, '--json'];
     const requireOperator = (c: Ctx) => {
       if (c.get('auth')?.token_class !== 'operator') {

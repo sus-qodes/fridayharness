@@ -1,14 +1,28 @@
 import { type ReadinessAssessment, readinessReasonCode } from './readiness.js';
 import type { ModelRecord } from './registry.js';
 import { canonicalRole, ROLE_REGISTRY_SOURCE, type RoleRegistry, type RoleRegistryCandidate } from './role-registry.js';
-import { type RoutingRoleSource, resolveTaskRole } from './roles.js';
+import { fallbackTaskRole, type RoutingRoleSource, resolveTaskRole } from './roles.js';
 
 /**
  * The routing decision (spec Part 08 §7, §11; ADR-0031's 2026-10-21 amendment): pure and
  * deterministic. The static role registry is the only dispatch authority. Human pins and hard
  * constraints still come first, and a task whose role is unresolved or proposed as a DAG never
  * dispatches on a guess.
+ *
+ * 2026-11-17, two of the owner's decisions:
+ * - A person who gives a task to an agent ("Assign to") is followed. The ranking then only chooses
+ *   the model: a role it does not know, no entry for that host in the role, or a pin of a model
+ *   that host cannot run no longer stop the work, which runs with the model the ranking has for the
+ *   host, else the agent's own. Before, such a task waited for good, with no warning at the moment
+ *   of assigning. Hard constraints, a host that is not ready, and a split a person has not decided
+ *   still stop it.
+ * - A pin cannot be applied to a session that chooses its own model (Antigravity, Claude Code in
+ *   an editor). A pin of a model such a host does not run no longer blocks every task there: it is
+ *   set aside for that session, and the decision says so.
  */
+
+/** The role whose ranking chooses a model when a person assigned a task whose role says nothing. */
+const GENERAL_ROLE = 'implementation';
 
 export interface RoutingSettings {
   must_use_local: boolean;
@@ -73,9 +87,12 @@ export interface RouteInput {
   resolved_role?: string | null;
   /**
    * What Friday has observed of a host and model on this machine (ADR-0035 §1); unset: no
-   * readiness filter (a pure decision, as in tests of the registry alone).
+   * readiness filter (a pure decision, as in tests of the registry alone). A null model asks about
+   * the host alone.
    */
-  readiness?: (host: string, model: string) => ReadinessAssessment | null;
+  readiness?: (host: string, model: string | null) => ReadinessAssessment | null;
+  /** A person gave this task to the agent whose harness this is ("Assign to"). */
+  assigned_by_human?: boolean;
 }
 
 /** One readiness check routing made, for the receipt and `routing explain` (ADR-0035 §2). */
@@ -113,7 +130,8 @@ export interface RoutingDecision {
    * that meets the constraints.
    */
   blocked: boolean;
-  source: 'pin' | 'registry' | 'none';
+  /** `assignment`: a person gave the task to this agent, which runs it with its own model. */
+  source: 'pin' | 'registry' | 'assignment' | 'none';
   reason: string;
   reason_codes: string[];
   candidates: Candidate[];
@@ -260,6 +278,7 @@ export function decideRoute(input: RouteInput): RoutingDecision {
   const constrained = eligible;
 
   const binding = input.model_control === 'set';
+  const assigned = input.assigned_by_human === true && input.vendor !== null;
   const observed = input.observed_model ?? null;
   const assemble = (
     model: string | null,
@@ -342,14 +361,38 @@ export function decideRoute(input: RouteInput): RoutingDecision {
       codes.push('role.classification_required');
       return blocked(resolved.reason);
     }
-    codes.push('role.missing');
-    return blocked('role classification is required before static registry dispatch; clarification is required');
+    // A person who chose the agent has decided where the work runs; the role only chooses the model.
+    if (!assigned) {
+      codes.push('role.missing');
+      return blocked('role classification is required before static registry dispatch; clarification is required');
+    }
   }
 
   // A human's pinned model is never silently replaced. Sensitive work takes only a pin made for it:
   // a general pin is no consent.
   const chosen = sensitive ? pins.find((p) => p.model && p.sensitive) : pinModel;
-  const wanted = chosen?.model ?? null;
+  const pinned = chosen?.model ?? null;
+  // A pin that cannot be applied here is set aside, and said: for a session that chooses its own
+  // model (it cannot be given one), and for a task a person gave to this agent (the more specific
+  // of their two decisions). Never for sensitive work, where the pin is the consent.
+  const pinRunsHere = pinned !== null && eligible.some((m) => m.id === pinned);
+  const setAside: 'assignment' | 'advisory' | null =
+    pinned === null || pinRunsHere || sensitive
+      ? null
+      : assigned
+        ? 'assignment'
+        : input.vendor !== null && !binding
+          ? 'advisory'
+          : null;
+  let aside = '';
+  if (setAside && pinned) {
+    codes.push(`pin.set_aside.${setAside}`);
+    aside =
+      setAside === 'assignment'
+        ? `; the pin of ${pinned} is set aside: a person gave this task to this agent, which cannot run it`
+        : `; the pin of ${pinned} is set aside: this session chooses its own model and does not run it`;
+  }
+  const wanted = setAside ? null : pinned;
   if (wanted) {
     const pin_id = chosen?.pin_id ?? null;
     const why = excluded.find((e) => e.model === wanted)?.reason;
@@ -391,14 +434,22 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     );
   }
 
-  const registryRole = canonicalRole(role, registry);
+  let registryRole = role ? canonicalRole(role, registry) : null;
+  if (!registryRole && assigned) {
+    // The role says nothing the ranking knows ("fullstack", or none at all): the model is chosen as
+    // for what the task's kind and paths point at, else as for general implementation work.
+    const assumed = fallbackTaskRole({ ...task, role: null })?.role ?? GENERAL_ROLE;
+    registryRole = canonicalRole(assumed, registry) ?? canonicalRole(GENERAL_ROLE, registry);
+    codes.push('role.assumed');
+  }
   const definition = registryRole ? registry.roles[registryRole] : undefined;
-  if (!registryRole || !definition) {
+  if (!assigned && (!registryRole || !definition)) {
     codes.push('role.unsupported');
     return blocked(`role "${role}" is not declared in the static role registry`);
   }
+  if (assigned) codes.push('assignment.human');
 
-  const registryCandidates = [...definition.candidates].sort((a, b) => a.rank - b.rank);
+  const registryCandidates = [...(definition?.candidates ?? [])].sort((a, b) => a.rank - b.rank);
   const selected: { candidate: RoleRegistryCandidate; row: Candidate }[] = [];
   for (const candidate of registryCandidates) {
     if (!candidate.declared_dispatchable) {
@@ -458,11 +509,28 @@ export function decideRoute(input: RouteInput): RoutingDecision {
     });
   }
   if (!selected.length) {
-    codes.push('registry.none_eligible');
     const unready = readinessChecks.filter((c) => !c.dispatchable);
+    // A person gave the task to this agent and the ranking has no model for it here: it runs with
+    // the agent's own model. Only where nothing else stands in the way: a hard constraint or a
+    // host that is not ready stops it as for anyone.
+    if (assigned && input.vendor !== null && !constraints.length && !unready.length) {
+      const host = input.readiness?.(input.vendor, null) ?? null;
+      if (host && !host.dispatchable) {
+        codes.push('registry.none_eligible', 'readiness.none_ready', readinessReasonCode(host));
+        return blocked(`a person gave this task to this agent, but ${host.reason}`);
+      }
+      codes.push('assignment.own_model');
+      return assemble(
+        null,
+        'assignment',
+        `a person gave this task to this agent, and the ranking names no model for it on ${input.vendor}: it runs with the agent's own model${aside}`,
+        { failover_policy: 'none' },
+      );
+    }
+    codes.push('registry.none_eligible');
     if (unready.length) codes.push('readiness.none_ready');
     return blocked(
-      `no dispatchable candidate for role "${role}" on this harness${constraints.length ? ` while ${constraints.join(', ')} must hold` : ''}${unready.length ? `; not ready: ${unready.map((c) => c.reason).join('; ')}` : ''}`,
+      `no dispatchable candidate for role "${role ?? registryRole}" on this harness${constraints.length ? ` while ${constraints.join(', ')} must hold` : ''}${unready.length ? `; not ready: ${unready.map((c) => c.reason).join('; ')}` : ''}`,
       { candidates: [] },
     );
   }
@@ -471,7 +539,7 @@ export function decideRoute(input: RouteInput): RoutingDecision {
   return result(
     first.row.model,
     'registry',
-    `${first.row.model}, rank ${first.candidate.rank} for role ${role}${registryRole !== role ? ` (${registryRole})` : ''}`,
+    `${first.row.model}, rank ${first.candidate.rank} for role ${role ?? registryRole}${role && registryRole !== role ? ` (${registryRole})` : ''}${assigned ? '; a person gave this task to this agent' : ''}${aside}`,
     {
       candidates: selected.map((entry) => entry.row),
       fallback_chain: [

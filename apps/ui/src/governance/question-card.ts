@@ -8,9 +8,16 @@
  * Friday's own kinds are CLI instructions: never choices, at most small print. Every box a person
  * types an answer into is labelled "Reply to <agent>": one wording for one act.
  */
-import type { EscalationView } from '@friday/protocol';
+
+import type { EscalationView, RoutingOfferView } from '@friday/protocol';
 import { classifyEscalation, composeAnswer, LET_AGENT_DECIDE, type QuestionSpec } from '../model/escalations.js';
+import { blockSentence, hostBlocks, hostName, liftLabel } from '../model/host-blocks.js';
+import { defaultModel, hostLabel, modelLabel, modelName, usableModels } from '../model/models.js';
+import { fixedInSettings, PLANNER_FAILURES, plannerTrouble, plannerTroubleWords } from '../model/planner-words.js';
+import { kindWord, routingBlockWords } from '../model/routing-words.js';
+import { MERGE_WORDS, wordsFor } from '../model/status.js';
 import { hasHidden, visible } from '../model/text.js';
+import { cancelTask } from '../shell/cancel-task.js';
 import { type AppContext, type Component, openDrawer, openModal } from '../shell/context.js';
 import { append, button, h, replace, setText } from '../ui/dom.js';
 import { cleanText, stripEscapes, timeAgo, truncate } from '../ui/format.js';
@@ -49,7 +56,7 @@ interface Kit {
 
 function askerText(ctx: AppContext, e: EscalationView, spec: QuestionSpec): string {
   if (spec.asker === 'agent') return agentKeyOf(ctx.store.select('board'), e.requested_by_id) ?? 'an agent';
-  if (spec.asker === 'master_brain') return 'the Master Brain';
+  if (spec.asker === 'master_brain') return 'Friday’s planner';
   return 'Friday';
 }
 
@@ -159,11 +166,21 @@ function buildBody(kit: Kit): Built {
     case 'recovery':
       return recoveryBody(kit);
     case 'routing':
-      return routingBody(kit);
+      // A task with no agent to run it gets the card that leads with "Run it on …"; a host that ran
+      // a model its constraints forbid keeps the card that explains and pins.
+      return kit.spec.kind === 'routing_blocked' ? routingBlockedBody(kit) : routingBody(kit);
     case 'integration':
       return integrationBody(kit);
     case 'unanswered':
       return unansweredBody(kit);
+    case 'setup':
+      return setupBody(kit);
+    case 'checks':
+      return checksBody(kit);
+    case 'folder':
+      return folderBody(kit);
+    case 'install':
+      return installBody(kit);
     case 'brain':
       return brainBody(kit);
   }
@@ -200,7 +217,7 @@ function cliHints(spec: QuestionSpec): HTMLElement | null {
   return h(
     'details',
     { class: 'gv-cli' },
-    h('summary', null, 'What the CLI would do'),
+    h('summary', null, 'The same from a terminal'),
     h('ul', null, ...spec.cliHints.map((x) => h('li', { class: 'mono' }, truncate(visible(x), 300)))),
   );
 }
@@ -356,6 +373,29 @@ function waitingHint(kit: Kit): HTMLElement | null {
 function recoveryBody(kit: Kit): Built {
   const { spec, ctx } = kit;
   const d = (kit.e.details ?? {}) as Record<string, unknown>;
+  // The agent's host stopped the attempt at the agent's own spending limit (2026-11-17): one
+  // button raises the limit and lets the task continue; the other ways stay behind "Other options".
+  if (spec.taskId && d.reason === 'budget_exceeded' && d.scope === 'agent') {
+    const taskId = spec.taskId;
+    const raise = button(
+      [icon('rework', 14), 'Raise the limit and continue…'],
+      () => openModal(ctx, { kind: 'raise-limit', id: taskId }),
+      { class: 'btn btn-primary' },
+    );
+    const other = button('Other options…', () => openModal(ctx, { kind: 'recover', id: taskId }), { class: 'btn' });
+    return {
+      body: present([
+        ...context(spec),
+        h(
+          'p',
+          { class: 'field-hint' },
+          'Nothing runs again on its own here: another try at the same limit would stop at the same place.',
+        ),
+        h('div', { class: 'gv-actions' }, raise, other),
+      ]),
+      decisions: [],
+    };
+  }
   const recover = button(
     [icon('rework', 14), 'Recover…'],
     () => {
@@ -379,9 +419,241 @@ function recoveryBody(kit: Kit): Built {
   };
 }
 
-// ---- routing_blocked, routing_violated
+// ---- routing_blocked: who runs this task? (2026-11-17)
+
+/**
+ * A task routing does not let start. The card said the decision's own sentence, offered "Why" and a
+ * list of every model id in the catalog (the dearest first, most of which no agent here could run),
+ * and fixed one task at a time. It now says what is wrong in a person's words and leads with the way
+ * out: give the task to a connected agent ("Run it on …"), which Friday follows with that agent's
+ * model. Choosing a model, for this task or for every task of its kind, and the decision's own
+ * words are one step further.
+ */
+function routingBlockedBody(kit: Kit): Built {
+  const { spec, ctx } = kit;
+  const taskId = spec.taskId ?? '';
+  const d = (kit.e.details ?? {}) as Record<string, unknown>;
+  const codes = Array.isArray(d.reason_codes) ? (d.reason_codes as unknown[]).filter((c) => typeof c === 'string') : [];
+  const task = ctx.store.select('board')?.tasks.find((t) => t.task_id === taskId);
+  const said = h('p', { class: 'gv-question-text' }, routingBlockWords(codes as string[]));
+  const details = h(
+    'details',
+    { class: 'gv-details' },
+    h('summary', null, 'Details'),
+    h('p', { class: 'muted' }, decisionText(spec.question)),
+  );
+  const runOn = h(
+    'div',
+    { class: 'gv-run-on', aria: { live: 'polite' } },
+    taskId ? h('p', { class: 'muted' }, 'Looking for an agent that can take it…') : null,
+  );
+  const whyBox = h('div', { class: 'gv-routing-why', hidden: true });
+  const pinBox = h('div', { class: 'gv-pin', hidden: true });
+
+  const give = (offer: RoutingOfferView): HTMLButtonElement => {
+    const own = offer.attach_mode !== 'spawn';
+    // What happens on the click is in the label: the arming of a decision owns the button's tooltip.
+    const how = own ? ', your editor' : offer.free ? '' : ', busy now';
+    const b = decisionButton(
+      `${visible(offer.agent_key)} (${hostLabel(offer.host)}${how})`,
+      kit,
+      async (btn) => {
+        btn.disabled = true;
+        const r = await ctx.act('Give the task to an agent', () => ctx.api.assign(taskId, offer.agent_key));
+        if (!r) {
+          btn.disabled = false;
+          return;
+        }
+        if (r.mode === 'assigned') {
+          kit.done(`Given to ${visible(offer.agent_key)}: it starts now.`);
+          return;
+        }
+        // Kept for the agent: the question closes by itself when the task starts there.
+        ctx.refresh();
+        setText(
+          kit.status,
+          own
+            ? `Kept for ${visible(offer.agent_key)}: take it there, in ${hostLabel(offer.host)}, with /friday.`
+            : `Kept for ${visible(offer.agent_key)}: it starts when that agent is free.`,
+        );
+      },
+      'btn btn-primary',
+    );
+    return b;
+  };
+
+  const showOffers = (offers: RoutingOfferView[] | null): void => {
+    if (offers === null) {
+      // The answer did not come: the other ways below still work.
+      replace(runOn);
+      return;
+    }
+    const can = offers.filter((o) => !o.blocked);
+    if (!can.length) {
+      replace(
+        runOn,
+        h(
+          'p',
+          null,
+          offers.length
+            ? 'None of the connected agents can take it, whoever it is given to.'
+            : 'No agent is connected that can take work.',
+        ),
+        h(
+          'div',
+          { class: 'gv-actions' },
+          button('Start an agent', () => openModal(ctx, { kind: 'start-agent' }), { class: 'btn btn-primary' }),
+        ),
+      );
+      return;
+    }
+    const buttons = can.slice(0, 6).map(give);
+    for (const b of buttons) kit.arming().register(b);
+    replace(runOn, h('p', { class: 'field-label' }, 'Run it on'), h('div', { class: 'gv-actions' }, ...buttons));
+    kit.arming().check();
+  };
+  if (taskId) {
+    ctx.api.get<RoutingExplain>(`/routing/explain/${encodeURIComponent(taskId)}`).then(
+      (r) => showOffers(Array.isArray(r?.offers) ? r.offers : null),
+      () => showOffers(null),
+    );
+  }
+
+  const pinOpen = button(
+    'Choose a model…',
+    async () => {
+      pinBox.hidden = false;
+      replace(pinBox, h('p', { class: 'muted' }, 'Reading the models…'));
+      const r = await ctx.act('Read the models', () => ctx.api.models());
+      const models = usableModels(r?.models);
+      if (!r || !models.length) {
+        replace(
+          pinBox,
+          h(
+            'p',
+            { class: 'muted' },
+            r ? 'Friday knows no model an agent here can run.' : 'The models could not be read.',
+          ),
+        );
+        return;
+      }
+      const selectId = nextId('pin-model');
+      const select = h(
+        'select',
+        { class: 'select gv-pin-select', id: selectId },
+        ...models.map((m) => h('option', { value: m.id }, visible(modelLabel(m)))),
+      );
+      select.value = defaultModel(models);
+      const allId = nextId('pin-all');
+      const all = h('input', { type: 'checkbox', id: allId });
+      const pin = decisionButton(
+        'Use this model',
+        kit,
+        async (b) => {
+          const model = select.value;
+          if (!model) return;
+          const kind = all.checked && task?.kind ? task.kind : null;
+          b.disabled = true;
+          const ok = await ctx.act(
+            'Choose a model',
+            () =>
+              ctx.api.pin(
+                kind
+                  ? { scope: 'kind', target: kind, model, note: 'chosen for a task that had no agent' }
+                  : { scope: 'task', target: taskId, model, note: 'chosen for a task that had no agent' },
+              ),
+            kind ? `${modelName(model)} for every ${kindWord(kind)} task` : `${modelName(model)} for this task`,
+          );
+          b.disabled = false;
+          if (ok) kit.done(`${modelName(model)} is chosen; the question closes when the task starts.`);
+        },
+        'btn btn-primary',
+      );
+      kit.arming().register(pin);
+      replace(
+        pinBox,
+        h('label', { class: 'field-label', for: selectId }, 'Model'),
+        h('div', { class: 'row' }, select, pin),
+        task?.kind
+          ? h(
+              'label',
+              { class: 'check gv-pin-all', for: allId },
+              all,
+              h('span', null, `Use it for every ${kindWord(task.kind)} task, not only this one`),
+            )
+          : null,
+        h(
+          'p',
+          { class: 'muted gv-pin-home' },
+          'Only an agent that can run the model takes the work. Choices are kept in Settings → Models.',
+        ),
+      );
+      kit.arming().check();
+    },
+    { class: 'btn' },
+  );
+  const why = button(
+    'Why',
+    async () => {
+      whyBox.hidden = false;
+      replace(whyBox, h('p', { class: 'muted' }, 'Asking routing…'));
+      const r = await ctx.act('Explain routing', () =>
+        ctx.api.get<RoutingExplain>(`/routing/explain/${encodeURIComponent(taskId)}`),
+      );
+      replace(whyBox, r ? explainView(r) : h('p', { class: 'muted' }, 'Routing did not answer.'));
+    },
+    { class: 'btn btn-ghost' },
+  );
+  const cancel = cancelTaskButton(kit);
+  const blockRows = hostBlockRows(kit);
+  return {
+    body: present([
+      said,
+      ...blockRows,
+      taskId ? runOn : null,
+      taskId ? h('div', { class: 'gv-actions' }, pinOpen, why, cancel) : null,
+      pinBox,
+      whyBox,
+      details,
+    ]),
+    decisions: [cancel],
+  };
+}
+
+/** A host that is kept out (not signed in, a limit), each with the button that tries it again. */
+function hostBlockRows(kit: Kit): HTMLElement[] {
+  const { ctx } = kit;
+  return hostBlocks(ctx.store.select('board')).map((b) => {
+    const lift = button(
+      liftLabel(b),
+      async () => {
+        lift.disabled = true;
+        const done = await ctx.act(
+          b.kind === 'sign_in' ? 'Try the sign-in again' : 'Try the host again',
+          () => ctx.api.clearReadiness(b.host, b.model),
+          `${hostName(b.host)} is tried again with the next task`,
+        );
+        if (done) {
+          ctx.refresh();
+          kit.status.textContent = 'Friday offers the task again now; this question closes when it starts.';
+        } else lift.disabled = false;
+      },
+      { class: b.kind === 'sign_in' ? 'btn btn-primary' : 'btn' },
+    );
+    return h(
+      'div',
+      { class: 'gv-host-block', dataset: { host: b.host, kind: b.kind } },
+      h('p', null, blockSentence(b)),
+      h('div', { class: 'gv-actions' }, lift),
+    );
+  });
+}
+
+// ---- routing_violated
 
 interface RoutingExplain {
+  /** The connected agents the task could be given to, and whether it would start there. */
+  offers?: RoutingOfferView[];
   dry_run?: {
     blocked?: boolean;
     reason?: string;
@@ -454,7 +726,7 @@ function routingBody(kit: Kit): Built {
               h('label', { class: 'field-label', for: selectId }, 'Model'),
               h('div', { class: 'row' }, select, pin),
               // The card keeps its own Pin (review §5); the pins' home is Settings → Routing (M9k.4).
-              h('p', { class: 'muted gv-pin-home' }, 'Pins are kept in Settings → Routing.'),
+              h('p', { class: 'muted gv-pin-home' }, 'Pins are kept in Settings → Models.'),
             ]
           : h('p', { class: 'muted' }, 'Friday knows no models to pin.'),
       );
@@ -462,9 +734,13 @@ function routingBody(kit: Kit): Built {
     { class: 'btn' },
   );
   const cancel = cancelTaskButton(kit);
+  // A host that is kept out (not signed in, a limit) is often why no agent may run the task: said
+  // in plain words, with the button that tries it again (2026-11-17).
+  const blockRows = hostBlockRows(kit);
   return {
     body: present([
       ...context(spec),
+      ...blockRows,
       taskId ? h('div', { class: 'gv-actions' }, why, pinOpen, cancel) : null,
       whyBox,
       pinBox,
@@ -514,21 +790,406 @@ function cancelTaskButton(kit: Kit): HTMLButtonElement {
     async (b) => {
       if (!spec.taskId) return;
       const taskId = spec.taskId;
-      const ok = await ctx.confirm({
-        title: 'Cancel this task?',
-        body: [taskLine(ctx.store.select('board'), taskId), 'A cancelled task does not run again.'],
-        confirmLabel: 'Cancel task',
-        cancelLabel: 'Keep it',
-        danger: true,
-      });
-      if (!ok) return;
       b.disabled = true;
-      const r = await ctx.act('Cancel the task', () => ctx.api.taskAction(taskId, 'cancel'), 'Task cancelled');
+      const summary = ctx.store.select('board')?.tasks.find((t) => t.task_id === taskId)?.summary ?? null;
+      const done = await cancelTask(
+        ctx,
+        { task_id: taskId, summary },
+        { line: taskLine(ctx.store.select('board'), taskId) },
+      );
       b.disabled = false;
-      if (r) kit.done('Task cancelled');
+      if (done) kit.done('Task cancelled');
     },
     'btn btn-danger',
   );
+}
+
+// ---- folder_conflict: the person and the goal changed the same file (2026-11-17)
+
+/**
+ * A file in the project folder that the person changed themselves and that the goal's finished
+ * work changes too. Friday never writes over it, and the agent that works in that folder does not
+ * start its task until the person has chosen, per file: **Keep mine**, **Take the finished one**
+ * (their own version is saved first, and **Put mine back** restores it), or **Show both** to
+ * compare before choosing. When every file is decided the question closes by itself.
+ */
+function folderBody(kit: Kit): Built {
+  const { spec, ctx } = kit;
+  const taskId = spec.taskId ?? '';
+  const list = h('div', { class: 'gv-folder-files' }, h('p', { class: 'muted' }, 'Reading the files…'));
+  const row = (f: { path: string; mine: string | null; theirs: string | null }): HTMLElement => {
+    const state = h('span', { class: 'gv-folder-state muted', role: 'status' });
+    const both = h('div', { class: 'gv-folder-both', hidden: true });
+    const act = async (label: string, work: () => Promise<{ remaining: number }>, said: string) => {
+      for (const b of buttons) b.disabled = true;
+      const r = await ctx.act(label, work);
+      if (!r) {
+        for (const b of buttons) b.disabled = false;
+        return;
+      }
+      setText(state, said);
+      if (r.remaining === 0) kit.done('Every file is decided: the agent in your folder can take its task now');
+    };
+    const mine = button(
+      'Keep mine',
+      () => void act('Keep my version', () => ctx.api.settleFolderFile(taskId, f.path, 'mine'), 'Yours is kept.'),
+      {
+        class: 'btn',
+      },
+    );
+    const theirs = button(
+      'Take the finished one',
+      () =>
+        void act(
+          'Take the finished version',
+          () => ctx.api.settleFolderFile(taskId, f.path, 'theirs'),
+          'Replaced with the finished version. Yours is saved.',
+        ).then(() => {
+          back.hidden = false;
+        }),
+      { class: 'btn' },
+    );
+    const show = button(
+      'Show both',
+      () => {
+        both.hidden = !both.hidden;
+        setText(show, both.hidden ? 'Show both' : 'Hide');
+        if (!both.hidden && !both.childElementCount) {
+          both.append(
+            agentText('Yours', f.mine ?? '(you deleted this file)'),
+            agentText('The finished version', f.theirs ?? '(the finished work has no such file)'),
+          );
+        }
+      },
+      { class: 'btn btn-ghost' },
+    );
+    const back = button(
+      'Put mine back',
+      () => {
+        back.disabled = true;
+        void ctx
+          .act('Put my version back', () => ctx.api.restoreFolderFile(taskId, f.path), 'Your version is back')
+          .then((r) => {
+            back.disabled = false;
+            if (r) {
+              back.hidden = true;
+              setText(state, 'Yours is back in place.');
+            }
+          });
+      },
+      { class: 'btn btn-ghost', hidden: true },
+    );
+    const buttons = [mine, theirs];
+    return h(
+      'div',
+      { class: 'gv-folder-file' },
+      h('div', { class: 'gv-folder-path mono' }, truncate(cleanText(f.path), 200)),
+      h('div', { class: 'gv-actions' }, mine, theirs, show, back),
+      state,
+      both,
+    );
+  };
+
+  if (taskId) {
+    void ctx.api.folderConflict(taskId).then(
+      (r) => {
+        replace(
+          list,
+          ...(r.files.length
+            ? r.files.map(row)
+            : [
+                h(
+                  'p',
+                  { class: 'muted' },
+                  'No file is in the way any more: the agent in your folder can take its task.',
+                ),
+              ]),
+        );
+      },
+      () => {
+        replace(list, h('p', { class: 'field-error' }, 'The files could not be read. Close this and open it again.'));
+      },
+    );
+  }
+  const cancel = cancelTaskButton(kit);
+  return {
+    body: present([
+      h(
+        'p',
+        { class: 'gv-question-text' },
+        'You changed a file in your project folder that this goal’s finished work also changes. Friday did not touch yours, and the agent in your folder waits until you choose which version it works with.',
+      ),
+      list,
+      h(
+        'p',
+        { class: 'field-hint' },
+        'Taking the finished one saves yours first, so you can put it back. After you have chosen for every file, prompt the agent in your editor again.',
+      ),
+      taskId ? h('div', { class: 'gv-actions' }, cancel) : null,
+    ]),
+    decisions: [cancel],
+  };
+}
+
+// ---- check_not_run: the project's checks could not be started here (2026-11-17)
+
+/**
+ * A task "failed" because a check of the project could not even start on this computer: the
+ * program it names is not installed, or the check is misspelt. Nothing of the agent's work was
+ * judged. Before, the task went back to its agent, which cannot install a program for the person,
+ * until it read "keeps failing verification". The card says what could not start and leads to
+ * where checks are changed; once that is put right, **Send it back to the agent** has its next
+ * result checked.
+ */
+function checksBody(kit: Kit): Built {
+  const { spec, ctx } = kit;
+  const taskId = spec.taskId ?? '';
+  const rework = decisionButton('Send it back to the agent', kit, async (b) => {
+    b.disabled = true;
+    const r = await ctx.act(
+      'Send the task back',
+      () =>
+        ctx.api.taskAction(
+          taskId,
+          'rework',
+          'Sent back by a person. The project check that could not be started is put right: report the work as done again so it is checked; change nothing that was not asked for.',
+        ),
+      'Sent back to the agent',
+    );
+    b.disabled = false;
+    if (r) kit.done('Sent back to the agent');
+  });
+  const open = button(
+    [icon('gear', 14), 'Open the checks'],
+    () => openDrawer(ctx, { kind: 'settings', tab: 'checks' }),
+    { class: 'btn btn-primary' },
+  );
+  const cancel = cancelTaskButton(kit);
+  return {
+    body: present([
+      h(
+        'p',
+        { class: 'gv-question-text' },
+        'This task was not really checked: a check of this project could not be started on this computer. That is the setup, not the work of the agent.',
+      ),
+      spec.why
+        ? h('p', { class: 'gv-why' }, h('span', { class: 'gv-k' }, 'What happened: '), decisionText(spec.why))
+        : null,
+      h(
+        'p',
+        { class: 'field-hint' },
+        'Install the program the check needs, or correct the check in Settings. Then send the task back: the agent reports it again and it is checked. Friday sends nothing back on its own here: another try would end the same way.',
+      ),
+      taskId ? h('div', { class: 'gv-actions' }, open, rework, cancel) : null,
+    ]),
+    decisions: [rework, cancel],
+  };
+}
+
+// ---- install_broken: every new task folder fails its install (2026-11-18)
+
+/** What the repair goal asks for: the lockfile, and nothing else. */
+export function repairRequest(lockfile: string): string {
+  return `Repair ${lockfile} so that a clean install (npm ci) works again: bring it in step with package.json by running npm install, and change nothing else. Check with "npm ci --dry-run --ignore-scripts".`;
+}
+
+/**
+ * The project's lockfile no longer matches its `package.json`, so the install every task folder
+ * starts with fails. In the trial only the agents were told, four times in one goal; each then
+ * installed by itself. The card says it once, in a person's words, and leads with the way out:
+ * **Have an agent repair it** starts a goal for exactly that file. "Not now" is remembered for
+ * this state of the package list.
+ */
+function installBody(kit: Kit): Built {
+  const { ctx, e } = kit;
+  const d = (e.details ?? {}) as { lockfile?: unknown; missing?: unknown };
+  const lockfile = typeof d.lockfile === 'string' && d.lockfile.trim() ? d.lockfile : 'package-lock.json';
+  const missing = Array.isArray(d.missing) ? d.missing.filter((m): m is string => typeof m === 'string') : [];
+  const repair = decisionButton(
+    'Have an agent repair it',
+    kit,
+    async (b) => {
+      b.disabled = true;
+      const plan = ctx.store.select('board')?.brain?.planner_available ?? false;
+      const goal = await ctx.act('Start the repair', () =>
+        ctx.api.createGoal({
+          request: repairRequest(lockfile),
+          constraints: [],
+          outcomes: [],
+          priority: 'normal',
+          plan,
+        }),
+      );
+      if (!goal) {
+        b.disabled = false;
+        return;
+      }
+      // The goal exists whatever follows: the question is closed with what was done.
+      await ctx.act('Close the question', () =>
+        ctx.api.answer(e.escalation_id, `An agent was asked to repair it (goal ${goal.goal_id}).`),
+      );
+      ctx.refresh();
+      if (!plan && goal.goal_id) openModal(ctx, { kind: 'plan-editor', id: goal.goal_id, mode: 'first' });
+      kit.done(
+        plan
+          ? 'A goal to repair it was started: approve its plan when it is ready'
+          : 'A goal to repair it was created: write its one task in the editor',
+      );
+    },
+    'btn btn-primary',
+  );
+  const skip = decisionButton('Not now', kit, async (b) => {
+    b.disabled = true;
+    const r = await ctx.act('Close the question', () => ctx.api.answer(e.escalation_id, 'Not now.'));
+    b.disabled = false;
+    if (r) kit.done('Left as it is. Friday asks again only when the package list changes');
+  });
+  return {
+    body: present([
+      h(
+        'p',
+        { class: 'gv-question-text' },
+        `Every task starts by installing this project’s packages in a folder of its own, and that install now fails: ${truncate(cleanText(lockfile), 120)} does not match package.json.`,
+      ),
+      missing.length
+        ? h(
+            'p',
+            { class: 'gv-why' },
+            h('span', { class: 'gv-k' }, 'npm said: '),
+            decisionText(truncate(missing.join('; '), 500)),
+          )
+        : null,
+      h(
+        'p',
+        { class: 'field-hint' },
+        'Each agent then installs by itself, in its own way, which costs minutes on every task, or fails. An agent can repair the file in one small goal; nothing else is changed.',
+      ),
+      h('div', { class: 'gv-actions' }, repair, skip),
+    ]),
+    decisions: [repair, skip],
+  };
+}
+
+// ---- setup_failed: the checks failed where the install failed (2026-11-17)
+
+/** The install's command and the end of what it printed, from a question's evidence lines. */
+export function installEvidence(evidence: string[]): { command: string | null; output: string | null } {
+  const of = (prefix: string): string | null => {
+    const line = evidence.find((x) => x.startsWith(prefix));
+    return line ? line.slice(prefix.length).trim() || null : null;
+  };
+  return { command: of('install:'), output: of('install output:') };
+}
+
+/**
+ * A task failed its checks in a folder whose dependencies were never installed. That read "A task
+ * keeps failing verification" after the agent had been sent back to fail the same way; the planner
+ * now stops at the first such failure and asks. The card says so in a person's words and leads with
+ * the way out: **Install again** (after fixing what kept it from installing: the network, a
+ * registry, a lockfile), then **Send it back to the agent**, whose next result is checked in the
+ * installed folder. A failed task cannot be checked again as it stands, so there is no such button.
+ */
+function setupBody(kit: Kit): Built {
+  const { spec, ctx } = kit;
+  const taskId = spec.taskId ?? '';
+  const board = ctx.store.select('board');
+  const root = board?.runs[taskId]?.execution_root ?? null;
+  const first = installEvidence(spec.evidence);
+  const result = h('div', { class: 'gv-setup-result', role: 'status' });
+  let installed = false;
+
+  const rework = decisionButton('Send it back to the agent', kit, async (b) => {
+    b.disabled = true;
+    const reason = installed
+      ? 'The dependencies are installed in the task folder now. The earlier check most likely failed for want of them: run the checks, fix what still fails, and finish.'
+      : 'Sent back by a person. The dependencies of the task folder were not installed, so a check may fail for that reason.';
+    const r = await ctx.act(
+      'Send the task back',
+      () => ctx.api.taskAction(taskId, 'rework', reason),
+      'Sent back to the agent',
+    );
+    b.disabled = false;
+    if (r) kit.done('Sent back to the agent');
+  });
+
+  const install = decisionButton(
+    'Install again',
+    kit,
+    async (b) => {
+      b.disabled = true;
+      setText(kit.status, 'Installing… (this can take a few minutes)');
+      const r = await ctx.act('Install again', () => ctx.api.setupWorktree(taskId));
+      b.disabled = false;
+      setText(kit.status, '');
+      if (r === undefined) return;
+      const s = r.setup;
+      if (s?.status === 'passed') {
+        installed = true;
+        install.classList.remove('btn-primary');
+        rework.classList.add('btn-primary');
+        replace(
+          result,
+          h(
+            'p',
+            { class: 'gv-setup-ok' },
+            'Installed. Send the task back to its agent: its next result is checked in the installed folder.',
+          ),
+        );
+        return;
+      }
+      installed = false;
+      replace(
+        result,
+        h(
+          'p',
+          { class: 'field-error' },
+          s
+            ? `The install did not finish: ${truncate(cleanText(s.reason), 300)}.`
+            : 'Nothing was installed: this project declares no install for a task folder.',
+        ),
+        s?.output_tail ? agentText('What the install printed', s.output_tail.slice(-1500)) : null,
+      );
+    },
+    'btn btn-primary',
+  );
+
+  const open = root
+    ? button([icon('expand', 14), 'Open the folder in VS Code'], () => ctx.platform.openInEditor(root), {
+        class: 'btn btn-ghost',
+      })
+    : null;
+  const cancel = cancelTaskButton(kit);
+
+  return {
+    body: present([
+      h(
+        'p',
+        { class: 'gv-question-text' },
+        'This task failed its checks, and the dependencies of its folder were not installed. That is most likely a setup problem, not the work of the agent.',
+      ),
+      spec.why
+        ? h('p', { class: 'gv-why' }, h('span', { class: 'gv-k' }, 'The install: '), decisionText(spec.why))
+        : null,
+      h(
+        'p',
+        { class: 'field-hint' },
+        'Fix what kept it from installing (the network, a registry, a lockfile), then install again. Friday sends nothing back on its own here: another try would fail the same way.',
+      ),
+      taskId ? h('div', { class: 'gv-actions' }, install, rework, open, cancel) : null,
+      result,
+      h(
+        'details',
+        { class: 'gv-details' },
+        h('summary', null, 'Details'),
+        h('p', { class: 'muted' }, decisionText(spec.question)),
+        first.command ? agentText('The install command', first.command) : null,
+        first.output ? agentText('What the install printed', first.output) : null,
+        root ? agentText('The task folder', root) : null,
+      ),
+      cliHints(spec),
+    ]),
+    decisions: taskId ? [install, rework, cancel] : [],
+  };
 }
 
 // ---- integration_conflict, integration_failed
@@ -548,8 +1209,27 @@ function integrationBody(kit: Kit): Built {
   const goalId = spec.goalId ?? integration?.goal_id ?? null;
   const root = run?.execution_root ?? null;
 
-  const again = decisionButton('Integrate again', kit, (b) => integrate(kit, b, false), 'btn btn-primary');
-  const repair = decisionButton('Integrate my repair', kit, (b) => integrate(kit, b, true));
+  // The work was made in a copy of its own (it has a branch): its agent can finish the merge there.
+  // That is the first choice; the rest is for a person who repaired it by hand.
+  const ownCopy = Boolean(taskId && run?.branch_ref);
+  const back = decisionButton(
+    'Let the agent fix it',
+    kit,
+    async (b) => {
+      if (!taskId) return;
+      b.disabled = true;
+      const r = await ctx.act(
+        'Send it back to the agent',
+        () => ctx.api.sendBackToAgent(taskId),
+        'Sent back to its agent',
+      );
+      b.disabled = false;
+      if (r) kit.done('Sent back to its agent');
+    },
+    'btn btn-primary',
+  );
+  const again = decisionButton('Try again', kit, (b) => integrate(kit, b, false), ownCopy ? 'btn' : 'btn btn-primary');
+  const repair = decisionButton('I repaired it myself', kit, (b) => integrate(kit, b, true));
   const cancelGoal = decisionButton(
     'Cancel goal',
     kit,
@@ -603,31 +1283,46 @@ function integrationBody(kit: Kit): Built {
         : integration?.summary
           ? agentText('What failed', integration.summary)
           : null,
+      // Branches and the folder are for whoever looks for them (2026-11-23): folded, as on the
+      // install question, so the card reads as what happened and what to do.
       h(
-        'dl',
-        { class: 'gv-meta' },
+        'details',
+        { class: 'gv-details' },
+        h('summary', null, 'Details'),
         h(
-          'div',
-          { class: 'gv-meta-row' },
-          h('dt', null, 'Task branch'),
-          h('dd', { class: 'mono' }, visible(run?.branch_ref ?? '—')),
+          'dl',
+          { class: 'gv-meta' },
+          h(
+            'div',
+            { class: 'gv-meta-row' },
+            h('dt', null, 'Task branch'),
+            h('dd', { class: 'mono' }, visible(run?.branch_ref ?? '—')),
+          ),
+          h(
+            'div',
+            { class: 'gv-meta-row' },
+            h('dt', null, 'Goal branch'),
+            h('dd', { class: 'mono' }, visible(integration?.branch ?? (goalId ? `friday/goal-${goalId}` : '—'))),
+          ),
+          h(
+            'div',
+            { class: 'gv-meta-row' },
+            h('dt', null, 'Task folder'),
+            h('dd', { class: 'mono' }, visible(root ?? '—')),
+          ),
         ),
-        h(
-          'div',
-          { class: 'gv-meta-row' },
-          h('dt', null, 'Goal branch'),
-          h('dd', { class: 'mono' }, visible(integration?.branch ?? (goalId ? `friday/goal-${goalId}` : '—'))),
-        ),
-        h('div', { class: 'gv-meta-row' }, h('dt', null, 'Worktree'), h('dd', { class: 'mono' }, visible(root ?? '—'))),
       ),
       h(
         'p',
         { class: 'field-hint' },
-        'Repair the task branch in its worktree, commit, then choose Integrate my repair. Friday never merges into your own branches.',
+        ownCopy
+          ? 'Friday already sent this back to its agent and it still does not fit. The agent can try once more: it gets the other tasks’ work in its own copy, with both versions marked where they collide. Nothing is merged into your own branches.'
+          : 'This work was made in your project folder, so no agent has a copy of its own to merge it in. Repair it there, or cancel the goal. Nothing is merged into your own branches.',
       ),
       h(
         'div',
         { class: 'gv-actions' },
+        ownCopy ? back : null,
         taskId ? again : null,
         taskId ? repair : null,
         openWorktree,
@@ -635,7 +1330,7 @@ function integrationBody(kit: Kit): Built {
       ),
       cliHints(spec),
     ]),
-    decisions: [again, repair, cancelGoal],
+    decisions: ownCopy ? [back, again, repair, cancelGoal] : [again, repair, cancelGoal],
   };
 }
 
@@ -646,20 +1341,21 @@ async function integrate(kit: Kit, b: HTMLButtonElement, repaired: boolean): Pro
   b.disabled = true;
   setText(
     kit.status,
-    repaired ? 'Integrating your repair… (checks may take a while)' : 'Integrating… (checks may take a while)',
+    repaired ? 'Merging your repair… (checks may take a while)' : 'Merging… (checks may take a while)',
   );
-  const r = await ctx.act(repaired ? 'Integrate the repair' : 'Integrate again', () =>
-    ctx.api.integrate(taskId, repaired),
-  );
+  const r = await ctx.act(repaired ? 'Merge the repair' : 'Merge again', () => ctx.api.integrate(taskId, repaired));
   b.disabled = false;
   if (!r) {
     setText(kit.status, '');
     return;
   }
   const s = r.integration?.status;
-  if (s === 'integrated' || s === 'not_needed') kit.done(s === 'integrated' ? 'Integrated' : 'Nothing to integrate');
+  if (s === 'integrated' || s === 'not_needed') kit.done(wordsFor(MERGE_WORDS, s));
   else {
-    setText(kit.status, `Integration ${s ?? 'ended'}: ${cleanText(r.integration?.summary ?? 'see the task')}`);
+    setText(
+      kit.status,
+      `${wordsFor(MERGE_WORDS, s ?? 'failed')}: ${cleanText(r.integration?.summary ?? 'see the task')}`,
+    );
     ctx.refresh();
   }
 }
@@ -711,36 +1407,129 @@ function unansweredBody(kit: Kit): Built {
   };
 }
 
+// ---- planning itself failed (2026-11-17)
+
+/**
+ * The planner could not plan a goal: what happened in a person's words, then the buttons that fit.
+ * "Try again" (with an optional note) while a planner is ready, which answers the question so the
+ * daemon plans from the answer; "Write the plan myself" always; "Planner settings" where the cause
+ * is fixed there. The daemon's own sentence, with its ids, is under "Details".
+ */
+function plannerFailureBody(kit: Kit, goalId: string): Built {
+  const { spec, ctx } = kit;
+  const board = ctx.store.select('board');
+  const goal = board?.goals.find((g) => g.goal_id === goalId) ?? null;
+  const revising = !!board?.plans[goalId]?.active;
+  const ready = board?.brain?.planner_available === true;
+  const trouble = plannerTrouble(spec.kind, spec.why);
+  const decisions: HTMLButtonElement[] = [];
+  const row = h('div', { class: 'gv-actions' });
+  const body: (HTMLElement | null)[] = [
+    h(
+      'p',
+      { class: 'gv-question-text' },
+      revising ? 'Friday could not change the plan of this goal.' : 'Friday could not plan this goal.',
+    ),
+    goal ? h('p', { class: 'gv-from' }, 'Goal: ', truncate(cleanText(goal.request), 300)) : null,
+    h('p', { class: 'gv-why' }, plannerTroubleWords(trouble, spec.why)),
+  ];
+  if (ready) {
+    const noteId = nextId('plan-again-note');
+    const note = h('textarea', {
+      class: 'textarea',
+      id: noteId,
+      rows: 2,
+      maxLength: 2000,
+      placeholder: 'For example: keep it to two tasks',
+    });
+    const again = decisionButton(
+      'Try again',
+      kit,
+      async (b) => {
+        b.disabled = true;
+        setText(kit.status, 'Asking the planner again… (a model call can take a minute)');
+        // Answering settles the question, and the daemon plans from the answer (ADR-0015).
+        const r = await ctx.act('Ask the planner again', () =>
+          ctx.api.answer(kit.e.escalation_id, note.value.trim() || 'Try again.'),
+        );
+        b.disabled = false;
+        if (r) kit.done('The planner was asked again: its plan appears on the board for you to review.');
+        else setText(kit.status, '');
+      },
+      'btn btn-primary',
+    );
+    body.push(
+      h(
+        'div',
+        { class: 'field' },
+        h('label', { class: 'field-label', for: noteId }, 'Anything the planner should know (optional)'),
+        note,
+      ),
+    );
+    row.append(again);
+    decisions.push(again);
+  }
+  row.append(
+    button(
+      revising ? 'Write the change myself' : 'Write the plan myself',
+      () => openModal(ctx, { kind: 'plan-editor', id: goalId, mode: revising ? 'revision' : 'first' }),
+      { class: ready ? 'btn' : 'btn btn-primary' },
+    ),
+  );
+  if (!ready || fixedInSettings(trouble)) {
+    row.append(
+      button('Planner settings', () => openDrawer(ctx, { kind: 'settings', tab: 'planner' }), {
+        class: 'btn btn-ghost',
+      }),
+    );
+  }
+  body.push(
+    row,
+    h(
+      'details',
+      { class: 'gv-details' },
+      h('summary', null, 'Details'),
+      h('p', { class: 'muted' }, decisionText(spec.question)),
+      spec.why ? h('p', { class: 'muted' }, decisionText(spec.why)) : null,
+    ),
+  );
+  return { body: present(body), decisions };
+}
+
 // ---- the Master Brain's other kinds
 
 function brainBody(kit: Kit): Built {
   const { spec, ctx } = kit;
+  // Planning itself failed for a goal: its own card. With a task in it (a failed check nobody could
+  // re-plan), the buttons below (rework, cancel) are what applies.
+  if (spec.kind && PLANNER_FAILURES.includes(spec.kind) && spec.goalId && !spec.taskId) {
+    return plannerFailureBody(kit, spec.goalId);
+  }
   const body: (HTMLElement | null)[] = [...context(spec)];
   const decisions: HTMLButtonElement[] = [];
   const row = h('div', { class: 'gv-actions' });
 
   if (spec.actions.includes('revise-note') && spec.goalId) {
-    const goalId = spec.goalId;
     const noteId = nextId('revise-note');
     const note = h('textarea', {
       class: 'textarea',
       id: noteId,
       rows: 3,
       maxLength: 2000,
-      placeholder: 'Guidance for the Master Brain’s next revision…',
+      placeholder: 'What the next version of the plan should do differently…',
     });
     const revise = decisionButton(
       'Revise with a note',
       kit,
       async (b) => {
         b.disabled = true;
-        setText(kit.status, 'Asking the Master Brain for a revision… (a model call can take a minute)');
+        setText(kit.status, 'Asking the planner for a new version of the plan… (a model call can take a minute)');
         // Answering settles the question, and the daemon revises the goal's plan from the answer
         // (ADR-0015); a separate replan would leave the question open.
         const text = note.value.trim() || 'Revise the plan.';
         const r = await ctx.act('Revise the plan', () => ctx.api.answer(kit.e.escalation_id, text));
         b.disabled = false;
-        if (r) kit.done(`Revision requested for ${cleanText(goalId)}`);
+        if (r) kit.done('A new version of the plan was requested: it appears on the board for you to review.');
         else setText(kit.status, '');
       },
       'btn btn-primary',
@@ -815,7 +1604,7 @@ function brainBody(kit: Kit): Built {
       h(
         'div',
         { class: 'field' },
-        h('label', { class: 'field-label', for: replyId }, replyLabel('the Master Brain')),
+        h('label', { class: 'field-label', for: replyId }, replyLabel('Friday’s planner')),
         reply,
       ),
     );

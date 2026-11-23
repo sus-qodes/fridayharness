@@ -182,6 +182,31 @@ export class CodeGraph {
     return this.incoming.get(file) ?? [];
   }
 
+  /**
+   * Test files that reach the file through at most `depth` imports (2026-11-18): directly, through
+   * an index that re-exports it, through the entry of a workspace package, through a helper. A test
+   * that imports `src/index.ts`, which exports `src/money.ts`, tests `src/money.ts` too; only
+   * direct importers were counted, and a task that added such tests was warned it had none.
+   */
+  testsReaching(file: string, depth = 3): string[] {
+    const tests = new Set<string>();
+    const seen = new Set<string>([file]);
+    let layer = [file];
+    for (let step = 0; step < depth && layer.length; step += 1) {
+      const next: string[] = [];
+      for (const f of layer) {
+        for (const e of this.consumers(f)) {
+          if (seen.has(e.from)) continue;
+          seen.add(e.from);
+          if (this.nodes.get(e.from)?.test) tests.add(e.from);
+          else next.push(e.from);
+        }
+      }
+      layer = next;
+    }
+    return [...tests].sort();
+  }
+
   /** Test files that import the file directly. */
   testsOf(file: string): string[] {
     return [
@@ -283,13 +308,22 @@ async function changedSince(root: GitRoot, previous: CodeGraph, identity: Source
   return changed;
 }
 
+/**
+ * Whether a path is in one of Friday's own folders (2026-11-19): its hook launcher, its lint file.
+ * They are not the project's code, and the graph leaves them out.
+ */
+export function isFridayOwn(p: string): boolean {
+  const s = p.replaceAll('\\', '/');
+  return s.startsWith('.friday/') || s.startsWith('.agents/.friday/');
+}
+
 /** Builds the graph of an execution root as it is now (ADR-0020 §6). */
 export async function buildGraph(root: GitRoot, opts: BuildOptions = {}): Promise<CodeGraph> {
   const started = Date.now();
   const cache = opts.cache ?? memoryFactsCache();
   const maxBytes = opts.maxFileBytes ?? 1024 * 1024;
   const identity = opts.identity ?? (await root.identity());
-  const listed = opts.files ? [...opts.files] : await root.files();
+  const listed = (opts.files ? [...opts.files] : await root.files()).filter((f) => !isFridayOwn(f));
   const files = new Set(listed);
   const sameLimit = opts.previous && opts.previous.maxFileBytes === maxBytes;
   const byGit = sameLimit ? await changedSince(root, opts.previous as CodeGraph, identity) : null;

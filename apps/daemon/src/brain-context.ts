@@ -75,6 +75,15 @@ function doc(root: string, rel: string, stateDir: string | undefined): { text: s
   }
 }
 
+/**
+ * The files a project keeps its rules for coding agents in, each read when it is there
+ * (2026-11-23). Only `CLAUDE.md` was read: a project worked on with Codex or Antigravity keeps its
+ * rules in `AGENTS.md` (Gemini CLI in `GEMINI.md`), and its plans were written without them.
+ */
+export const AGENT_RULES: readonly string[] = ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md'];
+/** What `friday harness config` writes into such a file, between its markers. */
+const FRIDAY_BLOCK = /\n?<!-- friday:begin -->[\s\S]*?<!-- friday:end -->\n?/g;
+
 export interface BrainContextOptions {
   /** Masks known credentials and the daemon's own tokens in everything sent out (review F03). */
   redactor: Redactor;
@@ -120,11 +129,14 @@ export async function buildBrainContext(
     'docs/DECISIONS.md',
     'ARCHITECTURE.md',
     'docs/ARCHITECTURE.md',
-    'CLAUDE.md',
+    ...AGENT_RULES,
   ]) {
     const { text, source } = doc(root, rel, opts.stateDir);
     if (source.reason !== 'absent') sources.push(source);
-    if (text) parts.push(`## ${rel}\n${text}`);
+    // The block Friday itself wrote into an agents' rules file is its guidance for an agent at
+    // work, not the project's rules: it is left out. A file that held nothing else is not sent.
+    const own = text && AGENT_RULES.includes(rel) ? text.replace(FRIDAY_BLOCK, '\n').trim() : text;
+    if (own) parts.push(`## ${rel}\n${own}`);
   }
 
   const scopes = Object.entries(cfg.scopes);

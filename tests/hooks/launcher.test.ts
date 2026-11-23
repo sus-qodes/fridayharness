@@ -27,6 +27,7 @@ import { REPO_ROOT } from '../helpers/cli.js';
 import { initTestProject, startTestDaemon, type TestDaemon } from '../helpers/daemon.js';
 import { bundleLauncher, decisionOf, runLauncher, toolHook } from '../helpers/hooks.js';
 import { startMcp } from '../helpers/mcp-rig.js';
+import { hostFixture, hostProjectEnv, runHost } from './host-rig.js';
 
 const ws = useTestWorkspace();
 let bundleDir = '';
@@ -366,6 +367,35 @@ describe('hook launcher with a daemon', () => {
     const stdout = (post.body.hook as { tool_response: { stdout: string } }).tool_response.stdout;
     expect(stdout.length).toBeLessThan(2100);
     expect(stdout).toContain('[truncated');
+  });
+
+  it('sends a host’s own name when this machine has one for it, and the shared key otherwise', async () => {
+    initTestProject(ws());
+    const w = ws();
+    const fake = await fakeDaemon(w, () => ({ status: 200, json: { ok: true, hook_output: null } }));
+    writePrivateFile(
+      fake.priv,
+      'agent.json',
+      JSON.stringify({ agent_key: 'dev-7', hosts: { antigravity: 'antigravity-1' } }),
+    );
+    // Antigravity's hooks run from its own copy of the launcher, named with its vendor.
+    const dir = path.join(w.projectDir, '.friday', 'harness', 'antigravity');
+    mkdirSync(dir, { recursive: true });
+    copyFileSync(bundle, path.join(dir, 'hook.mjs'));
+    const fx = hostFixture('antigravity', 'PreToolUse.run_command', w.projectDir);
+    const env = { ...hostProjectEnv('antigravity', w.projectDir), FRIDAY_STATE_DIR: w.stateDir };
+    await runHost(path.join(dir, 'hook.mjs'), ['antigravity', fx.event], fx.input, env);
+    await launch(w, 'PreToolUse', pre(w, 'Bash', { command: 'node --test' }));
+    await runHost(path.join(dir, 'hook.mjs'), ['antigravity', fx.event], fx.input, { ...env, FRIDAY_AGENT: 'dev-9' });
+    // The same file, without a name for Antigravity: the one key, as before the names were apart.
+    writePrivateFile(fake.priv, 'agent.json', JSON.stringify({ agent_key: 'dev-7', hosts: { antigravity: 5 } }));
+    await runHost(path.join(dir, 'hook.mjs'), ['antigravity', fx.event], fx.input, env);
+    expect(fake.seen.map((s) => [s.url.split('/hooks/')[1]?.split('/')[0], s.body.agent_key])).toEqual([
+      ['antigravity', 'antigravity-1'],
+      ['claude-code', 'dev-7'],
+      ['antigravity', 'dev-9'],
+      ['antigravity', 'dev-7'],
+    ]);
   });
 
   it('applies the failure rules when the daemon errors, and within its time budget when it hangs', async () => {

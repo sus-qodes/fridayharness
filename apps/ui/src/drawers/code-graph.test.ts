@@ -102,10 +102,10 @@ describe('runningScopes', () => {
 });
 
 describe('the code graph drawer', () => {
-  it("says it is the main checkout's graph and draws the neighbourhood as SVG", async () => {
+  it('says it is the graph of the project folder and draws the neighbourhood as SVG', async () => {
     const { ctx, drawer } = setup();
     await settle();
-    expect(drawer.el.textContent).toContain("main checkout's code graph (TS/JS files)");
+    expect(drawer.el.textContent).toContain('the code graph of your project folder (TS/JS files)');
     const first = ctx.transport.to('GET', '/graph/query')[0];
     expect(params(first).get('path')).toBe(CENTER);
     expect(params(first).get('depth')).toBe('2');
@@ -150,7 +150,7 @@ describe('the code graph drawer', () => {
     expect(panel?.textContent).toContain('backend/src/checkout.ts');
     expect(panel?.textContent).toContain('Imports (1)');
     expect(panel?.textContent).toContain('Imported by (1)');
-    expect(panel?.textContent).toContain('In the write scope of');
+    expect(panel?.textContent).toContain('A file these tasks may change');
     expect(panel?.textContent).toContain(`Checkout ${IMG}`);
     expect(drawer.el.querySelector('img')).toBeNull();
     buttonNamed(drawer.el, 'Open in VS Code')?.click();
@@ -210,7 +210,11 @@ describe('the code graph drawer', () => {
     input.value = 'missing.ts';
     drawer.el.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await settle();
-    expect(drawer.el.querySelector('.dr-error')?.textContent).toContain('missing.ts is not in the code graph');
+    // Not an error (2026-11-18): the file is not in the project folder's graph, and that is said.
+    expect(drawer.el.querySelector('.dr-error')).toBeNull();
+    expect(drawer.el.textContent).toContain('Nothing to show for missing.ts yet');
+    expect(drawer.el.textContent).toContain('appears once the goal is landed');
+    expect(drawer.el.textContent).not.toContain('COS-');
     buttonNamed(drawer.el, 'Show')?.click();
     input.value = `.\\shared\\src\\api.ts`;
     drawer.el.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));

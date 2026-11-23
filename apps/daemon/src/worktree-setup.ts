@@ -138,10 +138,17 @@ export function planSetup(
     declared: { command: string; args: string[] } | null;
     held: { source: string; reason: string } | null;
     allowScripts: boolean;
+    /**
+     * A person asked for the install (2026-11-17): it runs though `node_modules` is there, since
+     * that folder may be what a failed install left half done.
+     */
+    again?: boolean;
   },
 ): SetupDecision {
   if (!opts.enabled) return { skipped: 'worktrees.setup.enabled is false' };
-  if (existsSync(path.join(root, 'node_modules'))) return { skipped: 'node_modules is already there' };
+  if (!opts.again && existsSync(path.join(root, 'node_modules'))) {
+    return { skipped: 'node_modules is already there' };
+  }
   if (opts.declared) {
     return {
       source: 'config',
@@ -192,7 +199,11 @@ export interface WorktreeSetupDeps {
 export class WorktreeSetup {
   constructor(private readonly deps: WorktreeSetupDeps) {}
 
-  async run(worktree: { path: string }, ids: { task_id: string; run_id: string }): Promise<SetupOutcome> {
+  async run(
+    worktree: { path: string },
+    ids: { task_id: string; run_id: string },
+    opts: { again?: boolean } = {},
+  ): Promise<SetupOutcome> {
     const { logger } = this.deps;
     const policy = this.deps.policy();
     const settings = this.deps.settings();
@@ -203,6 +214,7 @@ export class WorktreeSetup {
         : null,
       held: policy.worktree_setup_held,
       allowScripts: policy.worktree_scripts,
+      ...(opts.again ? { again: true } : {}),
     });
     const none = {
       source: null,
@@ -229,7 +241,9 @@ export class WorktreeSetup {
     const key = install
       ? await dependencyCacheKey(worktree.path, install.manager, install.lockfile, install.scripts)
       : null;
-    if (cache && key && (await cache.lookup(key))) {
+    // An install a person asked for runs for real: a tree cloned over a half-installed one is not
+    // known to be whole, and the package manager is what puts such a folder right.
+    if (cache && key && !opts.again && (await cache.lookup(key))) {
       try {
         const stats = await cache.restore(key, worktree.path);
         logger.info('task worktree dependencies restored from the cache', { ...ids, key, ...stats });

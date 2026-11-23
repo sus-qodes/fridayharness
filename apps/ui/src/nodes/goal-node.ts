@@ -9,11 +9,13 @@
  * the goal detail's `summary` and refreshed when the goal's tasks change; the full set, one row per
  * fact, is the line's tooltip and the landing dialog's "What Friday did".
  */
-import type { GoalSummary, UiSnapshot } from '@friday/protocol';
+import type { AnswerView, GoalSummary, UiSnapshot } from '@friday/protocol';
 import type { GoalGroup } from '../model/board.js';
+import { GOAL_WORDS, wordsFor } from '../model/status.js';
+import { type StoryLine, storyOfGoal } from '../model/story.js';
 import { type AppContext, openModal } from '../shell/context.js';
 import { button, h, replace, setVar, toggleClass } from '../ui/dom.js';
-import { cleanText, compact, plural, shortId, truncate, usd } from '../ui/format.js';
+import { cleanText, compact, plural, truncate, usd } from '../ui/format.js';
 import { actionButton, badge, fingerprint, type NodeView, nodeIcon, pill, type Tone } from './common.js';
 
 export interface GoalCardModel {
@@ -22,14 +24,52 @@ export interface GoalCardModel {
 
 const GOAL_TONE: Record<string, Tone> = { OPEN: 'info', ACTIVE: 'good', COMPLETED: 'good', CANCELLED: 'muted' };
 
+/** Where a question's answer stands, as the badge on its card. */
+function answerBadge(a: AnswerView | null): HTMLElement {
+  const who = a?.agent_key ? truncate(cleanText(a.agent_key), 30) : 'An agent';
+  if (!a || a.state === 'waiting')
+    return badge('Waiting for an agent', 'muted', 'It starts as soon as an agent is free');
+  if (a.state === 'answering')
+    return badge(`${who} is answering`, 'info', 'Reading the project and writing the answer');
+  if (a.state === 'ready')
+    return badge(a.read ? 'Answered' : 'Answer ready', 'good', `${who} answered. Nothing was changed.`);
+  if (a.state === 'failed') return badge('No answer', 'warn', `${who} ended without an answer`);
+  return badge('Cancelled', 'muted');
+}
+
+/** What each kind of line is called, for whoever does not see its mark. */
+const STORY_WORD: Record<StoryLine['tone'], string> = {
+  you: 'Needs you',
+  work: 'At work',
+  wait: 'Waiting',
+  done: 'Finished',
+};
+
+/** The goal's story: one line per task, what needs the person first. */
+function storyList(lines: readonly StoryLine[]): HTMLElement {
+  return h(
+    'ul',
+    { class: 'nd-story', aria: { label: 'Who is doing what' } },
+    lines.map((l) =>
+      h(
+        'li',
+        { class: ['nd-story-line', `nd-story-${l.tone}`], title: `${STORY_WORD[l.tone]}: ${l.text}` },
+        h('span', { class: 'nd-story-mark', aria: { hidden: 'true' } }),
+        h('span', { class: 'visually-hidden' }, `${STORY_WORD[l.tone]}: `),
+        h('span', { class: 'nd-story-text' }, l.text),
+      ),
+    ),
+  );
+}
+
 /** "1 claim" / "3 claims". */
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** "2 of 2 attempts". */
-const attemptsOf = (n: number, h: GoalSummary['hosts']) => `(${n} of ${count(h.attempts, 'attempt')})`;
+/** "from 2 of 2 tries": how many of the goal's agent runs the figures come from. */
+const attemptsOf = (n: number, h: GoalSummary['hosts']) => `(from ${n} of ${count(h.attempts, 'try', 'tries')})`;
 
 /**
- * "184k tokens, $0.42 (2 of 2 attempts)": what the hosts reported, as they reported it, with how
+ * "184k tokens, $0.42 (from 2 of 2 tries)": what the agents reported, as they reported it, with how
  * many of the goal's attempts the figures come from; the cost gets its own count when fewer hosts
  * named one. Null when no host reported anything.
  */
@@ -50,33 +90,32 @@ export function hostsWords(h: GoalSummary['hosts']): string | null {
 const followed = (n: number, of: number, word: string) => (n === 0 ? '' : n === of ? `, ${word}` : `, ${n} ${word}`);
 
 /**
- * The card's one line: the facts with something to say, in the words of plan M12.7 ("3 of 3 tasks
- * verified · 1 claim refused by the checks, reworked · 2 actions held for you · 1 session recovered
- * · hosts reported 184k tokens, $0.42 (2 of 2 attempts)"). A count of zero is left out of the line;
- * a figure nobody reported is never written as 0. Null while the goal has no work on record.
+ * The card's one line: the facts with something to say (plan M12.7), in a person's words since
+ * 2026-11-18 ("3 of 3 tasks passed their checks · 1 sent back by the checks, redone · you were
+ * asked 2 times · 1 agent stopped midway, picked up again · agents used 184k tokens, $0.42 (from 2
+ * of 2 tries)"). A count of zero is left out of the line; a figure nobody reported is never
+ * written as 0. Null while the goal has no work on record.
  */
 export function goalSummaryLine(s: GoalSummary): string | null {
   if (s.tasks.total === 0 && s.hosts.attempts === 0 && s.planning.calls === 0) return null;
   const parts: string[] = [];
-  if (s.tasks.total > 0) parts.push(`${s.tasks.verified} of ${plural(s.tasks.total, 'task')} verified`);
+  if (s.tasks.total > 0) parts.push(`${s.tasks.verified} of ${plural(s.tasks.total, 'task')} passed their checks`);
   if (s.claims_refused > 0) {
-    parts.push(
-      `${count(s.claims_refused, 'claim')} refused by the checks${followed(s.reworked, s.claims_refused, 'reworked')}`,
-    );
+    parts.push(`${s.claims_refused} sent back by the checks${followed(s.reworked, s.claims_refused, 'redone')}`);
   }
-  if (s.held_for_human > 0) parts.push(`${count(s.held_for_human, 'action')} held for you`);
-  if (s.refused_by_policy > 0) parts.push(`${count(s.refused_by_policy, 'action')} refused by policy`);
+  if (s.held_for_human > 0) parts.push(`you were asked ${count(s.held_for_human, 'time')}`);
+  if (s.refused_by_policy > 0) parts.push(`Friday stopped ${count(s.refused_by_policy, 'action')}`);
   if (s.sessions_lost > 0) {
     parts.push(
       s.sessions_recovered === s.sessions_lost
-        ? `${count(s.sessions_recovered, 'session')} recovered`
+        ? `${count(s.sessions_lost, 'agent')} stopped midway, picked up again`
         : s.sessions_recovered === 0
-          ? `${count(s.sessions_lost, 'session')} lost`
-          : `${s.sessions_recovered} of ${s.sessions_lost} sessions recovered`,
+          ? `${count(s.sessions_lost, 'agent')} stopped midway`
+          : `${s.sessions_lost} agents stopped midway, ${s.sessions_recovered} picked up again`,
     );
   }
   const hosts = hostsWords(s.hosts);
-  if (hosts) parts.push(`hosts reported ${hosts}`);
+  if (hosts) parts.push(`agents used ${hosts}`);
   if (s.planning.calls > 0) {
     parts.push(
       `Friday planned in ${count(s.planning.calls, 'call')}${s.planning.cost_usd === null ? '' : `, ${usd(s.planning.cost_usd)}`}`,
@@ -95,24 +134,30 @@ export function goalSummaryRows(s: GoalSummary): { label: string; value: string 
   if (s.tasks.total === 0 && s.hosts.attempts === 0 && s.planning.calls === 0) return [];
   const none = (n: number, words: string) => (n === 0 ? 'none' : words);
   const rows = [
-    { label: 'Tasks verified', value: `${s.tasks.verified} of ${s.tasks.total}` },
+    { label: 'Tasks that passed their checks', value: `${s.tasks.verified} of ${s.tasks.total}` },
     {
-      label: 'Claims refused by the checks',
-      value: none(s.claims_refused, `${s.claims_refused}${followed(s.reworked, s.claims_refused, 'reworked')}`),
+      label: 'Work the checks sent back',
+      value: none(s.claims_refused, `${s.claims_refused}${followed(s.reworked, s.claims_refused, 'redone')}`),
     },
-    { label: 'Actions held for you', value: none(s.held_for_human, String(s.held_for_human)) },
-    { label: 'Actions refused by policy', value: none(s.refused_by_policy, String(s.refused_by_policy)) },
+    { label: 'Times an agent asked you', value: none(s.held_for_human, String(s.held_for_human)) },
+    { label: 'Actions Friday stopped', value: none(s.refused_by_policy, String(s.refused_by_policy)) },
     {
-      label: 'Sessions lost',
-      value: none(s.sessions_lost, `${s.sessions_lost}${followed(s.sessions_recovered, s.sessions_lost, 'recovered')}`),
+      label: 'Agents that stopped midway',
+      value: none(
+        s.sessions_lost,
+        `${s.sessions_lost}${followed(s.sessions_recovered, s.sessions_lost, 'picked up again')}`,
+      ),
     },
   ];
   if (s.hosts.attempts > 0) {
-    rows.push({ label: 'Hosts reported', value: hostsWords(s.hosts) ?? `nothing ${attemptsOf(0, s.hosts)}` });
+    rows.push({
+      label: 'What the agents used',
+      value: hostsWords(s.hosts) ?? `not reported ${attemptsOf(0, s.hosts)}`,
+    });
   }
   if (s.planning.calls > 0) {
     rows.push({
-      label: "Friday's planning",
+      label: 'Planning',
       value: `${count(s.planning.calls, 'call')}${s.planning.cost_usd === null ? '' : `, ${usd(s.planning.cost_usd)}`}`,
     });
   }
@@ -124,13 +169,13 @@ export function progressPercent(p: { completed: number; total: number }): number
   return p.total > 0 ? Math.round((p.completed / p.total) * 100) : 0;
 }
 
-/** "2 integrated · 1 conflicted", or null when nothing was integrated yet. */
+/** "2 merged · 1 clashes", or null when nothing was merged into the goal yet. */
 export function integrationText(i: GoalGroup['integration']): string | null {
   const parts: string[] = [];
-  if (i.integrated) parts.push(`${i.integrated} integrated`);
-  if (i.conflicted) parts.push(`${i.conflicted} conflicted`);
-  if (i.failed) parts.push(`${i.failed} failed`);
-  if (i.not_needed) parts.push(`${i.not_needed} not needed`);
+  if (i.integrated) parts.push(`${i.integrated} merged`);
+  if (i.conflicted) parts.push(`${i.conflicted} ${i.conflicted === 1 ? 'clashes' : 'clash'} with other work`);
+  if (i.failed) parts.push(`${i.failed} could not merge`);
+  if (i.not_needed) parts.push(`${i.not_needed} had nothing to merge`);
   return parts.length ? parts.join(' · ') : null;
 }
 
@@ -191,19 +236,75 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
     })();
   }
   const land = () => openModal(ctx, { kind: 'land', id: model.group.goal.goal_id });
+  /** A question's answer (a goal of mode `ask`): where it is read. */
+  const readAnswer = () => openModal(ctx, { kind: 'answer', id: model.group.goal.goal_id });
+  /**
+   * A completed goal's last step, from the board's `goal_landing`: landed already (it says into
+   * which branch), work that was made in the project folder itself (nothing to land: review and
+   * commit), or ready to land. Each opens the same dialog, which says what there is to do.
+   */
+  function landButton(goalId: string): HTMLElement {
+    const landing = ctx.store.select('board')?.goal_landing?.[goalId];
+    if (landing?.landed) {
+      return button([nodeIcon('check', 13), `Landed into ${truncate(cleanText(landing.landed.into), 40)}`], land, {
+        class: 'btn nd-land nd-landed',
+        title: 'This goal was landed; open it to see what it brought',
+        dataset: { action: 'land', landing: 'landed' },
+      });
+    }
+    if (landing?.work === 'folder') {
+      return button([nodeIcon('check', 13), 'Review and commit'], land, {
+        class: 'btn btn-primary nd-land',
+        title: 'This goal’s work is already in your project folder: review the changes and commit them',
+        dataset: { action: 'land', landing: 'folder' },
+      });
+    }
+    return button([nodeIcon('check', 13), 'Ready to land'], land, {
+      class: 'btn btn-primary nd-land',
+      title: `Land friday/goal-${goalId}`,
+      dataset: { action: 'land' },
+    });
+  }
+  /**
+   * Cancels a goal that is open or running (2026-11-17): before, only an integration conflict's
+   * card offered it, so a goal nobody wanted any more stayed on the board for good. The desktop
+   * asks in its own dialog (`confirm_and_send`); a browser asks here.
+   */
+  const cancelGoal = async () => {
+    const goalId = model.group.goal.goal_id;
+    if (!ctx.platform.desktop) {
+      const ok = await ctx.confirm({
+        title: 'Cancel this goal?',
+        body: [
+          'Every task of the goal that is not finished is cancelled, and agents working on them are stopped.',
+          'The work already done is kept: the goal branch and its commits stay, and nothing is merged into your branches.',
+        ],
+        confirmLabel: 'Cancel goal',
+        cancelLabel: 'Keep it',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    const r = await ctx.act(
+      'Cancel the goal',
+      () => ctx.api.cancelGoal(goalId, 'cancelled from the board'),
+      'Goal cancelled',
+    );
+    if (r) ctx.refresh();
+  };
   const writePlan = () => openModal(ctx, { kind: 'plan-editor', id: model.group.goal.goal_id, mode: 'first' });
   const brainPlan = async () => {
     const goalId = model.group.goal.goal_id;
-    const r = await ctx.act('Let the Master Brain plan', () => ctx.api.replan(goalId));
+    const r = await ctx.act('Let Friday plan', () => ctx.api.replan(goalId));
     if (!r) return;
     ctx.refresh();
     const result = typeof r.result === 'string' ? r.result : '';
     if (result.startsWith('proposed'))
-      ctx.toast({ kind: 'success', text: 'The Master Brain proposed a plan: review it on the board' });
+      ctx.toast({ kind: 'success', text: 'Friday proposed a plan: review it on the board' });
     else
       ctx.toast({
         kind: 'warn',
-        text: 'The Master Brain proposed no plan',
+        text: 'Friday proposed no plan',
         ...(result ? { detail: truncate(cleanText(result), 300) } : {}),
       });
   };
@@ -218,7 +319,8 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
         keydown: (e) => {
           if (e.target === el && e.key === 'Enter' && model.group.goal.status === 'COMPLETED') {
             e.preventDefault();
-            land();
+            if (model.group.goal.mode === 'ask') readAnswer();
+            else land();
           }
         },
       },
@@ -238,8 +340,18 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
       loadSummary(fingerprint([goal.status, goal.updated_at, g.progress, tasks.map((t) => [t.status, t.updated_at])]));
     }
     const need = planNeed(g, board);
+    // A question (2026-11-18): the card says where its answer stands, and has nothing to plan or land.
+    const asked = goal.mode === 'ask';
+    const answer = asked ? (board?.answers?.[goal.goal_id] ?? null) : null;
+    // Who finished, who is working on what, what waits and why (2026-11-18).
+    const story = storyOfGoal(board, goal.goal_id);
     const print = fingerprint([
       goal,
+      story,
+      board?.goal_landing?.[goal.goal_id] ?? null,
+      answer?.state,
+      answer?.read,
+      answer?.agent_key,
       g.progress,
       g.integration,
       g.active?.version,
@@ -266,10 +378,11 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
       h(
         'div',
         { class: 'nd-head', dataset: { dragHandle: '' } },
+        // The id is for whoever looks for it: the tooltip of "Goal".
         nodeIcon('target', 14),
-        h('span', { class: 'nd-id mono', title: goal.goal_id }, shortId(goal.goal_id)),
+        h('span', { class: 'nd-id', title: `Goal ${goal.goal_id}` }, asked ? 'Question' : 'Goal'),
         h('span', { class: 'spacer' }),
-        badge(goal.status, GOAL_TONE[goal.status] ?? 'muted'),
+        badge(wordsFor(GOAL_WORDS, goal.status), GOAL_TONE[goal.status] ?? 'muted'),
       ),
       h(
         'p',
@@ -310,6 +423,17 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
           `${pct}% (${g.progress.completed} of ${plural(g.progress.total, 'task')})`,
         ),
       ),
+      // While the plan is written, the card says so in its body (2026-11-23): a small badge at its
+      // foot was all there was, and for 10 to 30 seconds nothing seemed to happen.
+      need?.planning
+        ? h(
+            'p',
+            { class: 'nd-planning', role: 'status' },
+            h('span', { class: 'nd-planning-dot', aria: { hidden: 'true' } }),
+            'Friday is writing the plan. It usually takes 10 to 30 seconds; you review it before anything starts.',
+          )
+        : null,
+      story.length ? storyList(story) : null,
       did,
     );
     renderDid();
@@ -317,13 +441,17 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
     const integration = integrationText(g.integration);
     replace(
       foot,
-      g.active
-        ? badge(`Plan v${g.active.version}`, 'muted', truncate(cleanText(g.active.summary), 300))
-        : need?.planning
-          ? badge('Master Brain planning', 'info', 'The Master Brain is writing a plan for this goal')
-          : need
-            ? null
-            : badge('No plan yet', 'muted'),
+      asked
+        ? answerBadge(answer)
+        : goal.mode === 'do' && g.active
+          ? badge('One task, no plan', 'muted', 'Started at once from what you typed: nobody planned it')
+          : g.active
+            ? badge(`Plan v${g.active.version}`, 'muted', truncate(cleanText(g.active.summary), 300))
+            : need?.planning
+              ? badge('Friday is planning', 'info', 'Friday is writing a plan for this goal')
+              : need
+                ? null
+                : badge('No plan yet', 'muted'),
       g.proposed ? badge(`v${g.proposed.version} proposed`, 'warn', 'A plan version waits for your review') : null,
       integration
         ? h(
@@ -336,6 +464,27 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
           )
         : null,
       h('span', { class: 'spacer' }),
+      // A goal whose plan runs can be changed (2026-11-17): the planner is asked from a note, or
+      // the change is written in the editor; before, nothing on the card led to either.
+      goal.status === 'ACTIVE' && g.active && !asked
+        ? button('Change…', () => openModal(ctx, { kind: 'change-goal', id: goal.goal_id }), {
+            class: 'btn btn-ghost nd-change-goal',
+            title:
+              'Change this goal: add, drop or redo tasks in a new version of the plan, reviewed before anything starts',
+            ariaLabel: 'Change this goal',
+            dataset: { action: 'change-goal' },
+          })
+        : null,
+      // A small button with its words in the tooltip (2026-11-18): beside "Write the plan" and "Let
+      // Friday plan" its words pushed them out of the card's right edge.
+      goal.status === 'OPEN' || goal.status === 'ACTIVE'
+        ? button(nodeIcon('close', 13), () => void cancelGoal(), {
+            class: 'btn btn-ghost btn-icon nd-cancel-goal',
+            title: 'Cancel this goal: its unfinished tasks are cancelled, the work already done is kept',
+            ariaLabel: 'Cancel this goal',
+            dataset: { action: 'cancel-goal' },
+          })
+        : null,
       need
         ? actionButton('Write the plan', 'goal', writePlan, {
             cls: 'nd-act-primary',
@@ -344,19 +493,25 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
           })
         : null,
       need?.brain
-        ? actionButton('Let the Master Brain plan', 'bolt', brainPlan, {
+        ? actionButton('Let Friday plan', 'bolt', brainPlan, {
             action: 'brain-plan',
             busyLabel: 'Planning…',
-            title: 'Ask the Master Brain for a plan; you review it before anything starts',
+            title: 'Ask Friday for a plan; you review it before anything starts',
           })
         : null,
-      goal.status === 'COMPLETED'
-        ? button([nodeIcon('check', 13), 'Ready to land'], land, {
-            class: 'btn btn-primary nd-land',
-            title: `Land friday/goal-${goal.goal_id}`,
-            dataset: { action: 'land' },
-          })
+      asked && answer && (answer.state === 'ready' || answer.state === 'failed')
+        ? button(
+            [nodeIcon('check', 13), answer.state === 'ready' ? 'Read the answer' : 'See what happened'],
+            readAnswer,
+            {
+              class: ['btn', answer.state === 'ready' && !answer.read ? 'btn-primary' : null, 'nd-land'],
+              title:
+                answer.state === 'ready' ? 'Open the answer to this question' : 'The attempt ended without an answer',
+              dataset: { action: 'answer' },
+            },
+          )
         : null,
+      goal.status === 'COMPLETED' && !asked ? landButton(goal.goal_id) : null,
     );
     el.dataset.status = goal.status;
     el.setAttribute('aria-label', `Goal ${goal.status.toLowerCase()}: ${truncate(cleanText(text), 120)}`);

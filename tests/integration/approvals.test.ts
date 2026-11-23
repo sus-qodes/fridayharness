@@ -106,6 +106,15 @@ describe('capability requests and approvals', () => {
     expect(await pre('Edit', { file_path: outside, old_string: 'a', new_string: 'b' })).toBe('allow');
     expect(await pre('Edit', { file_path: outside, old_string: 'b', new_string: 'c' })).toBe('allow');
     expect(approval(td, doc.approval_id as string)).toMatchObject({ status: 'granted', reuse: 'task', uses: 2 });
+    // What was allowed for a task and still holds is listed by task, for the inspector's "Take
+    // back" (2026-11-17); the push above was for once and is used, so it is not among it.
+    type Listed = { approvals: { approval_id: string; status: string; reuse: string; task_id: string | null }[] };
+    const forTask = await td.operator.get<Listed>(td.operator.projectPath(`/tasks/${task.task_id}/approvals`));
+    expect(forTask.approvals.map((a) => [a.approval_id, a.reuse])).toEqual([[doc.approval_id, 'task']]);
+    expect((await td.operator.get<Listed>(td.operator.projectPath('/tasks/task_none/approvals'))).approvals).toEqual(
+      [],
+    );
+    await expect(td.bootstrap.get(td.bootstrap.projectPath(`/tasks/${task.task_id}/approvals`))).rejects.toThrow();
     expect((await cli(['--project', dir, 'approvals', 'revoke', doc.approval_id as string])).code).toBe(0);
     expect(await pre('Edit', { file_path: outside, old_string: 'c', new_string: 'd' })).toBe('deny');
 

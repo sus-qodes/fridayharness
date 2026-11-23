@@ -20,14 +20,14 @@ let dialogs = 0;
 export const HALT_DOES = [
   'Pauses Friday: nothing new is assigned, delivered or started, and every change an agent tries is refused until you resume.',
   "Preserves each running attempt's work under refs/friday/preserved/… before it stops the attempt.",
-  'Releases each of those tasks to READY, so it starts again after you resume, in the same worktree.',
+  'Puts each of those tasks back to Ready, so it starts again after you resume, in the same folder.',
   'Sends the stop to the agents Friday started; each stops when its adapter takes the stop.',
   'Stops running operations.',
 ];
 
 export const HALT_DOES_NOT = [
-  'Stop sessions attached in an editor (Claude Code in VS Code): they keep running, but cannot change anything while Friday is paused.',
-  'Cancel any task, remove any worktree, or interrupt a verification.',
+  'Stop agents connected from an editor (Claude Code in VS Code): they keep running, but cannot change anything while Friday is paused.',
+  'Cancel any task, remove any task folder, or interrupt a verification.',
 ];
 
 /** How one stopped attempt is described. */
@@ -40,7 +40,7 @@ export function stopLabel(t: Pick<ControlTaskStop, 'host' | 'stop'>): string {
 
 export const HOST_LABEL: Record<ControlTaskStop['host'], string> = {
   spawned: 'Agents Friday started',
-  attached: 'Sessions attached in an editor',
+  attached: 'Agents connected from an editor',
   none: 'Without an agent',
 };
 
@@ -67,7 +67,7 @@ export function haltSummary(result: ControlResult, board: UiSnapshot | null): Ha
   const groups = [...byKey.values()].sort((a, b) => order.indexOf(a.host) - order.indexOf(b.host));
   const summaries = new Map((board?.tasks ?? []).map((t) => [t.task_id, t.summary]));
   const notes: string[] = [];
-  if (tasks.length > 0) notes.push('Every task keeps its worktree; resume Friday to start them again.');
+  if (tasks.length > 0) notes.push('Every task keeps its folder; resume Friday to start them again.');
   if (tasks.some((t) => t.host === 'attached') || attachedSessions(board) > 0) notes.push(ATTACHED_NOTE);
   return {
     heading: result.control?.paused

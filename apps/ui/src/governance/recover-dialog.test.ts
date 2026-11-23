@@ -106,6 +106,55 @@ describe('recovery dialog', () => {
     d.destroy();
   });
 
+  it('says the task’s state and its agent’s as the board does, not as constants (2026-11-17)', async () => {
+    const d = await open({
+      [`GET /tasks/${TASK}/recovery`]: {
+        assessment: assessment({ task_status: 'WAITING', waiting_reason: 'agent_error' }),
+      },
+    });
+    const rows = [...d.el.querySelectorAll('.gv-meta-row')].map((r) => r.textContent);
+    expect(rows[0]).toBe('StatusWaiting (the agent hit an error)');
+    expect(rows.find((r) => r?.startsWith('Session'))).toContain('claude-1 · disconnected');
+    expect(d.el.querySelector('.gv-meta-row dd')?.getAttribute('title')).toBe('WAITING (agent_error)');
+    d.destroy();
+  });
+
+  it('makes a deleted task folder again from the task’s branch, and assesses again', async () => {
+    let exists = false;
+    const tree = (e: boolean) => ({ ...assessment().worktree, exists: e, uncommitted: [] });
+    const d = await open({
+      [`GET /tasks/${TASK}/recovery`]: () => ({ assessment: assessment({ worktree: tree(exists) as never }) }),
+      [`POST /tasks/${TASK}/worktree`]: () => {
+        exists = true;
+        return { worktree: {}, warnings: [], created: true };
+      },
+    });
+    const gone = d.el.querySelector('.gv-folder-gone') as HTMLElement;
+    expect(gone.textContent).toContain('The task’s folder is gone.');
+    expect(gone.textContent).toContain('changes it had not committed are lost');
+    (gone.querySelector('button') as HTMLButtonElement).click();
+    await flush();
+    expect(ctx.transport.to('POST', `/tasks/${TASK}/worktree`)).toHaveLength(1);
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'The task folder is back, from the task’s branch' });
+    // Assessed again: the folder is there, and the notice is gone.
+    expect(ctx.transport.to('GET', `/tasks/${TASK}/recovery`)).toHaveLength(2);
+    expect(d.el.querySelector('.gv-folder-gone')).toBeNull();
+    d.destroy();
+  });
+
+  it('offers no such thing for a folder that is there, or that belongs to another copy of the project', async () => {
+    const here = await open();
+    expect(here.el.querySelector('.gv-folder-gone')).toBeNull();
+    here.destroy();
+    const elsewhere = await open({
+      [`GET /tasks/${TASK}/recovery`]: {
+        assessment: assessment({ worktree: { ...assessment().worktree, exists: false, elsewhere: true } as never }),
+      },
+    });
+    expect(elsewhere.el.querySelector('.gv-folder-gone')).toBeNull();
+    elsewhere.destroy();
+  });
+
   it('performs an option with the reason, after the dialog armed', async () => {
     const d = await open();
     const reason = d.el.querySelector('input') as HTMLInputElement;

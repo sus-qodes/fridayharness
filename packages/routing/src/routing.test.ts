@@ -280,9 +280,191 @@ describe('decideRoute', () => {
     ];
     expect(applicablePins(both, base().task).map((p) => p.pin_id)).toEqual(['p_task', 'p_kind']);
     expect(decideRoute(base({ pins: both })).model).toBe('claude-opus-5-5');
-    const elsewhere = decideRoute(base({ pins: [pin({ model: 'gpt-5.6-luna' })] }));
+    // An agent Friday gives its model to: a pin it cannot run stops the work there, for a human.
+    const elsewhere = decideRoute(base({ model_control: 'set', pins: [pin({ model: 'gpt-5.6-luna' })] }));
     expect(elsewhere).toMatchObject({ model: null, source: 'none', blocked: true });
     expect(elsewhere.reason).toContain('harness.cannot_run');
+    expect(elsewhere.reason_codes).toContain('pin.unavailable');
+  });
+
+  it('sets a pin aside for a session that chooses its own model and cannot run it, and says so (2026-11-17)', () => {
+    const claudePin = [pin({ model: 'claude-sonnet-5-5' })];
+    // Antigravity cannot be given a model, and does not run Claude's: before, the pin blocked every
+    // task there. The ranking's own entry for the host stands, as advice.
+    const antigravity = decideRoute(base({ vendor: 'antigravity', pins: claudePin }));
+    expect(antigravity).toMatchObject({
+      blocked: false,
+      model: 'gemini-3.8-flash',
+      source: 'registry',
+      binding: false,
+      pin_id: null,
+    });
+    expect(antigravity.reason_codes).toContain('pin.set_aside.advisory');
+    expect(antigravity.reason).toContain(
+      'the pin of claude-sonnet-5-5 is set aside: this session chooses its own model',
+    );
+    // A session in an editor that does run the pinned model is still told it, as advice.
+    const vscode = decideRoute(base({ pins: claudePin }));
+    expect(vscode).toMatchObject({ model: 'claude-sonnet-5-5', source: 'pin', binding: false });
+    expect(vscode.reason).toContain('advisory');
+    // What "would it start?" answers for no host in particular still follows the pin, and an agent
+    // Friday gives its model to is still held to it.
+    expect(decideRoute(base({ vendor: null, pins: claudePin }))).toMatchObject({ source: 'pin' });
+    expect(decideRoute(base({ vendor: 'codex', model_control: 'set', pins: claudePin }))).toMatchObject({
+      blocked: true,
+      reason_codes: expect.arrayContaining(['pin.unavailable']),
+    });
+    // Sensitive work is never let through this way: its pin is the consent, and the session is not
+    // seen running the model it names.
+    const sensitive = decideRoute(
+      base({ vendor: 'antigravity', pins: [pin({ model: 'claude-sonnet-5-5', sensitive: true })] }),
+    );
+    expect(sensitive.blocked).toBe(true);
+    // A hard constraint still decides: nothing Antigravity runs is local.
+    expect(
+      decideRoute(
+        base({ vendor: 'antigravity', pins: claudePin, settings: { ...DEFAULT_ROUTING, must_use_local: true } }),
+      ).blocked,
+    ).toBe(true);
+  });
+
+  it('lets every agent Friday can start take every kind of work (2026-11-17)', () => {
+    for (const role of ['architect', 'backend', 'frontend', 'qa', 'devops', 'review']) {
+      for (const vendor of ['claude-code', 'codex', 'antigravity']) {
+        const d = decideRoute(base({ vendor, model_control: 'set', task: { ...base().task, role } }));
+        expect(d.blocked, `${role} on ${vendor}: ${d.reason}`).toBe(false);
+        expect(d.model, `${role} on ${vendor}`).not.toBeNull();
+      }
+    }
+    // Codex, in the two roles the ranking had no entry for it in, after every ranked entry.
+    const frontend = decideRoute(
+      base({ vendor: 'codex', model_control: 'set', task: { ...base().task, role: 'frontend' } }),
+    );
+    expect(frontend).toMatchObject({ model: 'openai/gpt-6.1-sol', selected_rank: 5, selected_harness: 'codex' });
+    const review = decideRoute(
+      base({ vendor: 'codex', model_control: 'set', task: { ...base().task, role: 'review' } }),
+    );
+    expect(review).toMatchObject({ model: 'openai/gpt-6-astra', selected_rank: 5 });
+  });
+
+  describe('a task a person gave to an agent (2026-11-17)', () => {
+    const codex = (extra: Partial<RouteInput> = {}) =>
+      base({ vendor: 'codex', model_control: 'set', assigned_by_human: true, ...extra });
+
+    it('runs there though its role says nothing the ranking knows, with the model of what its kind points at', () => {
+      const unknown = { ...base().task, role: 'fullstack' };
+      // Without a person's choice, a role the ranking does not know still waits for one.
+      expect(decideRoute(base({ vendor: 'codex', model_control: 'set', task: unknown }))).toMatchObject({
+        blocked: true,
+        reason_codes: ['role.unsupported'],
+      });
+      const d = decideRoute(codex({ task: unknown }));
+      expect(d).toMatchObject({
+        blocked: false,
+        model: 'openai/gpt-6.1-sol',
+        source: 'registry',
+        binding: true,
+        // The role stays as the task names it: only the model was chosen by another's ranking.
+        role: 'fullstack',
+      });
+      expect(d.reason_codes).toEqual(expect.arrayContaining(['role.assumed', 'assignment.human', 'registry.rank']));
+      expect(d.reason).toContain('a person gave this task to this agent');
+      // No role at all, and a kind and paths that point nowhere: general implementation work.
+      const none = decideRoute(
+        codex({ task: { ...base().task, kind: 'analysis', role: null, scope: { write: [], read: [] } } }),
+      );
+      expect(none).toMatchObject({ blocked: false, model: 'openai/gpt-6.1-sol', role: null });
+      // What the paths point at chooses the model where they say something: tests are QA work.
+      const tests = decideRoute(
+        codex({
+          task: { ...base().task, kind: 'analysis', role: 'whatever', scope: { write: ['tests/a.test.ts'], read: [] } },
+        }),
+      );
+      expect(tests).toMatchObject({ blocked: false, selected_rank: 2, model: 'openai/gpt-6.1-sol' });
+    });
+
+    it('runs with the agent’s own model where the ranking names none for its host', () => {
+      // Gemini CLI has no entry for backend work.
+      expect(decideRoute(base({ vendor: 'gemini' })).blocked).toBe(true);
+      const d = decideRoute(base({ vendor: 'gemini', model_control: 'set', assigned_by_human: true }));
+      expect(d).toMatchObject({
+        blocked: false,
+        model: null,
+        binding: false,
+        source: 'assignment',
+        failover_policy: 'none',
+        role: 'backend_engineer',
+      });
+      expect(d.reason_codes).toEqual(expect.arrayContaining(['assignment.human', 'assignment.own_model']));
+      expect(d.reason).toContain("it runs with the agent's own model");
+    });
+
+    it('sets aside a pin of a model that agent cannot run, and follows one it can', () => {
+      const d = decideRoute(codex({ pins: [pin({ model: 'claude-sonnet-5-5' })] }));
+      expect(d).toMatchObject({ blocked: false, model: 'openai/gpt-6.1-sol', source: 'registry', pin_id: null });
+      expect(d.reason_codes).toContain('pin.set_aside.assignment');
+      expect(d.reason).toContain('the pin of claude-sonnet-5-5 is set aside: a person gave this task to this agent');
+      const same = decideRoute(codex({ pins: [pin({ model: 'openai/gpt-6-astra' })] }));
+      expect(same).toMatchObject({ model: 'openai/gpt-6-astra', source: 'pin', pin_id: 'pin_1' });
+    });
+
+    it('is still stopped by a hard constraint, a host that is not ready, and a split nobody decided', () => {
+      expect(decideRoute(codex({ settings: { ...DEFAULT_ROUTING, must_use_local: true } }))).toMatchObject({
+        blocked: true,
+        constraints: ['must_use_local'],
+      });
+      expect(
+        decideRoute(codex({ settings: { ...DEFAULT_ROUTING, sensitive: { kinds: ['implementation'], roles: [] } } })),
+      ).toMatchObject({
+        blocked: true,
+        reason_codes: expect.arrayContaining(['constraint.sensitive']),
+      });
+      for (const [role_source, code] of [
+        ['decision_model', 'role.proposed_dag'],
+        ['missing', 'role.classification_required'],
+      ] as const) {
+        const d = decideRoute(
+          codex({
+            task: { ...base().task, role: null, role_source, role_decision_id: 'rdec_00000000000000000000000004' },
+          }),
+        );
+        expect(d.blocked, code).toBe(true);
+        expect(d.reason_codes).toContain(code);
+      }
+      // The host is kept out (a failed sign-in): assigning to it does not start work that would fail.
+      const NOW = '2026-11-17T12:00:00.000Z';
+      const signedOut: ReadinessEvidence[] = [
+        {
+          host: 'gemini',
+          model: null,
+          stage: 'authenticated',
+          status: 'failed',
+          checked_at: NOW,
+          expires_at: null,
+          source: 'test',
+          version: null,
+          detail: 'not signed in',
+        },
+      ];
+      const out = decideRoute(
+        base({
+          vendor: 'gemini',
+          model_control: 'set',
+          assigned_by_human: true,
+          readiness: (host, model) => assessReadiness(signedOut, { host, model, live: true, now: NOW }),
+        }),
+      );
+      expect(out).toMatchObject({ blocked: true, model: null });
+      expect(out.reason_codes).toContain('readiness.none_ready');
+      expect(out.reason).toContain('a person gave this task to this agent, but');
+    });
+
+    it('changes nothing for a dry run over every host', () => {
+      const d = decideRoute(
+        base({ vendor: null, assigned_by_human: true, task: { ...base().task, role: 'fullstack' } }),
+      );
+      expect(d).toMatchObject({ blocked: true, reason_codes: ['role.unsupported'] });
+    });
   });
 
   it('applies hard constraints before registry rank: local only, sensitive work, vision', () => {
@@ -398,7 +580,7 @@ describe('readiness filters candidates and never reorders (ADR-0035 §2)', () =>
   /** Every host connected now, with the given evidence. */
   const readiness =
     (evidence: ReadinessEvidence[], live = true) =>
-    (host: string, model: string) =>
+    (host: string, model: string | null) =>
       assessReadiness(evidence, { host, model, live, now: NOW });
   const architect = (extra: Partial<RouteInput> = {}) =>
     base({ task: { ...base().task, kind: 'research', role: 'architect' }, ...extra });
@@ -411,7 +593,7 @@ describe('readiness filters candidates and never reorders (ADR-0035 §2)', () =>
   it('skips a benched rank 1 for the next rank the harness can run, and records every check made', () => {
     const until = '2026-10-22T12:30:00.000Z';
     const d = decideRoute(architect({ readiness: readiness([bench('claude-code', 'claude-opus-5-5', until)]) }));
-    expect(d).toMatchObject({ model: 'claude-fable-5-1', source: 'registry', selected_rank: 2, blocked: false });
+    expect(d).toMatchObject({ model: 'claude-fable-5-2', source: 'registry', selected_rank: 2, blocked: false });
     expect(d.excluded).toContainEqual({ model: 'claude-opus-5-5', reason: 'readiness.benched' });
     expect(d.readiness).toEqual([
       {
@@ -421,7 +603,7 @@ describe('readiness filters candidates and never reorders (ADR-0035 §2)', () =>
         reason: `claude-code/claude-opus-5-5 is benched until ${until}: rate limited`,
         bench_until: until,
       },
-      { host: 'claude-code', model: 'claude-fable-5-1', dispatchable: true, reason: 'ready', bench_until: null },
+      { host: 'claude-code', model: 'claude-fable-5-2', dispatchable: true, reason: 'ready', bench_until: null },
     ]);
     // Rank is untouched: the chain still names what readiness skipped nowhere, and what is next.
     expect(d.fallback_chain).toEqual([{ model: null, reason: 'human' }]);

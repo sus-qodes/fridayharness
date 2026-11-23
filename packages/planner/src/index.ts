@@ -23,6 +23,7 @@ export {
   type DelegationDecision,
   type DelegationTask,
   delegate,
+  type RunningWork,
   scoreCandidate,
 } from './delegate.js';
 export { diffPlanVersions, type PlanDiff, type PlanVersionTask } from './diff.js';
@@ -39,6 +40,7 @@ export {
 } from './intent-drafter.js';
 export {
   budgetedCost,
+  DEFAULT_DAILY_CALLS,
   formatIssues,
   type ParseResult,
   type PlannerCall,
@@ -47,6 +49,7 @@ export {
   requestEstimate,
   runPlanner,
 } from './model.js';
+export { canRunSideBySide, sharedWith } from './parallel.js';
 export { parsePlanDraft, parseReplanDraft } from './parse.js';
 export { costOf, DEFAULT_PRICES, type ModelPrice, type PriceTable, priceEntry, worstCaseCost } from './pricing.js';
 export {
@@ -74,14 +77,28 @@ export {
   type ClaudeCodePlannerOptions,
   usageFromClaude,
 } from './providers/claude-code.js';
+export {
+  CODEX_DEFAULT_MODEL,
+  CODEX_PLANNER_OFF,
+  CODEX_UNNAMED_MODEL,
+  CodexPlannerModel,
+  type CodexPlannerOptions,
+  classifyCodexFailure,
+  dropNullOptionals,
+  strictOutputSchema,
+  usageFromCodex,
+} from './providers/codex.js';
 export { FakePlannerModel, type FakeResponse } from './providers/fake.js';
 export {
   DEFAULT_LOCAL_BASE_URL,
   jsonModeInstructions,
+  keyRefused,
   localEndpoint,
   localOutputSchema,
   type OpenAICompatibleOptions,
   OpenAICompatiblePlannerModel,
+  remoteEndpoint,
+  type TokenParam,
   usageFrom,
 } from './providers/openai-compatible.js';
 export {
@@ -101,6 +118,7 @@ export {
   type RoleClassifierSettings,
 } from './role-classifier.js';
 export {
+  AgentKeyRef,
   draftJsonSchema,
   NeedsHuman,
   PLAN_LIMITS,
@@ -111,6 +129,7 @@ export {
   ReplanDraft,
   type ReplanDraftInput,
   ScopeGlob,
+  withoutAssignments,
 } from './schemas.js';
 export { type BrainAction, failureAction, type TriggerEvent, type TriggerFacts, triggersFor } from './triggers.js';
 export {

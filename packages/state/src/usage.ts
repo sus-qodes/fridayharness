@@ -172,6 +172,15 @@ function selectRuns(
 }
 
 /**
+ * The host a session runs in: a Codex report from before 2026-11-18 did not say that its input
+ * holds the cache, and is read as Codex's all the same.
+ */
+function vendorOf(db: SqlDatabase, harnessId: string): string | null {
+  const row = db.prepare('SELECT vendor FROM harnesses WHERE harness_id = ?').get<{ vendor: string }>(harnessId);
+  return row?.vendor ?? null;
+}
+
+/**
  * The attempts' tool calls and host reports, read from `agent.event` observations through the
  * index on (project, type, sequence) the way `toolCallCounts` does. The hooks router puts the tool
  * name at the payload's top (`tool`) and names the session (`harness_id`); spawn adapters report
@@ -222,6 +231,9 @@ function readEvents(
           output_tokens: int(d.output_tokens),
           cache_read_input_tokens: int(d.cache_read_input_tokens),
           cache_creation_input_tokens: int(d.cache_creation_input_tokens),
+          ...(d.input_includes_cache === true || vendorOf(db, run.harness_id) === 'codex'
+            ? { input_includes_cache: true }
+            : {}),
           cost_usd: num(d.cost_usd),
           // Friday's figure, not the host's: kept across the host's reports.
           cap_usd: u.host.cap_usd,

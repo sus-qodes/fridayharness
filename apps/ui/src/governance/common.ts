@@ -30,11 +30,14 @@ export function taskOf(board: UiSnapshot | null, taskId: string | null | undefin
   return board?.tasks.find((t) => t.task_id === taskId) ?? null;
 }
 
-/** "task_29jxbk8t · Add discount codes" (a summary is shown cleaned and shortened). */
+/**
+ * A task as a person knows it: its summary, cleaned and shortened. The id stood before it
+ * ("task_29jxbk8t · Add discount codes"); it is shown only for a task the board does not hold.
+ */
 export function taskLine(board: UiSnapshot | null, taskId: string | null | undefined): string {
   if (!taskId) return 'no task';
   const t = taskOf(board, taskId);
-  return t ? `${shortId(taskId)} · ${truncate(cleanText(t.summary), 120)}` : shortId(taskId);
+  return t ? truncate(cleanText(t.summary), 120) : `task ${shortId(taskId)}`;
 }
 
 /** Whether an approval's expiry has passed (the table keeps such rows `pending`; plan §2). */

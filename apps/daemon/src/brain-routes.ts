@@ -20,11 +20,12 @@ import {
   ProjectIntentProposeRequest,
   type TokenClass,
 } from '@friday/protocol';
-import type { ProjectRef } from '@friday/sdk';
+import { PLANNER_CHOICES, type PlannerChoice, type ProjectRef } from '@friday/sdk';
 import type { FridayState, PlanProposal } from '@friday/state';
 import type { Context, Hono, MiddlewareHandler } from 'hono';
 import type { AppEnv } from './app.js';
 import type { BrainHandle } from './brain.js';
+import { answerOf, directDraft } from './direct-goal.js';
 
 export interface BrainRouteDeps {
   app: Hono<AppEnv>;
@@ -146,8 +147,47 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
   app.post(`${P}/goals`, op, async (c) => {
     const body = await json(c);
     const key = c.req.header('idempotency-key');
-    const goal = state.createGoal(pid, human, GoalCreateRequest.parse(body), key ? { idempotency_key: key } : {});
+    const req = GoalCreateRequest.parse(body);
+    const goal = state.createGoal(pid, human, req, key ? { idempotency_key: key } : {});
+    // A question, or one task to do now (2026-11-18): its one task is written here from the
+    // request as it was typed, and started. The person who typed it is who approves it; no model
+    // planned anything. A repeated request (the same idempotency key) finds the plan there.
+    if (req.mode !== 'plan' && !goal.plan_id) {
+      const bound = (t: Parameters<FridayState['boundPlanTask']>[0]) => state.boundPlanTask(t);
+      const r = parsePlanDraft(directDraft(req.request, req.mode), bound);
+      if (!r.ok) {
+        throw new FridayError('schema_mismatch', `the request could not be started: ${r.errors.join('; ')}`, {
+          errors: r.errors,
+        });
+      }
+      const asked = req.mode === 'ask';
+      const v = state.proposePlan(
+        pid,
+        human,
+        goal.goal_id,
+        proposalFromDraft(r.value, { trigger: asked ? 'a question, asked directly' : 'one task, started directly' }),
+      );
+      state.approvePlan(pid, human, v.plan_id, v.version, asked ? 'asked directly' : 'started directly');
+      return c.json(state.q.goal(pid, goal.goal_id), 201);
+    }
     return c.json(goal, 201);
+  });
+
+  /** A question's answer, in full, for the person who asked (`ask` goals only). */
+  app.get(`${P}/goals/:gid/answer`, op, (c) => {
+    const goal = state.q.goal(pid, c.req.param('gid'));
+    if (goal.mode !== 'ask') throw new FridayError('invalid_request', `goal ${goal.goal_id} is not a question`);
+    return c.json(answerOf(state, pid, goal, { full: true }));
+  });
+
+  /** The person opened the answer: it leaves what waits for them. */
+  app.post(`${P}/goals/:gid/answer/read`, op, (c) => {
+    const goal = state.q.goal(pid, c.req.param('gid'));
+    if (goal.mode !== 'ask') throw new FridayError('invalid_request', `goal ${goal.goal_id} is not a question`);
+    if (!answerOf(state, pid, goal).read) {
+      state.recordObservation(pid, human, 'goal.answer_read', { goal_id: goal.goal_id }, []);
+    }
+    return c.json({ ok: true });
   });
 
   app.get(`${P}/goals/:gid`, op, (c) => c.json(goalDetail(c.req.param('gid'))));
@@ -323,6 +363,95 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
   app.get(`${P}/brain`, op, (c) => c.json(brain().status()));
 
   app.post(`${P}/brain/run-once`, op, async (c) => c.json(await brain().brain.runOnce()));
+
+  // How this person plans here, kept on this machine and not in the tracked config.yaml
+  // (2026-11-17): null hands the choice back to the project's `master_brain.provider`. The planner
+  // is built when Friday starts, so the answer's `choice.wanted` differs from `provider` until then.
+  // The same route takes the planner's model (2026-11-17), kept on this machine too: `model` names
+  // it, null hands it back to `master_brain.model`. It is read at each planning call, so it needs
+  // no restart. A body names the planner, the model, or both.
+  app.post(`${P}/brain/planner-choice`, op, async (c) => {
+    const body = await json(c);
+    const hasProvider = 'provider' in body;
+    const hasModel = 'model' in body;
+    if (!hasProvider && !hasModel) {
+      throw new FridayError('invalid_request', 'send {"provider": …}, {"model": …} or both');
+    }
+    if (hasProvider) {
+      const raw = body.provider;
+      if (raw !== null && !(PLANNER_CHOICES as readonly unknown[]).includes(raw)) {
+        throw new FridayError('invalid_request', `provider is one of ${PLANNER_CHOICES.join(', ')}, or null`);
+      }
+    }
+    if (hasModel && body.model !== null && (typeof body.model !== 'string' || !body.model.trim())) {
+      throw new FridayError('invalid_request', 'model is a model name, or null');
+    }
+    // The planner a model is for (2026-11-23): each keeps its own. Left out: the running planner.
+    const forPlanner = body.model_for;
+    if (forPlanner !== undefined && !(PLANNER_CHOICES as readonly unknown[]).includes(forPlanner)) {
+      throw new FridayError('invalid_request', `model_for is one of ${PLANNER_CHOICES.join(', ')}`);
+    }
+    // The model first: a model Friday cannot price is refused before anything is written.
+    if (hasModel) {
+      const model = body.model === null ? null : (body.model as string).trim();
+      const target = (forPlanner as string | undefined) ?? brain().status().provider;
+      const was =
+        brain()
+          .status()
+          .planners.find((p) => p.id === target)?.model ?? null;
+      brain().choosePlannerModel(model, forPlanner as string | undefined);
+      if (was !== model) {
+        state.recordObservation(pid, human, 'planner.chosen', { model, was_model: was, planner: target }, []);
+      }
+    }
+    if (hasProvider) {
+      const provider = body.provider as PlannerChoice | null;
+      const before = brain().status().choice.here;
+      brain().choosePlanner(provider);
+      if (before !== provider) {
+        state.recordObservation(pid, human, 'planner.chosen', { provider, was: before }, []);
+      }
+    }
+    return c.json(brain().status());
+  });
+
+  // "Turn spending off" (2026-11-17): this machine's approval to spend on planning is taken back.
+  // Giving it stays the machine's own act (`friday brain allow-remote`, the desktop's dialog);
+  // taking it back only tightens, so the interface may. It holds from the next planning call.
+  app.post(`${P}/brain/deny-remote`, op, async (c) => {
+    const raw = (await json(c)).provider;
+    const known = brain()
+      .status()
+      .planners.filter((p) => p.remote)
+      .map((p) => p.id);
+    if (raw !== undefined && !known.includes(raw as string)) {
+      throw new FridayError('invalid_request', `provider is one of ${known.join(', ')}, or left out`);
+    }
+    const removed = brain().denySpending(raw as string | undefined);
+    if (removed) state.recordObservation(pid, human, 'planner.spending_denied', { provider: raw ?? null }, []);
+    return c.json({ removed, brain: brain().status() });
+  });
+
+  // The models a key service or the model server on this machine offers (2026-11-23), for a
+  // person to pick from: read on their request, with the key stored on this machine.
+  app.get(`${P}/brain/models`, op, async (c) => {
+    const provider = c.req.query('provider') ?? '';
+    return c.json({ provider, models: await brain().listModels(provider) });
+  });
+
+  // Where the model server on this machine listens (2026-11-23: LM Studio's port, another of
+  // Ollama's), kept on this machine. Only an address of this machine is taken, so no key and no
+  // request can be sent elsewhere by it; null hands it back to the project's setting. The planner
+  // reads it when Friday starts.
+  app.post(`${P}/brain/local-endpoint`, op, async (c) => {
+    const raw = (await json(c)).base_url;
+    if (raw !== null && typeof raw !== 'string') {
+      throw new FridayError('invalid_request', 'base_url is an address of this computer, or null');
+    }
+    const base_url = brain().setLocalEndpoint(raw);
+    state.recordObservation(pid, human, 'planner.chosen', { local_endpoint: raw }, []);
+    return c.json({ base_url });
+  });
 
   app.get(`${P}/model-calls`, op, (c) => {
     const goalId = c.req.query('goal');

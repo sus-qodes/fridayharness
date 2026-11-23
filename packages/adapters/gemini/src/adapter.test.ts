@@ -109,7 +109,8 @@ describe('the system settings of a spawned session', () => {
 });
 
 describe('the final answer in the last message', () => {
-  const answer = { status: 'completed', summary: 'did it', blocked_reason: '' };
+  // `answer` is empty: only a question's task hands one in (2026-11-18).
+  const answer = { status: 'completed', summary: 'did it', blocked_reason: '', answer: '' };
 
   it('takes the JSON object alone, fenced, or after prose', () => {
     expect(finalFrom(JSON.stringify(answer))).toEqual({ ...answer, checks: [] });
@@ -128,6 +129,7 @@ describe('the final answer in the last message', () => {
       summary: 'I changed a.ts.',
       blocked_reason: '',
       checks: [],
+      answer: '',
     });
   });
 });

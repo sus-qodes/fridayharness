@@ -13,7 +13,17 @@ export type EscalationReason =
   /** A human rejected a revision while failed tasks still wait for a decision (review F05). */
   | 'plan_rejected'
   /** A Master Brain action kept failing after its retries (review F05). */
-  | 'action_failed';
+  | 'action_failed'
+  /**
+   * A project check failed in a task folder whose dependencies were never installed (2026-11-17):
+   * most likely the setup, not the work, and another attempt would fail the same way.
+   */
+  | 'setup_failed'
+  /**
+   * The project's checks could not be started on this computer (2026-11-17): the work was not
+   * judged at all, and another attempt would end the same way.
+   */
+  | 'check_not_run';
 
 export interface EscalationDetails {
   blocked: string;
@@ -42,6 +52,8 @@ const CAPABILITY: Record<EscalationReason, string> = {
   budget_exceeded: 'model.budget',
   plan_rejected: 'human.decision',
   action_failed: 'human.decision',
+  setup_failed: 'human.decision',
+  check_not_run: 'human.decision',
 };
 
 export function buildEscalation(input: {

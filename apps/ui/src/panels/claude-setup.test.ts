@@ -23,6 +23,8 @@ function plan(over: Partial<ClaudeSetupPlan> = {}): ClaudeSetupPlan {
   };
 }
 
+const CONFIG_FIX = 're-run "friday harness config claude-code"';
+
 describe('claude code setup', () => {
   it('names tracked files in the confirmation', () => {
     expect(applyWarning(plan().changes)).toEqual([
@@ -43,11 +45,13 @@ describe('claude code setup', () => {
         'GET /agent-setup/claude-code': plan(),
         'POST /agent-setup/claude-code': {
           plan: plan({ applied: true }),
+          // The check's answer as `harness doctor claude-code --json` gives it.
           doctor: {
-            level: 'L1',
+            achieved: 'L1 degraded',
             checks: [
-              { id: 'hooks.installed', status: 'ok', detail: HOSTILE },
-              { id: 'mcp.server', status: 'warn' },
+              { id: 'cc.binary', status: 'ok', message: `Claude Code 2.1.301 ${HOSTILE}` },
+              { id: 'cc.skill', status: 'warn', message: 'the friday skill is missing', fix: CONFIG_FIX },
+              { id: 'cc.launcher', status: 'fail', message: 'launch-mcp.mjs is missing', fix: CONFIG_FIX },
             ],
           },
         },
@@ -79,7 +83,24 @@ describe('claude code setup', () => {
     expect(ctx.confirms[1]?.body).toEqual(expect.arrayContaining(['  .mcp.json']));
     expect(ctx.transport.to('POST', '/agent-setup/claude-code')[0]?.body).toEqual({ agent_key: 'dev-1' });
     const text = m.el.textContent ?? '';
-    expect(text).toContain('hooks.installed');
+    // One sentence on whether it is connected, then what needs attention, the worst first, with
+    // what to do in this dialog's terms; no check codes and no terminal command.
+    expect(text).toContain('Connected, with gaps: part of Friday’s checks is not in place for Claude Code.');
+    const attention = Array.from(m.el.querySelectorAll('.pn-checks-attention > li')).map((li) => li.textContent);
+    expect(attention).toEqual([
+      'Needs fixinglaunch-mcp.mjs is missingWhat to do: Apply this setup again: Preview, then Apply.',
+      'Worth a lookthe friday skill is missingWhat to do: Apply this setup again: Preview, then Apply.',
+    ]);
+    expect(text).not.toContain('cc.launcher');
+    expect(text).not.toContain('friday harness config');
+    // The code is still there for whoever needs it, in the tooltip; what passed is folded away.
+    expect(m.el.querySelector('.pn-checks-attention > li')?.getAttribute('title')).toBe('cc.launcher');
+    const passed = m.el.querySelector('details.pn-checks-passed') as HTMLDetailsElement;
+    expect(passed.open).toBe(false);
+    expect(passed.querySelector('summary')?.textContent).toBe('1 check with nothing to do');
+    expect(passed.textContent).toContain(HOSTILE);
+    expect(m.el.querySelector('img')).toBeNull();
+    expect(text).toContain('it shows in the Agents list as “connected from VS Code”');
     expect(text).toContain('accept the folder-trust prompt'.replace('accept', 'Accept'));
     expect(text).toContain('/friday start');
     buttonBy(m.el, 'Copy the start command').click();

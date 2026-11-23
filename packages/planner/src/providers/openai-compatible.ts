@@ -19,7 +19,20 @@ export interface OpenAICompatibleOptions {
   timeoutMs?: number;
   /** The name Friday records for this provider (default `local`). */
   provider?: string;
+  /**
+   * A service on the internet, reached with the person's own key (2026-11-23: OpenAI, Gemini,
+   * DeepSeek, OpenRouter): https only, requests leave the machine, so consent applies and the
+   * planner is held to a limit. The address comes from Friday's own list or from this machine,
+   * never from the project's tracked settings.
+   */
+  remote?: boolean;
+  /** Who answers, for a person: "OpenAI". Default: "the local model server". */
+  label?: string;
+  /** The name of the answer's size limit: newer OpenAI models take only `max_completion_tokens`. */
+  tokenParam?: TokenParam;
 }
+
+export type TokenParam = 'max_tokens' | 'max_completion_tokens';
 
 /** Ollama's OpenAI-compatible endpoint; LM Studio serves at port 1234. */
 export const DEFAULT_LOCAL_BASE_URL = 'http://127.0.0.1:11434/v1';
@@ -46,6 +59,31 @@ export function localEndpoint(raw: string): URL {
     );
   }
   return u;
+}
+
+/**
+ * A service on the internet the person's key is sent to: https only, with no credentials in the
+ * address. Checked when the provider is built and again before every request.
+ */
+export function remoteEndpoint(raw: string): URL {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new ModelError('unavailable', `"${raw}" is not an address`);
+  }
+  if (u.protocol !== 'https:' || u.username || u.password) {
+    throw new ModelError('unavailable', `a key is only sent over https; ${u.protocol}//${u.host} is refused`);
+  }
+  return u;
+}
+
+/**
+ * Whether a 400 is the service refusing the key. Most answer 401 for that; Gemini answers 400
+ * ("API key not valid. Please pass a valid API key.", seen 2026-11-23).
+ */
+export function keyRefused(text: string): boolean {
+  return /api[ _-]?key/i.test(text) && /not valid|invalid|valid api key|missing|expired/i.test(text);
 }
 
 /** What the server says went wrong, bounded; never the request. */
@@ -155,8 +193,12 @@ export function usageFrom(u: ChatCompletion['usage']): ModelUsage {
 
 export class OpenAICompatiblePlannerModel implements PlannerModel {
   readonly provider: string;
-  readonly remote = false;
+  readonly remote: boolean;
   readonly #opts: OpenAICompatibleOptions;
+  /** Who answers, in the words of every message: "OpenAI", or "the local model server". */
+  readonly #who: string;
+  /** The answer's size limit as this server names it; switched once when the server says so. */
+  #tokenParam: TokenParam;
   /**
    * Whether the server takes `response_format: json_schema`; unknown until the first answer. A
    * server that refuses it (400) gets JSON mode with the schema in the instructions from then on.
@@ -164,9 +206,16 @@ export class OpenAICompatiblePlannerModel implements PlannerModel {
   #jsonSchema: boolean | undefined;
 
   constructor(opts: OpenAICompatibleOptions) {
-    localEndpoint(opts.baseUrl);
+    this.remote = opts.remote === true;
+    this.#endpoint(opts.baseUrl);
     this.#opts = opts;
     this.provider = opts.provider ?? 'local';
+    this.#who = opts.label ?? 'the local model server';
+    this.#tokenParam = opts.tokenParam ?? 'max_tokens';
+  }
+
+  #endpoint(raw: string): URL {
+    return this.remote ? remoteEndpoint(raw) : localEndpoint(raw);
   }
 
   /** What the last answer taught about the server; for tests and status. */
@@ -198,7 +247,7 @@ export class OpenAICompatiblePlannerModel implements PlannerModel {
     return {
       model: req.model,
       messages,
-      max_tokens: req.maxTokens,
+      [this.#tokenParam]: req.maxTokens,
       stream: false,
       response_format: jsonSchema
         ? { type: 'json_schema', json_schema: { name: req.schemaName, schema, strict: true } }
@@ -211,7 +260,8 @@ export class OpenAICompatiblePlannerModel implements PlannerModel {
     try {
       return await doFetch(url, {
         method: 'POST',
-        // Never away from this machine: a redirect is refused, not followed (review F09).
+        // Never anywhere else: a redirect is refused, not followed (review F09). For a service on
+        // the internet that keeps the person's key from following one to another address.
         redirect: 'manual',
         headers: {
           'content-type': 'application/json',
@@ -226,7 +276,7 @@ export class OpenAICompatiblePlannerModel implements PlannerModel {
         throw why?.name === 'TimeoutError'
           ? new ModelError(
               'timeout',
-              `the local model did not answer within ${Math.round((this.#opts.timeoutMs ?? DEFAULT_TIMEOUT_MS) / 60_000)} minutes`,
+              `${this.remote ? this.#who : 'the local model'} did not answer within ${Math.round((this.#opts.timeoutMs ?? DEFAULT_TIMEOUT_MS) / 60_000)} minutes`,
               false,
               undefined,
               { billed: 'unknown' },
@@ -235,8 +285,13 @@ export class OpenAICompatiblePlannerModel implements PlannerModel {
       }
       throw new ModelError(
         'network',
-        `no model server answers at ${this.#opts.baseUrl}: ${(e as Error).message}; start it (Ollama: "ollama serve") and check providers.local.base_url`,
+        this.remote
+          ? `${this.#who} could not be reached at ${this.#opts.baseUrl}: ${(e as Error).message}; check the internet connection`
+          : `no model server answers at ${this.#opts.baseUrl}: ${(e as Error).message}; start it (Ollama: "ollama serve") and check providers.local.base_url`,
         true,
+        undefined,
+        // Sent or not is not known for a service on the internet; a local model costs nothing either way.
+        this.remote ? { billed: 'unknown' } : {},
       );
     }
   }
@@ -263,36 +318,50 @@ export class OpenAICompatiblePlannerModel implements PlannerModel {
   }
 
   async complete(req: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
-    const base = localEndpoint(this.#opts.baseUrl);
+    const base = this.#endpoint(this.#opts.baseUrl);
     const url = `${base.origin}${base.pathname.replace(/\/$/, '')}/chat/completions`;
     const timeout = AbortSignal.timeout(this.#opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     const abort = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    const who = this.#who;
 
     let withSchema = this.#jsonSchema !== false;
     let res = await this.#post(url, this.#body(req, withSchema), abort);
-    if (withSchema && res.status === 400) {
-      // Older servers take JSON mode but not a schema: the schema goes into the instructions, and
-      // Friday's own validation (with the one repair attempt) still decides what is accepted.
-      await res.body?.cancel().catch(() => undefined);
-      this.#jsonSchema = false;
-      withSchema = false;
-      res = await this.#post(url, this.#body(req, false), abort);
+    let text: string | null = null;
+    // A 400 is the server refusing the shape of the request, before any model ran. Two shapes
+    // differ between servers, and each is tried the other way once:
+    //  - the name of the answer's size limit: newer OpenAI models take only
+    //    `max_completion_tokens`, most other servers only `max_tokens`; the refusal names them;
+    //  - the schema: older servers take JSON mode but not a schema, which then goes into the
+    //    instructions. Friday's own validation (with the one repair attempt) decides what is accepted.
+    let flipped = false;
+    for (let again = 0; again < 2 && res.status === 400; again += 1) {
+      text = await this.#text(res);
+      // A refused key is no shape to try another way (Gemini answers 400 for one).
+      if (keyRefused(text)) break;
+      if (!flipped && /max_completion_tokens|max_tokens/.test(text)) {
+        flipped = true;
+        this.#tokenParam = this.#tokenParam === 'max_tokens' ? 'max_completion_tokens' : 'max_tokens';
+      } else if (withSchema) {
+        this.#jsonSchema = false;
+        withSchema = false;
+      } else break;
+      text = null;
+      res = await this.#post(url, this.#body(req, withSchema), abort);
     }
     if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
       await res.body?.cancel().catch(() => undefined);
-      throw new ModelError(
-        'unavailable',
-        `the local model server answered with a redirect (${res.status}); Friday follows none`,
-      );
+      throw new ModelError('unavailable', `${who} answered with a redirect (${res.status}); Friday follows none`);
     }
-    const text = await this.#text(res);
+    text ??= await this.#text(res);
     if (!res.ok) {
       const said = serverMessage(text);
       const where = `${base.origin}${base.pathname.replace(/\/$/, '')}`;
-      if (res.status === 401 || res.status === 403) {
+      if (res.status === 401 || res.status === 403 || (res.status === 400 && keyRefused(text))) {
         throw new ModelError(
           'auth',
-          `the local model server rejected the key (${res.status}); set providers.local.api_key_env to the variable that holds the key it wants`,
+          this.remote
+            ? `${who} rejected the key (${res.status}: ${said})`
+            : `the local model server rejected the key (${res.status}); set providers.local.api_key_env to the variable that holds the key it wants`,
           false,
           res.status,
         );
@@ -300,21 +369,26 @@ export class OpenAICompatiblePlannerModel implements PlannerModel {
       if (res.status === 404) {
         throw new ModelError(
           'bad_request',
-          `the server at ${where} has no model "${req.model}" (404: ${said}); pull it, or set master_brain.model to a model it has ("friday doctor" lists them)`,
+          this.remote
+            ? `${who} has no model "${req.model}" (404: ${said})`
+            : `the server at ${where} has no model "${req.model}" (404: ${said}); pull it, or set master_brain.model to a model it has ("friday doctor" lists them)`,
           false,
           404,
         );
       }
-      if (res.status === 429)
-        throw new ModelError('rate_limited', `the local model server is busy (429): ${said}`, true, 429);
+      if (res.status === 429) {
+        throw new ModelError(
+          'rate_limited',
+          this.remote
+            ? `${who} says a limit of the account is reached (429): ${said}`
+            : `${who} is busy (429): ${said}`,
+          true,
+          429,
+        );
+      }
       if (res.status >= 500)
-        throw new ModelError('unavailable', `the local model server failed (${res.status}): ${said}`, true, res.status);
-      throw new ModelError(
-        'bad_request',
-        `the local model server rejected the request (${res.status}): ${said}`,
-        false,
-        res.status,
-      );
+        throw new ModelError('unavailable', `${who} failed (${res.status}): ${said}`, true, res.status);
+      throw new ModelError('bad_request', `${who} rejected the request (${res.status}): ${said}`, false, res.status);
     }
     if (withSchema) this.#jsonSchema = true;
 
@@ -322,15 +396,9 @@ export class OpenAICompatiblePlannerModel implements PlannerModel {
     try {
       completion = JSON.parse(text) as ChatCompletion;
     } catch {
-      throw new ModelError(
-        'no_output',
-        'the local model server answered with something that is not JSON',
-        false,
-        undefined,
-        {
-          billed: 'yes',
-        },
-      );
+      throw new ModelError('no_output', `${who} answered with something that is not JSON`, false, undefined, {
+        billed: 'yes',
+      });
     }
     const usage = usageFrom(completion.usage);
     const model = typeof completion.model === 'string' && completion.model ? completion.model : req.model;

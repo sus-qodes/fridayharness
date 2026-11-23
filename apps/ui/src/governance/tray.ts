@@ -13,9 +13,17 @@
  * The one difference is an approval whose decision is in flight, which leaves the rail at once.
  */
 import type { SnapshotInboxItem, UiSnapshot } from '@friday/protocol';
+import { capabilityWords } from '../model/capability-words.js';
 import { classifyEscalation } from '../model/escalations.js';
 import { visible } from '../model/text.js';
-import { itemSignature, type WaitingItem, waitingItems } from '../notch/derive.js';
+import {
+  attentionWords,
+  itemSignature,
+  turnHost,
+  turnPrompt,
+  type WaitingItem,
+  waitingItems,
+} from '../notch/derive.js';
 import { type AppContext, type Component, openDrawer, openModal } from '../shell/context.js';
 import { button, h, replace, setText } from '../ui/dom.js';
 import { cleanText, plural, truncate } from '../ui/format.js';
@@ -61,18 +69,37 @@ const ICONS: Record<TrayItem['kind'], IconName> = {
   approval: 'shield',
   question: 'question',
   waiting: 'hourglass',
+  turn: 'hourglass',
+  quiet: 'hourglass',
+  stopped: 'stop',
+  asking: 'question',
   plan: 'goal',
+  verify: 'check',
+  answer: 'message',
+  land: 'branch',
   message: 'message',
   memory: 'memory',
   policy: 'shield',
 };
 
 /** Rows that open another place instead of a card under themselves. */
-const OPENS_PLACE = new Set<TrayItem['kind']>(['plan', 'message', 'memory', 'policy']);
+const OPENS_PLACE = new Set<TrayItem['kind']>([
+  'turn',
+  'quiet',
+  'stopped',
+  'asking',
+  'plan',
+  'verify',
+  'answer',
+  'land',
+  'message',
+  'memory',
+  'policy',
+]);
 
 function senderOf(m: SnapshotInboxItem): string {
   if (m.from.kind === 'agent') return m.from.agent_key ?? m.from.id;
-  if (m.from.kind === 'master_brain') return 'Master Brain';
+  if (m.from.kind === 'master_brain') return 'Friday’s planner';
   if (m.from.kind === 'system') return 'Friday';
   return m.from.kind;
 }
@@ -124,7 +151,7 @@ export function mountDecisionsTray(
         const a = item.approval;
         const who = agentKeyOf(board, a.requested_by_id) ?? a.requested_by_kind;
         return {
-          label: `Approval: ${visible(a.capability)}`,
+          label: `Approval: ${capabilityWords(a.capability)}`,
           sub: `${visible(who)} · ${truncate(visible(a.target ?? 'no target'), 90)}`,
         };
       }
@@ -137,8 +164,40 @@ export function mountDecisionsTray(
           label: `${visible(item.task.agent_key ?? 'An agent')} waits`,
           sub: truncate(cleanText(item.task.waiting_note ?? item.task.summary), 110),
         };
+      case 'stopped':
+      case 'asking': {
+        const w = attentionWords(item, turnHost(item.host));
+        return {
+          label: w.title,
+          sub: `${truncate(cleanText(w.line), 150)} · ${truncate(cleanText(item.task.summary), 70)}`,
+        };
+      }
+      case 'quiet':
+        return {
+          label: `${visible(item.agentKey)} has gone quiet`,
+          sub: `Look at ${turnHost(item.host)}: it may be closed, or waiting for you there · ${truncate(cleanText(item.task.summary), 80)}`,
+        };
+      case 'turn':
+        return {
+          label: `Your turn in ${turnHost(item.host)}`,
+          sub: `${visible(item.agentKey)} takes it when you type ${turnPrompt(item.host)} there · ${truncate(cleanText(item.task.summary), 80)}`,
+        };
       case 'plan':
         return { label: `Proposed plan v${item.version}`, sub: truncate(cleanText(item.request), 110) };
+      case 'verify':
+        return {
+          label: 'Work to check',
+          sub: `${visible(item.task.agent_key ?? 'An agent')} says it is done · ${truncate(cleanText(item.task.summary), 90)}`,
+        };
+      case 'answer':
+        return item.failed
+          ? { label: 'A question got no answer', sub: truncate(cleanText(item.question), 110) }
+          : {
+              label: 'Your answer is ready',
+              sub: `${visible(item.agentKey ?? 'An agent')} · ${truncate(cleanText(item.question), 100)}`,
+            };
+      case 'land':
+        return { label: 'Goal ready to land', sub: truncate(cleanText(item.request), 110) };
       case 'message': {
         const m = item.message;
         return {
@@ -153,8 +212,8 @@ export function mountDecisionsTray(
         };
       case 'policy':
         return {
-          label: 'Policy change not yet trusted',
-          sub: "The project's files loosen Friday's defaults; nothing of it applies until you trust it.",
+          label: 'Project settings wait for your trust',
+          sub: 'This project’s files ask to let Friday or its agents do more than the defaults. None of it applies on this computer until you trust it.',
         };
     }
   };
@@ -187,7 +246,13 @@ export function mountDecisionsTray(
 
   /** Where a row without a card is decided. */
   const openPlace = (item: TrayItem): void => {
-    if (item.kind === 'plan') openModal(ctx, { kind: 'plan-review', id: item.goalId });
+    if (item.kind === 'turn' || item.kind === 'quiet' || item.kind === 'stopped' || item.kind === 'asking') {
+      ctx.store.patch('ui', { selectedTaskId: item.taskId });
+      openDrawer(ctx, { kind: 'inspector', id: item.taskId });
+    } else if (item.kind === 'plan') openModal(ctx, { kind: 'plan-review', id: item.goalId });
+    else if (item.kind === 'verify') openModal(ctx, { kind: 'verify', id: item.taskId });
+    else if (item.kind === 'land') openModal(ctx, { kind: 'land', id: item.goalId });
+    else if (item.kind === 'answer') openModal(ctx, { kind: 'answer', id: item.goalId });
     else if (item.kind === 'message') openDrawer(ctx, { kind: 'inbox', id: item.message.delivery_id });
     else if (item.kind === 'memory') openDrawer(ctx, { kind: 'memory', tab: 'review' });
     else if (item.kind === 'policy') openDrawer(ctx, { kind: 'settings', tab: 'policy' });

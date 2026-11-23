@@ -47,14 +47,15 @@ describe('verification wording (FD-29)', () => {
     ]);
     expect(w).toEqual({
       button: 'Run checks',
-      detail: "Runs the project's checks (tests, lint (advisory)), then Friday's scope and credential checks.",
+      detail:
+        "Runs your project's checks (tests, lint (advisory)), then Friday's own: that only the files it was given changed, with no passwords or keys in them.",
       configured: true,
     });
   });
 
   it('says what runs without project checks', () => {
     expect(checksWording([]).detail).toBe(
-      "No project checks are configured: Friday's scope and credential checks will run.",
+      'Your project has no checks of its own set: Friday checks that the agent changed only the files it was given and left no passwords or keys in them.',
     );
   });
 });
@@ -108,14 +109,163 @@ describe('verification panel', () => {
     });
     const m = verifyModal(ctx, { kind: 'verify', id: TID }, () => undefined);
     await flush();
-    expect(m.el.textContent).toContain("Runs the project's checks (tests)");
+    expect(m.el.textContent).toContain("Runs your project's checks (tests)");
     buttonBy(m.el, 'Run checks').click();
     await flush();
     const call = ctx.transport.to('POST', `/tasks/${TID}/verify`)[0];
     expect(call?.body).toEqual({});
     expect(call?.opts?.timeoutMs).toBeGreaterThanOrEqual(300_000);
-    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Verification Passed' });
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Checks passed' });
     expect(m.el.querySelector('.pn-result')?.textContent).toContain('Passed');
+    m.destroy();
+  });
+
+  it('shows what a failed check found in words, with its output one click away (2026-11-17)', async () => {
+    const failed = makeVerification({
+      status: 'FAILED',
+      summary: '1 of 2 required checks failed',
+      checks: [
+        {
+          name: 'tests',
+          kind: 'test',
+          status: 'FAILED',
+          exit_code: 1,
+          artifact_ref: 'artifact:out1',
+          summary: 'exit 1',
+          required: true,
+          origin: 'configured',
+          duration_ms: 900,
+          details: null,
+        },
+        {
+          name: 'friday.secrets',
+          kind: 'secrets',
+          status: 'FAILED',
+          exit_code: null,
+          artifact_ref: null,
+          summary: 'failed: secrets.token',
+          required: true,
+          origin: 'friday',
+          duration_ms: 12,
+          details: {
+            findings: [
+              {
+                rule: 'secrets.token',
+                severity: 'fail',
+                message: `A token is in the change ${HOSTILE}`,
+                paths: ['src/a.ts'],
+              },
+            ],
+          },
+        },
+      ],
+    } as never);
+    const ctx = makeContext({
+      snapshot: scenario(),
+      answers: {
+        'GET /tasks/task_0000000000000000000000aa01/diff': {
+          task_id: TID,
+          source: 'worktree',
+          root: 'C:/wt',
+          base: 'b',
+          files: [file('src/a.ts')],
+          truncated: false,
+          notes: [],
+        },
+        'POST /tasks/task_0000000000000000000000aa01/verify': { task: makeTask(), verification: failed },
+        'GET /artifacts/out1': {
+          artifact_ref: 'artifact:out1',
+          kind: 'verification',
+          text: '1 failing',
+          lines: 900,
+          from_line: 501,
+          truncated: true,
+        },
+      },
+    });
+    const m = verifyModal(ctx, { kind: 'verify', id: TID }, () => undefined);
+    await flush();
+    buttonBy(m.el, 'Run checks').click();
+    await flush();
+    const result = m.el.querySelector('.pn-verification') as HTMLElement;
+    expect(result.textContent).toContain('No credentials in the changes');
+    expect(result.textContent).toContain(`A token is in the change ${HOSTILE}`);
+    expect(result.textContent).toContain('src/a.ts');
+    expect(result.textContent).not.toContain('secrets.token');
+    expect(result.querySelector('img')).toBeNull();
+    buttonBy(result, 'Show output').click();
+    await flush();
+    expect(result.querySelector('pre')?.textContent).toBe('1 failing');
+    expect(result.textContent).toContain('The end of the output: lines 501 to 900 of 900.');
+    m.destroy();
+  });
+
+  it('says when the task’s folder is gone, and makes it again from the task’s branch (2026-11-17)', async () => {
+    let gone = true;
+    const ctx = makeContext({
+      snapshot: scenario(),
+      answers: {
+        'GET /tasks/task_0000000000000000000000aa01/diff': {
+          task_id: TID,
+          source: 'worktree',
+          root: 'C:/wt',
+          base: 'b',
+          files: [],
+          truncated: false,
+          notes: [],
+        },
+        'POST /tasks/task_0000000000000000000000aa01/verify': () => {
+          if (gone) {
+            throw new Error(
+              `the checkout ${TID} worked in is gone (C:/wt/x); restore it from its branch with "friday task worktree ${TID}", or record a result with --result passed|failed`,
+            );
+          }
+          return { task: makeTask(), verification: makeVerification({ status: 'PASSED' }) };
+        },
+        'POST /tasks/task_0000000000000000000000aa01/worktree': () => {
+          gone = false;
+          return { worktree: {}, warnings: [], created: true };
+        },
+      },
+    });
+    const m = verifyModal(ctx, { kind: 'verify', id: TID }, () => undefined);
+    await flush();
+    buttonBy(m.el, 'Run checks').click();
+    await flush();
+    // Said in the dialog, in words, with the way out: no toast naming a terminal command.
+    expect(ctx.toasts).toEqual([]);
+    const notice = m.el.querySelector('.pn-folder-gone') as HTMLElement;
+    expect(notice.textContent).toContain('The task’s folder is gone, so there is nothing to check.');
+    expect(m.el.textContent).not.toContain('friday task worktree');
+    buttonBy(notice, 'Create the folder again').click();
+    await flush();
+    expect(ctx.transport.to('POST', `/tasks/${TID}/worktree`)).toHaveLength(1);
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'The task folder is back: run the checks again' });
+    expect(m.el.querySelector('.pn-folder-gone')).toBeNull();
+    buttonBy(m.el, 'Run checks').click();
+    await flush();
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Checks passed' });
+    m.destroy();
+  });
+
+  it('shows any other refusal as it did', async () => {
+    const ctx = makeContext({
+      snapshot: scenario(),
+      answers: {
+        'POST /tasks/task_0000000000000000000000aa01/verify': () => {
+          throw new Error('a verification of this task is already running');
+        },
+      },
+    });
+    const m = verifyModal(ctx, { kind: 'verify', id: TID }, () => undefined);
+    await flush();
+    buttonBy(m.el, 'Run checks').click();
+    await flush();
+    expect(ctx.toasts.at(-1)).toMatchObject({
+      kind: 'error',
+      detail: 'a verification of this task is already running',
+    });
+    expect(m.el.querySelector('.pn-folder-gone')).toBeNull();
     m.destroy();
   });
 
@@ -127,7 +277,7 @@ describe('verification panel', () => {
     });
     await flush();
     const close = () => [...m.el.querySelectorAll('button')].find((b) => b.textContent === 'Close');
-    expect(m.el.querySelector('.pn-status')?.textContent).toBe('Ready for verification');
+    expect(m.el.querySelector('.pn-status')?.textContent).toBe('Done, to be checked');
     expect(close()?.hidden).toBe(true);
     ctx.board(
       makeSnapshot({
@@ -135,7 +285,7 @@ describe('verification panel', () => {
         tasks: [makeTask({ task_id: TID, status: 'COMPLETED', summary: 'Add discount codes' })],
       }),
     );
-    expect(m.el.querySelector('.pn-status')?.textContent).toBe('Completed');
+    expect(m.el.querySelector('.pn-status')?.textContent).toBe('Done');
     expect(buttonBy(m.el, "Run Friday's checks").disabled).toBe(true);
     close()?.click();
     expect(closed).toBe(1);
@@ -147,7 +297,7 @@ describe('verification panel', () => {
     const m = verifyModal(ctx, { kind: 'verify', id: TID }, () => undefined);
     await flush();
     expect(m.el.textContent).toContain(
-      "No project checks are configured: Friday's scope and credential checks will run.",
+      'Your project has no checks of its own set: Friday checks that the agent changed only the files it was given and left no passwords or keys in them.',
     );
     expect(buttonBy(m.el, "Run Friday's checks").disabled).toBe(false);
     expect(m.el.textContent).toContain('verification:');
@@ -207,11 +357,11 @@ describe('verification panel', () => {
     expect(ctx.store.select('ui').drawer).toEqual({
       kind: 'diff',
       id: TID,
-      back: { modal: { kind: 'verify', id: TID }, label: 'Back to verification' },
+      back: { modal: { kind: 'verify', id: TID }, label: 'Back to the checks' },
     });
     buttonBy(m.el, 'Open config.yaml in VS Code').click();
     expect(opened).toEqual(['C:/demo/shop/.friday/config.yaml']);
-    expect(m.el.textContent).toContain('new checks judge the next verification');
+    expect(m.el.textContent).toContain('new checks are used the next time work is checked');
     m.destroy();
   });
 
@@ -244,9 +394,9 @@ describe('verification panel', () => {
     expect(text).toContain('⟨U+202E⟩');
     expect(text).toContain('⟨U+200B⟩');
     expect(text).not.toContain('\u202E');
-    expect(text).toContain('Claimed but unchanged');
+    expect(text).toContain('It says it changed these, but they did not change');
     expect(text).toContain('src/claimed-only.ts');
-    expect(text).toContain('Changed but not claimed');
+    expect(text).toContain('Changed, but it did not say so');
     expect(m.el.querySelector('.hidden-warning')).not.toBeNull();
     m.destroy();
   });
@@ -262,7 +412,7 @@ describe('verification panel', () => {
     });
     const m = verifyModal(ctx, { kind: 'verify', id: TID }, () => undefined);
     await flush();
-    expect(m.el.textContent).toContain('No completion claim is recorded');
+    expect(m.el.textContent).toContain('The agent has not said it is done in this try yet');
     expect(m.el.textContent).toContain('Could not read the diff: git is not available');
     m.destroy();
   });
@@ -287,7 +437,7 @@ describe('the diff from the verification panel (review R3)', () => {
       expect(drawer?.querySelector('.diff-stub')).not.toBeNull();
       expect(layers.modalOpen()).toBe(false);
       expect(layers.top()?.el).toBe(drawer);
-      buttonBy(drawers.el, 'Back to verification').click();
+      buttonBy(drawers.el, 'Back to the checks').click();
       expect(ctx.store.select('ui').drawer).toBeNull();
       expect(ctx.store.select('ui').modal).toEqual({ kind: 'verify', id: TID });
       expect(drawers.el.querySelector('[role="dialog"]')).toBeNull();

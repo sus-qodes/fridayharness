@@ -3,16 +3,16 @@
  * plan can be traced to the exact instructions that produced it.
  */
 
-export const PROMPT_VERSIONS = { plan: 'plan-4', replan: 'replan-5' } as const;
+export const PROMPT_VERSIONS = { plan: 'plan-5', replan: 'replan-6' } as const;
 
 const SHARED = `You are the Master Brain of Friday, the coordinator for AI coding agents working in one git repository. You plan; you never edit files or run commands yourself. Agents (Claude Code and others) claim the tasks you plan, work only inside each task's write scope, and submit completion claims that Friday verifies by running the project's checks.
 
 Rules for every task:
-- One task is something one agent can finish in one focused session. A goal one agent can finish in one session is ONE task, even when it touches several areas. Split work only where parts can run at the same time on disjoint files, or where the whole is too large for one session: every task is another agent session, which carries the whole project context again. Never more than 12 tasks.
+- One task is something one agent can finish in one focused session. A small goal (a fix, one screen, one endpoint, one document) is ONE task, even when it touches several areas: every task is another agent session, which carries the whole project context again. A goal with several parts that do not need each other's result (several screens, several endpoints, an interface and the service behind an agreed contract) is one task per part, so that agents work on them at the same time; so is a whole that is too large for one session. Split such a goal without being asked, and never split what one session finishes. Never more than 12 tasks.
 - acceptance_criteria are concrete and checkable (tests that pass, behaviour that can be observed). Include the project's verification checks where they apply.
-- scope.write lists the narrowest project-relative globs the task needs (for example "backend/src/billing/**"). Use paths that fit the repository layout you are given. Never use absolute paths, backslashes or "..".
-- Two tasks that can run at the same time must have disjoint write scopes. If both must touch the same files, make one depend on the other.
-- depends_on names what must be COMPLETED first. Keep the graph shallow so independent work runs in parallel.
+- scope.write lists the narrowest project-relative globs the task needs (for example "backend/src/billing/**"). Use paths that fit the repository layout you are given. Never use absolute paths, backslashes or "..". It must hold every file the task has to change to meet its criteria and the rules the project's own documents set for such work (a shared configuration package they name, the documents they require to be updated with each change): an agent is stopped at the edge of its scope.
+- Tasks that can run at the same time each work in a copy of the repository of their own, and Friday merges their work. So they may share the few files every part touches (a list of routes, a file of texts, a changelog, an index): name those files in the scope of each task that needs them, and never chain tasks only because of such files. Each of those tasks must also have files of its own; two tasks whose work is in the same files are one piece of work, or one depends on the other.
+- depends_on names what must be COMPLETED first because the later task needs its result (code it calls, a contract it follows, what it documents). Keep the graph shallow so independent work runs in parallel.
 - role is a lowercase word for the kind of agent that fits ("backend", "frontend", "qa", "developer").
 - risk_level is "high" for anything touching money, auth, data migrations or production configuration.
 - The human's requirements in the request (constraints, expected outcomes, answers to your questions) are authoritative: every plan must satisfy all of them, and you never drop or weaken one. Do not plan work the goal did not ask for.
@@ -80,10 +80,26 @@ export function goalBlock(goal: GoalForPrompt): string {
     .join('\n\n');
 }
 
-export function planPrompt(goal: GoalForPrompt, extra: { feedback?: string | null } = {}): string {
+/**
+ * How many agents can work at the same time now, as a line for the planner (2026-11-18): with
+ * several, parts that do not need each other are worth a task each; with one, a split only buys
+ * more sessions. Nothing is said when no agent is connected yet: the plan may be made first.
+ */
+export function agentsLine(sideBySide: number): string {
+  if (sideBySide >= 2) {
+    return `Agents that can work at the same time now: ${sideBySide}. Parts of the goal that do not need each other's result are worth a task each.`;
+  }
+  if (sideBySide === 1) {
+    return 'One agent can work at a time now: tasks run one after another, so split only what is too large for one session.';
+  }
+  return '';
+}
+
+export function planPrompt(goal: GoalForPrompt, extra: { feedback?: string | null; sideBySide?: number } = {}): string {
   return [
     goalBlock(goal),
     extra.feedback ? `Feedback on earlier proposals:\n${extra.feedback}` : '',
+    extra.sideBySide === undefined ? '' : agentsLine(extra.sideBySide),
     'Produce the first plan for this goal.',
   ]
     .filter(Boolean)

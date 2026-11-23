@@ -179,6 +179,8 @@ export const FRIDAY_HOOK_EVENTS = [
   'PostToolUseFailure',
   'Stop',
   'SessionEnd',
+  // Before the model is called for a person's prompt (Antigravity's PreInvocation, 2026-11-19).
+  'UserPromptSubmit',
 ] as const;
 export type FridayHookEvent = (typeof FRIDAY_HOOK_EVENTS)[number];
 
@@ -235,6 +237,11 @@ export interface NormalizedHook {
   stop_completed: boolean | null;
   /** Stop: how the host says the turn ended, in its own words (Cursor's `status`, Antigravity's `terminationReason`). */
   stop_reason: string | null;
+  /**
+   * Stop: the error the host gives for a turn that ended on one (Antigravity's `error`: no capacity
+   * on its servers, a used-up quota). What a person needs to read when their agent stops by itself.
+   */
+  stop_error?: string | null;
   /** SessionEnd: why the session ended. */
   reason: string | null;
   /** PostToolUseFailure: the host's error text. */
@@ -244,21 +251,37 @@ export interface NormalizedHook {
   can_ask: boolean;
   /** Why the module could not read this call's input; a write it cannot read is declined. */
   shape_error: string | null;
+  /**
+   * UserPromptSubmit: the person's prompt as the host gives it (Antigravity's `lastUserInput`),
+   * cut short; absent elsewhere.
+   */
+  prompt?: string | null;
 }
 
 /**
  * Friday's answer to one hook, before a host module turns it into the host's reply. Friday only
- * restricts (B9): there is no "allow" here, and a host module never answers allow or approve.
+ * restricts (B9): a host module never answers allow or approve, with one exception the owner
+ * decided on 2026-11-16. Antigravity takes no reply without a decision (it reads one as a denial),
+ * so "no objection" there can only be said as its `ask`, a prompt to the person at every step; the
+ * first live sessions needed thirty to forty of them. For Antigravity alone, a call that Friday's
+ * own rules pass is therefore answered `allow`. Every other host module reads `allow` as `none`.
  * Reasons carry no "Friday:" prefix; each host's reply adds it.
  */
 export type HookJudgment =
   | { decision: 'none' }
   | { decision: 'deny'; reason: string }
   | { decision: 'ask'; reason: string }
+  /** PreToolUse: Friday's own rules pass this call, or it is one of Friday's own tools (Antigravity only; `none` elsewhere). */
+  | { decision: 'allow'; reason: string }
   /** SessionStart: text for the session. `brief` marks a one-line note rather than the context packet. */
   | { decision: 'context'; text: string; brief?: boolean }
   /** Stop: keep the agent working once, with this message. */
-  | { decision: 'continue'; reason: string };
+  | { decision: 'continue'; reason: string }
+  /**
+   * UserPromptSubmit: end the turn before the model is called, with this message for the person
+   * (2026-11-19: `/friday` with nothing to take cost a model call, 1.3k tokens, to say so).
+   */
+  | { decision: 'halt'; text: string };
 
 /** What the launcher prints and how it exits, for one host. */
 export interface HostReply {

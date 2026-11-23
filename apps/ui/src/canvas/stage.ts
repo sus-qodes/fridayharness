@@ -148,6 +148,8 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
   let lay: Layout = { rects: new Map(), labels: [], bounds: null, layers: new Map() };
   /** The rectangles drawn now: the layout's, with a card being dragged moved. */
   let rects = new Map<string, Rect>();
+  /** The goals on the board at the last build; null before the first (`revealNewGoal`). */
+  let knownGoals: Set<string> | null = null;
   let groupById = new Map<string, GoalGroup>();
   let podTask = new Map<string, string | null>();
   let podAgent = new Map<string, string>();
@@ -399,6 +401,7 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
       lastToolMs: durations.last(p.agentKey),
       recentFile: p.taskId ? (a.files[p.taskId]?.[0]?.path ?? null) : null,
       selected: false,
+      now: ctx.now(),
     };
   }
 
@@ -467,7 +470,8 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
       let el = labelEls.get(l.id);
       if (!el) {
         el = h('div', { class: 'cv-label', aria: { hidden: 'true' } });
-        world.prepend(el);
+        // Above the cards (2026-11-18): drawn first, any card placed or moved over it cut it.
+        world.append(el);
         labelEls.set(l.id, el);
       }
       setText(el, l.text);
@@ -532,8 +536,37 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
       fitted = true;
       fit(false);
     }
+    revealNewGoal();
+    revealWhenThere();
     cull();
     invalidate();
+  }
+
+  /**
+   * A goal that appears on the board after this window opened, created in the last minute, is
+   * moved to (2026-11-23): one typed in the Notch, another window of its own, was never shown
+   * here, and its planning looked like nothing happening.
+   */
+  function revealNewGoal(): void {
+    // Before the first snapshot every goal would look new.
+    if (!store.select('board')) return;
+    const ids = new Set(board.groups.map((g) => g.id));
+    const before = knownGoals;
+    knownGoals = ids;
+    if (!before || store.select('ui').revealId) return;
+    const recent = Date.now() - 60_000;
+    const fresh = board.groups
+      .filter((g) => !before.has(g.id) && Date.parse(g.goal.created_at) >= recent)
+      .sort((a, b) => b.goal.created_at.localeCompare(a.goal.created_at))[0];
+    if (fresh) store.patch('ui', { revealId: fresh.id });
+  }
+
+  /** Moves to the card asked for (`ui.revealId`, a goal just created) once it is on the board. */
+  function revealWhenThere(): void {
+    const id = store.select('ui').revealId;
+    if (!id || !rects.has(id)) return;
+    store.patch('ui', { revealId: null });
+    focusNode(id);
   }
 
   // ---- culling and drawing --------------------------------------------------------------------
@@ -870,6 +903,8 @@ export function mountStudio(ctx: AppContext, container: HTMLElement): StudioHand
       if (ui.selectedTaskId !== prev.selectedTaskId && ui.selectedTaskId && !selectingHere)
         focusNode(ui.selectedTaskId);
       selectingHere = false;
+      // Asked for while its card is already on the board; otherwise the next rebuild moves there.
+      if (ui.revealId && ui.revealId !== prev.revealId) revealWhenThere();
     }),
   );
 

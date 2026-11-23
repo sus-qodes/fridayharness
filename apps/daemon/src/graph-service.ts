@@ -3,6 +3,7 @@ import {
   buildGraph,
   type CodeGraph,
   type FactsCache,
+  isFridayOwn,
   type MerkleStore,
   openFactsCache,
   openMerkleStore,
@@ -91,7 +92,8 @@ export class GraphService {
     // The Merkle tree (ADR-0037 §2): a stat per file, nothing read when nothing changed. When git
     // could not vouch for the checkout, an unchanged tree keeps the last graph, and a changed one
     // says which files to read again.
-    const files = await git.files();
+    // Friday's own folders are not the project's code (2026-11-19).
+    const files = (await git.files()).filter((f) => !isFridayOwn(f));
     const scan = await this.merkle().scan(git.root, files);
     if (e.latest && e.latest.treeHash === scan.root_hash && identity.basis !== 'content') return e.latest;
     // The last graph of this checkout is the starting point: files git says are unchanged keep
@@ -169,7 +171,11 @@ export function query(g: CodeGraph, rawPath: string, depth: number) {
   const file = rawPath.replace(/\\/g, '/').replace(/^\.\//, '');
   const node = g.nodes.get(file);
   if (!node) {
-    throw new FridayError('invalid_request', `${file} is not in the code graph (only TS/JS files git sees are)`);
+    // The words the interface recognises: "is not in the code graph" (2026-11-18).
+    throw new FridayError(
+      'invalid_request',
+      `${file} is not in the code graph of your project folder (it holds the TypeScript and JavaScript files git sees there)`,
+    );
   }
   return {
     version: g.version,

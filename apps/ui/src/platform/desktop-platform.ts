@@ -4,7 +4,7 @@
  * a test; the shell's shortcuts, restart, start at sign-in and native planner dialogs (FD-26) are
  * offered. The page holds no daemon credential (FD-06).
  */
-import type { DesktopShortcut, Platform } from '../shell/context.js';
+import type { DesktopShortcut, Platform, RecentProject } from '../shell/context.js';
 import { errorOf, type TauriCore } from './tauri-transport.js';
 import { ApiError } from './transport.js';
 
@@ -15,7 +15,12 @@ export const DIALOG_CANCELLED = 'DESKTOP-1003';
 export const TEST_TITLE = 'Friday: a test notification';
 export const TEST_BODY = 'This is how Friday tells you that an approval, a question or a failure waits for you.';
 
-export function desktopPlatform(core: Pick<TauriCore, 'invoke'>, clipboard?: Pick<Clipboard, 'writeText'>): Platform {
+export function desktopPlatform(
+  core: Pick<TauriCore, 'invoke'>,
+  clipboard?: Pick<Clipboard, 'writeText'>,
+  /** Told when a file did not open in the editor (no handler for `vscode://`, a path refused). */
+  openFailed?: (e: unknown) => void,
+): Platform {
   const board = clipboard ?? (typeof navigator !== 'undefined' ? navigator.clipboard : undefined);
   /** A shell command; its refusal (`{status, body}`) becomes the error a toast can read. */
   async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -38,7 +43,7 @@ export function desktopPlatform(core: Pick<TauriCore, 'invoke'>, clipboard?: Pic
   return {
     kind: 'tauri',
     openInEditor(path, line) {
-      void core.invoke('open_in_editor', { path, ...(line ? { line } : {}) }).catch(() => undefined);
+      void core.invoke('open_in_editor', { path, ...(line ? { line } : {}) }).catch((e) => openFailed?.(errorOf(e)));
     },
     async copy(text) {
       if (!board) return false;
@@ -56,8 +61,23 @@ export function desktopPlatform(core: Pick<TauriCore, 'invoke'>, clipboard?: Pic
       setShortcut: (id, accel) => call<DesktopShortcut[]>('set_shortcut', { id, accel }),
       // The shell asks natively before it stops a running Friday; a cancel answers false.
       restart: () => dialog('restart_daemon'),
+      openProject: async () => {
+        await call<unknown>('open_another_project');
+      },
+      recentProjects: async () => {
+        const got = await call<unknown>('recent_projects');
+        return Array.isArray(got) ? (got as RecentProject[]) : [];
+      },
+      openRecent: async (root: string) => {
+        await call<unknown>('open_recent_project', { root });
+      },
       storeKey: (name) => dialog('store_key', { name }),
-      allowSpending: (budget) => dialog('allow_spending', { budget }),
+      allowSpending: (budget, provider, calls) =>
+        dialog('allow_spending', {
+          budget,
+          ...(provider && provider !== 'anthropic' ? { provider } : {}),
+          ...(calls !== undefined ? { calls } : {}),
+        }),
       autostart: async () => (await call<unknown>('get_autostart')) === true,
       setAutostart: async (enabled) => (await call<unknown>('set_autostart', { enabled })) === true,
       // `test`: from either window, now, whatever the Notch shows; the answer is whether the shell

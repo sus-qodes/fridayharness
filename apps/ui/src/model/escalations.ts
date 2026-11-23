@@ -8,7 +8,17 @@
 import type { EscalationView } from '@friday/protocol';
 
 /** Which card a question gets. */
-export type QuestionCardKind = 'free' | 'recovery' | 'routing' | 'integration' | 'unanswered' | 'brain';
+export type QuestionCardKind =
+  | 'free'
+  | 'recovery'
+  | 'routing'
+  | 'integration'
+  | 'unanswered'
+  | 'setup'
+  | 'checks'
+  | 'folder'
+  | 'install'
+  | 'brain';
 
 /** A button a question card offers. */
 export type QuestionAction =
@@ -40,6 +50,10 @@ export type QuestionAction =
   | 'write-revision'
   /** `POST tasks/:tid/rework`. */
   | 'rework-task'
+  /** `POST tasks/:tid/setup`: run the install of the task's folder again. */
+  | 'install-again'
+  /** `POST goals`: a goal that repairs the project's lockfile, and nothing else. */
+  | 'repair-install'
   /** Settings → Planner. */
   | 'planner-settings';
 
@@ -82,21 +96,25 @@ export const BRAIN_KINDS: readonly string[] = [
 ];
 
 const TITLES: Record<string, string> = {
-  ambiguous_intent: 'The Master Brain asks what you mean',
+  ambiguous_intent: 'Friday’s planner asks what you mean',
   recovery_needed: 'A task needs a recovery decision',
-  routing_blocked: 'Routing does not let a task start',
-  routing_violated: 'Routing stopped a task',
-  integration_conflict: 'Integration conflict',
-  integration_failed: 'Integration failed',
+  routing_blocked: 'A task has no agent to run it',
+  routing_violated: 'A task ran on another model than chosen',
+  integration_conflict: 'A task’s work clashes with other work of its goal',
+  integration_failed: 'A task’s work could not be merged into its goal',
   unanswered_request: 'An agent waits for an answer',
-  repeated_verification_failures: 'A task keeps failing verification',
+  setup_failed: "A task's dependencies were not installed",
+  install_broken: 'New task folders cannot install this project’s packages',
+  check_not_run: 'A check could not be run on this computer',
+  folder_conflict: 'You and an agent changed the same file',
+  repeated_verification_failures: 'A task keeps failing its checks',
   repeated_failures: 'A task keeps failing',
   replan_limit: 'The plan reached its revision limit',
   planner_unavailable: 'Friday cannot plan',
   invalid_plan: 'The planner produced no valid plan',
   budget_exceeded: "Today's model budget is spent",
   plan_rejected: 'A revision was rejected',
-  action_failed: 'The Master Brain could not finish',
+  action_failed: 'Friday’s planner could not finish',
 };
 
 function str(value: unknown): string | null {
@@ -134,6 +152,12 @@ export function cardKindOf(kind: string | null): QuestionCardKind {
   if (kind === 'routing_blocked' || kind === 'routing_violated') return 'routing';
   if (kind === 'integration_conflict' || kind === 'integration_failed') return 'integration';
   if (kind === 'unanswered_request') return 'unanswered';
+  // The Master Brain's too, but it is not answered by revising the plan: the install is run again.
+  if (kind === 'setup_failed') return 'setup';
+  // The project's lockfile, not a task: an agent repairs it in a goal of its own.
+  if (kind === 'install_broken') return 'install';
+  if (kind === 'check_not_run') return 'checks';
+  if (kind === 'folder_conflict') return 'folder';
   // Every other kind is the Master Brain's, or one this interface does not know yet: it is
   // answered by revising the plan (or, without a goal, by a recorded reply).
   return 'brain';
@@ -166,6 +190,15 @@ export function classifyEscalation(e: EscalationView, env: { plannerAvailable: b
       break;
     case 'unanswered':
       actions.push('reply');
+      break;
+    case 'setup':
+      if (taskId) actions.push('install-again', 'rework-task', 'cancel-task');
+      break;
+    case 'checks':
+      if (taskId) actions.push('rework-task', 'cancel-task');
+      break;
+    case 'install':
+      actions.push('repair-install');
       break;
     case 'brain':
       if (goalId) actions.push(env.plannerAvailable ? 'revise-note' : 'write-revision');

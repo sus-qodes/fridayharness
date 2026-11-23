@@ -1,23 +1,29 @@
 /**
  * `friday harness config antigravity` (plan M8b.3): plans every file change that attaches
  * Antigravity to a Friday project, and its exact undo with `--remove`. Friday owns its hook group
- * (`friday`) in `.agents/hooks.json`, its server (`friday`) in `.agents/mcp_config.json`, its marker
- * block in `AGENTS.md` and the folder `.friday/harness/antigravity/`; everything else in those
- * files is the user's and is kept as it is, in order.
+ * (`friday`) in `.agents/hooks.json`, its server (`friday`) in `.agents/mcp_config.json`, its skill
+ * (`.agents/skills/friday/`, the `/friday` command), its marker block in `AGENTS.md` and the folder
+ * `.friday/harness/antigravity/`; everything else in those files is the user's and is kept as it
+ * is, in order.
  */
 import { existsSync, readFileSync, rmdirSync } from 'node:fs';
 import path from 'node:path';
 import { applyPlan, bundledHookSource, type FileChange } from '@friday/adapter-claude';
 import { FridayError } from '@friday/protocol';
-import { loadProject, privateDirFor } from '@friday/sdk';
+import { LINT_SKIP, LINT_SKIP_FILE, loadProject, privateDirFor } from '@friday/sdk';
 import {
   AGENTS_MD_BLOCK,
   fridayHookGroup,
   HARNESS_DIR,
   HARNESS_README,
   HOOK_GROUP,
+  HOOK_SHIM,
+  HOOK_SHIM_PATH,
   LAUNCH_MCP,
   MCP_ENTRY,
+  SKILL_MARKER,
+  SKILL_MD,
+  SKILL_PATH,
 } from './templates.js';
 
 export interface AntigravityConfigOptions {
@@ -55,6 +61,9 @@ export function readJsonObject(text: string | null, file: string): Record<string
 
 // No byte-order mark, LF endings: Antigravity failed to load hook files with a byte-order mark before CLI 1.3.1.
 const stringify = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
+
+/** The name Antigravity works under on a machine where nobody chose one. */
+export const DEFAULT_AGENT_KEY = 'antigravity-1';
 
 /** Friday's `friday` group added (or replaced) or removed; the user's groups keep their order. */
 export function mergeHooks(existing: Record<string, unknown>, install: boolean): Record<string, unknown> {
@@ -110,16 +119,24 @@ export function planAntigravity(opts: AntigravityConfigOptions): FileChange[] {
     });
   };
 
-  // The launcher reads this machine's agent key from the private folder, as for Claude Code: one
-  // key per machine and project, for every host attached from this machine.
+  // Antigravity's own name on this machine (2026-11-17), beside the one Claude Code works under
+  // (`agent_key`, kept as it is): the launcher and the MCP server read `hosts.antigravity` first.
+  // Before, both hosts read the one key, and the second to connect was a shadow of the first that
+  // could take no task.
   if (install) {
     const agentFile = path.join(privateDirFor(ref, opts.env), 'agent.json');
-    const current = readJsonObject(read(agentFile), agentFile).agent_key;
-    const agentKey = opts.agentKey ?? (typeof current === 'string' ? current : undefined) ?? 'dev-1';
+    const existing = readJsonObject(read(agentFile), agentFile);
+    const hosts =
+      existing.hosts && typeof existing.hosts === 'object' && !Array.isArray(existing.hosts)
+        ? (existing.hosts as Record<string, unknown>)
+        : {};
+    const current = hosts.antigravity;
+    const agentKey =
+      opts.agentKey ?? (typeof current === 'string' && current ? current : undefined) ?? DEFAULT_AGENT_KEY;
     if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(agentKey))
       throw new FridayError('invalid_request', `invalid agent key "${agentKey}"`);
     const before = read(agentFile);
-    const after = stringify({ agent_key: agentKey });
+    const after = stringify({ ...existing, hosts: { ...hosts, antigravity: agentKey } });
     if (before !== after)
       changes.push({
         path: agentFile,
@@ -127,7 +144,7 @@ export function planAntigravity(opts: AntigravityConfigOptions): FileChange[] {
         before,
         after,
         tracked: false,
-        note: `this machine's agent key: ${agentKey}`,
+        note: `Antigravity's agent key on this machine: ${agentKey}`,
         owned: true,
       });
   }
@@ -138,6 +155,22 @@ export function planAntigravity(opts: AntigravityConfigOptions): FileChange[] {
     install ? (opts.hookSource ?? bundledHookSource()) : null,
     true,
     'hook launcher (policy checks)',
+    true,
+  );
+  // Antigravity starts hooks in `.agents/`, where the hook command's path lands on this file.
+  add(
+    path.join(root, ...HOOK_SHIM_PATH.split('/')),
+    install ? HOOK_SHIM : null,
+    true,
+    'runs the hook launcher from .agents (where Antigravity starts hooks)',
+    true,
+  );
+  // The project's lint skips Friday's folder in `.agents` (2026-11-19, the trial's F18); removed with it.
+  add(
+    path.join(root, '.agents', '.friday', LINT_SKIP_FILE),
+    install ? LINT_SKIP : null,
+    true,
+    "keeps Friday's files out of the project's lint (ESLint 10 and later)",
     true,
   );
   add(path.join(harnessDir, 'launch-mcp.mjs'), install ? LAUNCH_MCP : null, true, 'starts the friday MCP server', true);
@@ -159,13 +192,20 @@ export function planAntigravity(opts: AntigravityConfigOptions): FileChange[] {
   addJson(
     path.join(agentsDir, 'hooks.json'),
     (e) => mergeHooks(e, install),
-    'Friday hooks (SessionStart, PreToolUse, PostToolUse, Stop)',
+    'Friday hooks (SessionStart, PreToolUse, PostToolUse, Stop, PreInvocation)',
   );
   addJson(
     path.join(agentsDir, 'mcp_config.json'),
     (e) => mergeMcpConfig(e, install),
     'registers the friday MCP server',
   );
+
+  // The `/friday` command. A skill named friday that the user wrote is theirs: Friday writes and
+  // removes only the one carrying its marker.
+  const skillFile = path.join(root, ...SKILL_PATH.split('/'));
+  const skillBefore = read(skillFile);
+  if (skillBefore === null || skillBefore.includes(SKILL_MARKER))
+    add(skillFile, install ? SKILL_MD : null, true, 'the /friday command (a skill)', true);
 
   const agentsMd = path.join(root, 'AGENTS.md');
   const mdBefore = read(agentsMd);
@@ -182,10 +222,16 @@ export function applyAntigravityPlan(changes: FileChange[]): void {
   applyPlan(changes);
   for (const c of changes) {
     if (c.after !== null || !c.display.startsWith('.agents/')) continue;
-    try {
-      rmdirSync(path.dirname(c.path));
-    } catch {
-      // not empty: the user's own files stay
+    // Every folder between the removed file and the project root, innermost first, `.agents` last.
+    let dir = path.dirname(c.path);
+    for (let depth = c.display.split('/').length - 1; depth > 0; depth -= 1) {
+      try {
+        rmdirSync(dir);
+      } catch {
+        // not empty: the user's own files stay
+        break;
+      }
+      dir = path.dirname(dir);
     }
   }
 }

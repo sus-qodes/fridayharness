@@ -240,6 +240,12 @@
               "string",
               "null"
             ]
+          },
+          "assign_to": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

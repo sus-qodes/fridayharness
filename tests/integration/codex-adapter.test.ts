@@ -145,6 +145,8 @@ const usageFrom = (total: Record<string, number> | undefined, model: string) => 
   output_tokens: total?.outputTokens ?? null,
   cache_read_input_tokens: total?.cachedInputTokens ?? null,
   cache_creation_input_tokens: total?.cacheWriteInputTokens ?? null,
+  // Its input is the whole prompt: counted once, with the cache in it (2026-11-18).
+  input_includes_cache: true,
   turns: 1,
   model,
 });

@@ -2,6 +2,7 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
   AttemptStops,
+  answerOf,
   classifyHostFailure,
   FINAL_SCHEMA,
   type GenericHarnessClient,
@@ -178,6 +179,8 @@ export function codexHostUsage(
     output_tokens: num(t.outputTokens),
     cache_read_input_tokens: num(t.cachedInputTokens),
     cache_creation_input_tokens: num(t.cacheWriteInputTokens),
+    // `inputTokens` is the whole prompt: `allTokens` must not add the cache to it again.
+    input_includes_cache: true,
     turns,
     model,
   };
@@ -772,7 +775,20 @@ export class CodexAdapter {
     const spent = { ...this.#spent(a), stop: () => stopped };
     if (turn.status === 'completed') {
       const final = parseFinal(a.lastMessage);
-      if (final.status === 'blocked') {
+      // A turn that answered nothing claims nothing: it is said to a person, never taken as "done".
+      if (!String(a.lastMessage ?? '').trim()) {
+        void reports.report(
+          'result',
+          {
+            ...ids,
+            status: 'blocked',
+            summary: 'ended without an answer',
+            blocked_reason:
+              'It ended its turn without doing or saying anything, so nothing is claimed as done. Continue it, or give the task to another agent.',
+          },
+          spent,
+        );
+      } else if (final.status === 'blocked') {
         void reports.report(
           'result',
           {
@@ -797,6 +813,8 @@ export class CodexAdapter {
             ...ids,
             status: 'completed_claim',
             summary: final.summary.slice(0, 2000) || 'done',
+            // A question's answer, when the thread gave one (Friday keeps it only for a question).
+            ...answerOf(final, ''),
             changed_paths: [...changed].slice(0, 200),
             // What the thread says it ran: verification's evidence, bounded by what the hooks saw.
             checks: final.checks,

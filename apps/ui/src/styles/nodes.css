@@ -616,6 +616,49 @@
   white-space: nowrap;
 }
 
+/* While Friday writes a goal's plan (2026-11-23): said in the card's body, with a slow pulse. */
+.nd-planning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: var(--text-caption);
+  line-height: 1.4;
+  color: var(--status-running);
+}
+
+.nd-planning-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--status-running);
+  animation: nd-planning-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes nd-planning-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not(.motion-on) .nd-planning-dot {
+    animation: none;
+  }
+}
+
+:root.reduce-motion .nd-planning-dot {
+  animation: none;
+}
+
 .nd-goal-foot {
   display: flex;
   align-items: center;
@@ -623,6 +666,24 @@
   height: 40px;
   padding: 0 12px;
   border-top: 1px solid var(--border-subtle);
+  /* Nothing leaves the card (2026-11-18): a button that does not fit is cut short, with its words in
+     its tooltip, instead of standing out of the card's right edge. */
+  overflow: hidden;
+}
+
+.nd-goal-foot > * {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.nd-goal-foot > .btn {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nd-goal-foot > .spacer,
+.nd-goal-foot > .btn-icon {
+  flex-shrink: 0;
 }
 
 .nd-integration {
@@ -641,6 +702,12 @@
 .nd-land {
   min-height: 26px;
   padding: 0 10px;
+}
+
+/* A goal a person landed: said, not offered. */
+.nd-landed {
+  color: var(--color-text-secondary, inherit);
+  font-weight: var(--weight-regular, 400);
 }
 
 /* ---- proposed plan --------------------------------------------------------------------------- */
@@ -702,6 +769,67 @@
   font-size: var(--text-caption);
 }
 
+/* The goal's story: one line per task, what needs the person first. Each line is 18px high, which
+   the layout counts on (`storyHeight`). */
+.nd-story {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.nd-story-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 18px;
+  font-size: var(--text-caption);
+  color: var(--color-slate-300);
+}
+
+.nd-story-mark {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-slate-500);
+}
+
+.nd-story-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.nd-story-you {
+  color: var(--color-amber);
+}
+
+.nd-story-you .nd-story-mark {
+  background: var(--color-amber);
+}
+
+.nd-story-work .nd-story-mark {
+  background: var(--color-neon-blue);
+}
+
+.nd-story-wait {
+  color: var(--color-slate-400);
+}
+
+.nd-story-wait .nd-story-mark {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--color-slate-500);
+}
+
+.nd-story-done {
+  color: var(--color-slate-400);
+}
+
+.nd-story-done .nd-story-mark {
+  background: var(--color-emerald);
+}
+
 /* What Friday did for the goal: one line under the card's body, the rows in its tooltip. */
 .nd-goal-did {
   font-size: var(--text-caption);
@@ -710,6 +838,16 @@
 }
 
 /* ---- agent pod ------------------------------------------------------------------------------- */
+/* What the agent is doing, in one sentence (2026-11-18). */
+.nd-doing {
+  margin: 4px 0 2px;
+  font-size: var(--text-base);
+  color: var(--color-slate-200);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .nd-pod {
   border-radius: var(--radius-lg);
   border: 1px solid rgba(56, 189, 248, 0.25);

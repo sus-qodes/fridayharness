@@ -2,10 +2,17 @@
  * Plan review (plan §7.5, §7.3): the proposed version of a goal's plan, task by task with its
  * change (new, keep, rework, drop) and note, and its diff against the active version
  * (`plans/:id/diff`); Approve, or Reject with a note.
+ *
+ * 2026-11-17: a proposed plan was approve or reject, nothing between, and a note sent with a
+ * rejection of a first plan went nowhere. Now:
+ * - **Edit before approving…** opens the plan in the editor as it was proposed; proposing the
+ *   edited plan replaces it.
+ * - **Reject and ask again** rejects it and asks the planner for a new one from the note (shown
+ *   while a planner is ready).
  */
 import type { LivePlanTask, LivePlanVersion } from '@friday/protocol';
 import { hasHidden, visible } from '../model/text.js';
-import type { AppContext, Component, ModalRequest } from '../shell/context.js';
+import { type AppContext, type Component, type ModalRequest, openModal } from '../shell/context.js';
 import { button, h, replace, setText } from '../ui/dom.js';
 import { cleanText, plural, stripEscapes, truncate } from '../ui/format.js';
 import { ARMING_TEXT, armDecisions, type Clock } from './arming.js';
@@ -36,6 +43,43 @@ interface PlanDiffView {
 }
 
 /** Reads the diff route's `diff` defensively (its type is the planner's, not the protocol's). */
+/** A glob's fixed beginning: `backend/**` gives `backend/`, a plain path gives itself. */
+const fixedPart = (glob: string): string => glob.replace(/[*?[{].*$/, '');
+
+/**
+ * Pairs of plan tasks that may change the same files and that neither depends on the other, by
+ * key (2026-11-17). Friday never runs two such tasks at once, so the plan is slower than it looks;
+ * the review says so before the person approves. The test is the coarse one delegation uses: one
+ * write scope's fixed beginning lies under the other's.
+ */
+export function tasksOnSameFiles(
+  tasks: readonly { key: string; depends_on: readonly string[]; scope?: { write?: readonly string[] } | null }[],
+): [string, string][] {
+  const byKey = new Map(tasks.map((t) => [t.key, t]));
+  const comesAfter = (a: string, b: string, seen = new Set<string>()): boolean => {
+    if (seen.has(a)) return false;
+    seen.add(a);
+    const deps = byKey.get(a)?.depends_on ?? [];
+    return deps.includes(b) || deps.some((d) => comesAfter(d, b, seen));
+  };
+  const meet = (x: readonly string[], y: readonly string[]) =>
+    x.some((a) => y.some((b) => fixedPart(a).startsWith(fixedPart(b)) || fixedPart(b).startsWith(fixedPart(a))));
+  const out: [string, string][] = [];
+  for (let i = 0; i < tasks.length; i += 1) {
+    for (let j = i + 1; j < tasks.length; j += 1) {
+      const a = tasks[i];
+      const b = tasks[j];
+      if (!a || !b) continue;
+      const wa = a.scope?.write ?? [];
+      const wb = b.scope?.write ?? [];
+      if (!wa.length || !wb.length || !meet(wa, wb)) continue;
+      if (comesAfter(a.key, b.key) || comesAfter(b.key, a.key)) continue;
+      out.push([a.key, b.key]);
+    }
+  }
+  return out;
+}
+
 export function readPlanDiff(raw: unknown): PlanDiffView | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
@@ -80,6 +124,16 @@ function taskRow(t: LivePlanTask): HTMLElement {
       `${t.kind} · ${t.role} · ${t.priority} priority · ${t.risk_level} risk`,
       t.depends_on.length ? ` · after ${t.depends_on.map((d) => visible(d)).join(', ')}` : '',
     ),
+    // Who takes it once approved: one agent by name, else whoever Friday gives it to by role.
+    t.assign_to
+      ? h(
+          'div',
+          { class: 'gv-plan-task-assign' },
+          'For ',
+          h('span', { class: 'mono' }, visible(t.assign_to)),
+          ': kept for this agent when you approve',
+        )
+      : null,
     // What the agent will be told: the description becomes its instruction, in full.
     t.description
       ? h('div', { class: 'gv-plan-desc' }, h('span', { class: 'gv-k' }, 'Instructions: '), decisionText(t.description))
@@ -201,11 +255,38 @@ export function planReview(
     id: noteId,
     rows: 2,
     maxLength: 2000,
-    placeholder: 'Why it is rejected (the planner reads it when it revises)',
+    placeholder: 'What should be different (the planner reads it when it plans again)',
   });
   const approve = button('Approve plan', () => undefined, { class: 'btn btn-primary gv-decide' });
+  // "Put this goal into my project when it has all passed" (2026-11-17): a choice for this goal
+  // alone. Offered where it can apply (the project has a required check) and is not the project's
+  // rule already.
+  const boardNow = ctx.store.select('board');
+  const landTick = h('input', { type: 'checkbox', class: 'gv-land-tick' }) as HTMLInputElement;
+  const landOffered =
+    (boardNow?.verification.checks.some((c) => c.required) ?? false) && (boardNow?.landing?.mode ?? 'ask') === 'ask';
+  const landRow = h(
+    'label',
+    { class: 'gv-land-row', hidden: !landOffered },
+    landTick,
+    h(
+      'span',
+      null,
+      'When every task of this goal has passed its checks, put it into my project without asking. Friday still stops if a file I changed is in the way.',
+    ),
+  );
   const reject = button('Reject with note', () => undefined, { class: 'btn btn-danger gv-decide' });
+  // The plan as it was proposed, in the editor: what a person changes there replaces this version.
+  const editFirst = button(
+    'Edit before approving…',
+    () => openModal(ctx, { kind: 'plan-editor', id: goalId, mode: active ? 'revision' : 'first', seed: 'proposed' }),
+    { class: 'btn' },
+  );
+  const plannerReady = () => ctx.store.select('board')?.brain?.planner_available === true;
+  const again = button('Reject and ask again', () => undefined, { class: 'btn gv-decide' });
+  again.hidden = !plannerReady();
   const tasks = [...p.tasks].sort((x, y) => x.position - y.position);
+  const sameFiles = tasksOnSameFiles(tasks);
 
   replace(
     el,
@@ -217,7 +298,7 @@ export function planReview(
       h(
         'span',
         { class: 'badge badge-info' },
-        p.proposed_by.kind === 'master_brain' ? 'Master Brain' : humanOrOther(p.proposed_by.kind),
+        p.proposed_by.kind === 'master_brain' ? 'Friday’s planner' : humanOrOther(p.proposed_by.kind),
       ),
     ),
     goal ? h('p', { class: 'gv-from' }, 'Goal: ', truncate(cleanText(goal.request), 300)) : null,
@@ -225,7 +306,13 @@ export function planReview(
     p.rationale
       ? h('p', { class: 'gv-why' }, h('span', { class: 'gv-k' }, 'Rationale: '), decisionText(p.rationale))
       : null,
-    h('p', { class: 'field-hint' }, `Trigger: ${cleanText(p.trigger)}`),
+    // Why this version came to be (a failed check, a note, written by hand): one step away.
+    h(
+      'details',
+      { class: 'gv-details' },
+      h('summary', null, 'Why this version was proposed'),
+      h('p', { class: 'muted' }, cleanText(p.trigger)),
+    ),
     p.needs_human
       ? h(
           'div',
@@ -237,6 +324,16 @@ export function planReview(
       : null,
     h('h4', { class: 'section-title' }, `Tasks (${tasks.length})`),
     h('ol', { class: 'gv-plan-tasks' }, ...tasks.map(taskRow)),
+    sameFiles.length
+      ? h(
+          'p',
+          { class: 'gv-plan-overlap field-hint' },
+          `These tasks may change the same files and do not depend on each other, so Friday runs them one after the other, not together: ${sameFiles
+            .slice(0, 4)
+            .map(([a, b]) => `${visible(a)} and ${visible(b)}`)
+            .join('; ')}${sameFiles.length > 4 ? '; …' : ''}.`,
+        )
+      : null,
     h('h4', { class: 'section-title' }, active ? `Against the active plan v${active.version}` : 'Changes'),
     diffBox,
     h(
@@ -245,7 +342,8 @@ export function planReview(
       h('label', { class: 'field-label', for: noteId }, 'Note (sent with a rejection)'),
       note,
     ),
-    h('div', { class: 'gv-actions' }, approve, reject),
+    landRow,
+    h('div', { class: 'gv-actions' }, approve, editFirst, again, reject),
     gone,
     hint,
     status,
@@ -272,6 +370,46 @@ export function planReview(
   });
   arming.register(approve);
   arming.register(reject);
+  arming.register(again);
+
+  again.addEventListener(
+    'click',
+    arming.guard(async () => {
+      if (busy || !gone.hidden) return;
+      const text = note.value.trim();
+      if (!text) {
+        setText(status, 'Say in the note what should be different: the planner plans again from it.');
+        note.focus();
+        return;
+      }
+      busy = true;
+      again.disabled = true;
+      setText(status, 'Rejecting…');
+      const rejected = await ctx.act('Reject the plan', () => ctx.api.rejectPlan(p.plan_id, p.version, text));
+      if (!rejected) {
+        busy = false;
+        again.disabled = false;
+        setText(status, '');
+        return;
+      }
+      // The rejection stands whatever follows; the new plan is a model call and can take a minute.
+      if (!disposed) setText(status, 'Rejected. Asking the planner for a new plan… (this can take a minute)');
+      const asked = await ctx.act(
+        'Ask for a new plan',
+        () => ctx.api.replan(goalId, text),
+        'The planner was asked for a new plan from your note',
+      );
+      busy = false;
+      ctx.refresh();
+      if (disposed) return;
+      if (asked) close();
+      else
+        setText(
+          status,
+          'The plan is rejected, but the planner could not be asked. Ask again from the goal, or write the plan yourself.',
+        );
+    }),
+  );
 
   approve.addEventListener(
     'click',
@@ -281,6 +419,10 @@ export function planReview(
       approve.disabled = true;
       setText(status, 'Approving…');
       const r = await ctx.act('Approve the plan', () => ctx.api.approvePlan(p.plan_id, p.version), 'Plan approved');
+      // The tick for this goal: said after the approval stands, and only when it differs from the project's own.
+      if (r && landTick.checked) {
+        await ctx.act('Land this goal without asking', () => ctx.api.goalLanding(goalId, 'goal'));
+      }
       busy = false;
       approve.disabled = false;
       if (r) {
@@ -318,7 +460,10 @@ export function planReview(
       gone.hidden = false;
       approve.disabled = true;
       reject.disabled = true;
+      again.disabled = true;
+      editFirst.disabled = true;
     }
+    again.hidden = !plannerReady();
   });
 
   return {

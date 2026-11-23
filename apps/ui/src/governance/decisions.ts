@@ -19,7 +19,7 @@ export type DecisionOutcome = 'done' | 'already' | 'failed' | 'busy';
 
 export const REACH_LABEL: Record<Reach, string> = {
   once: 'once',
-  run: 'for this attempt',
+  run: 'for this try',
   task: 'for this task',
 };
 
@@ -28,10 +28,22 @@ export const REACH_LABEL: Record<Reach, string> = {
  * counts as high.
  */
 export function modalReason(a: Pick<ApprovalRow, 'risk' | 'target'>, reuse: Reach): string | null {
-  if (riskOf(a) === 'high') return a.risk ? 'High risk needs the full view and a hold to authorize.' : 'Unknown risk.';
-  if (reuse === 'task') return 'A grant for the whole task needs the full view and a hold to authorize.';
-  if (!fits(a.target ?? '')) return 'The target is too long to decide from the card.';
+  if (riskOf(a) === 'high')
+    return a.risk ? 'A high-risk action is decided in the full view, with a hold.' : 'Its risk is not known.';
+  if (reuse === 'task') return 'Allowing it for the whole task is done in the full view, with a hold.';
+  if (!fits(a.target ?? '')) return 'What it asks for is too long to read on the card.';
   return null;
+}
+
+/**
+ * How a card grants for the whole task (2026-11-18). It opened the full view, in the Studio, with
+ * a hold, and the desktop then asked once more; from the Notch that view opened behind the Notch.
+ * A request the card may grant once is granted for its task from the card too, after one
+ * confirmation (the desktop's own dialog there, the page's elsewhere). High risk, and a target too
+ * long to read on the card, still go to the full view.
+ */
+export function taskGrantPath(a: Pick<ApprovalRow, 'risk' | 'target'>): 'confirm' | 'modal' {
+  return modalReason(a, 'once') === null ? 'confirm' : 'modal';
 }
 
 /** `one-click` when the card may grant it directly; `modal` otherwise. */

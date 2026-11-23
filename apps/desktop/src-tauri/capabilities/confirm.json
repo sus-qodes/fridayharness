@@ -1,0 +1,6 @@
+{
+  "identifier": "confirm",
+  "description": "Friday's own confirmation window (src/ask.rs): it may give its answer, and nothing else. The Studio and the Notch are not given this command, so a page that asked cannot answer itself.",
+  "windows": ["confirm"],
+  "permissions": ["allow-confirm-answer"]
+}

@@ -64,7 +64,7 @@ const actionOf = (c: { before: string | null; after: string | null }) =>
 export function geminiConfigCommand(
   g: GeminiGlobals,
   o: { agent?: string; print?: boolean; remove?: boolean; geminiMd?: boolean },
-  extraChanges?: (root: string) => FileChange[],
+  extraChanges?: (root: string, remove?: { host: string }) => FileChange[],
 ): void {
   const ref = loadProject(g.project);
   const changes = planGemini({
@@ -73,7 +73,7 @@ export function geminiConfigCommand(
     ...(o.remove ? { remove: true } : {}),
     ...(o.geminiMd === false ? { geminiMd: false } : {}),
   });
-  if (!o.remove) changes.push(...(extraChanges?.(ref.root) ?? []));
+  changes.push(...(extraChanges?.(ref.root, o.remove ? { host: 'gemini' } : undefined) ?? []));
   if (!o.print) applyGeminiPlan(changes, ref.root);
   const install = findGemini();
   const summary = {

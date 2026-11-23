@@ -961,3 +961,98 @@
 .gv-tray-empty {
   padding: 16px 8px;
 }
+
+/* A task with no agent to run it: the agents it can be given to, and the decision's own words. */
+.gv-run-on {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gv-run-on .field-label {
+  margin: 0;
+}
+
+.gv-details {
+  font-size: var(--text-caption);
+  color: var(--color-slate-400);
+}
+
+.gv-details summary {
+  cursor: pointer;
+}
+
+.gv-details p {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.gv-pin-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: var(--text-sm);
+}
+
+/* The card for a check that failed where the install failed: what "Install again" did. */
+.gv-setup-result:empty {
+  display: none;
+}
+
+.gv-setup-result p {
+  margin: 6px 0 0;
+}
+
+.gv-setup-ok {
+  color: var(--green-2);
+}
+
+/* The tick on a plan's Approve: land this goal without asking (2026-11-17). */
+.gv-land-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 4px 0 8px;
+  color: var(--color-slate-300);
+  font-size: var(--text-caption);
+}
+
+.gv-land-row[hidden] {
+  display: none;
+}
+
+/* A file the person and the goal both changed: one row per file, with both versions on request. */
+.gv-folder-files {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gv-folder-file {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.gv-folder-both[hidden] {
+  display: none;
+}
+
+.gv-folder-both {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+/* A press that came a moment before the card armed is kept, and shows that it was taken (2026-11-18). */
+.gv-held,
+.gv-held.gv-unarmed {
+  opacity: 1;
+  cursor: progress;
+  outline: 2px solid rgba(34, 211, 238, 0.7);
+  outline-offset: 2px;
+}

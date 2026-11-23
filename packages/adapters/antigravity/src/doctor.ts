@@ -9,7 +9,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import os from 'node:os';
 import path from 'node:path';
 import { bundledHookSource, compareVersions } from '@friday/adapter-claude';
-import { DaemonClient, type ProjectRef, readDiscovery, readInstallInfo, readToken } from '@friday/sdk';
+import { DaemonClient, installCheck, type ProjectRef, readDiscovery, readToken } from '@friday/sdk';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import {
@@ -31,11 +31,15 @@ import {
   HARNESS_DIR,
   HOOK_EVENTS,
   HOOK_GROUP,
+  HOOK_SHIM,
+  HOOK_SHIM_PATH,
   HOOK_TIMEOUTS_S,
   hookCommand,
   LAUNCH_MCP,
   launcherBudgetMs,
   MCP_ENTRY,
+  SKILL_MARKER,
+  SKILL_PATH,
   TOOL_MATCHER,
 } from './templates.js';
 
@@ -63,6 +67,8 @@ export interface AntigravityDoctorOptions {
   found?: AntigravityFound;
   /** Override the recorded failure behaviour (tests). */
   evidence?: FailureEvidence;
+  /** The MCP server entry of the copy of Friday that runs the check (tests); null for none. */
+  ownMcpEntry?: string | null;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -294,6 +300,26 @@ export async function antigravityDoctor(
             },
     );
   }
+  // Antigravity starts hooks in `.agents/` (observed on CLI 1.4.4): without this file there, every
+  // hook ends with "Cannot find module" and Friday sees none of the session's tool calls.
+  const shimText = readText(path.join(root, ...HOOK_SHIM_PATH.split('/')));
+  checks.push(
+    shimText === HOOK_SHIM
+      ? {
+          id: 'ag.hook-shim',
+          status: 'ok',
+          message: 'the hook command also runs from .agents, where Antigravity starts hooks',
+        }
+      : {
+          id: 'ag.hook-shim',
+          status: 'fail',
+          message:
+            shimText === undefined
+              ? `${HOOK_SHIM_PATH} is missing: Antigravity starts hooks in .agents and would not find the launcher`
+              : `${HOOK_SHIM_PATH} differs from the current template`,
+          fix: CONFIG_FIX,
+        },
+  );
   const launch = path.join(harnessDir, 'launch-mcp.mjs');
   const launchText = readText(launch);
   checks.push(
@@ -365,19 +391,28 @@ export async function antigravityDoctor(
       : { id: 'ag.agents-md', status: 'warn', message: 'AGENTS.md has no Friday block', fix: CONFIG_FIX },
   );
 
-  const info = readInstallInfo(env);
-  const mcpEntry = env.FRIDAY_MCP_ENTRY ?? info?.mcp_server_entry ?? undefined;
-  const entryOk = Boolean(mcpEntry && existsSync(mcpEntry));
+  // The `/friday` command: a convenience, so a missing one is a warning, and the user's own skill of that name is theirs.
+  const skill = readText(path.join(root, ...SKILL_PATH.split('/')));
   checks.push(
-    entryOk
-      ? { id: 'ag.install', status: 'ok', message: `MCP server entry: ${mcpEntry}` }
-      : {
-          id: 'ag.install',
-          status: 'fail',
-          message: 'Friday is not set up on this machine (install.json has no MCP server entry)',
-          fix: 'run "pnpm build" in the Friday repository, then "friday setup"',
-        },
+    skill?.includes(SKILL_MARKER)
+      ? { id: 'ag.skill', status: 'ok', message: `the /friday command is in place (${SKILL_PATH})` }
+      : skill
+        ? {
+            id: 'ag.skill',
+            status: 'info',
+            message: `${SKILL_PATH} is a skill of your own, so Friday did not write its /friday command`,
+          }
+        : { id: 'ag.skill', status: 'warn', message: 'the /friday command is missing', fix: CONFIG_FIX },
   );
+
+  // A warning when the Antigravity a person opens would start another copy of Friday than this one.
+  const { entry: mcpEntry, ...machine } = installCheck({
+    env,
+    named: env.FRIDAY_MCP_ENTRY,
+    own: opts.ownMcpEntry,
+  });
+  const entryOk = mcpEntry !== undefined;
+  checks.push({ id: 'ag.install', ...machine });
 
   // Secrets: the live tokens must not appear in any file Antigravity loads from the project.
   const live = [readToken(ref, 'operator', env), readToken(ref, 'bootstrap', env)].filter((t): t is string =>

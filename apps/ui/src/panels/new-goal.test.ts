@@ -51,7 +51,7 @@ describe('new goal enabling rules', () => {
     );
     expect(off.canPlan).toBe(false);
     expect(off.valid).toBe(true);
-    expect(off.plannerText).toBe('The Master Brain cannot plan yet: store a provider key.');
+    expect(off.plannerText).toBe('Friday cannot write plans yet: store your API key.');
     expect(goalFormState(form('Add billing'), null).plannerText).toMatch(/not running/);
     expect(goalFormState(form('ab'), brain()).canPlan).toBe(false);
   });
@@ -59,16 +59,48 @@ describe('new goal enabling rules', () => {
   it('turns the planner reasons into interface words', () => {
     const text = (b: Partial<BrainStatusView>) =>
       goalFormState(form('Add billing'), brain({ planner_available: false, ...b })).plannerText;
-    expect(text({ approved_here: false })).toBe('The Master Brain cannot plan yet: allow this clone to spend.');
-    expect(text({ allow_remote: false })).toBe(
-      "The Master Brain cannot plan yet: the project's config does not allow remote planning.",
+    expect(text({ approved_here: false })).toBe(
+      'Friday cannot write plans yet: allow planning to spend on this computer.',
     );
+    expect(text({ allow_remote: false })).toBe('Friday cannot write plans yet: allow it for this project.');
     expect(text({ key: 'missing', approved_here: false, allow_remote: false })).toMatch(
-      /store a provider key; allow this clone to spend; the project's config/,
+      /store your API key; allow planning to spend on this computer; allow it for this project/,
     );
     expect(text({ remote: false, reason: 'the provider "none" cannot plan' })).toBe(
-      'The Master Brain cannot plan: the provider "none" cannot plan.',
+      'Friday cannot write plans: the provider "none" cannot plan.',
     );
+  });
+
+  /**
+   * Nobody chose a planner on this computer and the project's own is not ready (2026-11-23): the
+   * steps of an Anthropic key were named to people who have Codex, another key, or nothing yet.
+   */
+  it('says to choose who writes the plans, where nobody chose yet', () => {
+    const fresh = goalFormState(
+      form('Add billing'),
+      brain({
+        planner_available: false,
+        key: 'missing',
+        approved_here: false,
+        allow_remote: false,
+        planners: [],
+        choice: { here: null, project: 'anthropic', wanted: 'anthropic' },
+      }),
+    );
+    expect(fresh.plannerText).toBe(
+      'Friday cannot write plans yet: choose who writes your plans (Claude Code, Codex, a key of your own, or a model on this computer).',
+    );
+    // A person who chose one is told its own next step, as before.
+    const chosen = goalFormState(
+      form('Add billing'),
+      brain({
+        planner_available: false,
+        key: 'missing',
+        planners: [],
+        choice: { here: 'anthropic', project: 'anthropic', wanted: 'anthropic' },
+      }),
+    );
+    expect(chosen.plannerText).toBe('Friday cannot write plans yet: store your API key.');
   });
 
   it('limits constraints and outcomes and drops empty lines from the body', () => {
@@ -87,16 +119,16 @@ describe('new goal enabling rules', () => {
 });
 
 describe('new goal modal', () => {
-  it('disables "Let the Master Brain plan" without a planner and links to Settings → Planner', () => {
+  it('disables "Let Friday plan" without a planner and links to Settings → Planner', () => {
     const ctx = makeContext({ snapshot: makeSnapshot({ brain: brain({ planner_available: false, key: 'missing' }) }) });
     const m = newGoalModal(ctx, { kind: 'new-goal' }, () => undefined);
     type(m.el.querySelector('textarea') as HTMLTextAreaElement, 'Add billing');
-    expect(buttonBy(m.el, 'Let the Master Brain plan').disabled).toBe(true);
+    expect(buttonBy(m.el, 'Let Friday plan').disabled).toBe(true);
     expect(buttonBy(m.el, 'Write the plan myself').disabled).toBe(false);
-    expect(m.el.textContent).toContain('store a provider key');
+    expect(m.el.textContent).toContain('store your API key');
     expect(m.el.textContent).toContain('You can always write the plan yourself');
     buttonBy(m.el, 'Settings → Planner').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'planner' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'planner', drawer: null });
     m.destroy();
   });
 
@@ -106,7 +138,7 @@ describe('new goal modal', () => {
     const m = newGoalModal(ctx, { kind: 'new-goal' }, () => {
       closed += 1;
     });
-    const plan = buttonBy(m.el, 'Let the Master Brain plan');
+    const plan = buttonBy(m.el, 'Let Friday plan');
     expect(plan.disabled).toBe(true);
     type(m.el.querySelector('textarea') as HTMLTextAreaElement, 'Add billing');
     buttonBy(m.el, 'Add constraint').click();
@@ -160,5 +192,56 @@ describe('new goal modal', () => {
     expect(ctx.toasts.at(-1)).toMatchObject({ kind: 'error', text: 'Create the goal' });
     expect(buttonBy(m.el, 'Write the plan myself').disabled).toBe(false);
     m.destroy();
+  });
+});
+
+describe('a question, or one task, from the dialog (2026-11-18)', () => {
+  it('offers both without a planner, and sends each as its own mode, with no plan editor', async () => {
+    for (const [label, mode, toast] of [
+      ['Just answer this', 'ask', 'Asked: the answer appears here when it is ready'],
+      ['Do it now, one agent', 'do', 'Started: one agent takes it now'],
+    ] as const) {
+      const ctx = makeContext({
+        snapshot: makeSnapshot({ brain: brain({ planner_available: false, key: 'missing' }) }),
+        answers: { 'POST /goals': makeGoal() },
+      });
+      let closed = 0;
+      const m = newGoalModal(ctx, { kind: 'new-goal' }, () => {
+        closed += 1;
+      });
+      expect(buttonBy(m.el, label).disabled).toBe(true);
+      type(m.el.querySelector('textarea') as HTMLTextAreaElement, 'How does checkout work?');
+      expect(buttonBy(m.el, label).disabled).toBe(false);
+      buttonBy(m.el, label).click();
+      await flush();
+      expect(ctx.transport.to('POST', '/goals')[0]?.body).toEqual({
+        request: 'How does checkout work?',
+        constraints: [],
+        outcomes: [],
+        priority: 'normal',
+        plan: false,
+        mode,
+      });
+      expect(ctx.toasts.at(-1)?.text).toBe(toast);
+      expect(closed).toBe(1);
+      expect(ctx.store.select('ui').modal?.kind).not.toBe('plan-editor');
+      m.destroy();
+    }
+  });
+
+  it('keeps a planned goal as it was: no mode is sent', () => {
+    expect(goalBody({ request: ' Add billing ', constraints: [], outcomes: [], priority: 'normal' }, true)).toEqual({
+      request: 'Add billing',
+      constraints: [],
+      outcomes: [],
+      priority: 'normal',
+      plan: true,
+    });
+    expect(
+      goalBody({ request: 'x y z', constraints: [], outcomes: [], priority: 'normal' }, true, 'ask'),
+    ).toMatchObject({
+      plan: false,
+      mode: 'ask',
+    });
   });
 });

@@ -283,12 +283,16 @@ describe('Cursor in spawn mode: what an attempt does (plan M8b.2)', () => {
     ]);
     expect(existsSync(path.join(root, 'src', 'ok.ts'))).toBe(true);
     expect(existsSync(path.join(root, 'docs', 'no.md'))).toBe(false);
-    // A commit is a human's decision, and no human is at a spawned session: one pending approval.
+    // A commit is a human's decision, and no human is at a spawned session: one request for a person.
     const commit = c.entries().find((e) => e.hook === 'beforeShellExecution' && e.decision === 'deny');
-    expect(String(commit?.reason)).toMatch(/^Friday: .*A human decides this \(approval apr_/);
-    expect(td.daemon.state.q.approvals(pid, 'pending').filter((a) => a.capability === 'shell.git.commit')).toHaveLength(
-      1,
-    );
+    expect(String(commit?.reason)).toMatch(/^Friday: .*The person was asked in Friday \(approval apr_/);
+    // One request for it, which ended with the attempt that asked (2026-11-18).
+    expect(
+      td.daemon.state.q
+        .approvals(pid)
+        .filter((a) => a.capability === 'shell.git.commit')
+        .map((a) => a.status),
+    ).toEqual(['revoked']);
     // Friday's tools came from the adapter's own server, by the attempt's secret.
     expect(c.entries().find((e) => e.mcp)?.mcp).toEqual({ friday: [...SPAWNED_AGENT_TOOLS] });
     expect(c.entries().find((e) => e.toolCall === 'friday_request_context')).toMatchObject({ success: true });

@@ -77,6 +77,7 @@ const PATHS = {
   goal: ['M5 21V4', 'M5 4h11l-2 4l2 4H5'],
   logout: ['M10 4H5v16h5', 'M14 8l4 4l-4 4', 'M18 12H9'],
   chevronDown: ['M6 9l6 6l6-6'],
+  chevronUp: ['M6 15l6-6l6 6'],
   chevronRight: ['M9 6l6 6l-6 6'],
   chevronLeft: ['M15 18l-6-6 6-6'],
   sidebar: ['M3 4h18v16H3z', 'M15 4v16'],

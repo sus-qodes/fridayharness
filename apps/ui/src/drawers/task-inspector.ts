@@ -5,6 +5,7 @@
  * was given (the packet the agent received and why: it explains Friday, not the task). It reads the
  * board snapshot and follows it; the three tabs after Overview load when first shown.
  */
+
 import type {
   ContextExplanation,
   ContextPacket,
@@ -16,8 +17,20 @@ import type {
   TaskView,
   VerificationView,
 } from '@friday/protocol';
-import { notStartedText, PRIORITY, RISK, TASK_KIND, WAITING_REASON } from '../model/status.js';
+import { modelName } from '../model/models.js';
+import {
+  CHECK_WORDS,
+  MERGE_WORDS,
+  notStartedText,
+  PRIORITY,
+  RISK,
+  TASK_KIND,
+  WAITING_REASON,
+  wordsFor,
+} from '../model/status.js';
 import { visible } from '../model/text.js';
+import { checkName, checkOutput, findingsList, ranOutOfTime, summaryIsCodes } from '../panels/check-details.js';
+import { cancelTask } from '../shell/cancel-task.js';
 import { type AppContext, type Component, type DrawerRequest, openDrawer, openModal } from '../shell/context.js';
 import { append, button, type Child, h, replace } from '../ui/dom.js';
 import { cleanText, duration, humanize, plural, shortId, timeAgo, truncate } from '../ui/format.js';
@@ -39,9 +52,10 @@ import {
   tabs,
 } from './common.js';
 import { describeEvent, HISTORY_PAGE, mayHaveOlder, mergeEvents, olderBefore } from './events.js';
+import { taskGrants } from './task-grants.js';
 
 export type InspectorTab = 'overview' | 'changes' | 'history' | 'context';
-export type InspectorAction = 'verify' | 'continue' | 'rework' | 'recover' | 'cancel';
+export type InspectorAction = 'verify' | 'continue' | 'rework' | 'recover' | 'unstick' | 'cancel';
 
 /** The tabs in their order on the screen. */
 export const INSPECTOR_TABS: readonly InspectorTab[] = ['overview', 'changes', 'history', 'context'];
@@ -65,11 +79,28 @@ export function inspectorActions(
   if (task.status === 'FAILED') out.push('rework');
   if (task.status === 'HARNESS_LOST' || task.waiting_reason === 'agent_error' || opts.recoveryQuestion)
     out.push('recover');
+  // A task an agent holds and does nothing with (connected, and idle) had Cancel alone
+  // (2026-11-17). The same dialog gives it to another agent or starts it again, with the work kept;
+  // it is offered quietly, since a task that is running well needs none of it.
+  else if (task.status === 'RUNNING' || task.status === 'ASSIGNED') out.push('unstick');
   if (!TERMINAL.has(task.status)) out.push('cancel');
   return out;
 }
 
-type InspectedTask = TaskView & Partial<Pick<SnapshotTask, 'agent_key' | 'waiting_note' | 'delegation_note'>>;
+type InspectedTask = TaskView & Partial<Pick<SnapshotTask, 'agent_key' | 'waiting_note' | 'delegation_note' | 'why'>>;
+
+/**
+ * Why the task went to its agent and runs on its model (2026-11-18): "Why claude-1: the best fit of
+ * the free agents. Why Claude Opus 5.5: you chose it for every task (Settings → Models)." Null when
+ * Friday has nothing on record.
+ */
+export function whyLine(why: SnapshotTask['why']): string | null {
+  if (!why) return null;
+  const parts: string[] = [];
+  if (why.agent && why.agent_key) parts.push(`Why ${cleanText(why.agent_key)}: ${why.agent}.`);
+  if (why.model && why.model_reason) parts.push(`Why ${modelName(why.model)}: ${why.model_reason}.`);
+  return parts.length ? parts.join(' ') : null;
+}
 
 interface View {
   task: InspectedTask;
@@ -244,6 +275,14 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
             button([icon('shield', 14), 'Recover…'], () => openModal(ctx, { kind: 'recover', id }), { class: 'btn' }),
           );
           break;
+        case 'unstick':
+          buttons.push(
+            button('Not moving?…', () => openModal(ctx, { kind: 'recover', id }), {
+              class: 'btn btn-ghost',
+              title: 'Give the task to another agent, or start it again. The work so far is kept.',
+            }),
+          );
+          break;
         case 'cancel':
           buttons.push(button([icon('cross', 14), 'Cancel task'], () => void cancel(v), { class: 'btn btn-danger' }));
           break;
@@ -253,23 +292,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
   }
 
   async function cancel(v: View): Promise<void> {
-    const ok = await ctx.confirm({
-      title: 'Cancel this task?',
-      body: [
-        `“${truncate(cleanText(v.task.summary), 160)}” stops for good: it will not run again.`,
-        'Its worktree and its preserved work are kept.',
-      ],
-      confirmLabel: 'Cancel task',
-      cancelLabel: 'Keep it',
-      danger: true,
-    });
-    if (!ok) return;
-    await ctx.act(
-      'Cancel the task',
-      () => ctx.api.taskAction(id, 'cancel', 'cancelled in the inspector'),
-      'Task cancelled',
-    );
-    ctx.refresh();
+    await cancelTask(ctx, v.task, { reason: 'cancelled in the inspector' });
   }
 
   function taskLink(taskId: string): HTMLElement {
@@ -289,17 +312,27 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
   }
 
   function renderVerification(ver: VerificationView | null): Child {
-    if (!ver) return empty('Not verified yet.');
+    if (!ver) return empty('Not checked yet.');
     const run = ver.checks.filter((c) => !NOT_RUN.has(c.status));
     const passed = run.filter((c) => c.status === 'PASSED').length;
+    // Friday's own checks alone (scope, credentials, evidence): none of the project's ran, because
+    // none is set. "Passed" then says less than it reads, so it is said (2026-11-17).
+    const fridayOnly = run.length > 0 && run.every((c) => c.origin === 'friday');
     return [
       h(
         'div',
         { class: 'row-wrap' },
-        badge(humanize(ver.status), TONE_OF_CHECK[ver.status] ?? 'muted'),
+        badge(wordsFor(CHECK_WORDS, ver.status), TONE_OF_CHECK[ver.status] ?? 'muted'),
         h('span', null, `${passed} passed of ${run.length} run`),
         ver.ended_at ? h('span', { class: 'muted', title: ver.ended_at }, timeAgo(ver.ended_at, ctx.now())) : null,
       ),
+      fridayOnly
+        ? h(
+            'p',
+            { class: 'dr-text muted', dataset: { role: 'friday-only' } },
+            'Checked by Friday only: this project has no checks of its own set (tests, lint, build). Friday checked that the changes stay in scope, hold no credentials and were run, not that the project’s tests pass.',
+          )
+        : null,
       ver.summary ? h('p', { class: 'dr-text' }, truncate(cleanText(ver.summary), 600)) : null,
       ver.checks.length
         ? h(
@@ -309,12 +342,24 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
               h(
                 'li',
                 { class: 'dr-check' },
-                badge(humanize(c.status), TONE_OF_CHECK[c.status] ?? 'muted'),
-                h('span', { class: 'dr-mono' }, cleanText(c.name)),
+                ranOutOfTime(c)
+                  ? badge('Ran out of time', 'warn')
+                  : badge(wordsFor(CHECK_WORDS, c.status), TONE_OF_CHECK[c.status] ?? 'muted'),
+                // Friday's own checks by what they check; the name as the daemon has it in the tooltip.
+                h(
+                  'span',
+                  { class: c.origin === 'friday' ? 'dr-check-name' : 'dr-mono', title: cleanText(c.name) },
+                  checkName(c.name),
+                ),
                 h('span', { class: 'muted' }, duration(c.duration_ms)),
                 c.required ? null : badge('advisory', 'muted'),
                 c.origin === 'friday' ? badge('Friday', 'info', "Friday's own check: it runs no project code") : null,
-                c.summary ? h('div', { class: 'dr-check-summary muted' }, truncate(cleanText(c.summary), 300)) : null,
+                // What it found, in words, in place of a line of rule codes.
+                findingsList(c),
+                c.summary && !summaryIsCodes(c)
+                  ? h('div', { class: 'dr-check-summary muted' }, truncate(cleanText(c.summary), 300))
+                  : null,
+                checkOutput(ctx, c.artifact_ref),
               ),
             ),
           )
@@ -323,12 +368,12 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
   }
 
   function renderIntegration(i: IntegrationView | null): Child {
-    if (!i) return empty('Not integrated into a goal branch yet.');
+    if (!i) return empty('Not merged into its goal yet.');
     return [
       h(
         'div',
         { class: 'row-wrap' },
-        badge(humanize(i.status), INTEGRATION_TONE[i.status]),
+        badge(wordsFor(MERGE_WORDS, i.status), INTEGRATION_TONE[i.status]),
         i.branch ? mono(i.branch) : null,
         i.merged_commit ? h('span', { class: 'muted' }, `at ${shortSha(i.merged_commit)}`) : null,
       ),
@@ -348,6 +393,30 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
     ];
   }
 
+  /**
+   * What was allowed for this task and still holds, each with "Take back". The heading shows only
+   * while there is something under it, which is seldom.
+   */
+  let grants: ReturnType<typeof taskGrants> | null = null;
+  function grantsSection(): HTMLElement {
+    grants?.destroy();
+    const box = section('Allowed for this task');
+    box.hidden = true;
+    const made = taskGrants(ctx, id, (count) => {
+      box.hidden = count === 0;
+    });
+    grants = made;
+    box.append(
+      h(
+        'p',
+        { class: 'dr-text muted' },
+        'You allowed these without asking again. Take one back and the agent asks the next time.',
+      ),
+      made.el,
+    );
+    return box;
+  }
+
   function renderOverview(v: View): void {
     const t = v.task;
     const board = ctx.store.select('board');
@@ -364,9 +433,10 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
             h('span', { class: 'dr-text' }, truncate(cleanText(t.waiting_note), 1000)),
           )
         : null,
-      t.status === 'READY' && t.delegation_note
+      (t.status === 'READY' || t.status === 'PROPOSED') && t.delegation_note
         ? h('div', { class: 'dr-banner', role: 'note' }, truncate(notStartedText(cleanText(t.delegation_note)), 400))
         : null,
+      whyLine(t.why) ? h('p', { class: 'dr-why muted', dataset: { role: 'why' } }, whyLine(t.why)) : null,
       section(
         'Description',
         t.description ? h('p', { class: 'dr-text dr-prewrap' }, cleanText(t.description)) : empty('No description.'),
@@ -381,13 +451,14 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
             )
           : empty('No acceptance criteria.'),
       ),
-      section('Verification', renderVerification(v.verification)),
+      // Section titles in a person's words (2026-11-19): Verification, Scope, Integration were Friday's.
+      section('Checks', renderVerification(v.verification)),
       section(
-        'Scope',
+        'Files it may change',
         h(
           'div',
           { class: 'dr-scope' },
-          h('span', { class: 'muted' }, 'write'),
+          h('span', { class: 'muted' }, 'may change'),
           scope.write.length
             ? h(
                 'span',
@@ -395,7 +466,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
                 scope.write.map((g) => h('span', { class: 'pill dr-pill-write' }, visible(g))),
               )
             : h('span', { class: 'muted' }, 'nothing'),
-          h('span', { class: 'muted' }, 'read'),
+          h('span', { class: 'muted' }, 'may read'),
           scope.read.length
             ? h(
                 'span',
@@ -412,7 +483,8 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
           : empty('Nothing: it can start on its own.'),
       ),
       dependents.length ? section('Needed by', h('ul', { class: 'dr-deps' }, dependents.map(taskLink))) : null,
-      section('Integration', renderIntegration(v.integration)),
+      grantsSection(),
+      section('Merging into the goal', renderIntegration(v.integration)),
       section(
         'Timing',
         facts([
@@ -437,6 +509,16 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
     const fileSources = packet.sections
       .flatMap((s) => s.sources)
       .filter((s) => s.source_type === 'file' || s.source_type === 'graph');
+    /**
+     * The file a source is about, for the code graph (2026-11-18): `src/a.ts`, or the file of
+     * `src/a.ts#Money`. The repository's shape (`graph:<version>`) and a name looked up
+     * (`name:Money`) are no file: the button sent them as one, and the graph answered with an error.
+     */
+    const fileOf = (id: string): string | null => {
+      if (/^(graph|name):/.test(id)) return null;
+      const file = id.split('#')[0] ?? '';
+      return file && !file.endsWith('/') ? file : null;
+    };
     const files = [...new Map(fileSources.map((s) => [s.source_id, s] as const)).values()];
     const included = new Map((explanation?.included ?? []).map((i) => [i.source_id, i]));
     const fileIds = new Set(files.map((f) => f.source_id));
@@ -491,11 +573,13 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
                     { class: 'row' },
                     mono(f.source_id, 'dr-ctx-path'),
                     h('span', { class: 'spacer' }),
-                    button(
-                      [icon('graph', 14), 'Code graph'],
-                      () => openDrawer(ctx, { kind: 'graph', path: f.source_id }),
-                      { class: 'btn btn-ghost', ariaLabel: `Code graph of ${visible(f.source_id)}` },
-                    ),
+                    fileOf(f.source_id)
+                      ? button(
+                          [icon('graph', 14), 'Code graph'],
+                          () => openDrawer(ctx, { kind: 'graph', path: fileOf(f.source_id) as string }),
+                          { class: 'btn btn-ghost', ariaLabel: `Code graph of ${visible(fileOf(f.source_id) ?? '')}` },
+                        )
+                      : null,
                   ),
                   h(
                     'div',
@@ -509,7 +593,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
                 );
               }),
             )
-          : empty('No files: the packet holds the task, its state and its history only.'),
+          : empty('No files: the agent was given the task, its state and its history only.'),
       ),
     );
     if (others.length) {
@@ -627,7 +711,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
       const d = await ctx.api.deliveredContext(id);
       if (destroyed) return;
       if (!d.context_id) {
-        replace(delivered, empty('No context packet was delivered to an agent for this task yet.'));
+        replace(delivered, empty('No agent was given anything for this task yet.'));
         return;
       }
       const r = await explainOf(d.context_id);
@@ -660,7 +744,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
   function renderChangesInfo(v: View): void {
     const run = v.run;
     if (!run) {
-      replace(changesInfo, empty('No attempt yet: the task has no worktree.'));
+      replace(changesInfo, empty('Not tried yet: the task has no folder of its own.'));
       return;
     }
     const root = run.execution_root;
@@ -668,12 +752,12 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
       changesInfo,
       facts([
         [
-          'Attempt',
-          `${run.attempt} · ${humanize(run.status)}${run.workspace === 'pending' ? ' · worktree being prepared' : ''}`,
+          'Try',
+          `${run.attempt} · ${humanize(run.status)}${run.workspace === 'pending' ? ' · its folder is being prepared' : ''}`,
         ],
         ['Branch', run.branch_ref ? mono(run.branch_ref) : '—'],
         [
-          'Worktree',
+          'Task folder',
           root
             ? h(
                 'span',
@@ -681,7 +765,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
                 mono(root),
                 button(icon('expand', 14), () => ctx.platform.openInEditor(root), {
                   class: 'btn btn-ghost btn-icon',
-                  ariaLabel: 'Open the worktree in VS Code',
+                  ariaLabel: 'Open the task folder in VS Code',
                   title: 'Open in VS Code',
                 }),
               )
@@ -696,7 +780,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
                 { class: 'dr-mono', title: v.verification.commit_sha },
                 `${shortSha(v.verification.commit_sha)} (verified)`,
               )
-            : h('span', { class: 'muted' }, 'not verified yet'),
+            : h('span', { class: 'muted' }, 'not checked yet'),
         ],
         ['Model', run.model_observed ?? run.model_requested ?? '—'],
       ]),
@@ -925,6 +1009,7 @@ export function createTaskInspector(ctx: AppContext, request: DrawerRequest): Co
     title,
     destroy() {
       destroyed = true;
+      grants?.destroy();
       for (const u of unsubscribe) u();
       el.remove();
     },

@@ -20,6 +20,7 @@ import type {
   VerificationView,
 } from '@friday/protocol';
 import type { LayoutGroup, LayoutInput, LayoutItem, LayoutPod } from './layout.js';
+import { storyHeight, storyOfGoal } from './story.js';
 
 /** Task statuses that end a task. */
 export const TERMINAL_STATUSES: ReadonlySet<string> = new Set(['COMPLETED', 'CANCELLED', 'ABANDONED']);
@@ -421,7 +422,7 @@ export function taskCardParts(board: Board, task: SnapshotTask, dropped: boolean
   const note =
     task.status === 'WAITING' && task.waiting_note
       ? 'blocked'
-      : task.status === 'READY' && task.delegation_note
+      : (task.status === 'READY' || task.status === 'PROPOSED') && task.delegation_note
         ? 'delegation'
         : null;
   const badges =
@@ -443,8 +444,10 @@ export function taskCardHeight(parts: TaskCardParts): number {
   return h;
 }
 
-export function goalCardHeight(goal: GoalView): number {
-  return NODE_SIZE.goal.h + (goal.constraints.length || goal.inferred_constraints.length ? 26 : 0);
+export function goalCardHeight(goal: GoalView, storyLines = 0): number {
+  return (
+    NODE_SIZE.goal.h + (goal.constraints.length || goal.inferred_constraints.length ? 26 : 0) + storyHeight(storyLines)
+  );
 }
 
 /** The layout input: groups in board order, then the loose tasks, then the pods. */
@@ -467,7 +470,12 @@ export function layoutInputOf(board: Board): LayoutInput {
       const ghost = board.ghosts.get(id) as PlanGhost;
       items.push({ id, ...NODE_SIZE.ghost, deps: ghost.deps });
     }
-    groups.push({ id: g.id, root: { id: g.id, w: NODE_SIZE.goal.w, h: goalCardHeight(g.goal), deps: [] }, items });
+    const story = storyOfGoal(board.snapshot, g.goal.goal_id).length;
+    groups.push({
+      id: g.id,
+      root: { id: g.id, w: NODE_SIZE.goal.w, h: goalCardHeight(g.goal, story), deps: [] },
+      items,
+    });
   }
   if (board.loose.length) {
     groups.push({
@@ -483,15 +491,65 @@ export function layoutInputOf(board: Board): LayoutInput {
   return { groups, pods };
 }
 
-/** Agents a task can be given to (Reassign): connected, not shadows, not the current holder. */
-export function assignableAgents(snapshot: UiSnapshot | null, task: SnapshotTask): AgentView[] {
+/** Hosts by the name a person knows them by. */
+const HOST_NAMES: Record<string, string> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  antigravity: 'Antigravity',
+  cursor: 'Cursor',
+  gemini: 'Gemini CLI',
+  opencode: 'OpenCode',
+};
+
+/** One agent a task can be given to, with what a person needs to choose it. */
+export interface AgentChoice {
+  agent_key: string;
+  role: string;
+  /** `claude-code`, `antigravity`, …; null when Friday has not seen the agent's host. */
+  host: string | null;
+  connected: boolean;
+  /** "dev-1 · Antigravity · not open now", for a menu or a select. */
+  label: string;
+  /** What happens once it is given: it starts by itself, or waits for its person. */
+  note: string;
+}
+
+/** An agent in one of these is not at a live session now; a terminated one is not offered at all. */
+const NOT_CONNECTED: ReadonlySet<string> = new Set(['DISCONNECTED', 'UNHEALTHY', 'TERMINATED']);
+
+/**
+ * Every agent a task can be given to, connected or not: a task given to an agent that is not
+ * connected is reserved for it and waits (an Antigravity session takes it when its person types
+ * /friday). Not shadows, not the current holder; connected agents first, then by key.
+ */
+export function agentChoices(snapshot: UiSnapshot | null, exceptKey: string | null = null): AgentChoice[] {
   if (!snapshot) return [];
-  return snapshot.agents.filter(
-    (a) =>
-      !a.shadow &&
-      a.status !== 'TERMINATED' &&
-      a.status !== 'DISCONNECTED' &&
-      a.status !== 'UNHEALTHY' &&
-      a.agent_key !== task.agent_key,
-  );
+  const hostOf = new Map(snapshot.harnesses.map((h) => [h.harness_id, h.vendor]));
+  return snapshot.agents
+    .filter((a) => !a.shadow && a.status !== 'TERMINATED' && a.agent_key !== exceptKey)
+    .map((a) => {
+      const host = (a.harness_id && hostOf.get(a.harness_id)) || null;
+      const connected = !NOT_CONNECTED.has(a.status);
+      const name = host ? (HOST_NAMES[host] ?? host) : null;
+      const attachedByPerson = host === 'antigravity';
+      const state = connected ? '' : attachedByPerson ? 'not open now' : 'not connected';
+      return {
+        agent_key: a.agent_key,
+        role: a.role,
+        host,
+        connected,
+        label: [a.agent_key, name, state].filter(Boolean).join(' · '),
+        note: attachedByPerson
+          ? 'waits until you type /friday in Antigravity'
+          : connected
+            ? 'it starts the task'
+            : 'it waits until this agent is connected',
+      };
+    })
+    .sort((x, y) => Number(y.connected) - Number(x.connected) || x.agent_key.localeCompare(y.agent_key));
+}
+
+/** Agents a task can be given to (Reassign): any agent but its holder, connected or not. */
+export function assignableAgents(snapshot: UiSnapshot | null, task: SnapshotTask): AgentChoice[] {
+  return agentChoices(snapshot, task.agent_key);
 }

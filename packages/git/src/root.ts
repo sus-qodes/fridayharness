@@ -262,6 +262,35 @@ export class GitRoot {
   }
 
   /**
+   * The tree of `base` with only `paths` taken from the checkout as it is now (2026-11-17): a file
+   * that is there replaces the one in `base`, a file that is gone is left out of it. Built in a
+   * temporary index, so the checkout, its index and its branch are untouched. This is one task's
+   * work in a folder it shares with a person and with other sessions: never the whole folder
+   * (Friday never runs `git add -A` on a live folder, review M7.1 F04).
+   */
+  async pathsTree(base: string, paths: readonly string[]): Promise<string> {
+    const refs = await this.refs();
+    const index = path.join(refs.gitDir, `friday-paths-${randomBytes(4).toString('hex')}.index`);
+    const env = { GIT_INDEX_FILE: index };
+    try {
+      await this.git(['read-tree', base], { env });
+      const here: string[] = [];
+      const gone: string[] = [];
+      for (const p of paths) (existsSync(path.join(this.root, p)) ? here : gone).push(p);
+      const timeoutMs = Math.max(this.opts.timeoutMs ?? 15_000, 300_000);
+      for (let i = 0; i < here.length; i += 50) {
+        await this.git(['--literal-pathspecs', 'add', '--', ...here.slice(i, i + 50)], { env, timeoutMs });
+      }
+      for (let i = 0; i < gone.length; i += 50) {
+        await this.git(['update-index', '--force-remove', '--', ...gone.slice(i, i + 50)], { env });
+      }
+      return (await this.git(['write-tree'], { env })).stdout.trim();
+    } finally {
+      rmSync(index, { force: true });
+    }
+  }
+
+  /**
    * One line per entry: path, kind and the git blob id of its current content. A tracked file
    * whose content, filtered as `git add` would filter it, equals the index is left out: git
    * reports it changed only because its size changed, as when a checkout made with

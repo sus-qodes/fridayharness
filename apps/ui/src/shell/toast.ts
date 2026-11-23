@@ -13,7 +13,8 @@ export const TOAST_ERROR_MS = 8000;
 /** After the pointer leaves, a paused toast stays at least this long. */
 export const TOAST_RESUME_MS = 2000;
 /** The most toasts shown at once; older ones leave first. */
-export const TOAST_MAX = 5;
+/** At most this many at once (2026-11-18: five stood three deep and more in the trial's recording). */
+export const TOAST_MAX = 3;
 const TEXT_MAX = 300;
 const DETAIL_MAX = 600;
 
@@ -30,6 +31,8 @@ interface Shown {
   timer: ReturnType<typeof setTimeout> | null;
   ms: number;
   key?: string;
+  /** Its kind and words: the same said again replaces it. */
+  said: string;
 }
 
 const ICON: Record<ToastKind, 'check' | 'bell' | 'cross' | 'question'> = {
@@ -78,11 +81,29 @@ export function createToastHost(): ToastHost {
         { class: 'sh-toast-body' },
         h('div', { class: 'sh-toast-text' }, text),
         detail ? h('div', { class: 'sh-toast-detail mono' }, detail) : null,
+        t.action
+          ? button(
+              truncate(cleanText(String(t.action.label)), 40),
+              () => {
+                remove(s);
+                t.action?.run();
+              },
+              { class: 'btn sh-toast-action' },
+            )
+          : null,
       ),
     );
-    const s: Shown = { el: item, timer: null, ms, ...(t.key ? { key: t.key } : {}) };
-    // What it replaces is out of date: Friday cannot be paused and running again at once.
+    const s: Shown = {
+      el: item,
+      timer: null,
+      ms,
+      said: `${t.kind}|${text}|${detail}`,
+      ...(t.key ? { key: t.key } : {}),
+    };
+    // What it replaces is out of date: Friday cannot be paused and running again at once. The same
+    // words said again replace themselves too, so a repeated message never stands twice.
     if (t.key) for (const old of shown.filter((x) => x.key === t.key)) remove(old);
+    for (const old of shown.filter((x) => x.said === `${t.kind}|${text}|${detail}`)) remove(old);
     const close = button(icon('close', 14), () => remove(s), {
       class: 'btn btn-ghost btn-icon sh-toast-close',
       ariaLabel: 'Dismiss this message',

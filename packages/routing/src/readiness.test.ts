@@ -33,7 +33,7 @@ describe('readiness under the loose rule (ADR-0035 §1)', () => {
   it('needs a connection or a fresh doctor check for a host with no session', () => {
     const none = assessReadiness([], { host: 'codex', model: null, live: false, now: NOW });
     expect(none).toMatchObject({ dispatchable: false, blocking: { stage: 'detected', status: 'missing' } });
-    expect(none.reason).toContain('no session is connected');
+    expect(none.reason).toContain('no session of it is connected');
     const doctor = ['detected', 'configured', 'handshake'].map((stage) =>
       ev({ stage: stage as ReadinessEvidence['stage'], status: 'passed', expires_at: '2026-10-23T11:00:00.000Z' }),
     );

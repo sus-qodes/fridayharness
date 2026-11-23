@@ -55,12 +55,15 @@ export interface PolicySourceData {
   operations?: Record<string, OperationSpec>;
   execution?: { binaries?: string[]; env_passthrough?: string[] };
   auto_verification?: boolean;
+  auto_landing?: 'goal' | 'task';
   mcp?: Record<string, { default?: string; tools?: Record<string, string> }>;
   elicitation?: boolean;
   /** `daemon.port` when fixed (loosening, plan M9 §5.13). */
   daemon_port?: number;
   /** `worktrees.setup`: the project's own install command, and lifecycle scripts (loosenings, plan Phase 7). */
   worktree_setup?: { command?: string; args?: string[]; allow_scripts?: boolean };
+  /** `worktrees.files`: files outside version control that every copy of the project gets (loosening). */
+  worktree_files?: { from: string; to?: string | undefined }[];
   /** `sandbox`: this checkout is disposable; command classes a human would review run on their own (loosening). */
   sandbox?: boolean;
 }
@@ -83,6 +86,7 @@ export function readPolicySources(
       operations: config.operations,
       execution: config.execution,
       auto_verification: config.verification.auto_on_completion,
+      ...(config.landing.mode !== 'ask' ? { auto_landing: config.landing.mode } : {}),
       mcp: config.mcp.servers,
       elicitation: config.approvals.elicitation,
       ...(config.sandbox ? { sandbox: true } : {}),
@@ -97,6 +101,7 @@ export function readPolicySources(
             },
           }
         : {}),
+      ...(config.worktrees.files.length ? { worktree_files: config.worktrees.files.map((f) => ({ ...f })) } : {}),
     },
   ];
   const errors: { file: string; error: string }[] = [];
@@ -124,21 +129,47 @@ export function readPolicySources(
 
 const TRUST_FILE = 'policy-trust.json';
 
-/** The loosening this clone trusted, as its hash; null when none was. */
-export function readPolicyTrust(privateDir: string): string | null {
+/**
+ * What this clone trusts of the settings that loosen Friday's defaults: the whole list as it once
+ * stood (`hash`; all a trust file held before 2026-11-18), and single settings by their ids
+ * (`items`). Nothing when no file is there, or it cannot be read.
+ */
+export function readPolicyTrust(privateDir: string): { hash: string | null; items: string[] } {
   try {
-    const data = JSON.parse(readFileSync(path.join(privateDir, TRUST_FILE), 'utf8')) as { loosening_hash?: unknown };
-    return typeof data.loosening_hash === 'string' ? data.loosening_hash : null;
+    const data = JSON.parse(readFileSync(path.join(privateDir, TRUST_FILE), 'utf8')) as {
+      loosening_hash?: unknown;
+      items?: unknown;
+    };
+    return {
+      hash: typeof data.loosening_hash === 'string' ? data.loosening_hash : null,
+      items: Array.isArray(data.items) ? data.items.filter((i): i is string => typeof i === 'string') : [],
+    };
   } catch {
-    return null;
+    return { hash: null, items: [] };
   }
 }
 
-/** Records that this clone trusts exactly the loosening with this hash (stored in its private folder). */
-export function writePolicyTrust(privateDir: string, looseningHash: string, trustedBy: string): void {
+/**
+ * Records what this clone trusts (in its private folder): the ids of the settings, and the hash
+ * of the whole list when all of it was trusted at once (null otherwise).
+ */
+export function writePolicyTrust(
+  privateDir: string,
+  trust: { hash: string | null; items: readonly string[] },
+  trustedBy: string,
+): void {
   writePrivateFile(
     privateDir,
     TRUST_FILE,
-    `${JSON.stringify({ loosening_hash: looseningHash, trusted_at: new Date().toISOString(), trusted_by: trustedBy }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        loosening_hash: trust.hash,
+        items: [...new Set(trust.items)].sort(),
+        trusted_at: new Date().toISOString(),
+        trusted_by: trustedBy,
+      },
+      null,
+      2,
+    )}\n`,
   );
 }

@@ -9,7 +9,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import os from 'node:os';
 import path from 'node:path';
 import { bundledHookSource, compareVersions, ROOT_PROGRAMS } from '@friday/adapter-claude';
-import { DaemonClient, type ProjectRef, readDiscovery, readInstallInfo, readToken } from '@friday/sdk';
+import { DaemonClient, installCheck, type ProjectRef, readDiscovery, readToken } from '@friday/sdk';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { isFridayCursorHook, ruleIsOurs } from './config.js';
@@ -45,6 +45,8 @@ export interface CursorDoctorOptions {
   /** Override detection (tests). */
   ide?: CursorIde | null;
   cli?: CursorCli;
+  /** The MCP server entry of the copy of Friday that runs the check (tests); null for none. */
+  ownMcpEntry?: string | null;
 }
 
 /** The versions Friday's adapter was written against (Cursor's documentation, read 2026-10-18). */
@@ -440,19 +442,14 @@ export async function cursorDoctor(ref: ProjectRef, opts: CursorDoctorOptions = 
   });
 
   // ---- this machine -----------------------------------------------------------------------------------
-  const info = readInstallInfo(env);
-  const mcpEntry = env.FRIDAY_MCP_ENTRY ?? info?.mcp_server_entry ?? undefined;
-  const entryOk = Boolean(mcpEntry && existsSync(mcpEntry));
-  checks.push(
-    entryOk
-      ? { id: 'cursor.install', status: 'ok', message: `MCP server entry: ${mcpEntry}` }
-      : {
-          id: 'cursor.install',
-          status: 'fail',
-          message: 'Friday is not set up on this machine (install.json has no MCP server entry)',
-          fix: 'run "pnpm build" in the Friday repository, then "friday setup"',
-        },
-  );
+  // A warning when the Cursor a person opens would start another copy of Friday than this one.
+  const { entry: mcpEntry, ...machine } = installCheck({
+    env,
+    named: env.FRIDAY_MCP_ENTRY,
+    own: opts.ownMcpEntry,
+  });
+  const entryOk = mcpEntry !== undefined;
+  checks.push({ id: 'cursor.install', ...machine });
 
   // Secrets: the live tokens must not appear in any file Cursor can read in the project.
   const live = [readToken(ref, 'operator', env), readToken(ref, 'bootstrap', env)].filter((t): t is string =>

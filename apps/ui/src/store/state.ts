@@ -3,7 +3,7 @@
  * re-read; `activity` is what the event stream shows between snapshots; `ui` and `prefs` are local.
  */
 import type { UiSnapshot } from '@friday/protocol';
-import type { DrawerRequest, ModalRequest } from '../shell/context.js';
+import type { DrawerBack, DrawerRequest, ModalRequest } from '../shell/context.js';
 import { ObservableStore } from './store.js';
 
 export type Connection = 'starting' | 'signed-out' | 'connecting' | 'live' | 'reconnecting' | 'stopped';
@@ -95,7 +95,17 @@ export type StudioView = 'canvas' | 'settings';
 export interface UiState {
   activeView: StudioView;
   settingsTab?: string;
+  /**
+   * The dialog Settings was opened from (2026-11-18): the page offers a way back to it, as a
+   * drawer's Back button does. Cleared when Settings is left.
+   */
+  settingsBack?: DrawerBack | null;
   selectedTaskId: string | null;
+  /**
+   * A card the canvas moves to once it is on the board (2026-11-23): a goal just created. Its card
+   * could be off-screen, and for the 10 to 30 seconds of planning nothing seemed to happen.
+   */
+  revealId?: string | null;
   drawer: DrawerRequest | null;
   modal: ModalRequest | null;
   paletteOpen: boolean;

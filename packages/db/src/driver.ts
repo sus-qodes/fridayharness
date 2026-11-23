@@ -124,10 +124,16 @@ function plain<T>(row: unknown): T {
 type NodeBackup = (db: NodeDb, target: string, opts?: { rate?: number }) => Promise<number>;
 
 export function openNodeSqlite(path: string): SqlDatabase {
-  const mod = process.getBuiltinModule('node:sqlite') as unknown as
+  const mod = process.getBuiltinModule?.('node:sqlite') as unknown as
     | { DatabaseSync: new (file: string) => NodeDb; backup?: NodeBackup }
     | undefined;
-  if (!mod) throw new Error('node:sqlite is not available in this Node.js build');
+  // Said so a person can act on it (2026-11-19): the desktop installer's copy of Friday has no
+  // compiled SQLite of its own and relies on the one in Node.js, there in every version Friday runs on (22.18 and newer).
+  if (!mod) {
+    throw new Error(
+      `Friday needs Node.js 22.18 or newer, and this computer has ${process.version}: install the current one from nodejs.org, then start Friday again`,
+    );
+  }
   const db = new mod.DatabaseSync(path);
   const cache = new Map<string, SqlStatement>();
   let depth = 0;

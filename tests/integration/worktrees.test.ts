@@ -1,7 +1,7 @@
 /**
  * Task worktrees through the daemon (plan M5a, ADR-0023).
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { claudeCodeHooks } from '@friday/adapter-claude';
 import type { TaskStartParams, TaskView, WorktreeView } from '@friday/protocol';
@@ -53,6 +53,120 @@ const taskOf = (td: TestDaemon, id: string) =>
   td.operator.get<{ task: TaskView }>(td.operator.projectPath(`/tasks/${id}`)).then((r) => r.task);
 
 describe('spawn runs work in their own worktrees', () => {
+  // What the goal branch gained since a task's worktree was cut is in that worktree before its next
+  // attempt starts (2026-11-17): here the agent reported blocked, the goal moved on, and a person
+  // gave the task to an agent again. Where the two collide the folder still gets the merge
+  // (2026-11-18): the file holds both versions marked, and the attempt starts with it as its work.
+  it.each([false, true])('refreshes a goal task before its next attempt starts (conflict=%s)', async (conflict) => {
+    const td = await startTestDaemon(ws(), { git: true, brain: { autoStart: false } });
+    const pid = td.project.project_id;
+    const op = td.operator;
+    const goal = await op.post<{ goal_id: string }>(op.projectPath('/goals'), {
+      request: 'implement the answer',
+      plan: false,
+    });
+    const plan = await op.post<{ plan_id: string; version: number }>(op.projectPath(`/goals/${goal.goal_id}/plans`), {
+      draft: {
+        objective: 'implement the answer',
+        summary: 'one task',
+        tasks: [
+          {
+            key: 'impl',
+            kind: 'implementation',
+            role: 'developer',
+            summary: 'implement the answer',
+            scope: { write: ['**'], read: ['**'] },
+            acceptance_criteria: ['answer passes'],
+          },
+        ],
+      },
+    });
+    await op.post(op.projectPath(`/plans/${plan.plan_id}/versions/${plan.version}/approve`), {});
+    const task = td.daemon.state.q.goalTasks(pid, goal.goal_id)[0] as TaskView;
+    const h = await FakeHarness.connect(td, { agentKey: 'refresh-dev' });
+    ws().track({ close: () => h.close() });
+    await op.post(op.projectPath(`/tasks/${task.task_id}/assign`), { agent_key: 'refresh-dev' });
+    const first = (await h.waitFor('task.start')).params as TaskStartParams;
+    const firstTree = td.daemon.state.q.worktreeForTask(task.task_id);
+    await eventually(
+      () => taskOf(td, task.task_id),
+      (t) => t.status === 'RUNNING',
+      'initial start',
+    );
+    const file = conflict ? 'README.md' : 'answer.txt';
+    writeFileSync(path.join(first.working_directory, file), 'task edit\n');
+    await h.client.reportResult({
+      task_id: task.task_id,
+      run_id: first.run_id,
+      status: 'blocked',
+      summary: 'QA check needs correction',
+      blocked_reason: 'QA check needs correction',
+    });
+    const git = deterministicGit(ws().projectDir);
+    writeFileSync(path.join(ws().projectDir, conflict ? 'README.md' : 'check.txt'), 'goal correction\n');
+    await git.commitAll('correct the QA check');
+    const goalHead = await git.headSha();
+    await git.run(['update-ref', `refs/heads/friday/goal-${goal.goal_id}`, goalHead]);
+    await op.post(op.projectPath(`/tasks/${task.task_id}/recover`), {
+      action: 'reassign',
+      reason: 'the goal has the corrected check',
+    });
+    await op.post(op.projectPath(`/tasks/${task.task_id}/assign`), { agent_key: 'refresh-dev' });
+    if (conflict) {
+      // The same attempt, not a declined one and a third: its note names the file and says how.
+      const resolving = (await h.waitFor('task.start', 15_000, (m) => (m.params as TaskStartParams).attempt === 2))
+        .params as TaskStartParams;
+      expect(resolving.working_directory).toBe(first.working_directory);
+      expect(resolving.note).toContain('README.md');
+      expect(resolving.note).toContain('hold both versions');
+      expect(resolving.note).toContain('do not run git merge');
+      expect(td.daemon.state.q.run(resolving.run_id).base_commit).toBe(goalHead);
+      expect(td.daemon.state.q.escalations(pid, 'pending')).toEqual([]);
+      expect(td.daemon.state.q.runs(task.task_id).map((r) => r.status)).not.toContain('DECLINED');
+      const ready = td.daemon.state.store.readByRef(pid, 'run', resolving.run_id, {
+        types: ['run.workspace_ready'],
+      })[0]?.payload as { refresh?: { conflicts?: string[]; marked?: boolean; artifact_ref?: string | null } };
+      expect(ready.refresh).toMatchObject({ goal_head: goalHead, conflicts: ['README.md'], marked: true });
+      expect(ready.refresh?.artifact_ref).toMatch(/^artifact:/);
+      // Both versions are in the file, the task's first; the folder descends from the goal's work.
+      const text = readFileSync(path.join(first.working_directory, 'README.md'), 'utf8').replace(/\r/g, '');
+      expect(text).toMatch(/<<<<<<< .*\ntask edit\n=======\ngoal correction\n>>>>>>> /);
+      const tree = deterministicGit(first.working_directory);
+      expect(await tree.run(['merge-base', '--is-ancestor', goalHead, 'HEAD']).then(() => true)).toBe(true);
+
+      // A claim with the marks still in the file is refused, by name...
+      await h.client.reportResult({
+        task_id: task.task_id,
+        run_id: resolving.run_id,
+        status: 'completed_claim',
+        summary: 'merged',
+        changed_paths: ['README.md'],
+        checks: [],
+      });
+      const refused = await op.post<{ verification: { status: string; checks: { name: string; summary: string }[] } }>(
+        op.projectPath(`/tasks/${task.task_id}/verify`),
+        {},
+      );
+      expect(refused.verification.status).toBe('FAILED');
+      expect(JSON.stringify(refused.verification.checks)).toContain('still hold two versions');
+      return;
+    } else {
+      const second = (await h.waitFor('task.start', 15_000, (m) => (m.params as TaskStartParams).attempt === 2))
+        .params as TaskStartParams;
+      expect(second.working_directory).toBe(first.working_directory);
+      expect(readFileSync(path.join(second.working_directory, 'check.txt'), 'utf8').trim()).toBe('goal correction');
+      expect(td.daemon.state.q.run(second.run_id).base_commit).toBe(goalHead);
+      expect(td.daemon.state.q.worktreeForTask(task.task_id)?.base_commit).toBe(goalHead);
+      expect(td.daemon.state.q.worktreeForTask(task.task_id)?.worktree_id).toBe(firstTree?.worktree_id);
+      expect(td.daemon.state.q.worktrees(pid).filter((w) => w.task_id === task.task_id)).toHaveLength(1);
+      expect(
+        td.daemon.state.store.readByRef(pid, 'run', second.run_id, { types: ['run.workspace_ready'] })[0]?.payload,
+      ).toMatchObject({ refresh: { commits: [goalHead], goal_head: goalHead } });
+      expect(second.note).toBeNull();
+    }
+    expect(readFileSync(path.join(first.working_directory, file), 'utf8').trim()).toBe('task edit');
+  });
+
   it('gives each run its checkout, keeps their contents apart and the main checkout clean', async () => {
     const td = await project();
     const dir = ws().projectDir;

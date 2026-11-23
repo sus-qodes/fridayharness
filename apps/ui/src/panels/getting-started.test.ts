@@ -29,26 +29,37 @@ describe('getting started', () => {
         project: { ...makeSnapshot().project, has_commit: false },
       }),
     );
+    // What there is to do; "Friday is running" no longer stands first, always ticked (2026-11-17).
     expect(items.map((i) => [i.id, i.done])).toEqual([
-      ['running', true],
       ['agent', false],
       ['planner', false],
       ['checks', false],
       ['commit', false],
       ['notify', false],
     ]);
-    expect(items[2]?.detail).toBe('To let it plan: allow this clone to spend. You can always write plans yourself.');
-    expect(items[3]?.detail).toMatch(/Verification will run Friday's scope and credential checks only/);
-    expect(items[4]?.detail).toMatch(/every agent works in the main checkout until you commit once/i);
+    expect(items[1]?.detail).toBe(
+      'To let Friday plan: allow planning to spend on this computer. You can always write plans yourself.',
+    );
+    expect(items[2]?.detail).toMatch(/Verification runs only Friday's own checks/);
+    // The way to fix it is the page that suggests them, not a file to write by hand (2026-11-17).
+    expect(items[2]?.fix).toEqual({ label: 'Settings → Checks', action: 'checks' });
+    expect(items[3]?.detail).toMatch(/every agent works in your own project folder instead of a folder of its task/i);
   });
 
   it('counts only harnesses that are not terminated', () => {
-    expect(checklist(makeSnapshot({ harnesses: [makeHarness({ status: 'TERMINATED' })] }))[1]?.done).toBe(false);
-    expect(checklist(makeSnapshot({ harnesses: [makeHarness(), makeHarness({ harness_id: 'h2' })] }))[1]?.title).toBe(
+    expect(checklist(makeSnapshot({ harnesses: [makeHarness({ status: 'TERMINATED' })] }))[0]?.done).toBe(false);
+    // A session that left, or is trying to come back, is not a connected agent.
+    for (const status of ['DISCONNECTED', 'RECONNECTING'] as const) {
+      expect(checklist(makeSnapshot({ harnesses: [makeHarness({ status })] }))[0]?.done, status).toBe(false);
+    }
+    for (const status of ['REGISTERED', 'READY', 'BUSY'] as const) {
+      expect(checklist(makeSnapshot({ harnesses: [makeHarness({ status })] }))[0]?.done, status).toBe(true);
+    }
+    expect(checklist(makeSnapshot({ harnesses: [makeHarness(), makeHarness({ harness_id: 'h2' })] }))[0]?.title).toBe(
       '2 agents are connected',
     );
-    expect(checklist(makeSnapshot({ brain: brain() }))[2]?.done).toBe(true);
-    expect(checklist(makeSnapshot({ brain: null }))[2]?.detail).toMatch(/not running/);
+    expect(checklist(makeSnapshot({ brain: brain() }))[1]?.done).toBe(true);
+    expect(checklist(makeSnapshot({ brain: null }))[1]?.detail).toMatch(/not running/);
   });
 
   it('asks to be notified while the tab is hidden, in the words of the platform that notifies', () => {
@@ -68,13 +79,13 @@ describe('getting started', () => {
   it('asks to trust the project’s policy only while its loosening is not trusted', () => {
     expect(checklist(makeSnapshot()).some((i) => i.id === 'policy')).toBe(false);
     const items = checklist(makeSnapshot({ policy_untrusted: true }));
-    expect(items.map((i) => i.id)).toEqual(['running', 'policy', 'agent', 'planner', 'checks', 'commit', 'notify']);
-    expect(items[1]).toMatchObject({
+    expect(items.map((i) => i.id)).toEqual(['policy', 'agent', 'planner', 'checks', 'commit', 'notify']);
+    expect(items[0]).toMatchObject({
       done: false,
-      title: "Trust this project's policy",
-      fix: { label: 'Settings → Policy', action: 'policy' },
+      title: 'Trust this project’s settings',
+      fix: { label: 'Settings → Permissions', action: 'policy' },
     });
-    expect(items[1]?.detail).toMatch(/nothing of it applies on this clone until you trust exactly that list/);
+    expect(items[0]?.detail).toMatch(/None of it applies on this computer until you trust it/);
   });
 
   it('links each open item to where to fix it, and dismisses', () => {
@@ -85,17 +96,22 @@ describe('getting started', () => {
     (ctx.platform as { openInEditor: (p: string) => void }).openInEditor = (p) => opened.push(p);
     const c = gettingStarted(ctx);
     expect(c.el.hidden).toBe(false);
-    expect(c.el.textContent).toContain('5 of 7 to do');
+    expect(c.el.textContent).toContain('5 of 6 to do');
     buttonBy(c.el, 'Open Agents').click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'agents' });
     buttonBy(c.el, 'Settings → Planner').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'planner' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'planner', drawer: null });
     buttonBy(c.el, 'Settings → Notifications').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'notifications' });
-    buttonBy(c.el, 'Settings → Policy').click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings', tab: 'policy' });
-    buttonBy(c.el, 'Open config.yaml').click();
-    expect(opened).toEqual(['C:/demo/shop/.friday/config.yaml']);
+    expect(ctx.store.select('ui')).toMatchObject({
+      activeView: 'settings',
+      settingsTab: 'notifications',
+      drawer: null,
+    });
+    buttonBy(c.el, 'Settings → Permissions').click();
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'policy', drawer: null });
+    buttonBy(c.el, 'Settings → Checks').click();
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', settingsTab: 'checks', drawer: null });
+    expect(opened).toEqual([]);
     // Trusted, connected, planning, notifying: all set, and the policy item is gone.
     ctx.board(makeSnapshot({ harnesses: [makeHarness()], brain: brain() }));
     ctx.store.patch('prefs', { notifications: true });
@@ -114,13 +130,19 @@ describe('registerPanels', () => {
     const registry = new Registry();
     registerPanels({ ...ctx, registry });
     expect([...registry.modals.keys()].sort()).toEqual([
+      'answer',
+      'antigravity-setup',
+      'change-goal',
       'claude-setup',
+      'edit-agent',
       'land',
       'new-goal',
       'plan-editor',
+      'raise-limit',
       'start-agent',
       'verify',
     ]);
-    expect([...registry.drawers.keys()].sort()).toEqual(['agents', 'settings']);
+    // Settings is a view of its own, not a drawer.
+    expect([...registry.drawers.keys()].sort()).toEqual(['agents']);
   });
 });

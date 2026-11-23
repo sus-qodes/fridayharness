@@ -6,7 +6,7 @@
 import { claudeCodeHooks } from '@friday/adapter-claude';
 import { GenericHarnessClient } from '@friday/adapter-generic';
 import { FakePlannerModel } from '@friday/planner';
-import type { RunView, TaskRoleDecisionView, TaskStartParams, TaskView } from '@friday/protocol';
+import type { RunView, TaskRoleDecisionView, TaskStartParams, TaskView, UiSnapshot } from '@friday/protocol';
 import { useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { claudeSession } from '../helpers/claude-session.js';
@@ -486,5 +486,103 @@ describe('model routing', () => {
         .escalations(pid, 'pending')
         .filter((e) => e.task_id === t.task_id && e.kind === 'routing_violated'),
     ).toHaveLength(1);
+  }, 120_000);
+
+  it('follows a person who gives a task to an agent, where the ranking alone would not start it (2026-11-17)', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: { autoStart: false }, extensions: [claudeCodeHooks()] });
+    const pid = td.project.project_id;
+    const asked = (taskId: string) =>
+      td.daemon.state.q.escalations(pid, 'pending').filter((e) => e.task_id === taskId && e.kind === 'routing_blocked');
+    type Explained = {
+      offers: {
+        agent_key: string;
+        host: string;
+        attach_mode: string;
+        free: boolean;
+        blocked: boolean;
+        model: string | null;
+      }[];
+    };
+    const explain = (id: string) => td.operator.get<Explained>(td.operator.projectPath(`/routing/explain/${id}`));
+    // A Codex agent Friday gives its model to, and a pin of a model only Claude Code runs.
+    const codex = await FakeHarness.connect(td, {
+      vendor: 'codex',
+      agentKey: 'codex-1',
+      capabilities: { task_start: true, task_cancel: true, model_control: 'set' },
+    });
+    await td.operator.post(td.operator.projectPath('/routing/pins'), {
+      scope: 'project',
+      target: null,
+      model: 'claude-sonnet-5-5',
+      note: 'use Sonnet for everything',
+    });
+    // The role is one the ranking does not know.
+    const t = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Build the settings page',
+      kind: 'implementation',
+      role: 'fullstack',
+      scope: { write: ['src/**'], read: [] },
+      ready: true,
+    });
+    // Before anyone decides: the dry run is blocked, and the card is told where it could run.
+    const before = await explain(t.task_id);
+    expect(before.offers).toEqual([
+      {
+        agent_key: 'codex-1',
+        host: 'codex',
+        attach_mode: 'spawn',
+        free: true,
+        blocked: false,
+        model: 'openai/gpt-6.1-sol',
+        reason: expect.stringContaining('a person gave this task to this agent'),
+      },
+    ]);
+    // A person gives it to Codex: it starts there, with the model the ranking has for Codex, and
+    // the pin it cannot run is set aside and said.
+    const r = await td.operator.post<{ mode: string }>(td.operator.projectPath(`/tasks/${t.task_id}/assign`), {
+      agent_key: 'codex-1',
+    });
+    expect(r.mode).toBe('assigned');
+    const start = (await codex.waitFor('task.start', 30_000)).params as TaskStartParams;
+    expect(start).toMatchObject({ task_id: t.task_id, model: 'openai/gpt-6.1-sol', model_binding: true });
+    const [decision] = td.daemon.state.q.routingDecisions(pid, { task_id: t.task_id, limit: 1 });
+    expect(decision).toMatchObject({ source: 'registry', model: 'openai/gpt-6.1-sol' });
+    expect(decision?.reason_codes).toEqual(
+      expect.arrayContaining(['pin.set_aside.assignment', 'role.assumed', 'assignment.human']),
+    );
+    expect(decision?.reason).toContain('the pin of claude-sonnet-5-5 is set aside');
+    expect(asked(t.task_id)).toEqual([]);
+    // The board says why, in words (2026-11-18): the person chose the agent, Friday the model.
+    const board = await td.operator.get<UiSnapshot>(td.operator.projectPath('/ui/snapshot'));
+    expect(board.tasks.find((x) => x.task_id === t.task_id)?.why).toEqual({
+      agent_key: 'codex-1',
+      agent: 'you gave it this task',
+      model: 'openai/gpt-6.1-sol',
+      model_reason: "Friday's choice for this kind of work",
+    });
+
+    // The same task left to Friday is not started on Codex: the pin holds for what nobody assigned.
+    const loose = await td.operator.post<TaskView>(td.operator.projectPath('/tasks'), {
+      summary: 'Tidy the settings page',
+      kind: 'implementation',
+      scope: { write: ['src/**'], read: [] },
+      ready: true,
+    });
+    expect((await explain(loose.task_id)).offers[0]).toMatchObject({
+      agent_key: 'codex-1',
+      free: false,
+      blocked: false,
+    });
+    expect(td.daemon.state.q.task(pid, loose.task_id).status).toBe('READY');
+
+    // Reserved for a busy agent at a person's word: it starts there once the agent is free.
+    const kept = await td.operator.post<{ mode: string }>(td.operator.projectPath(`/tasks/${loose.task_id}/assign`), {
+      agent_key: 'codex-1',
+    });
+    expect(kept.mode).toBe('reserved');
+    expect(td.daemon.state.q.task(pid, loose.task_id)).toMatchObject({
+      reserved_for_agent_key: 'codex-1',
+      reserved_by: 'human',
+    });
   }, 120_000);
 });

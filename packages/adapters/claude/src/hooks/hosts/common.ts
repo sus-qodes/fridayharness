@@ -144,6 +144,7 @@ export function wireHook(h: NormalizedHook): Record<string, unknown> {
   put('stop_hook_active', h.stop_hook_active);
   put('reason', h.reason);
   put('error', h.error);
+  put('prompt', h.prompt);
   return out;
 }
 
@@ -155,6 +156,8 @@ export function wireHost(h: NormalizedHook): Record<string, unknown> {
     tool_name: h.host_tool_name,
     version: h.host_version,
     can_ask: h.can_ask,
-    ...(h.event === 'Stop' ? { stop_completed: h.stop_completed, stop_reason: h.stop_reason } : {}),
+    ...(h.event === 'Stop'
+      ? { stop_completed: h.stop_completed, stop_reason: h.stop_reason, stop_error: h.stop_error ?? null }
+      : {}),
   };
 }

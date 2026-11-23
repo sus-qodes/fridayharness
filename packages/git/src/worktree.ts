@@ -4,6 +4,8 @@ import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { FridayError } from '@friday/protocol';
+import { commitTree, isAncestor, mergeCommits, mergeJoining, moveRef, resolveCommit } from './integrate.js';
+import { applyState, preserveCommit, preservedPrefix, resetWorktree, snapshotWorktree } from './recover.js';
 import { GitRoot } from './root.js';
 import { runGit } from './run.js';
 
@@ -77,6 +79,131 @@ export interface Allocation {
   /** True when the branch already existed (a previous attempt) and was checked out again. */
   reused_branch: boolean;
   warnings: string[];
+}
+
+export interface WorktreeRefresh {
+  from: string;
+  goal_head: string;
+  head: string;
+  commits: string[];
+  preserved_ref: string | null;
+  conflicts: { path: string; task: string; goal: string }[];
+  /** Files where both sides only added lines at the same place: both additions are in the folder. */
+  joined?: string[];
+  /**
+   * The folder holds the goal's work merged with the task's, and each of `conflicts` as git leaves
+   * a file it cannot merge: both versions between `<<<<<<<` and `>>>>>>>`, for the agent to finish.
+   */
+  marked?: boolean;
+}
+
+/** The words of the commit that takes a goal's newer work into a task's folder. */
+const TAKE_IN = "Take in the goal's other work";
+
+/**
+ * Merge a goal revision, then replay the recorded dirty delta without committing that delta.
+ *
+ * Where the two collide (2026-11-18) Friday still does the merge: the task's work as it stands
+ * becomes a commit of its branch, that is merged with the goal revision, and the files git cannot
+ * merge are left in the folder with both versions marked. The agent finishes them by editing, with
+ * no git command of its own, and the branch then descends from the goal revision, so the work
+ * integrates without colliding a second time. Before, the folder was left as it was and the agent
+ * was told to merge: a git command it has to ask for, and one it could skip by editing, after which
+ * its folder passed for a revert of everything the goal had gained.
+ */
+export async function refreshWorktree(opts: {
+  dir: string;
+  goalHead: string;
+  taskId: string;
+}): Promise<WorktreeRefresh> {
+  const root = await GitRoot.open(opts.dir);
+  const refs = await root.refs();
+  if (!refs.linked || refs.branch !== taskBranch(opts.taskId) || !refs.head)
+    throw new FridayError('invalid_request', 'only a task worktree with a HEAD can be refreshed');
+  const from = refs.head;
+  const goal = await resolveCommit(root.root, opts.goalHead);
+  if (!goal) throw new FridayError('invalid_request', `the goal revision ${opts.goalHead} is missing`);
+  const result: WorktreeRefresh = {
+    from,
+    goal_head: goal,
+    head: from,
+    commits: [],
+    preserved_ref: null,
+    conflicts: [],
+  };
+  if (await isAncestor(root.root, goal, from)) return result;
+  result.commits = (await runGit(root.root, ['rev-list', '--reverse', `${from}..${goal}`])).stdout
+    .trim()
+    .split('\n')
+    .filter(Boolean);
+  const content = await root.contentTree();
+  // The words of these commits are a person's (2026-11-19): they can end up in the project's history.
+  const saved = await snapshotWorktree(root.root, "Work in progress, kept before taking in the goal's other work");
+  if (saved) result.preserved_ref = await preserveCommit(root.root, preservedPrefix(opts.taskId), 'refresh', saved);
+  const merged = await mergeJoining(root.root, from, goal);
+  const head = merged.conflicts.length
+    ? from
+    : (await isAncestor(root.root, from, goal))
+      ? goal
+      : await commitTree(root.root, merged.tree, [from, goal], TAKE_IN);
+  const replayed = saved && !merged.conflicts.length ? await mergeCommits(root.root, head, saved) : null;
+  const conflicts = [...new Set([...merged.conflicts, ...(replayed?.conflicts ?? [])])];
+  if (conflicts.length) {
+    // The task's work as one commit: what is uncommitted in the folder is in `saved`, on `from`.
+    const mine = saved ?? from;
+    const both = await mergeJoining(root.root, mine, goal);
+    const base = (await runGit(root.root, ['merge-base', mine, goal])).stdout.trim();
+    const changes = async (side: string, file: string) => {
+      const diff = await runGit(root.root, [
+        'diff',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--unified=1',
+        base,
+        side,
+        '--',
+        file,
+      ]);
+      return diff.stdout.length > 3000
+        ? `${diff.stdout.slice(0, 3000)}\n[diff truncated after 3000 characters]`
+        : diff.stdout;
+    };
+    for (const file of both.conflicts)
+      result.conflicts.push({ path: file, task: await changes(mine, file), goal: await changes(goal, file) });
+    const left = both.conflicts.length;
+    const marked = await commitTree(
+      root.root,
+      both.tree,
+      [mine, goal],
+      left ? `${TAKE_IN}; ${left} file(s) hold both versions, for the agent to finish` : TAKE_IN,
+    );
+    const now = await root.contentTree();
+    if (now.head !== from || now.tree !== content.tree)
+      throw new FridayError('git_conflict', 'the task worktree changed while its refresh was prepared; retry');
+    // Every dirty file is in `saved`, an ancestor of the commit the folder moves to.
+    if (saved) await resetWorktree(root.root);
+    await runGit(root.root, ['read-tree', '-m', '-u', from, marked], { timeoutMs: 300_000 });
+    await moveRef(root.root, 'HEAD', marked, from);
+    result.head = marked;
+    result.marked = left > 0;
+    if (both.joined?.length) result.joined = both.joined;
+    return result;
+  }
+  const restored = replayed
+    ? await commitTree(root.root, replayed.tree, [head], 'Put back the work in progress')
+    : null;
+  const current = await root.contentTree();
+  const savedTree = saved ? (await runGit(root.root, ['rev-parse', `${saved}^{tree}`])).stdout.trim() : content.tree;
+  if (current.head !== from || current.tree !== content.tree || savedTree !== content.tree)
+    throw new FridayError('git_conflict', 'the task worktree changed while its refresh was prepared; retry');
+  // Every dirty file is reachable through preserved_ref before Git clears it; ignored files stay.
+  if (saved) await resetWorktree(root.root);
+  await runGit(root.root, ['read-tree', '-m', '-u', from, head], { timeoutMs: 300_000 });
+  await moveRef(root.root, 'HEAD', head, from);
+  if (restored) await applyState(root.root, restored);
+  result.head = head;
+  if (merged.joined?.length) result.joined = merged.joined;
+  return result;
 }
 
 /** Creates the task's worktree, or returns the one that already exists (ADR-0023 §2). */

@@ -318,6 +318,7 @@ describe('fixture-shop M1 demo', () => {
         '.claude/settings.json',
         '.claude/skills/friday/SKILL.md',
         '.claude/skills/friday/reference.md',
+        '.friday/eslint.config.mjs',
         '.friday/harness/claude-code/README.md',
         '.friday/harness/claude-code/hook.mjs',
         '.friday/harness/claude-code/launch-mcp.mjs',

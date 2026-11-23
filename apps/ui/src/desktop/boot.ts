@@ -21,8 +21,16 @@ import type { NotchStudioTarget } from '../notch/island-host.js';
 import { type NotificationCtor, type NotificationLike, startNotifierWith } from '../notify/notifier.js';
 import { desktopPlatform } from '../platform/desktop-platform.js';
 import { type TauriCore, TauriTransport } from '../platform/tauri-transport.js';
+import { errorDetail } from '../shell/act.js';
 import { createAppContext, createShellServices, mountShell } from '../shell/app.js';
-import { type AppContext, type DrawerKind, type ModalKind, openDrawer, openModal } from '../shell/context.js';
+import {
+  type AppContext,
+  type DrawerKind,
+  type ModalKind,
+  openDrawer,
+  openModal,
+  type Toast,
+} from '../shell/context.js';
 import { productMark } from '../shell/mark.js';
 import { loadPrefs, startPrefsSync, watchPrefs } from '../store/prefs.js';
 import { createStore, type FridayStore } from '../store/state.js';
@@ -46,6 +54,35 @@ export type DaemonState = 'starting' | 'ready' | 'stopping' | 'stopped' | 'faile
 export interface DaemonStatus {
   state: DaemonState;
   message?: string;
+  /**
+   * Friday was updated while its service ran, and work in progress kept the app from restarting it
+   * (2026-11-19): it restarts by itself once the work is done.
+   */
+  outdated?: boolean;
+}
+
+/** The shell's last word on the daemon, as `untilReady` read it, per shell. */
+const lastStatus = new WeakMap<DesktopEnv, DaemonStatus>();
+
+/** The message an outdated service gets in the Studio, and the one once it runs the new version. */
+export function updateNotice(
+  status: Pick<DaemonStatus, 'state' | 'outdated'>,
+  was: boolean,
+  restart: (() => void) | null,
+): Toast | null {
+  if (status.state !== 'ready') return null;
+  if (status.outdated) {
+    return {
+      kind: 'info',
+      key: 'friday-updated',
+      text: 'Friday was updated',
+      detail:
+        'Agents are at work, so Friday still runs the version from before. It restarts with the new one by itself once they are done.',
+      timeoutMs: 0,
+      ...(restart ? { action: { label: 'Restart now', run: restart } } : {}),
+    };
+  }
+  return was ? { kind: 'success', key: 'friday-updated', text: 'Friday now runs the new version' } : null;
 }
 
 /** The shell, as the page sees it; injectable for tests. */
@@ -55,6 +92,8 @@ export interface DesktopEnv {
   listen<T>(event: string, handler: (payload: T) => void): Promise<() => void>;
   /** How often the page asks for the daemon's state while it waits (ms). */
   pollMs?: number;
+  /** Loads this window again (a test replaces it: a reload would end the test page). */
+  reload?: () => void;
 }
 
 /** Where a deep link from the Notch or the tray points (`show_studio`'s target, lib.rs `DeepLink`). */
@@ -135,19 +174,46 @@ async function loadEnv(): Promise<DesktopEnv> {
 const STATE_TEXT: Record<DaemonState, { title: string; message: string }> = {
   starting: { title: 'Friday is starting', message: 'The Studio opens as soon as Friday is ready.' },
   ready: { title: 'Friday is ready', message: '' },
-  stopping: { title: 'Friday is stopping', message: 'Work in worktrees is kept.' },
-  stopped: { title: 'Friday is not running', message: 'Start it for this project; work in worktrees is kept.' },
-  failed: { title: 'Friday could not start', message: 'What the shell saw is below.' },
+  stopping: { title: 'Friday is stopping', message: 'The work in the task folders is kept.' },
+  stopped: {
+    title: 'Friday is not running',
+    message: 'Start it for this project; the work in the task folders is kept.',
+  },
+  failed: { title: 'Friday could not start', message: 'What stopped it is below.' },
   no_project: {
     title: 'No project is open',
-    message: 'Start the desktop app from a project’s shortcut, or with --project and the project’s folder.',
+    message: 'Choose the folder of the project Friday should work on.',
   },
 };
 
+/** What the status screen offers besides Start: choosing a project, and the files that say why a start failed. */
+export interface StatusActions {
+  /** The folder picker (`choose_project_folder`), while no project is open. */
+  onChoose?: () => void;
+  /** The project's config.yaml or the daemon's log (`open_project_file`), after a failed start. */
+  onOpen?: (kind: 'config' | 'log') => void;
+}
+
 /** The screen shown while there is no board: the daemon's state, and a way on when there is one. */
-export function statusScreen(status: DaemonStatus, onStart: (() => void) | null): HTMLElement {
+export function statusScreen(
+  status: DaemonStatus,
+  onStart: (() => void) | null,
+  actions: StatusActions = {},
+): HTMLElement {
   const text = STATE_TEXT[status.state] ?? STATE_TEXT.failed;
   const canStart = onStart !== null && (status.state === 'stopped' || status.state === 'failed');
+  const { onChoose, onOpen } = actions;
+  const more = [
+    status.state === 'no_project' && onChoose
+      ? button('Choose a project folder…', () => onChoose(), { class: 'btn btn-primary sh-login-action' })
+      : null,
+    status.state === 'failed' && onOpen
+      ? button('Open config.yaml', () => onOpen('config'), { class: 'btn sh-login-action' })
+      : null,
+    status.state === 'failed' && onOpen
+      ? button('Open the log', () => onOpen('log'), { class: 'btn sh-login-action' })
+      : null,
+  ];
   return h(
     'main',
     { class: 'sh-login' },
@@ -164,6 +230,7 @@ export function statusScreen(status: DaemonStatus, onStart: (() => void) | null)
       text.message ? h('p', { class: 'sh-login-message' }, text.message) : null,
       status.message ? h('p', { class: 'sh-login-detail mono' }, status.message.slice(0, 400)) : null,
       canStart ? button('Start Friday', () => onStart?.(), { class: 'btn btn-primary sh-login-action' }) : null,
+      ...more,
     ),
   );
 }
@@ -182,6 +249,7 @@ export async function untilReady(env: DesktopEnv, root: HTMLElement | null): Pro
     } catch (e) {
       status = { state: 'failed', message: e instanceof Error ? e.message : String(e) };
     }
+    lastStatus.set(env, status);
     if (status.state === 'ready') {
       try {
         return await env.core.invoke<ProjectInfo>('project_info');
@@ -194,9 +262,20 @@ export async function untilReady(env: DesktopEnv, root: HTMLElement | null): Pro
       shown = key;
       replace(
         root,
-        statusScreen(status, () => {
-          void env.core.invoke('restart_daemon').catch(() => undefined);
-        }),
+        statusScreen(
+          status,
+          () => {
+            void env.core.invoke('restart_daemon').catch(() => undefined);
+          },
+          {
+            onChoose: () => {
+              void env.core.invoke('choose_project_folder').catch(() => undefined);
+            },
+            onOpen: (kind) => {
+              void env.core.invoke('open_project_file', { kind }).catch(() => undefined);
+            },
+          },
+        ),
       );
     }
     await new Promise((r) => setTimeout(r, pollMs));
@@ -223,7 +302,15 @@ function makeContext(env: DesktopEnv, info: ProjectInfo, root: HTMLElement): Run
   // The project's copy too, as in a browser: one copy for the windows, the browser and every start.
   const stopPrefsSync = startPrefsSync(api, store, { win: window });
   const dispatcher = new Dispatcher(store);
-  const engine = new SyncEngine(api, store, dispatcher);
+  // A window that cannot reach Friday asks the app before it says Friday stopped (2026-11-23): the
+  // app watches Friday's process, so a Friday that runs is not shown stopped in one window while
+  // the other is connected. Starting again counts as running.
+  const engine = new SyncEngine(api, store, dispatcher, {
+    stillRuns: async () => {
+      const s = await env.core.invoke<DaemonStatus>('daemon_status');
+      return s.state === 'ready' || s.state === 'starting';
+    },
+  });
   const keys = new Keyboard(window);
   keys.attach();
   const services = createShellServices(keys, document);
@@ -231,7 +318,10 @@ function makeContext(env: DesktopEnv, info: ProjectInfo, root: HTMLElement): Run
     store,
     api,
     keys,
-    platform: desktopPlatform(env.core),
+    // A file that cannot be opened (no VS Code) says so, instead of a button that does nothing.
+    platform: desktopPlatform(env.core, undefined, (e) =>
+      services.toasts.show({ kind: 'error', text: 'Open in VS Code', detail: errorDetail(e) }),
+    ),
     toast: (t) => services.toasts.show(t),
     confirm: (o) => services.confirms.confirm(o),
     react: (kind, label) => dispatcher.react(kind, Date.now(), label),
@@ -266,11 +356,44 @@ function safeStorage(): Storage | null {
   }
 }
 
-/** Follows the shell's word about the daemon: a restart on another port is read again at once. */
+/** What the strip says in the desktop app once Friday stopped: the app itself starts it again. */
+export const STOPPED_HERE =
+  'Friday has stopped for this project. The work in the task folders is kept; start it again here.';
+
+/**
+ * Follows the shell's word about the daemon: a restart on another port is read again at once, and
+ * a Friday that stopped or crashed shows on the strip now (with Start Friday), not after the
+ * stream gave up reconnecting.
+ */
 async function followDaemon(env: DesktopEnv, run: Running): Promise<() => void> {
-  return env.listen<DaemonStatus>('daemon-status', (s) => {
+  let outdated = false;
+  const restart = () => {
+    const shell = run.ctx.platform.desktop;
+    if (shell) void run.ctx.act('Restart Friday', () => shell.restart());
+  };
+  const tell = (s: DaemonStatus) => {
+    const notice = updateNotice(s, outdated, restart);
+    if (s.state === 'ready') outdated = Boolean(s.outdated);
+    if (notice) run.services.toasts.show(notice);
+  };
+  const stop = await env.listen<DaemonStatus>('daemon-status', (s) => {
     if (s.state === 'ready') void run.engine.retry();
+    else if (s.state === 'stopped' || s.state === 'failed') run.engine.daemonGone();
+    tell(s);
   });
+  // What the shell said before this window listened (an update noticed at the app's start).
+  const now = lastStatus.get(env);
+  if (now) tell(now);
+  return stop;
+}
+
+/**
+ * The app opened another project (2026-11-17, `project-changed`): this window holds the board, the
+ * stream and the preferences of the one before, so it loads again and finds the new one, through
+ * the same waiting screen as at a launch.
+ */
+async function followProject(env: DesktopEnv): Promise<() => void> {
+  return env.listen('project-changed', () => (env.reload ?? (() => location.reload()))());
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -295,11 +418,7 @@ export function applyDeepLink(ctx: AppContext, t: StudioTarget | null | undefine
     openModal(ctx, { kind: 'approval', id: t.approval_id });
   } else if (panel === 'settings') {
     const tab = typeof t.tab === 'string' && TAB.test(t.tab) ? t.tab : undefined;
-    ctx.store.patch('ui', {
-      activeView: 'settings',
-      settingsTab: tab,
-      drawer: { kind: 'settings', ...(tab ? { tab } : {}) },
-    });
+    ctx.store.patch('ui', { activeView: 'settings', settingsTab: tab, drawer: null });
   } else if (panel && ctx.registry.drawers.has(panel as DrawerKind))
     openDrawer(ctx, { kind: panel as DrawerKind, ...where });
   else if (panel && ctx.registry.modals.has(panel as ModalKind)) openModal(ctx, { kind: panel as ModalKind, ...id });
@@ -310,13 +429,26 @@ export async function bootDesktopStudio(root: HTMLElement, injected?: DesktopEnv
   const env = injected ?? (await loadEnv());
   const info = await untilReady(env, root);
   const run = makeContext(env, info, root);
+  // What happens without anyone asking (an agent that ended on its own) is said in this window.
+  run.dispatcher.notice = (t) => run.services.toasts.show(t);
   mountShell(run.ctx, run.services, root, studioAreas({ notch: false, sounds: false }), {
+    // "Start Friday" on the strip: a Friday that stopped is started by the shell (its `ready` then
+    // reads the board again, `followDaemon`); one that runs is only read again.
     onRetry: () => {
-      void run.engine.retry();
+      void (async () => {
+        const status = await env.core.invoke<DaemonStatus>('daemon_status').catch(() => null);
+        const shell = run.ctx.platform.desktop;
+        if (shell && status && (status.state === 'stopped' || status.state === 'failed')) {
+          await run.ctx.act('Start Friday', () => shell.restart());
+        }
+        void run.engine.retry();
+      })();
     },
+    stopped: { message: STOPPED_HERE, action: 'Start Friday' },
     reload: () => location.reload(),
   });
   await followDaemon(env, run);
+  await followProject(env);
   await env.listen<StudioTarget>('studio-deeplink', (t) => applyDeepLink(run.ctx, t));
   await env.listen('open-halt', () => openModal(run.ctx, { kind: 'halt' }));
   await env.listen<{ muted: boolean }>('toggle-mute', (p) => run.store.patch('prefs', { muted: !!p?.muted }));
@@ -396,14 +528,23 @@ export async function bootDesktopNotch(root: HTMLElement, injected?: DesktopEnv)
     },
   );
 
+  // What takes the mouse: the island, or the whole window while a confirmation is open in it.
+  let island: { x: number; y: number; w: number; h: number } | null = null;
+  let confirming = false;
+  const sendRect = () => {
+    const r = confirming ? { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight } : island;
+    if (r) void env.core.invoke('notch_rect', r).catch(() => undefined);
+  };
   const handle: NotchHandle = mountNotch(ctx, root, notchSlots, {
     mode: 'window',
     onRect: (r) => {
-      void env.core.invoke('notch_rect', { x: r.x, y: r.y, w: r.width, h: r.height }).catch(() => undefined);
+      island = { x: r.x, y: r.y, w: r.width, h: r.height };
+      sendRect();
     },
     onOpenStudio: (target) => showStudio(env, studioLink(target)),
   });
-  root.append(run.services.toasts.el, run.services.confirms.el);
+  const confirms = run.services.confirms.el;
+  root.append(run.services.toasts.el, confirms);
 
   // The keyboard belongs to the editor until the human works in the card (plan §8.2).
   let hasKeyboard = false;
@@ -412,11 +553,24 @@ export async function bootDesktopNotch(root: HTMLElement, injected?: DesktopEnv)
     hasKeyboard = take;
     void env.core.invoke('notch_keyboard', { take }).catch(() => undefined);
   };
+  const ours = (n: Node | null) => !!n && (handle.el.contains(n) || confirms.contains(n));
   handle.el.addEventListener('focusin', () => keyboard(true));
   handle.el.addEventListener('focusout', (e) => {
-    const next = (e as FocusEvent).relatedTarget as Node | null;
-    if (!next || !handle.el.contains(next)) keyboard(false);
+    if (!ours((e as FocusEvent).relatedTarget as Node | null)) keyboard(false);
   });
+  // A confirmation a card opens ("Cancel the goal?") is drawn outside the island, where the window
+  // let every click through to the editor and had no keyboard: neither its buttons nor Esc could
+  // close it (2026-11-23). While one is open, the whole window takes the mouse and the keyboard.
+  new MutationObserver(() => {
+    const open = confirms.childElementCount > 0;
+    if (open === confirming) return;
+    confirming = open;
+    sendRect();
+    if (open) {
+      keyboard(true);
+      (confirms.querySelector('.sh-confirm-cancel') as HTMLElement | null)?.focus();
+    } else if (!ours(document.activeElement)) keyboard(false);
+  }).observe(confirms, { childList: true });
 
   // What needs a larger view than the island opens in the Studio.
   store.subscribe('ui', (next) => {
@@ -458,6 +612,7 @@ export async function bootDesktopNotch(root: HTMLElement, injected?: DesktopEnv)
   const trayTimer = setInterval(tray, 15_000);
 
   await followDaemon(env, run);
+  await followProject(env);
   await env.listen<{ x: number; y: number }>('cursor', (p) => setCursor(p?.x ?? null, p?.y));
   await env.listen<{ focus?: boolean }>('notch-open', (p) => handle.open(p?.focus !== false));
   await env.listen<{ muted: boolean }>('toggle-mute', (p) => store.patch('prefs', { muted: !!p?.muted }));

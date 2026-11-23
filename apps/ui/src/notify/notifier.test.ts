@@ -186,7 +186,8 @@ describe('notifications (plan FD-25)', () => {
     expect(f.shown).toHaveLength(1);
     expect(f.shown[0]?.title).toBe('Approval needed — Friday — shop');
     expect(f.shown[0]?.options).toMatchObject({
-      body: 'shell.git.commit: git commit -m "pricing"',
+      // What the agent asks, as the act it is, then exactly what.
+      body: 'Commit or change branches: git commit -m "pricing"',
       tag: 'approval:apr_2',
     });
   });
@@ -226,6 +227,25 @@ describe('notifications (plan FD-25)', () => {
     }
   });
 
+  it('does not announce a plan to the person who just proposed it (2026-11-17)', () => {
+    const f = fakeEnv();
+    const ctx = ctxWith();
+    start(ctx, f.env);
+    const goal = makeGoal();
+    // Written in the plan editor: the person is looking at it.
+    const own = makePlan({ status: 'PROPOSED', proposed_by: { kind: 'human', id: 'local-operator' } });
+    ctx.board(makeSnapshot({ goals: [goal], plans: { [goal.goal_id]: { active: null, proposed: own } } }));
+    expect(f.shown).toEqual([]);
+    // The planner's next version of it is news.
+    const next = makePlan({
+      status: 'PROPOSED',
+      version: 2,
+      proposed_by: { kind: 'master_brain', id: 'master-brain' },
+    });
+    ctx.board(makeSnapshot({ goals: [goal], plans: { [goal.goal_id]: { active: null, proposed: next } } }));
+    expect(f.shown.map((n) => n.title)).toEqual(['A plan waits for your review — Friday — shop']);
+  });
+
   it('announces questions, proposed plans, blocked agents, failures and lost agents', () => {
     const f = fakeEnv();
     const ctx = ctxWith();
@@ -235,7 +255,12 @@ describe('notifications (plan FD-25)', () => {
       makeSnapshot({
         goals: [goal],
         escalations: [makeEscalation({ question: `Stack? ${HOSTILE}` })],
-        plans: { [goal.goal_id]: { active: null, proposed: makePlan({ status: 'PROPOSED' }) } },
+        plans: {
+          [goal.goal_id]: {
+            active: null,
+            proposed: makePlan({ status: 'PROPOSED', proposed_by: { kind: 'master_brain', id: 'master-brain' } }),
+          },
+        },
         tasks: [
           makeTask({
             task_id: 'tb',
@@ -258,6 +283,30 @@ describe('notifications (plan FD-25)', () => {
     ]);
     expect(f.shown[0]?.options?.body).toBe(`Stack? ${HOSTILE}`);
     expect(f.shown[2]?.options?.body).toBe('codex-1: Which names?');
+  });
+
+  it('announces work to verify and a goal ready to land, once each', () => {
+    const memory = remember(makeSnapshot(), NOW);
+    const board = makeSnapshot({
+      tasks: [
+        makeTask({
+          task_id: 't1',
+          status: 'READY_FOR_VERIFICATION',
+          agent_key: 'claude-1',
+          summary: `Add the API ${HOSTILE}`,
+        }),
+      ],
+      goals: [makeGoal({ goal_id: 'goal_done', status: 'COMPLETED', request: 'Add discount codes' })],
+      goal_landing: { goal_done: { work: 'branch', landed: null } },
+    });
+    const notices = diffNotices(memory, board, NOW);
+    expect(notices.map((n) => [n.title, n.body, n.taskId])).toEqual([
+      ['Work is ready for you to check', `claude-1: Add the API ${HOSTILE}`, 't1'],
+      ['A goal is ready to land', 'Add discount codes', null],
+    ]);
+    expect(diffNotices(memory, board, NOW)).toEqual([]);
+    // Work that waited when the page opened is not announced.
+    expect(diffNotices(remember(board, NOW), board, NOW)).toEqual([]);
   });
 
   it('announces a task each time it fails again, and an agent blocking again', () => {
@@ -368,7 +417,7 @@ describe('notifications (plan FD-25)', () => {
     });
     ctx.board(makeSnapshot({ inbox: [first, blocking] }));
     expect(f.shown.map((n) => n.options?.tag)).toEqual(['message:dlv_block']);
-    expect(f.shown[0]?.options?.body).toBe('Master Brain: Choose the plan to keep.');
+    expect(f.shown[0]?.options?.body).toBe('Friday’s planner: Choose the plan to keep.');
     // Replied to (or acknowledged): the delivery leaves the inbox and the notification closes.
     ctx.board(makeSnapshot({ inbox: [first] }));
     expect(f.shown[0]?.closed).toBe(true);

@@ -35,7 +35,8 @@ describe('the project shortcut (plan M9 §5.12)', () => {
 
 describe('agent options (plan M9 §5.9)', () => {
   it('accept only known values, never a leading dash, and become one --name=value argument each', () => {
-    expect(validateOptions('claude-code', {})).toEqual({ max_budget_usd: 1 });
+    // A limit nobody set is left undecided: the launcher decides it from how the host is signed in.
+    expect(validateOptions('claude-code', {})).toEqual({});
     expect(validateOptions('codex', { effort: 'high', service_tier: 'priority' })).toEqual({
       effort: 'high',
       sandbox: 'workspace-write',
@@ -46,7 +47,7 @@ describe('agent options (plan M9 §5.9)', () => {
       ['codex', { effort: '-x' }],
       ['codex', { max_budget_usd: 5 }],
       ['claude-code', { sandbox: 'read-only' }],
-      ['claude-code', { max_budget_usd: 500 }],
+      ['claude-code', { max_budget_usd: 5000 }],
       ['claude-code', { effort: 'very high' }],
     ] as const) {
       expect(() => validateOptions(host, bad), JSON.stringify(bad)).toThrow();
@@ -60,7 +61,6 @@ describe('agent options (plan M9 §5.9)', () => {
 
   it("carry an agent's cost class and models for Claude Code and Codex, never a leading dash (plan M13.3)", () => {
     expect(validateOptions('claude-code', { cost_class: 'cheap', models: ['claude-haiku-5-5'] })).toEqual({
-      max_budget_usd: 1,
       cost_class: 'cheap',
       models: ['claude-haiku-5-5'],
     });

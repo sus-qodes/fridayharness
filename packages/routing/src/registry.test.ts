@@ -93,13 +93,61 @@ describe('the static role registry', () => {
       [3, 'deepseek-flash', 'deepseek', false],
       [4, 'openai/gpt-6.1-sol', 'codex', true],
       [5, 'z-ai/glm-5.3', 'opencode', true],
+      [6, 'gemini-3.8-flash', 'antigravity', true],
     ]);
     expect(order('frontend_engineer')).toEqual([
       [1, 'gemini-4-argon', 'cursor', true],
       [2, 'claude-sonnet-5-5', 'cursor', true],
       [3, 'gemini-4-argon', 'gemini', true],
       [4, 'claude-opus-5-5', 'claude-code', true],
+      [5, 'openai/gpt-6.1-sol', 'codex', true],
+      [6, 'gemini-3.8-flash', 'antigravity', true],
     ]);
+    // Every agent Friday can start, and the one a person attaches, has a place in every working
+    // role (2026-11-17): a kind of work no connected agent may take waits for good.
+    for (const [role, definition] of Object.entries(ROLE_REGISTRY_SOURCE.roles)) {
+      if (role === 'decision_router') continue;
+      for (const host of ['claude-code', 'codex', 'antigravity']) {
+        expect(
+          definition.candidates.some((c) => c.harness === host && c.declared_dispatchable),
+          `${role} on ${host}`,
+        ).toBe(true);
+      }
+    }
+    // Codex's two added entries stand after the ranked ones and claim neither a cost nor a benchmark.
+    for (const role of ['frontend_engineer', 'code_reviewer_and_security']) {
+      const added = ROLE_REGISTRY_SOURCE.roles[role]?.candidates.find((c) => c.harness === 'codex');
+      expect(added, role).toMatchObject({ rank: 5, cost: null, benchmark: null, last_checked: '2026-11-17' });
+    }
+    // The current top model, not the one it replaced, which costs more.
+    expect(order('system_architect')?.[1]).toEqual([2, 'claude-fable-5-2', 'claude-code', true]);
+    expect(models.find((m) => m.id === 'claude-fable-5-2')).toMatchObject({
+      context_tokens: 1_000_000,
+      price: { input: 8, output: 40 },
+      vendors: ['claude-code'],
+    });
+    expect(models.find((m) => m.id === 'claude-haiku-5-5')?.context_tokens).toBe(1_000_000);
+    // Antigravity (the owner's addition of 2026-11-16) is last in every working role, so it reorders
+    // nothing, and it classifies nothing: the decision router has no entry for it. No cost or
+    // benchmark is claimed for it.
+    for (const [role, definition] of Object.entries(ROLE_REGISTRY_SOURCE.roles)) {
+      const ag = definition.candidates.filter((c) => c.harness === 'antigravity');
+      if (role === 'decision_router') {
+        expect(ag, role).toEqual([]);
+        continue;
+      }
+      expect(ag, role).toHaveLength(1);
+      expect(definition.candidates.at(-1), role).toMatchObject({
+        harness: 'antigravity',
+        model: 'gemini-3.8-flash',
+        rank: definition.candidates.length,
+        declared_dispatchable: true,
+        last_checked: '2026-11-16',
+        cost: null,
+        benchmark: null,
+      });
+    }
+    expect(models.find((m) => m.id === 'gemini-3.8-flash')?.vendors).toEqual(['gemini', 'antigravity']);
     expect(order('devops_and_terminal')?.[0]).toEqual([1, 'gemini-3.8-flash', 'gemini', true]);
     expect(ROLE_REGISTRY_SOURCE.roles.backend_engineer?.candidates[0]).toMatchObject({
       rank: 1,
@@ -154,7 +202,7 @@ describe('the static role registry', () => {
       backend: [{ model: 'local-coder', harness: 'generic' }],
     });
     expect(extended.roles.backend_engineer?.candidates.at(-1)).toEqual({
-      rank: 6,
+      rank: 7,
       model: 'local-coder',
       harness: 'generic',
       declared_dispatchable: true,

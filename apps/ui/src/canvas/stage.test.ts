@@ -137,6 +137,48 @@ describe('mountStudio', () => {
     expect(studio.camera()).toEqual({ x: 11, y: 22, zoom: 0.5 });
   });
 
+  /**
+   * The live test of 2026-11-23: a goal typed in the Notch never showed here, its card could be off
+   * the screen, and for the 10 to 30 seconds of planning nothing seemed to happen.
+   */
+  it('moves to a goal that appears on the board created a moment ago, and not to an old one', () => {
+    withSize();
+    const s = makeScenario();
+    const ctx = makeContext({ snapshot: s });
+    ctx.store.patch('prefs', { motion: 'reduce' });
+    ctx.store.patch('ui', { camera: { x: 9000, y: 9000, zoom: 1 } }); // looking far away
+    const host = document.createElement('div');
+    document.body.append(host);
+    const studio = mountStudio(ctx, host);
+    const far = studio.camera();
+    // A goal of yesterday that shows up (finished goals shown again) is left where it is.
+    const old = makeGoal({ goal_id: 'goal_old', request: 'Old', created_at: '2026-01-01T00:00:00.000Z' });
+    ctx.board({ ...s, goals: [...s.goals, old] });
+    expect(studio.camera()).toEqual(far);
+    // A goal created now, from this window or another: the camera goes to its card.
+    const fresh = makeGoal({ goal_id: 'goal_new', request: 'Add a line', created_at: new Date().toISOString() });
+    ctx.board({ ...s, goals: [...s.goals, old, fresh] });
+    expect(studio.camera()).not.toEqual(far);
+    expect(ctx.store.select('ui').revealId ?? null).toBeNull();
+    const r = studio.layout().rects.get('goal_new');
+    expect(r).toBeDefined();
+  });
+
+  it('moves to the card a goal form asks for, once it is on the board', () => {
+    withSize();
+    const s = makeScenario();
+    const ctx = makeContext({ snapshot: s });
+    ctx.store.patch('prefs', { motion: 'reduce' });
+    ctx.store.patch('ui', { camera: { x: 9000, y: 9000, zoom: 1 } });
+    const host = document.createElement('div');
+    document.body.append(host);
+    const studio = mountStudio(ctx, host);
+    const far = studio.camera();
+    ctx.store.patch('ui', { revealId: GOAL });
+    expect(studio.camera()).not.toEqual(far);
+    expect(ctx.store.select('ui').revealId ?? null).toBeNull();
+  });
+
   it('reuses card elements across snapshots and removes cards that left', () => {
     const { ctx, host } = setup();
     const before = card(host, API);

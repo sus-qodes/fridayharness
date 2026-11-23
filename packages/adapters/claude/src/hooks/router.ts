@@ -31,17 +31,36 @@ interface HookBody {
     /** Stop: false where the host says the turn ended other than by the agent (a human's stop, an error). */
     stop_completed?: boolean | null;
     stop_reason?: string | null;
+    /** Stop: the host's error text for a turn that ended on one. */
+    stop_error?: string | null;
   };
 }
 
 /** The router's answer: Friday's judgment, or the `allow` only Claude Code's spawned sessions get (ADR-0032 §11). */
 type Outcome = HookJudgment | { decision: 'allow'; reason: string };
 
+/** How long a session's hooks wait for its MCP server before `/friday` is left to the model. */
+export const TOOLS_STARTING_MS = 60_000;
+
+/**
+ * Whether a prompt is the `/friday` command (2026-11-19): typed as such, or as Antigravity may pass
+ * it, expanded into Friday's skill (its marker, or the sentence it opens with). Nothing else counts.
+ */
+export function isFridayCommand(prompt: string): boolean {
+  const p = prompt.trimStart();
+  return (
+    /^\/friday(\s|$)/i.test(p) ||
+    p.includes('<!-- friday:skill -->') ||
+    /^The user asked you to work on their Friday task\./.test(p)
+  );
+}
+
 /**
  * Daemon routes for every host's hooks (plan M1.10, M8b.1): POST
  * /api/v1/projects/:pid/hooks/:vendor/:event with the bootstrap token, `:event` in Friday's names.
  * Friday only restricts: "allow" returns no decision, so the host's own permission rules still
- * apply. Claude Code gets its hook output (`hook_output`), as it always has; every host gets
+ * apply (Antigravity, which takes no reply without a decision, is told allow: see `saysAllow`).
+ * Claude Code gets its hook output (`hook_output`), as it always has; every host gets
  * Friday's judgment (`judgment`), which the launcher's host module turns into the host's reply.
  */
 export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
@@ -59,7 +78,26 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
     ): HarnessRecord | undefined => {
       const sid = typeof hook.session_id === 'string' ? hook.session_id : undefined;
       const bySession = sid ? state.q.harnessBySession(pid, vendor, sid) : undefined;
-      if (bySession && bySession.status !== 'TERMINATED') return bySession;
+      if (bySession && bySession.status !== 'TERMINATED') {
+        // The conversation outlived the session its hooks were first linked to (2026-11-17): its
+        // MCP server started again (Friday restarted, the host reloaded its servers) and registered
+        // a new session that no hook has reached. Its hooks follow it there. Before, they kept
+        // counting for the dead session, and the live one stayed "no hook has reached the daemon":
+        // it could take no work until the person started a new conversation.
+        if (vendor !== 'claude-code' && sid && bySession.status === 'DISCONNECTED') {
+          const live = state.q.hooklessAttachHarness(
+            pid,
+            vendor,
+            body.agent_key || state.config.defaultAgentKey,
+            state.clock.now(),
+          );
+          if (live) {
+            state.bindSession(pid, vendor, sid, live.harness_id, null);
+            return state.q.harness(live.harness_id);
+          }
+        }
+        return bySession;
+      }
       const byKey = hostPid(body) ? state.q.harnessByKey(pid, keyFor(vendor, body)) : undefined;
       if (byKey || vendor === 'claude-code' || !sid) return byKey;
       // Cursor, Antigravity and Gemini CLI run hooks through a shell, so a hook's parent is never
@@ -154,14 +192,21 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
         throw new FridayError('invalid_request', `hook event mismatch (${String(hook.hook_event_name)} vs ${event})`);
       }
       /**
+       * Antigravity takes no reply without a decision (it reads one as a denial), so there a call
+       * Friday's rules pass is answered `allow`: the owner's choice of 2026-11-16, over a prompt to
+       * the person at every such step (HookJudgment). No other host is told allow.
+       */
+      const saysAllow = vendor === 'antigravity';
+      /**
        * The reply: Claude Code's hook output as it has always been, and Friday's judgment for every
-       * host. Friday's judgment never says allow, even where Claude Code's spawned session is told so.
+       * host. Friday's judgment says allow to Antigravity alone, even where Claude Code's spawned
+       * session is told so through its own hook output.
        */
       const reply = (o: Outcome) =>
         c.json({
           ok: true,
           hook_output: claude ? claudeHookOutput(o) : null,
-          judgment: (o.decision === 'allow' ? { decision: 'none' } : o) satisfies HookJudgment,
+          judgment: (o.decision === 'allow' && !saysAllow ? { decision: 'none' } : o) satisfies HookJudgment,
         });
       const none = () => reply({ decision: 'none' });
       const found = event === 'SessionStart' ? ensureHarness(vendor, hook, body) : harnessFor(vendor, hook, body);
@@ -235,6 +280,57 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           return reply({ decision: 'context', text: additionalContext });
         }
 
+        case 'UserPromptSubmit': {
+          // `/friday` with nothing to take (2026-11-19, U8/F21): it cost a model call, about 1.3k
+          // tokens, for the agent to find out and say so. Now the turn ends before the model is
+          // called, with Friday's words. Anything else, and any doubt, goes on as before.
+          const prompt = typeof hook.prompt === 'string' ? hook.prompt : '';
+          const asked = isFridayCommand(prompt);
+          // What the host passes for a slash command is not documented: recorded, so a live
+          // session shows it (the first words of a prompt that starts with "/", nothing else).
+          if (asked || prompt.trimStart().startsWith('/')) {
+            state.recordObservation(
+              pid,
+              actor,
+              'harness.prompt_seen',
+              {
+                session_id: hook.session_id ?? null,
+                friday_command: asked,
+                starts: prompt.trimStart().slice(0, 40),
+                length: prompt.length,
+              },
+              refs(null),
+            );
+          }
+          if (!asked || !agent || !harness || spawned || harness.shadow) return none();
+          if (state.q.control(pid).paused) {
+            return reply({
+              decision: 'halt',
+              text: 'Friday: Friday is paused, so no task can be taken; the model was not called. Resume Friday in its app, then type /friday again.',
+            });
+          }
+          if (state.nextTaskFor(pid, agent.agent_id)) {
+            // Something waits, but this session's Friday tools are not connected yet (2026-11-23):
+            // its hooks registered it a moment ago and its MCP server has not taken it over. The
+            // model could not claim, and in the live session it spent about 1k tokens to say "type
+            // /friday again". A session whose server never connects is left to the model after a
+            // minute, so nobody is held at this sentence.
+            const caps = harness.capabilities;
+            const young = state.clock.nowMs() - Date.parse(harness.registered_at) < TOOLS_STARTING_MS;
+            if (caps.hooks_route === true && !caps.mcp_tools && young) {
+              return reply({
+                decision: 'halt',
+                text: "Friday: Friday's tools are still starting in this session, so the model was not called. Type /friday again in a few seconds.",
+              });
+            }
+            return none();
+          }
+          return reply({
+            decision: 'halt',
+            text: `Friday: nothing waits for ${agent.agent_key} right now, so the model was not called and no tokens were used. Friday's app tells you when a task is given to this agent; type /friday then.`,
+          });
+        }
+
         case 'PreToolUse': {
           const toolName = String(hook.tool_name ?? '');
           const action = actionFromTool(toolName, (hook.tool_input as Record<string, unknown>) ?? {});
@@ -270,14 +366,17 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
           if (result.decision === 'ask' && cannotAsk) {
             return reply({
               decision: 'deny',
-              reason: `${result.reason}. A human decides this${approval_id ? ` (approval ${approval_id})` : ''}: it is declined until then. Do not try it another way; if you cannot finish without it, end as blocked and say so.`,
+              // It said "declined… end as blocked", and nothing ever said "granted" (2026-11-18):
+              // an agent whose three requests were all approved within seconds ended blocked.
+              reason: `${result.reason} The person was asked in Friday${approval_id ? ` (approval ${approval_id})` : ''}. Do not try it another way. Go on with whatever else the task needs: you get a message when they decide, and this same command passes then. If nothing else is left, end your turn and say you wait for ${approval_id ?? 'that approval'}.`,
             });
           }
           if (result.decision === 'allow') {
             // Friday decides for Claude Code's spawned session: what it allows goes ahead without a
             // prompt nobody would answer. Attached sessions: Friday only restricts, and the host's
-            // own rules still apply.
-            return decidesForHost ? reply({ decision: 'allow', reason: result.reason }) : none();
+            // own rules still apply. Antigravity is the exception (`saysAllow`): it has no reply
+            // that leaves a call to its own rules without asking its person.
+            return decidesForHost || saysAllow ? reply({ decision: 'allow', reason: result.reason }) : none();
           }
           return reply({ decision: result.decision, reason: result.reason });
         }
@@ -348,7 +447,17 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
             pid,
             actor,
             'agent.turn_ended',
-            { harness_id: harness?.harness_id ?? null, task_id: task?.task_id ?? null },
+            {
+              harness_id: harness?.harness_id ?? null,
+              task_id: task?.task_id ?? null,
+              // Why it ended, where the host says (2026-11-18): an agent its person runs stopped on
+              // "no capacity" and then on a used-up quota, and Friday went on showing it as running.
+              ...(body.host?.stop_reason ? { reason: String(body.host.stop_reason).slice(0, 80) } : {}),
+              ...(typeof body.host?.stop_completed === 'boolean' ? { completed: body.host.stop_completed } : {}),
+              ...(body.host?.stop_error
+                ? { error: state.redactor.redactString(String(body.host.stop_error)).value.slice(0, 400) }
+                : {}),
+            },
             refs(task),
           );
           // A spawned session's end is its adapter's to report.

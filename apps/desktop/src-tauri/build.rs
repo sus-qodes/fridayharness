@@ -3,12 +3,19 @@
 const COMMANDS: &[&str] = &[
     "friday_request",
     "confirm_and_send",
+    // The confirmation window's answer: given to that window alone (capabilities/confirm.json).
+    "confirm_answer",
     "stream_open",
     "stream_close",
     "project_info",
     "daemon_status",
     "stop_daemon",
     "restart_daemon",
+    "choose_project_folder",
+    "open_another_project",
+    "recent_projects",
+    "open_recent_project",
+    "open_project_file",
     "notch_rect",
     "notch_keyboard",
     "show_studio",
@@ -27,9 +34,14 @@ const COMMANDS: &[&str] = &[
 fn main() {
     // The Friday checkout this app is built from (apps/desktop/src-tauri -> the repository root):
     // the second place, after FRIDAY_HOME, where the app looks for Friday's CLI.
+    // Not in the installer for other computers (FRIDAY_RELEASE=1, 2026-11-19): it carries its own
+    // copy of Friday, and the build machine's folder means nothing elsewhere.
+    println!("cargo:rerun-if-env-changed=FRIDAY_RELEASE");
     let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    if let Some(home) = manifest.ancestors().nth(3) {
-        println!("cargo:rustc-env=FRIDAY_BUILD_HOME={}", home.display());
+    if std::env::var("FRIDAY_RELEASE").map_or(true, |v| v != "1") {
+        if let Some(home) = manifest.ancestors().nth(3) {
+            println!("cargo:rustc-env=FRIDAY_BUILD_HOME={}", home.display());
+        }
     }
     let windows = std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "windows");
     let mut attributes =

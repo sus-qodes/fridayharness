@@ -13,6 +13,8 @@
  * adds one to the card itself, and `reconcile` keeps the larger of a snapshot's count and the card's.
  */
 import type { ApprovalRow, DomainEvent, EscalationView, UiSnapshot } from '@friday/protocol';
+import { promptTokensOf } from '../model/usage.js';
+import type { Toast } from '../shell/context.js';
 import type { ActivityState, AgentActivity, FridayStore, LogLine, ReactionKind, ToolKind } from '../store/state.js';
 import { cleanText, truncate } from '../ui/format.js';
 import { approvalFromEvent, escalationFromEvent, record, str, strings } from './rows.js';
@@ -88,6 +90,12 @@ export class Dispatcher {
   readonly #local = new Map<string, LocalEdit<ApprovalRow>>();
   readonly #questions = new Map<string, LocalEdit<EscalationView>>();
 
+  /**
+   * Where a notice for the person goes (the window's toasts); unset in a window that shows none.
+   * For what happens without anyone asking: an agent that ended on its own, one that did not start.
+   */
+  notice: ((t: Toast) => void) | null = null;
+
   constructor(private readonly store: FridayStore) {}
 
   /** Applies one event; returns true when the snapshot should be read again. */
@@ -96,15 +104,23 @@ export class Dispatcher {
     switch (event.type) {
       case 'policy.evaluated':
         this.#tool(event, p, now);
+        // Its host asks its person: the waiting list says so; what follows a stop or a question clears it.
+        if (p.decision === 'ask' || this.#hasAttention(str(p.task_id))) return true;
         break;
       case 'agent.event':
         this.#agentEvent(event, p, now);
+        if (this.#hasAttention(str(p.task_id))) return true;
         break;
       case 'run.paths_observed':
         this.#paths(p, now);
         break;
       case 'agent.turn_ended':
         this.#log(this.#agentKeyOf(event), { at: now, sequence: event.sequence, stream: 'info', text: 'turn ended' });
+        // A call allowed but never run (its person cancelled it in Antigravity) sends no "completed":
+        // the card said "Running a command" after the turn and the task had ended (2026-11-23).
+        this.#idle(this.#agentKeyOf(event));
+        // An agent its person runs stopped in the middle of a task: the board says so (2026-11-18).
+        if (str(p.task_id)) return true;
         break;
       case 'scope.violation':
       case 'ownership.conflict':
@@ -174,6 +190,40 @@ export class Dispatcher {
       case 'task.harness_lost':
         this.#react('lost', now);
         break;
+      case 'agent.process_exited': {
+        // An agent Friday started ended without being asked to (a crash, a sign-out, a closed
+        // window). It did so silently (2026-11-17): its row said "exited" to whoever opened Agents.
+        const key = str(p.agent_key);
+        if (!key || p.requested !== false || typeof p.exit_code !== 'number' || p.exit_code === 0) break;
+        this.#log(key, {
+          at: now,
+          sequence: event.sequence,
+          stream: 'error',
+          text: `the agent stopped on its own (exit code ${p.exit_code})`,
+        });
+        this.#react('lost', now);
+        this.notice?.({
+          kind: 'warn',
+          text: `${truncate(clean(key), 64)} stopped on its own`,
+          detail: 'Nobody asked it to stop. Open Agents to see what it printed and to start it again.',
+          timeoutMs: 0,
+          key: `agent-exit:${key}`,
+        });
+        break;
+      }
+      case 'agent.autostart_failed': {
+        const key = str(p.agent_key);
+        if (!key) break;
+        const why = str(p.message);
+        this.notice?.({
+          kind: 'warn',
+          text: `${truncate(clean(key), 64)} did not start with Friday`,
+          detail: `${why ? `${truncate(cleanText(why), 300)} ` : ''}Open Agents to start it.`,
+          timeoutMs: 0,
+          key: `agent-start:${key}`,
+        });
+        break;
+      }
       case 'task.created':
       case 'goal.created':
         this.#react('node', now);
@@ -190,6 +240,12 @@ export class Dispatcher {
         break;
     }
     return isDomainEvent(event.type);
+  }
+
+  /** Whether the board shows this task's agent as stopped or asking (`SnapshotTask.attention`). */
+  #hasAttention(taskId: string | null | undefined): boolean {
+    if (!taskId) return false;
+    return Boolean(this.store.select('board')?.tasks.find((t) => t.task_id === taskId)?.attention);
   }
 
   /** A reaction started by the interface itself (an approval decided here). */
@@ -374,6 +430,16 @@ export class Dispatcher {
     this.store.setState({ board: { ...board, tasks } });
   }
 
+  /** The agent's turn ended: nothing of it is running any more. */
+  #idle(agentKey: string | null): void {
+    if (!agentKey) return;
+    this.#toolStart.delete(agentKey);
+    const a = this.store.select('activity');
+    const agent = a.agents[agentKey];
+    if (!agent?.current) return;
+    this.#setActivity({ ...a, agents: { ...a.agents, [agentKey]: { ...agent, current: null } } });
+  }
+
   #startTool(agentKey: string, tool: string, now: number): void {
     this.#toolStart.set(agentKey, { tool, at: now });
   }
@@ -487,14 +553,23 @@ export class Dispatcher {
         };
         if (taskId && unmediated.length) files = touchFiles(files, taskId, unmediated, now);
         break;
-      case 'host.usage':
+      case 'host.usage': {
+        const n = (v: unknown) => (typeof v === 'number' ? v : null);
+        // Counted as the board counts it: the whole prompt, the cache included (2026-11-18).
         agent.usage = {
-          cost_usd: typeof data.cost_usd === 'number' ? data.cost_usd : null,
-          input_tokens: typeof data.input_tokens === 'number' ? data.input_tokens : null,
-          output_tokens: typeof data.output_tokens === 'number' ? data.output_tokens : null,
+          cost_usd: n(data.cost_usd),
+          input_tokens: promptTokensOf({
+            input_tokens: n(data.input_tokens),
+            output_tokens: n(data.output_tokens),
+            cache_read_input_tokens: n(data.cache_read_input_tokens),
+            cache_creation_input_tokens: n(data.cache_creation_input_tokens),
+            input_includes_cache: data.input_includes_cache === true,
+          }),
+          output_tokens: n(data.output_tokens),
         };
         line = { at: now, sequence: event.sequence, stream: 'info', text: 'usage reported' };
         break;
+      }
       case 'model.observed':
         agent.model = str(data.model);
         line = {

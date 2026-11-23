@@ -9,6 +9,7 @@ import {
   localEndpoint,
   localOutputSchema,
   OpenAICompatiblePlannerModel,
+  remoteEndpoint,
   usageFrom,
 } from './openai-compatible.js';
 import { ModelError, type ModelRequest } from './types.js';
@@ -403,5 +404,136 @@ describe('a schema with alternatives at the top', () => {
     }) as { additionalProperties?: boolean; oneOf: { additionalProperties?: boolean }[] };
     expect(schema.additionalProperties).toBeUndefined();
     expect(schema.oneOf.map((b) => b.additionalProperties)).toEqual([false, false]);
+  });
+});
+
+/**
+ * A service on the internet, reached with the person's own key (2026-11-23): OpenAI, Gemini,
+ * DeepSeek, OpenRouter. Until then only Claude, or a model on this machine, could write a plan.
+ */
+describe('a service on the internet', () => {
+  const remote = (
+    fetchStub: typeof fetch,
+    extra: Partial<ConstructorParameters<typeof OpenAICompatiblePlannerModel>[0]> = {},
+  ) =>
+    new OpenAICompatiblePlannerModel({
+      baseUrl: 'https://api.openai.com/v1',
+      fetch: fetchStub,
+      remote: true,
+      provider: 'openai',
+      label: 'OpenAI',
+      apiKey: 'sk-test-key',
+      ...extra,
+    });
+
+  it('is reached over https only, with no credentials in the address, and says requests leave the machine', () => {
+    const s = server([]);
+    const model = remote(s.fetch);
+    expect([model.provider, model.remote]).toEqual(['openai', true]);
+    for (const bad of [
+      'http://api.openai.com/v1',
+      'http://127.0.0.1:11434/v1',
+      'https://user:pw@api.openai.com/v1',
+      'nope',
+    ]) {
+      expect(() => remote(s.fetch, { baseUrl: bad }), bad).toThrow(ModelError);
+    }
+    expect(s.sent).toEqual([]);
+    expect(remoteEndpoint('https://openrouter.ai/api/v1').host).toBe('openrouter.ai');
+    // A model on this machine still takes no address on the internet.
+    expect(() => make(s.fetch, { baseUrl: 'https://api.openai.com/v1' })).toThrow(ModelError);
+  });
+
+  it('sends the key to that address, follows no redirect, and reads the plan', async () => {
+    const s = server([{ status: 200, body: completion(JSON.stringify(PLAN), { model: 'gpt-6.1-sol' }) }]);
+    const res = await remote(s.fetch).complete({ ...req, model: 'gpt-6.1-sol' });
+    expect(res.output).toEqual(PLAN);
+    expect(res.model).toBe('gpt-6.1-sol');
+    expect(s.sent[0]?.url).toBe('https://api.openai.com/v1/chat/completions');
+    expect(s.sent[0]?.headers.get('authorization')).toBe('Bearer sk-test-key');
+    expect(s.sent[0]?.redirect).toBe('manual');
+    const redirected = server([{ status: 302, body: '', headers: { location: 'https://elsewhere.example/v1' } }]);
+    const e = await fails(remote(redirected.fetch).complete(req));
+    expect(e.message).toBe('OpenAI answered with a redirect (302); Friday follows none');
+    expect(redirected.sent).toHaveLength(1);
+  });
+
+  it('names the answer’s size limit the way the service asks for it, and remembers', async () => {
+    const refusal = {
+      error: {
+        message:
+          "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
+      },
+    };
+    const s = server([
+      { status: 400, body: refusal },
+      { status: 200, body: completion(JSON.stringify(PLAN)) },
+      { status: 200, body: completion(JSON.stringify(PLAN)) },
+    ]);
+    const model = remote(s.fetch);
+    expect((await model.complete(req)).output).toEqual(PLAN);
+    expect('max_tokens' in (s.sent[0]?.body ?? {})).toBe(true);
+    expect(s.sent[1]?.body.max_completion_tokens).toBe(16_000);
+    expect('max_tokens' in (s.sent[1]?.body ?? {})).toBe(false);
+    // The schema was not the problem: it is still sent.
+    expect(formatOf(s.sent[1]).type).toBe('json_schema');
+    await model.complete(req);
+    expect(s.sent[2]?.body.max_completion_tokens).toBe(16_000);
+    // A service known to want it is asked that way from the first request.
+    const known = server([{ status: 200, body: completion(JSON.stringify(PLAN)) }]);
+    await remote(known.fetch, { tokenParam: 'max_completion_tokens' }).complete(req);
+    expect(known.sent[0]?.body.max_completion_tokens).toBe(16_000);
+  });
+
+  it('tries the size limit’s other name and then JSON mode, each once, and then says what the service said', async () => {
+    const s = server([
+      { status: 400, body: { error: { message: 'max_tokens is not supported, use max_completion_tokens' } } },
+      { status: 400, body: { error: { message: 'response_format json_schema is not supported' } } },
+      { status: 200, body: completion(JSON.stringify(PLAN)) },
+    ]);
+    expect((await remote(s.fetch).complete(req)).output).toEqual(PLAN);
+    expect(s.sent).toHaveLength(3);
+    expect(formatOf(s.sent[2]).type).toBe('json_object');
+    expect(s.sent[2]?.body.max_completion_tokens).toBe(16_000);
+
+    const stuck = server([
+      { status: 400, body: { error: { message: 'schema too deep' } } },
+      { status: 400, body: { error: { message: 'still no' } } },
+    ]);
+    const e = await fails(remote(stuck.fetch).complete(req));
+    expect([e.code, e.message]).toEqual(['bad_request', 'OpenAI rejected the request (400): still no']);
+    expect(stuck.sent).toHaveLength(2);
+  });
+
+  it('says a rejected key, a missing model and a limit of the account in its own name, with no terminal advice', async () => {
+    const cases: [number, string, string][] = [
+      [401, 'auth', 'OpenAI rejected the key (401: Incorrect API key provided)'],
+      [404, 'bad_request', 'OpenAI has no model "qwen2.5:7b" (404: Incorrect API key provided)'],
+      [429, 'rate_limited', 'OpenAI says a limit of the account is reached (429): Incorrect API key provided'],
+    ];
+    for (const [status, code, message] of cases) {
+      const s = server([{ status, body: { error: { message: 'Incorrect API key provided' } } }]);
+      const e = await fails(remote(s.fetch).complete(req));
+      expect([e.code, e.message], String(status)).toEqual([code, message]);
+      expect(e.message).not.toContain('providers.local');
+      expect(e.message).not.toContain('friday doctor');
+    }
+    // Gemini answers 400 for a key it does not take: said as the key, with no second attempt.
+    const gemini = server([
+      { status: 400, body: [{ error: { code: 400, message: 'API key not valid. Please pass a valid API key.' } }] },
+    ]);
+    const refused = await fails(remote(gemini.fetch, { label: 'Google Gemini', provider: 'gemini' }).complete(req));
+    expect(refused.code).toBe('auth');
+    expect(refused.message).toContain('Google Gemini rejected the key (400');
+    expect(gemini.sent).toHaveLength(1);
+    const down = (async () => {
+      throw new Error('getaddrinfo ENOTFOUND api.openai.com');
+    }) as unknown as typeof fetch;
+    const e = await fails(remote(down).complete(req));
+    expect(e.code).toBe('network');
+    expect(e.message).toContain('OpenAI could not be reached at https://api.openai.com/v1');
+    expect(e.message).not.toContain('ollama');
+    // Whether the request went out is not known: it is not counted as free.
+    expect(e.billed).toBe('unknown');
   });
 });

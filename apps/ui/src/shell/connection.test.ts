@@ -56,6 +56,28 @@ describe('connection strip (review R2)', () => {
     expect(connectionView(sys({ connection: 'reconnecting', lastError: 'reset' })).retry).toBe(false);
   });
 
+  it('where the app starts Friday itself, a stopped Friday reads so and offers that', () => {
+    const store = createStore();
+    const retry = vi.fn();
+    const strip = mountConnectionStrip(store, {
+      onRetry: retry,
+      stopped: { message: 'Friday has stopped for this project.', action: 'Start Friday' },
+    });
+    mounted.push(strip);
+    store.setState({ system: sys({ connection: 'stopped', lastError: 'Friday is not reachable here: shortcut' }) });
+    expect(strip.el.hidden).toBe(false);
+    expect(strip.el.textContent).toContain('Friday has stopped for this project.');
+    expect(strip.el.textContent).not.toContain('shortcut');
+    const button = strip.el.querySelector('button') as HTMLButtonElement;
+    expect(button.textContent).toBe('Start Friday');
+    button.click();
+    expect(retry).toHaveBeenCalledOnce();
+    // A failed read while connected is still "Try again".
+    store.setState({ system: sys({ lastError: 'COS-5000: database is locked' }) });
+    expect(button.textContent).toBe('Try again');
+    expect(strip.el.textContent).toContain('the last read of the board failed');
+  });
+
   it('reads the board again from the strip while the engine runs, and hides once the read succeeds', async () => {
     vi.useFakeTimers();
     const daemon = new Daemon();

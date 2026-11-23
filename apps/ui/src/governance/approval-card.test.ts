@@ -93,6 +93,30 @@ describe('approval card', () => {
     card.destroy();
   });
 
+  it('says what the agent asks as the act it is, and keeps the policy’s name for it one hover away (2026-11-17)', () => {
+    const card = approvalCard(ctx, makeApproval({ capability: 'package.install', target: 'npm install zod' }));
+    document.body.appendChild(card.el);
+    const rows = [...card.el.querySelectorAll('.gv-meta-row')].map((r) => [
+      r.querySelector('dt')?.textContent,
+      r.querySelector('dd')?.textContent,
+    ]);
+    expect(rows.at(-1)).toEqual(['Asks to', 'Install packages']);
+    const asks = card.el.querySelector('.gv-meta-row:last-child dd') as HTMLElement;
+    expect(asks.title).toBe('package.install');
+    expect(asks.classList.contains('mono')).toBe(false);
+    // Exactly what would run is shown in full under it, as before.
+    expect(card.el.querySelector('.gv-target')?.textContent).toContain('Exactly this');
+    expect(card.el.querySelector('.gv-target')?.textContent).toContain('npm install zod');
+    expect(card.el.querySelector('.gv-purpose')?.textContent).toContain('The agent’s reason');
+    card.destroy();
+    // One Friday has no words for is shown as the policy names it.
+    const other = approvalCard(ctx, makeApproval({ capability: 'future.thing' }));
+    const dd = other.el.querySelector('.gv-meta-row:last-child dd') as HTMLElement;
+    expect(dd.textContent).toBe('future.thing');
+    expect(dd.classList.contains('mono')).toBe(true);
+    other.destroy();
+  });
+
   it('an expired request offers no decision', () => {
     const card = mount(makeApproval({ expired: true }));
     expect(card.el.querySelector('.gv-actions')?.hasAttribute('hidden')).toBe(true);
@@ -126,6 +150,44 @@ describe('approval card', () => {
     card.destroy();
   });
 
+  // Friday asks for an agent it started that was stopped at the edge of its task's files
+  // (2026-11-18): the file, for the rest of the task, is the first choice.
+  it('offers the file for the task first when the request is for one file outside the task', async () => {
+    const a = makeApproval({
+      capability: 'file.write',
+      target: 'packages/config/eslint/boundaries.js',
+      purpose: 'Edit: packages/config/eslint/boundaries.js is outside the files this task may change (src/**).',
+      reuse: 'task',
+      risk: 'low',
+    });
+    const card = mount(a);
+    const names = [...card.el.querySelectorAll('.gv-actions:not([hidden]) > button')].map(
+      (b) => b.querySelector('span')?.textContent,
+    );
+    expect(names.slice(0, 3)).toEqual(['Allow this file…', 'Just this edit', 'Deny']);
+    expect(buttonNamed(card.el, 'Allow this file…').classList.contains('btn-primary')).toBe(true);
+    expect(buttonNamed(card.el, 'Just this edit').classList.contains('btn-primary')).toBe(false);
+    expect(buttonNamed(card.el, 'Allow this file…').getAttribute('aria-keyshortcuts')).toBe('1');
+    arm(card.el);
+    ctx.confirmAnswer = true;
+    buttonNamed(card.el, 'Allow this file…').click();
+    await flush();
+    expect(ctx.transport.to('POST', `/approvals/${a.approval_id}/approve`).map((c) => c.body)).toEqual([
+      expect.objectContaining({ reuse: 'task' }),
+    ]);
+    // Shown another request, the same card goes back to its usual order.
+    card.update(
+      makeApproval({ approval_id: 'apr_other', capability: 'shell.npm.run', target: 'npm test', reuse: 'once' }),
+    );
+    expect(
+      [...card.el.querySelectorAll('.gv-actions:not([hidden]) > button')]
+        .map((b) => b.querySelector('span')?.textContent)
+        .slice(0, 2),
+    ).toEqual(['Allow once', 'Allow for this task…']);
+    expect(buttonNamed(card.el, 'Allow once').classList.contains('btn-primary')).toBe(true);
+    card.destroy();
+  });
+
   it('Allow once on high risk opens the modal instead', async () => {
     const a = makeApproval({ risk: 'high' });
     const card = mount(a);
@@ -138,17 +200,68 @@ describe('approval card', () => {
     card.destroy();
   });
 
-  it('Allow for this task… (the dots: it always opens the full view) opens the modal with the task reach', async () => {
+  it('Allow for this task… (the dots: one confirmation follows) grants for the task from the card (2026-11-18)', async () => {
     const a = makeApproval({ risk: 'low' });
     const card = mount(a);
     arm(card.el);
     expect(buttonNamed(card.el, 'Allow for this task').textContent).toContain('Allow for this task…');
+    // Saying no changes nothing.
+    ctx.confirmAnswer = false;
+    buttonNamed(card.el, 'Allow for this task…').click();
+    await flush();
+    expect(ctx.confirms.at(-1)?.title).toBe('Allow this for the whole task?');
+    expect([ctx.confirms.at(-1)?.body].flat().join(' ')).toContain('again on this task without asking');
+    expect(ctx.transport.calls).toHaveLength(0);
+    // A yes grants it: no second view, no hold.
+    ctx.confirmAnswer = true;
+    buttonNamed(card.el, 'Allow for this task…').click();
+    await flush();
+    expect(ctx.store.select('ui').modal).toBeFalsy();
+    const sent = ctx.transport.to('POST', `/approvals/${a.approval_id}/approve`);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.body).toMatchObject({ reuse: 'task' });
+    card.destroy();
+  });
+
+  it('on the desktop asks nothing itself: the shell shows its own confirmation for the whole task', async () => {
+    const a = makeApproval({ risk: 'medium' });
+    const card = mount(a);
+    (ctx as { platform: unknown }).platform = { ...ctx.platform, kind: 'tauri', desktop: {} };
+    arm(card.el);
+    buttonNamed(card.el, 'Allow for this task…').click();
+    await flush();
+    expect(ctx.confirms).toHaveLength(0);
+    expect(ctx.transport.to('POST', `/approvals/${a.approval_id}/approve`).map((c) => c.body)).toMatchObject([
+      { reuse: 'task' },
+    ]);
+    card.destroy();
+  });
+
+  it('a high-risk request still goes to the full view for the whole task, where its host opens it', async () => {
+    const a = makeApproval({ risk: 'high' });
+    const card = mount(a);
+    arm(card.el);
     buttonNamed(card.el, 'Allow for this task…').click();
     await flush();
     expect(ctx.transport.calls).toHaveLength(0);
     expect(ctx.store.select('ui').modal?.kind).toBe('approval');
     expect(takeRequestedReach(a.approval_id)).toBe('task');
     card.destroy();
+    // In the Notch the full view is the Studio's: the card asks its host for it, and opens nothing itself.
+    const opened: string[] = [];
+    const inNotch = approvalCard(ctx, makeApproval({ risk: 'high', approval_id: 'apr_notch' }), {
+      compact: true,
+      onFull: () => opened.push('studio'),
+    });
+    document.body.appendChild(inNotch.el);
+    ctx.store.patch('ui', { modal: null });
+    vi.advanceTimersByTime(0);
+    arm(inNotch.el);
+    buttonNamed(inNotch.el, 'Allow for this task…').click();
+    await flush();
+    expect(opened).toEqual(['studio']);
+    expect(ctx.store.select('ui').modal).toBeFalsy();
+    inNotch.destroy();
   });
 
   it('Deny opens a reason field; Send denial sends it as the note', async () => {
@@ -206,7 +319,9 @@ describe('approval card', () => {
       const back = buttonNamed(card.el, 'Back');
       back.click();
       press(card.el.querySelector('button') as HTMLElement, '2');
-      expect(ctx.store.select('ui').modal?.kind).toBe('approval');
+      await flush();
+      // The same as its button: one confirmation, then the grant for the task.
+      expect(ctx.confirms.at(-1)?.title).toBe('Allow this for the whole task?');
       card.destroy();
     });
 

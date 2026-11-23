@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppContext, Component } from '../shell/context.js';
 import { makeContext, type TestContext } from '../test/context.js';
 import {
+  makeAgent,
   makeApproval,
   makeEscalation,
   makeGoal,
+  makeHarness,
   makeInboxItem,
   makeRun,
   makeScenario,
@@ -354,7 +356,7 @@ describe('mounted Notch in a page: the pill alone (review §4, owner decision 1)
     const tag = q<HTMLButtonElement>('.nt-compact-open');
     expect(tag.getAttribute('aria-disabled')).toBe('false');
     expect(tag.tabIndex).toBe(0);
-    expect(tag.getAttribute('aria-label')).toBe('Inspect api: Running');
+    expect(tag.getAttribute('aria-label')).toBe('Inspect api: Working');
     expect(q('.nt-tag').textContent).toBe('api');
     tag.click();
     expect(ctx.store.select('ui').drawer).toEqual({ kind: 'inspector', id: 't1' });
@@ -637,7 +639,7 @@ describe('mounted Notch: messages, memories to review and an untrusted policy (r
     expect(onOpenStudio).toHaveBeenLastCalledWith({ panel: 'memory', tab: 'review' });
     handle.open();
     q<HTMLButtonElement>('[aria-label="Next waiting item"]').click();
-    expect(q('.nt-notice-policy .nt-notice-title').textContent).toBe('Policy change not yet trusted');
+    expect(q('.nt-notice-policy .nt-notice-title').textContent).toBe('Project settings wait for your trust');
     q<HTMLButtonElement>('.nt-studio').click();
     expect(onOpenStudio).toHaveBeenLastCalledWith({ panel: 'settings', tab: 'policy' });
     // A later arrival of the same quiet kinds keeps the card closed too.
@@ -765,7 +767,7 @@ describe('mounted Notch: the expanded card', () => {
     expect(ctx.transport.to('GET', '/models')).toHaveLength(0);
     expect(q('.nt-studio').getAttribute('aria-label')).toBe('Open this in Studio (Space)');
     expect(q('.nt-banner').hidden).toBe(false);
-    expect(q('.nt-banner-status').textContent).toBe('Running');
+    expect(q('.nt-banner-status').textContent).toBe('Working');
     expect(q('.nt-banner-tag').textContent).toBe('api');
     expect(q('.nt-meta-checks').textContent).toBe('No checks run yet');
     expect(q('.nt-banner').classList.contains('nt-banner-slim')).toBe(true);
@@ -838,10 +840,68 @@ describe('mounted Notch: the expanded card', () => {
     expect(settings?.textContent).toBe('Settings');
     expect(studio?.textContent).toBe('Open Studio');
     settings?.click();
-    expect(ctx.store.select('ui').drawer).toEqual({ kind: 'settings' });
+    expect(ctx.store.select('ui')).toMatchObject({ activeView: 'settings', drawer: null });
     handle.open();
     studio?.click();
     expect(handle.el.dataset.state).toBe('compact');
+  });
+
+  it('the handle at the lower edge folds the card back up, as Esc does (2026-11-17)', () => {
+    const ctx = makeContext({ snapshot: makeScenario() });
+    const { handle, q } = mount(ctx);
+    expect(handle.el.dataset.state).toBe('expanded');
+    const fold = q<HTMLButtonElement>('.nt-fold');
+    expect(fold.getAttribute('aria-label')).toBe('Fold back up (Esc)');
+    expect(fold.title).toBe('Fold back up (Esc)');
+    expect(fold.closest('.nt-foot')).not.toBeNull();
+    fold.focus();
+    fold.click();
+    // Folded while something waits: the pill stays, and the card is not reopened by a timer.
+    expect(handle.state()).toMatchObject({ state: 'compact', folded: true });
+    expect(document.activeElement).toBe(q('.nt-compact-open'));
+    // The card opens again from the pill, with the handle still there.
+    handle.open();
+    expect(handle.el.dataset.state).toBe('expanded');
+    q<HTMLButtonElement>('.nt-fold').click();
+    expect(handle.el.dataset.state).toBe('compact');
+  });
+
+  it('with nothing waiting the handle folds the card to the pill', () => {
+    const ctx = makeContext();
+    const { handle, q } = mount(ctx);
+    handle.open();
+    expect(handle.el.dataset.state).toBe('expanded');
+    q<HTMLButtonElement>('.nt-fold').click();
+    expect(handle.state()).toMatchObject({ state: 'compact', folded: false, pinned: false });
+  });
+
+  it('says it is your turn in Antigravity, and frees the task for another agent on one click (2026-11-17)', async () => {
+    const snapshot = makeSnapshot({
+      harnesses: [makeHarness({ harness_id: 'h_ag', vendor: 'antigravity', attach_mode: 'attach' })],
+      agents: [makeAgent({ agent_key: 'antigravity-1', harness_id: 'h_ag' })],
+      tasks: [
+        makeTask({
+          task_id: 'task_turn1',
+          status: 'READY',
+          reserved_for_agent_key: 'antigravity-1',
+          summary: 'Write the README',
+        }),
+      ],
+    });
+    const ctx = makeContext({ snapshot, answers: { 'POST /tasks/task_turn1/unreserve': { ok: true } } });
+    const { handle, q } = mount(ctx);
+    handle.open();
+    const notice = q('.nt-notice-turn');
+    expect(notice.querySelector('.nt-notice-title')?.textContent).toBe('Your turn in Antigravity');
+    expect(notice.querySelector('.nt-notice-line')?.textContent).toBe(
+      'antigravity-1 takes this task when you type /friday there · Write the README',
+    );
+    const buttons = [...notice.querySelectorAll<HTMLButtonElement>('button')];
+    expect(buttons.map((b) => b.textContent)).toEqual(['Open the task', 'Let another agent take it']);
+    buttons[1]?.click();
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    expect(ctx.transport.to('POST', '/tasks/task_turn1/unreserve')).toHaveLength(1);
+    expect(ctx.toasts.at(-1)).toEqual({ kind: 'success', text: 'Free for another agent' });
   });
 
   it('in the notch window Settings names its drawer for the Studio (deep review R7)', () => {

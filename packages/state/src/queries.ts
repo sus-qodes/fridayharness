@@ -2,6 +2,7 @@ import type { SqlDatabase, SqlValue } from '@friday/db';
 import {
   type AgentView,
   type AssignmentView,
+  allTokens,
   type ContextPacket,
   type ControlState,
   type FileReservationView,
@@ -28,6 +29,7 @@ import {
   type VerificationView,
   type WorktreeView,
 } from '@friday/protocol';
+import { sameApprovalTarget } from './approval-target.js';
 import type { IntentSnapshot } from './intent.js';
 import {
   type AgentRow,
@@ -473,6 +475,31 @@ export class Queries {
     return toVerificationView(row, checks);
   }
 
+  /**
+   * How long each of the project's own checks took lately (2026-11-19): per name, the longest of
+   * its last ten runs, and whether one of them ran out of time. Targeted runs and Friday's own
+   * checks are left out: they say nothing about a check's time limit.
+   */
+  checkTimes(projectId: string): Map<string, { longest_ms: number; ran_out: boolean; runs: number }> {
+    const rows = this.db
+      .prepare(
+        `SELECT name, duration_ms, details_json FROM verification_checks
+          WHERE project_id = ? AND origin = 'configured' AND duration_ms IS NOT NULL
+          ORDER BY rowid DESC LIMIT 400`,
+      )
+      .all<{ name: string; duration_ms: number; details_json: string | null }>(projectId);
+    const out = new Map<string, { longest_ms: number; ran_out: boolean; runs: number }>();
+    for (const r of rows) {
+      const seen = out.get(r.name) ?? { longest_ms: 0, ran_out: false, runs: 0 };
+      if (seen.runs >= 10) continue;
+      seen.runs += 1;
+      seen.longest_ms = Math.max(seen.longest_ms, r.duration_ms);
+      if (r.details_json?.includes('"check.ran_out_of_time"')) seen.ran_out = true;
+      out.set(r.name, seen);
+    }
+    return out;
+  }
+
   /** The newest packet compiled for an agent about a task: what that agent was given (LESSONS D-49). */
   deliveredPacketId(projectId: string, taskId: string, agentId: string): string | undefined {
     return this.db
@@ -782,22 +809,72 @@ export class Queries {
     use: { capability: string; target: string; task_id: string | null; run_id: string | null; agent_id: string },
     nowIso: string,
   ): { approval_id: string; expires_at: string | null } | undefined {
+    // The same need asked again in other words (a different `| tail -N`) is the same question.
     return this.db
       .prepare(
-        `SELECT approval_id, expires_at FROM approvals WHERE project_id = ? AND capability = ? AND target = ?
+        `SELECT approval_id, expires_at, target FROM approvals WHERE project_id = ? AND capability = ?
            AND status = 'pending' AND requested_by_kind = 'agent' AND requested_by_id = ?
            AND task_id IS ? AND run_id IS ? AND (expires_at IS NULL OR expires_at > ?)
-         ORDER BY created_at DESC LIMIT 1`,
+         ORDER BY created_at DESC`,
       )
-      .get<{ approval_id: string; expires_at: string | null }>(
+      .all<{ approval_id: string; expires_at: string | null; target: string | null }>(
         projectId,
         use.capability,
-        use.target,
         use.agent_id,
         use.task_id,
         use.run_id,
         nowIso,
-      );
+      )
+      .find((a) => sameApprovalTarget(a.target, use.target));
+  }
+
+  /**
+   * Grants of an attempt that nothing has used yet (2026-11-18): what an agent that stopped to wait
+   * was given while it worked, and never heard of. Oldest first.
+   */
+  unusedGrantsOfRun(
+    projectId: string,
+    runId: string,
+    nowIso: string,
+  ): { approval_id: string; capability: string; target: string | null; reuse: string }[] {
+    return this.db
+      .prepare(
+        `SELECT approval_id, capability, target, reuse FROM approvals WHERE project_id = ? AND run_id = ?
+           AND status = 'granted' AND uses = 0 AND requested_by_kind = 'agent'
+           AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at, approval_id`,
+      )
+      .all<{ approval_id: string; capability: string; target: string | null; reuse: string }>(projectId, runId, nowIso);
+  }
+
+  /** Requests of an attempt nobody has decided: they end with the attempt. */
+  pendingApprovalsOfRun(projectId: string, runId: string): string[] {
+    return this.db
+      .prepare("SELECT approval_id FROM approvals WHERE project_id = ? AND run_id = ? AND status = 'pending'")
+      .all<{ approval_id: string }>(projectId, runId)
+      .map((a) => a.approval_id);
+  }
+
+  /** One approval as the request for it reads it back. */
+  approvalRow(
+    projectId: string,
+    approvalId: string,
+  ):
+    | {
+        approval_id: string;
+        status: string;
+        capability: string;
+        target: string | null;
+        purpose: string | null;
+        risk: string | null;
+        expires_at: string | null;
+        reuse: string;
+      }
+    | undefined {
+    return this.db
+      .prepare(
+        'SELECT approval_id, status, capability, target, purpose, risk, expires_at, reuse FROM approvals WHERE approval_id = ? AND project_id = ?',
+      )
+      .get(approvalId, projectId);
   }
 
   /** File reservations of the project, oldest first (ADR-0025). */
@@ -880,8 +957,8 @@ export class Queries {
   ): string | undefined {
     const rows = this.db
       .prepare(
-        `SELECT approval_id, task_id, run_id, requested_by_kind, requested_by_id, reuse, policy_version FROM approvals
-         WHERE project_id = ? AND capability = ? AND target = ? AND status = 'granted'
+        `SELECT approval_id, task_id, run_id, requested_by_kind, requested_by_id, reuse, policy_version, target FROM approvals
+         WHERE project_id = ? AND capability = ? AND status = 'granted'
            AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at, approval_id`,
       )
       .all<{
@@ -892,7 +969,10 @@ export class Queries {
         requested_by_id: string;
         reuse: string;
         policy_version: string | null;
-      }>(projectId, use.capability, use.target, use.now);
+        target: string | null;
+      }>(projectId, use.capability, use.now)
+      // The command as it was approved, whatever trims its output this time (`approvalKey`).
+      .filter((a) => sameApprovalTarget(a.target, use.target));
     // When several grants cover a use, the narrowest is spent first and broader ones are kept.
     const reach: Record<string, number> = { once: 0, run: 1, task: 2 };
     rows.sort((x, y) => (reach[x.reuse] ?? 0) - (reach[y.reuse] ?? 0));
@@ -1278,8 +1358,10 @@ export class Queries {
       cost_reporters: 0,
     };
     for (const { host } of usage.rows) {
-      if (host.input_tokens !== null || host.output_tokens !== null) {
-        hosts.tokens = (hosts.tokens ?? 0) + (host.input_tokens ?? 0) + (host.output_tokens ?? 0);
+      // Every host counted the same way, the cache included (2026-11-18).
+      const tokens = allTokens(host);
+      if (tokens !== null) {
+        hosts.tokens = (hosts.tokens ?? 0) + tokens;
         hosts.tokens_reporters += 1;
       }
       if (host.cost_usd !== null) {
@@ -1340,6 +1422,21 @@ export class Queries {
            FROM model_calls WHERE project_id = ? AND provider = ? AND created_at >= ?`,
         )
         .get<{ usd: number }>(projectId, provider, sinceIso)?.usd ?? 0
+    );
+  }
+
+  /**
+   * The requests sent to a provider since a moment: every recorded call but the ones refused
+   * before they were sent. What a planner without a known price is held to a day (2026-11-23).
+   */
+  modelCallsSince(projectId: string, provider: string, sinceIso: string): number {
+    return (
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM model_calls
+           WHERE project_id = ? AND provider = ? AND created_at >= ? AND status <> 'refused'`,
+        )
+        .get<{ n: number }>(projectId, provider, sinceIso)?.n ?? 0
     );
   }
 

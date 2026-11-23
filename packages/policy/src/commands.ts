@@ -9,6 +9,13 @@ export type CommandClass =
   | 'test.local'
   | 'build.local'
   | 'lint.local'
+  /**
+   * A command that changes files in the working folder (`mkdir`, `cp`, `mv`, `sed -i`, `> file`).
+   * Until 2026-11-18 these were `git.mutate`, so a person was asked about "commit and change
+   * branches" for a `sed`. Where the files can be named, the command is judged as a write of
+   * those files (`evaluate`); this class's autonomy decides only what Friday cannot name.
+   */
+  | 'file.write'
   | 'git.mutate'
   | 'package.install'
   | 'fs.destructive'
@@ -40,6 +47,7 @@ export const DEFAULT_AUTONOMY: Record<CommandClass, Autonomy> = {
   'test.local': 'auto',
   'build.local': 'auto',
   'lint.local': 'auto',
+  'file.write': 'review',
   'git.mutate': 'review',
   'package.install': 'review',
   'fs.destructive': 'review',
@@ -63,7 +71,7 @@ const RANK: Record<Autonomy, number> = { auto: 0, review: 1, manual: 2, never: 3
  * It is kept where it belongs to a redirection (`2>&1`, `&> f`) and where it opens a segment with a
  * command after it, as PowerShell's call operator (`& "C:\…\node.exe" -v`).
  */
-export function splitSegments(command: string): string[] {
+export function splitSegments(command: string, shell?: Shell): string[] {
   const out: string[] = [];
   let cur = '';
   let quote: string | null = null;
@@ -73,6 +81,15 @@ export function splitSegments(command: string): string[] {
     const next = command[i + 1];
     if (quote) {
       cur += ch;
+      // Where the host names the shell as POSIX, a backslash inside double quotes keeps the next
+      // character (`grep "\"dates\|exports" f | head`): read otherwise, the quote ended at `\"`
+      // and the `|` of the pattern split the command in two. Only there: in PowerShell and cmd a
+      // backslash is a path separator, `"C:\dir\"` ends, and what follows it is a command.
+      if (quote === '"' && ch === '\\' && shell === 'posix' && next !== undefined) {
+        cur += next;
+        i += 1;
+        continue;
+      }
       if (ch === quote) quote = null;
       continue;
     }
@@ -153,6 +170,31 @@ function unwrap(ws: string[]): string[] {
       w = w.slice(2);
       continue;
     }
+    // `npm exec -- prettier --check a.ts` runs prettier, as `npx prettier` does. Its own options
+    // stand before the program; `-c` takes a command line for a shell, which no rule knows.
+    if (head === 'npm' && ['exec', 'x'].includes((w[1] ?? '').toLowerCase())) {
+      let k = 2;
+      let shellText = false;
+      while (k < w.length && (w[k] as string).startsWith('-') && w[k] !== '--') {
+        const o = (w[k] as string).toLowerCase();
+        if (o === '-c' || o === '--call' || o.startsWith('--call=')) shellText = true;
+        k += ['--package', '-p', '--workspace', '-w'].includes(o) ? 2 : 1;
+      }
+      if (w[k] === '--') k += 1;
+      if (!shellText && k < w.length) {
+        w = w.slice(k);
+        continue;
+      }
+    }
+    // `timeout 150 npx vitest run` runs what follows its duration. Alone it only waits
+    // (cmd's `timeout /t 5`), and is judged as itself.
+    if (head === 'timeout') {
+      const run = afterTimeout(w.slice(1));
+      if (run) {
+        w = run;
+        continue;
+      }
+    }
     if (['powershell', 'pwsh', 'cmd', 'bash', 'sh'].includes(head)) {
       const idx = w.findIndex((x, i) => i > 0 && /^(-c|-command|\/c|\/k|-lc)$/i.test(x));
       // The flag with no command after it: the shell takes its command at run time (from `xargs`,
@@ -166,6 +208,19 @@ function unwrap(ws: string[]): string[] {
     break;
   }
   return w;
+}
+
+/** What `timeout` runs: the words after its options and its duration; null when it runs nothing. */
+function afterTimeout(ws: string[]): string[] | null {
+  let i = 0;
+  while (i < ws.length) {
+    const t = ws[i] as string;
+    if (/^(?:-s|-k|--signal|--kill-after)$/.test(t)) i += 2;
+    else if (/^(?:--signal=|--kill-after=|--preserve-status$|--foreground$|-v$|--verbose$)/.test(t)) i += 1;
+    else break;
+  }
+  if (!/^\d+(?:\.\d+)?[smhd]?$/.test(ws[i] ?? '')) return null;
+  return i + 1 < ws.length ? ws.slice(i + 1) : null;
 }
 
 const has = (ws: string[], ...flags: string[]) => ws.some((x) => flags.includes(x.toLowerCase()));
@@ -247,7 +302,7 @@ export function classifySegment(segment: string): CommandClass {
 
   if (['rm', 'rmdir', 'rd', 'del', 'erase', 'remove-item', 'ri', 'format', 'shred', 'mkfs'].includes(cmd)) {
     const recursive = has(rest, '-r', '-rf', '-fr', '-R', '/s', '-recurse', '--recursive', '-force');
-    return recursive || ['format', 'shred', 'mkfs'].includes(cmd) ? 'fs.destructive' : 'git.mutate';
+    return recursive || ['format', 'shred', 'mkfs'].includes(cmd) ? 'fs.destructive' : 'file.write';
   }
   if (['kill', 'taskkill', 'stop-process', 'spps', 'pkill', 'killall'].includes(cmd)) return 'process.kill';
 
@@ -426,7 +481,7 @@ export function classifySegment(segment: string): CommandClass {
   // segment of its own (`findParts`).
   if (cmd === 'find') {
     if (rest.includes('-delete')) return 'fs.destructive';
-    if (rest.some((r) => ['-fprint', '-fprint0', '-fprintf', '-fls'].includes(r))) return 'git.mutate';
+    if (rest.some((r) => ['-fprint', '-fprint0', '-fprintf', '-fls'].includes(r))) return 'file.write';
   }
   // `command -v x` and `command -V x` look a program up.
   if (cmd === 'command' && /^-[vV]$/.test(ws[1] ?? '')) return 'read.local';
@@ -519,6 +574,9 @@ export function classifySegment(segment: string): CommandClass {
     'write-verbose',
     'write-information',
     'start-sleep',
+    'sleep',
+    // Without a command after its duration (`timeout /t 5`) it only waits.
+    'timeout',
     // POSIX tests and `read` (into a variable) run nothing; what they substitute is judged on its own.
     '[',
     '[[',
@@ -538,7 +596,7 @@ export function classifySegment(segment: string): CommandClass {
   if (readOnly.includes(cmd)) {
     // sed -i / awk -i inplace edit files.
     if ((cmd === 'sed' && rest.some((r) => r.startsWith('-i'))) || (cmd === 'awk' && rest.includes('inplace')))
-      return 'git.mutate';
+      return 'file.write';
     return 'read.local';
   }
   if (
@@ -565,7 +623,12 @@ export function classifySegment(segment: string): CommandClass {
       'chown',
     ].includes(cmd)
   ) {
-    return 'git.mutate';
+    return 'file.write';
+  }
+  // PowerShell's Get-* cmdlets only read (Get-Process, Get-Service, Get-ItemProperty). Not the
+  // ones that reach what a person keeps to themselves: credentials, a secret vault, the clipboard.
+  if (/^get-[a-z]+$/.test(cmd) && !['get-credential', 'get-secret', 'get-secretinfo', 'get-clipboard'].includes(cmd)) {
+    return 'read.local';
   }
   return 'unknown';
 }
@@ -575,6 +638,22 @@ export interface CommandClassification {
   class: CommandClass;
   autonomy: Autonomy;
   segments: { text: string; class: CommandClass }[];
+  /** Set when the command changes files with a command or a redirection: which ones, if it can be told. */
+  writes?: ShellWrites;
+}
+
+/** The files a command line writes through the shell, as far as Friday can name them. */
+export interface ShellWrites {
+  /**
+   * The files, as the command names them, with a `cd` before them applied; a relative one is
+   * relative to the folder the command starts in. Temporary files are left out.
+   */
+  paths: string[];
+  /**
+   * Friday cannot tell where it writes: a variable or a pattern in the name, a command inside a
+   * command, a cmdlet whose parameters it does not read.
+   */
+  opaque: boolean;
 }
 
 const SHELLS = new Set(['powershell', 'pwsh', 'cmd', 'bash', 'sh', 'zsh']);
@@ -614,6 +693,16 @@ function afterPrefixes(segment: string): string {
     if (PASS_THROUGH.has(name)) {
       s = rest;
       continue;
+    }
+    if (name === 'timeout') {
+      const t =
+        /^(?:(?:(?:-s|-k|--signal|--kill-after)\s+\S+|--signal=\S+|--kill-after=\S+|--preserve-status|--foreground|-v|--verbose)\s+)*\d+(?:\.\d+)?[smhd]?\s+(?=\S)/.exec(
+          rest,
+        );
+      if (t) {
+        s = rest.slice(t[0].length);
+        continue;
+      }
     }
     if (['command', 'builtin', 'exec'].includes(name) && !/^-[vV](\s|$)/.test(rest)) {
       s = rest.replace(/^-p\s+/, '');
@@ -675,6 +764,11 @@ export function wrappedCommand(segment: string): string | null {
     // One quoted argument; inside PowerShell's single quotes, a quote is written twice.
     if (!body.includes(q)) inner = body;
     else if (q === "'" && !body.replace(/''/g, '').includes("'")) inner = body.replace(/''/g, "'");
+    // Double quotes that hold a quote only as `'"'` or `\"` (Codex writes `--glob '"'!x'"'`) are
+    // still one argument: everything after the flag is the command, and it is read as one.
+    else if (q === '"' && !body.replace(/'"'/g, '').replace(/\\"/g, '').includes('"')) {
+      inner = body.replace(/\\"/g, '"');
+    }
   }
   return inner;
 }
@@ -694,7 +788,7 @@ function wrapperShell(segment: string): Shell {
 function expandedSegments(command: string, depth = 0, shell?: Shell): string[] {
   const branches = depth < 8 ? caseParts(command, shell) : null;
   if (branches) return branches.flatMap((p) => expandedSegments(p, depth + 1, shell));
-  return splitSegments(command).flatMap((s) => {
+  return splitSegments(command, shell).flatMap((s) => {
     if (depth >= 8) return [s];
     const inner = wrappedCommand(s);
     if (inner !== null) return expandedSegments(inner, depth + 1, wrapperShell(s));
@@ -1234,7 +1328,7 @@ export function classifyCommand(
   // Classes that are never allowed cannot be relaxed by configuration.
   table['secrets.read'] = 'never';
   table['friday.internal'] = 'never';
-  const segments = expandedSegments(command, 0, shell).map((text) => {
+  const found = expandedSegments(command, 0, shell).map((text) => {
     const known = classifySegment(text);
     // Only a command no rule knows (a project's own script) becomes a test run by being a check: a
     // check written as a deletion, a push or a fetch is judged as what it does.
@@ -1246,12 +1340,173 @@ export function classifyCommand(
   // it leaves no segment, yet `'x' > f` writes `f`. A command that leaves no segment is a read only
   // because every construct whose command comes from elsewhere (an `xargs` placeholder, a shell
   // with no `-c` text, a substitution where the program's name stands) is judged as written above.
-  const writes = writesThroughRedirect(command, 0, shell);
-  if (segments.length === 0 && !writes) return { class: 'read.local', autonomy: 'auto', segments };
+  const redirects = writesThroughRedirect(command, 0, shell);
+  // Where it writes, when it writes at all. A command whose every write is a temporary file
+  // (`eslint . > "$TEMP/lint.txt"`, `cp package-lock.json /tmp/lock.bak`) changes nothing of the
+  // project: its write segments are reads, as far as the project goes.
+  const written = redirects || found.some((s) => s.class === 'file.write') ? shellWrites(command, shell) : null;
+  const harmless = written !== null && !written.opaque && written.paths.length === 0 && !redirects;
+  const segments = harmless
+    ? found.map((s) => (s.class === 'file.write' ? { text: s.text, class: 'read.local' as const } : s))
+    : found;
+  if (segments.length === 0 && !redirects) return { class: 'read.local', autonomy: 'auto', segments };
   let worst: { text: string; class: CommandClass } = segments[0] ?? { text: command, class: 'read.local' };
-  for (const s of segments) if (RANK[table[s.class]] > RANK[table[worst.class]]) worst = s;
-  if (writes && RANK[table[worst.class]] < RANK.review) worst = { text: command, class: 'git.mutate' };
-  return { class: worst.class, autonomy: table[worst.class], segments };
+  for (const s of segments) {
+    const more = RANK[table[s.class]] - RANK[table[worst.class]];
+    // Of two classes that ask alike, the other one names the command: `file.write` is the class
+    // of a command only when everything else in it runs without asking, which is what lets its
+    // files decide (`evaluate`).
+    if (more > 0 || (more === 0 && worst.class === 'file.write' && s.class !== 'file.write')) worst = s;
+  }
+  if (redirects && RANK[table[worst.class]] < RANK[table['file.write']]) worst = { text: command, class: 'file.write' };
+  return {
+    class: worst.class,
+    autonomy: table[worst.class],
+    segments,
+    ...(written && !harmless ? { writes: written } : {}),
+  };
+}
+
+/** Where nothing is kept: output thrown away, or sent to the terminal. */
+const NO_FILE = /^(?:\$null|nul|\/dev\/(?:null|stdout|stderr|tty))$/i;
+
+/**
+ * Whether a path is a temporary file: under the system's temporary folder as a shell names it
+ * (`/tmp/x`, `"$TEMP/lint.txt"`, `%TEMP%\x`, `$env:TEMP\x`), by plain names with no way back out.
+ */
+export function isTempPath(target: string): boolean {
+  const m = /^(?:\/tmp|\/var\/tmp|\$\{?(?:TEMP|TMP|TMPDIR)\}?|%(?:TEMP|TMP)%|\$env:(?:TEMP|TMP))[\\/](.+)$/i.exec(
+    target,
+  );
+  if (!m) return false;
+  return (m[1] as string).split(/[\\/]/).every((c) => /^[\w.@+-]+$/.test(c) && c !== '.' && c !== '..');
+}
+
+/** A name the shell fills in when it runs (a variable, a pattern, the home folder): not a file Friday can name. */
+const UNNAMED = /[$`*?[\]{}%<>|!]|^~|^-$/;
+
+/**
+ * The files a segment's redirections write (`> f`, `>> f`, `2> f`, `&> f`), outside its quotes;
+ * null when one cannot be read (a process substitution, an unclosed quote). A redirection into
+ * another stream (`2>&1`) writes no file.
+ */
+function redirectTargets(segment: string): string[] | null {
+  const out: string[] = [];
+  let quote: string | null = null;
+  for (let i = 0; i < segment.length; i += 1) {
+    const ch = segment[i] as string;
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch !== '>') continue;
+    let j = i + 1;
+    if (segment[j] === '>') j += 1;
+    if (segment[j] === '&') {
+      i = j;
+      continue;
+    }
+    while (segment[j] === ' ' || segment[j] === '\t') j += 1;
+    const q = segment[j];
+    if (q === '"' || q === "'") {
+      const end = segment.indexOf(q, j + 1);
+      if (end < 0) return null;
+      out.push(segment.slice(j + 1, end));
+      i = end;
+      continue;
+    }
+    const m = /^[^\s;&|<>()]+/.exec(segment.slice(j));
+    if (!m) return null;
+    out.push(m[0]);
+    i = j + m[0].length - 1;
+  }
+  return out;
+}
+
+/**
+ * The files a command that changes files names, from its words; null where Friday does not read
+ * the command's parameters (PowerShell's cmdlets, `sed` with a script file, `awk`, `find`).
+ * More than it writes is fine (a word that is no file is then judged as one, and asked about);
+ * fewer never.
+ */
+function writtenBy(cmd: string, args: readonly string[]): string[] | null {
+  const named = args.filter((a) => !a.startsWith('-') && !/^\/[a-z?]$/i.test(a));
+  if (
+    ['mkdir', 'md', 'touch', 'tee', 'rm', 'rmdir', 'rd', 'del', 'erase', 'mv', 'move', 'ren', 'rename'].includes(cmd)
+  ) {
+    return named.length ? named : null;
+  }
+  // The last word is what a copy writes; the others are only read.
+  if (cmd === 'cp' || cmd === 'copy') return named.length >= 2 ? [named[named.length - 1] as string] : null;
+  // The first word is the mode, or the owner.
+  if (cmd === 'chmod' || cmd === 'chown') return named.length >= 2 ? named.slice(1) : null;
+  if (cmd === 'sed') {
+    if (args.some((a) => /^(?:-e|-f|--expression|--file)(?:=|$)/.test(a) || /^-[a-z]*[ef]$/i.test(a))) return null;
+    // The first word is the script.
+    return named.length >= 2 ? named.slice(1) : null;
+  }
+  return null;
+}
+
+const CHANGES_FOLDER = new Set(['cd', 'chdir', 'set-location', 'sl']);
+const FOLDER_STACK = new Set(['pushd', 'popd', 'push-location', 'pop-location']);
+
+/** `dir` then `p`, as the shell would read `p` after a `cd dir`. */
+function under(dir: string, p: string): string {
+  if (!dir || /^(?:[\\/]|[A-Za-z]:)/.test(p)) return p;
+  return `${dir.replace(/[\\/]+$/, '')}/${p}`;
+}
+
+/**
+ * Where a command line writes, read from a line that is plain: commands one after another, each
+ * written out. Anything that runs a command inside a command (a wrapper, a block, a substitution,
+ * `xargs`, `find -exec`) is not followed: such a line is `opaque`, and so is a name the shell
+ * fills in at run time. A `cd` to a folder that is written out is applied to what follows it.
+ */
+export function shellWrites(command: string, shell?: Shell): ShellWrites {
+  const flat = splitSegments(command, shell);
+  const expanded = expandedSegments(command, 0, shell);
+  if (flat.length !== expanded.length || flat.some((s, i) => s !== expanded[i])) return { paths: [], opaque: true };
+  const paths: string[] = [];
+  let dir = '';
+  /** A `cd` Friday could not follow: relative names after it are not known. */
+  let lost = false;
+  for (const seg of flat) {
+    // A quote written with a backslash is read differently by each shell: not guessed at.
+    if (/\\["']/.test(seg)) return { paths: [], opaque: true };
+    const redirected = redirectTargets(seg);
+    if (redirected === null) return { paths: [], opaque: true };
+    const ws = unwrap(words(seg.replace(TRAILING_REDIRECTS, '')));
+    const cmd = programName(ws[0] ?? '');
+    if (FOLDER_STACK.has(cmd)) {
+      lost = true;
+      continue;
+    }
+    if (CHANGES_FOLDER.has(cmd)) {
+      const to = ws[1];
+      if (ws.length === 1) continue;
+      if (ws.length !== 2 || !to || UNNAMED.test(to)) lost = true;
+      else dir = under(dir, to);
+      continue;
+    }
+    const named = [...redirected];
+    if (classifySegment(seg) === 'file.write') {
+      const args = writtenBy(cmd, ws.slice(1));
+      if (args === null) return { paths: [], opaque: true };
+      named.push(...args);
+    }
+    for (const t of named) {
+      if (NO_FILE.test(t) || isTempPath(t)) continue;
+      if (UNNAMED.test(t) || !t.trim()) return { paths: [], opaque: true };
+      if (lost && !/^(?:[\\/]|[A-Za-z]:)/.test(t)) return { paths: [], opaque: true };
+      paths.push(under(dir, t));
+    }
+  }
+  return { paths, opaque: false };
 }
 
 /**
@@ -1282,7 +1537,11 @@ function isDeclaredCheck(segment: string, checks: readonly (readonly string[])[]
 function writesThroughRedirect(command: string, depth = 0, shell?: Shell): boolean {
   const branches = depth < 8 ? caseParts(command, shell) : null;
   if (branches) return branches.some((p) => writesThroughRedirect(p, depth + 1, shell));
-  return splitSegments(command).some((s) => {
+  return splitSegments(command, shell).some((raw) => {
+    // Into a temporary file (`> "$TEMP/lint.txt"`, `> /tmp/out`): nothing of the project is written.
+    const s = raw.replace(/[0-9*&]?>{1,2}\s*(?:"([^"]*)"|([^\s;&|<>()'"]+))/g, (all, quoted, plain) =>
+      isTempPath(String(quoted ?? plain ?? '')) ? ' ' : all,
+    );
     const bare = s
       .replace(/"[^"]*"|'[^']*'/g, 'Q')
       .replace(/[0-9*&]?>{1,2}\s*(\$null|nul|\/dev\/null)(?![\w/.\\-])/gi, ' ');

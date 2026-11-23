@@ -22,6 +22,38 @@ let counter = 0;
 
 export const GOAL_PLACEHOLDER = 'Describe a goal…';
 
+/** How the line is taken up (2026-11-18): each is one click on the line itself. */
+export type LineMode = 'ask' | 'do' | 'plan';
+export const LINE_MODES: readonly {
+  mode: LineMode;
+  label: string;
+  title: string;
+  placeholder: string;
+  offer: string;
+}[] = [
+  {
+    mode: 'ask',
+    label: 'Ask',
+    title: 'A question: one agent answers it. Nothing is changed, checked or landed',
+    placeholder: 'Ask about this project…',
+    offer: 'Ask',
+  },
+  {
+    mode: 'do',
+    label: 'Do',
+    title: 'One task: one agent starts on it at once, with no plan to approve',
+    placeholder: 'Say what to do…',
+    offer: 'Start now with one agent',
+  },
+  {
+    mode: 'plan',
+    label: 'Plan',
+    title: 'A goal: it is split into tasks, and you approve the plan before anything starts',
+    placeholder: GOAL_PLACEHOLDER,
+    offer: 'Create a goal',
+  },
+];
+
 export function quickPrompt(ctx: AppContext, opts: QuickPromptOptions = {}): Component {
   const feedbackId = `dk-qp-feedback-${++counter}`;
   const input = h('input', {
@@ -35,12 +67,33 @@ export function quickPrompt(ctx: AppContext, opts: QuickPromptOptions = {}): Com
     aria: { label: 'Describe a goal', describedby: feedbackId },
   });
   const feedback = h('div', { class: 'dk-qp-feedback', id: feedbackId, role: 'status', aria: { live: 'polite' } });
+  let mode: LineMode = 'plan';
+  const modeButtons = LINE_MODES.map((m) => {
+    const b = h('button', { type: 'button', class: 'dk-qp-mode', title: m.title, dataset: { mode: m.mode } }, m.label);
+    b.addEventListener('click', () => setMode(m.mode));
+    return b;
+  });
+  const modes = h(
+    'div',
+    { class: 'dk-qp-modes', role: 'group', aria: { label: 'How to take this up' } },
+    ...modeButtons,
+  );
   const el = h(
     'div',
     { class: 'dk-qp' },
-    h('div', { class: 'dk-qp-row' }, h('span', { class: 'dk-qp-mark' }, icon('goal', 14)), input),
+    h('div', { class: 'dk-qp-row' }, h('span', { class: 'dk-qp-mark' }, icon('goal', 14)), input, modes),
     feedback,
   );
+  const spec = () => LINE_MODES.find((m) => m.mode === mode) ?? (LINE_MODES[2] as (typeof LINE_MODES)[number]);
+  function setMode(next: LineMode): void {
+    mode = next;
+    for (const b of modeButtons) b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
+    input.placeholder = spec().placeholder;
+    // What Enter offered was for the other way of taking it up.
+    pending = null;
+    clearFeedback();
+    input.focus();
+  }
 
   /** The goal offered by the last Enter, and the line as it was then: only that line creates it. */
   let pending: { text: string; line: string } | null = null;
@@ -59,22 +112,56 @@ export function quickPrompt(ctx: AppContext, opts: QuickPromptOptions = {}): Com
 
   async function createGoal(text: string): Promise<void> {
     const board = ctx.store.select('board');
-    const plan = board?.brain?.planner_available ?? false;
+    const direct = mode !== 'plan';
+    // A question and a single task need no planner.
+    const plan = direct ? false : (board?.brain?.planner_available ?? false);
     const r = await ctx.act(
-      'Create a goal',
-      () => ctx.api.createGoal({ request: text, constraints: [], outcomes: [], priority: 'normal', plan }),
-      plan ? 'Goal created: the Master Brain plans it' : 'Goal created: write its plan',
+      mode === 'ask' ? 'Ask the question' : mode === 'do' ? 'Start the task' : 'Create a goal',
+      () =>
+        ctx.api.createGoal({
+          request: text,
+          constraints: [],
+          outcomes: [],
+          priority: 'normal',
+          plan,
+          ...(direct ? { mode } : {}),
+        }),
+      mode === 'ask'
+        ? 'Asked: the answer appears here when it is ready'
+        : mode === 'do'
+          ? 'Started: one agent takes it now'
+          : plan
+            ? 'Goal created: Friday is planning it'
+            : 'Goal created: write its plan',
     );
     if (destroyed) return;
     if (!r) {
-      show('error', 'The goal was not created.');
+      show(
+        'error',
+        mode === 'ask'
+          ? 'The question was not asked.'
+          : mode === 'do'
+            ? 'The task was not started.'
+            : 'The goal was not created.',
+      );
       return;
     }
+    // The canvas moves to the new card as soon as it is on the board (2026-11-23).
+    if (r.goal_id) ctx.store.patch('ui', { revealId: r.goal_id });
     ctx.refresh();
     // Without a planner nobody else writes the plan: its editor opens on the new goal.
-    if (!plan && r.goal_id) openModal(ctx, { kind: 'plan-editor', id: r.goal_id, mode: 'first' });
+    if (!direct && !plan && r.goal_id) openModal(ctx, { kind: 'plan-editor', id: r.goal_id, mode: 'first' });
     input.value = '';
-    show('ok', plan ? 'Goal created.' : 'Goal created: write its plan in the editor.');
+    show(
+      'ok',
+      mode === 'ask'
+        ? 'Asked. The answer will wait for you here.'
+        : mode === 'do'
+          ? 'Started.'
+          : plan
+            ? 'Goal created.'
+            : 'Goal created: write its plan in the editor.',
+    );
     opts.onDone?.();
   }
 
@@ -103,7 +190,7 @@ export function quickPrompt(ctx: AppContext, opts: QuickPromptOptions = {}): Com
       h(
         'span',
         { class: 'dk-qp-ask' },
-        'Create a goal: ',
+        `${spec().offer}: `,
         h('span', { class: 'dk-qp-goal' }, parsed.text),
         '? ',
         h('strong', null, 'Press Enter'),
@@ -150,6 +237,7 @@ export function quickPrompt(ctx: AppContext, opts: QuickPromptOptions = {}): Com
 
   input.addEventListener('keydown', onKey);
   input.addEventListener('input', onInput);
+  for (const b of modeButtons) b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
 
   return {
     el,

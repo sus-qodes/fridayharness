@@ -61,14 +61,19 @@ export function goalFormState(form: GoalForm, brain: BrainStatusView | null | un
   return { valid, canPlan: valid && planner.ready, errors, plannerText: planner.ready ? null : planner.text };
 }
 
+/** How a request is taken up: planned first, done at once as one task, or asked as a question. */
+export type GoalMode = 'plan' | 'do' | 'ask';
+
 /** The request body `POST goals` takes. */
-export function goalBody(form: GoalForm, plan: boolean) {
+export function goalBody(form: GoalForm, plan: boolean, mode: GoalMode = 'plan') {
   return {
     request: form.request.trim(),
     constraints: form.constraints.map((s) => s.trim()).filter(Boolean),
     outcomes: form.outcomes.map((s) => s.trim()).filter(Boolean),
     priority: form.priority,
-    plan,
+    // A question and a single task need no plan.
+    plan: mode === 'plan' ? plan : false,
+    ...(mode === 'plan' ? {} : { mode }),
   };
 }
 
@@ -192,10 +197,19 @@ export function newGoalModal(
     },
   );
 
-  const planBtn = button([icon('bolt', 14), 'Let the Master Brain plan'], () => void submit(true), {
+  const planBtn = button([icon('bolt', 14), 'Let Friday plan'], () => void submit(true), {
     class: 'btn btn-primary',
   });
   const writeBtn = button([icon('goal', 14), 'Write the plan myself'], () => void submit(false), { class: 'btn' });
+  // Without a plan (2026-11-18): a question is answered and nothing changed; one task starts at once.
+  const askBtn = button([icon('question', 14), 'Just answer this'], () => void submit(false, 'ask'), {
+    class: 'btn',
+    title: 'One agent reads the project and answers. Nothing is changed, checked or landed',
+  });
+  const doBtn = button([icon('play', 14), 'Do it now, one agent'], () => void submit(false, 'do'), {
+    class: 'btn',
+    title: 'One agent starts on this at once: no plan to wait for or approve. Its work is checked and landed as usual',
+  });
   const plannerLine = h('div', { class: 'pn-planner-why' });
 
   const el = panel(
@@ -204,7 +218,10 @@ export function newGoalModal(
     h('div', { class: 'pn-grid2' }, constraints.el, outcomes.el),
     field('Priority', priority).el,
     plannerLine,
-    h('div', { class: 'pn-actions' }, writeBtn, planBtn),
+    note(
+      'A plan splits the work into tasks you approve first. For a question, or something small enough for one agent, skip it.',
+    ),
+    h('div', { class: 'pn-actions' }, askBtn, doBtn, writeBtn, planBtn),
   );
 
   function update() {
@@ -215,6 +232,8 @@ export function newGoalModal(
     outcomes.setError(state.errors.outcomes ?? null);
     planBtn.disabled = busy || !state.canPlan;
     writeBtn.disabled = busy || !state.valid;
+    askBtn.disabled = busy || !state.valid;
+    doBtn.disabled = busy || !state.valid;
     if (state.plannerText) {
       plannerLine.hidden = false;
       plannerLine.replaceChildren(
@@ -230,7 +249,7 @@ export function newGoalModal(
     }
   }
 
-  async function submit(plan: boolean) {
+  async function submit(plan: boolean, mode: GoalMode = 'plan') {
     const state = goalFormState(form, ctx.store.select('board')?.brain);
     if (!state.valid || (plan && !state.canPlan) || busy) {
       requestField.setError(state.errors.request ?? null);
@@ -240,16 +259,24 @@ export function newGoalModal(
     busy = true;
     update();
     const goal = await ctx.act(
-      'Create the goal',
-      () => ctx.api.createGoal(goalBody(form, plan)),
-      plan ? 'Goal created: the Master Brain is planning it' : 'Goal created: write its plan',
+      mode === 'ask' ? 'Ask the question' : mode === 'do' ? 'Start the task' : 'Create the goal',
+      () => ctx.api.createGoal(goalBody(form, plan, mode)),
+      mode === 'ask'
+        ? 'Asked: the answer appears here when it is ready'
+        : mode === 'do'
+          ? 'Started: one agent takes it now'
+          : plan
+            ? 'Goal created: Friday is planning it'
+            : 'Goal created: write its plan',
     );
     busy = false;
     if (td.done) return;
     update();
     if (!goal) return;
+    // The canvas moves to the new card as soon as it is on the board (2026-11-23).
+    ctx.store.patch('ui', { revealId: goal.goal_id });
     ctx.refresh();
-    if (plan) close();
+    if (plan || mode !== 'plan') close();
     else openModal(ctx, { kind: 'plan-editor', id: goal.goal_id, mode: 'first' });
   }
 

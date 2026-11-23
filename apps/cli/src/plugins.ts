@@ -2,7 +2,7 @@
  * Registers adapter-provided commands, doctor checks and daemon extensions (plan M1.6, M1.10).
  * Imported for its side effects by the `friday` entry point and by `@friday/cli`.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { antigravityConfigCli, antigravityDoctorCli } from '@friday/adapter-antigravity';
 import {
@@ -18,8 +18,10 @@ import { cursorConfigCli, cursorDoctor, cursorDoctorCli } from '@friday/adapter-
 import { geminiConfigCommand, geminiDoctor, geminiDoctorCommand } from '@friday/adapter-gemini';
 import { opencodeConfigCli, opencodeDoctorCli } from '@friday/adapter-opencode';
 import { newId } from '@friday/protocol';
+import { LINT_SKIP, LINT_SKIP_FILE } from '@friday/sdk';
 import { type Command, Option } from 'commander';
 import { createAgentLauncher } from './agent-launcher.js';
+import { antigravitySetupExtension } from './antigravity-setup-ext.js';
 import { claudeSetupExtension } from './claude-setup-ext.js';
 import { doctorCodex, registerSpawnRun } from './codex.js';
 import { type GlobalOptions, out, project, UsageError } from './context.js';
@@ -45,10 +47,49 @@ function requireHost(host: string): void {
 }
 
 /** What `harness config <host>` changes for every host besides the host's own files. */
-const sharedChanges = (root: string): FileChange[] => {
-  const gi = gitignoreChange(root);
-  return gi ? [gi] : [];
+const sharedChanges = (root: string, remove?: { host: string }): FileChange[] => {
+  const gi = remove ? null : gitignoreChange(root);
+  const lint = lintSkipChange(root, remove);
+  return [...(gi ? [gi] : []), ...(lint ? [lint] : [])];
 };
+
+/**
+ * `.friday/eslint.config.mjs` (2026-11-19, the trial's F18): the project's lint (ESLint 10 and
+ * later) skips Friday's folder, its hook launcher included. Written when missing, among the files
+ * to commit, so a copy of the project has it too; one already there is the person's.
+ */
+function lintSkipChange(root: string, remove?: { host: string }): FileChange | null {
+  const file = path.join(root, '.friday', LINT_SKIP_FILE);
+  if (remove) {
+    // Taken away with the last host set up here, and only as Friday wrote it.
+    const before = existsSync(file) ? readFileSync(file, 'utf8') : null;
+    if (before !== LINT_SKIP) return null;
+    const harness = path.join(root, '.friday', 'harness');
+    const others = existsSync(harness)
+      ? readdirSync(harness, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name !== remove.host)
+      : [];
+    if (others.length) return null;
+    return {
+      path: file,
+      display: `.friday/${LINT_SKIP_FILE}`,
+      before,
+      after: null,
+      tracked: true,
+      note: 'no agent app is set up here any more',
+      owned: true,
+    };
+  }
+  if (existsSync(file)) return null;
+  return {
+    path: file,
+    display: `.friday/${LINT_SKIP_FILE}`,
+    before: null,
+    after: LINT_SKIP,
+    tracked: true,
+    note: "keeps Friday's files out of the project's lint (ESLint 10 and later)",
+    owned: false,
+  };
+}
 
 /** How a host adapter's own `harness config|doctor <host>` prints (plan M8b): as every other command does. */
 const hostIo = (g: () => GlobalOptions) => ({
@@ -173,6 +214,8 @@ function registerHarness(program: Command): void {
         });
         const gi = opts.remove ? null : gitignoreChange(ref.root);
         if (gi) changes.push(gi);
+        const lint = lintSkipChange(ref.root, opts.remove ? { host: 'claude-code' } : undefined);
+        if (lint) changes.push(lint);
         if (!opts.print) applyPlan(changes);
         const agentLine = changes.find((c) => c.display.startsWith('(private)'))?.note;
         const summary = {
@@ -310,7 +353,12 @@ let registered = false;
 if (!registered) {
   registered = true;
   // The hooks route, and the interface's agent launcher and Claude Code setup (plan M9 §5.9, §5.10).
-  daemonPlugins.extensions.push(claudeCodeHooks(), createAgentLauncher(), claudeSetupExtension());
+  daemonPlugins.extensions.push(
+    claudeCodeHooks(),
+    createAgentLauncher(),
+    claudeSetupExtension(),
+    antigravitySetupExtension(),
+  );
   commandPlugins.push(registerHarness, registerFixture);
   extraDoctorChecks.push(async (ref) => {
     if (!ref || !existsSync(path.join(ref.root, '.friday', 'harness', 'claude-code'))) return [];

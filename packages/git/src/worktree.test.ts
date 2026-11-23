@@ -6,7 +6,7 @@ import path from 'node:path';
 import { FridayError } from '@friday/protocol';
 import { deterministicGit, useTestWorkspace } from '@friday/test-support';
 import { describe, expect, it } from 'vitest';
-import { allocateWorktree, GitRoot, removeWorktree, rootKey, worktreesDir } from './index.js';
+import { allocateWorktree, GitRoot, refreshWorktree, removeWorktree, rootKey, worktreesDir } from './index.js';
 
 const ws = useTestWorkspace();
 
@@ -111,6 +111,123 @@ describe('allocation', () => {
     expect(readFileSync(path.join(a.path, '.claude', 'settings.local.json'), 'utf8')).toContain('friday');
     expect(a.warnings.join(' ')).toMatch(/uncommitted changes \(\.mcp\.json\)/);
     expect((await (await GitRoot.open(a.path)).status()).clean).toBe(true);
+  });
+});
+
+describe('refreshing a reused worktree', () => {
+  async function changedGoal() {
+    const p = await project();
+    const taskId = 'task_0000000000000000000refresh';
+    const alloc = await allocateWorktree({ mainRoot: p.dir, worktreesDir: p.wt, taskId });
+    writeFileSync(path.join(p.dir, 'checks.ts'), 'export const check = 2;\n');
+    await p.g.commitAll('correct the independent check');
+    return { ...p, alloc, taskId, goalHead: await p.g.headSha() };
+  }
+
+  it('brings new goal commits into a clean worktree and is idempotent', async () => {
+    const { dir, alloc, taskId, goalHead } = await changedGoal();
+    const refreshed = await refreshWorktree({ dir: alloc.path, goalHead, taskId });
+    expect(refreshed).toMatchObject({
+      from: alloc.base_commit,
+      head: goalHead,
+      goal_head: goalHead,
+      commits: [goalHead],
+      conflicts: [],
+    });
+    expect(readFileSync(path.join(alloc.path, 'checks.ts'), 'utf8').trim()).toBe('export const check = 2;');
+    expect((await (await GitRoot.open(alloc.path)).identity()).dirty).toBe(false);
+    expect((await refreshWorktree({ dir: alloc.path, goalHead, taskId })).commits).toEqual([]);
+    expect(await deterministicGit(dir).headSha()).toBe(goalHead);
+  });
+
+  it('keeps committed task work and restores staged, deleted and untracked edits as uncommitted', async () => {
+    const { alloc, taskId, goalHead } = await changedGoal();
+    const git = deterministicGit(alloc.path);
+    writeFileSync(path.join(alloc.path, 'committed.ts'), 'committed task work\n');
+    await git.commitAll('task progress');
+    writeFileSync(path.join(alloc.path, 'src', 'a.ts'), 'export const a = 9;\n');
+    await git.run(['add', 'src/a.ts']);
+    rmSync(path.join(alloc.path, '.mcp.json'));
+    writeFileSync(path.join(alloc.path, 'new.ts'), 'untracked work\n');
+    const refreshed = await refreshWorktree({ dir: alloc.path, goalHead, taskId });
+    expect(refreshed.conflicts).toEqual([]);
+    expect(refreshed.preserved_ref).toMatch(/^refs\/friday\/preserved\//);
+    expect(readFileSync(path.join(alloc.path, 'checks.ts'), 'utf8').trim()).toBe('export const check = 2;');
+    expect(readFileSync(path.join(alloc.path, 'committed.ts'), 'utf8').trim()).toBe('committed task work');
+    expect(readFileSync(path.join(alloc.path, 'src', 'a.ts'), 'utf8').trim()).toBe('export const a = 9;');
+    expect(readFileSync(path.join(alloc.path, 'new.ts'), 'utf8').trim()).toBe('untracked work');
+    expect(existsSync(path.join(alloc.path, '.mcp.json'))).toBe(false);
+    expect(await git.run(['diff', '--cached', '--name-only'])).toBe('');
+    expect(await git.run(['show', 'HEAD:src/a.ts'])).toContain('a = 1');
+    expect(await git.run(['status', '--porcelain'])).toContain('?? new.ts');
+    expect((await (await GitRoot.open(alloc.path)).changesSince(goalHead)).changes.map((c) => c.path)).not.toContain(
+      'checks.ts',
+    );
+  });
+
+  // A collision is merged by Friday as far as git can (2026-11-18): the folder gets the goal's work,
+  // the task's own work stays, and the file git cannot merge holds both versions marked. The agent
+  // finishes it by editing; the branch descends from the goal revision, so it integrates after.
+  it.each([false, true])('merges a collision into the folder with both versions marked (dirty=%s)', async (dirty) => {
+    const { dir, g, wt } = await project();
+    const taskId = 'task_0000000000000000000conflict';
+    const alloc = await allocateWorktree({ mainRoot: dir, worktreesDir: wt, taskId });
+    const taskGit = deterministicGit(alloc.path);
+    writeFileSync(path.join(alloc.path, 'src', 'a.ts'), 'export const a = 3;\n');
+    writeFileSync(path.join(alloc.path, 'mine.ts'), 'export const mine = true;\n');
+    if (!dirty) await taskGit.commitAll('task changes a');
+    const head = await taskGit.headSha();
+    writeFileSync(path.join(dir, 'src', 'a.ts'), 'export const a = 2;\n');
+    writeFileSync(path.join(dir, 'theirs.ts'), 'export const theirs = true;\n');
+    await g.commitAll('goal changes a');
+    const goalHead = await g.headSha();
+    const refreshed = await refreshWorktree({ dir: alloc.path, goalHead, taskId });
+    expect(refreshed.marked).toBe(true);
+    expect(refreshed.conflicts).toEqual([
+      expect.objectContaining({
+        path: 'src/a.ts',
+        task: expect.stringContaining('+export const a = 3;'),
+        goal: expect.stringContaining('+export const a = 2;'),
+      }),
+    ]);
+    // Both versions, the task's first; the rest of both sides' work is in the folder as it was made.
+    const text = readFileSync(path.join(alloc.path, 'src', 'a.ts'), 'utf8').replace(/\r/g, '');
+    expect(text).toMatch(/^<<<<<<< .*\nexport const a = 3;\n=======\nexport const a = 2;\n>>>>>>> .*\n$/);
+    expect(readFileSync(path.join(alloc.path, 'mine.ts'), 'utf8').trim()).toBe('export const mine = true;');
+    expect(readFileSync(path.join(alloc.path, 'theirs.ts'), 'utf8').trim()).toBe('export const theirs = true;');
+    // The branch descends from the goal revision and from the task's work; nothing is uncommitted.
+    const now = await taskGit.headSha();
+    expect(now).toBe(refreshed.head);
+    expect(await taskGit.run(['merge-base', '--is-ancestor', goalHead, now]).then(() => true)).toBe(true);
+    expect(await taskGit.run(['merge-base', '--is-ancestor', head, now]).then(() => true)).toBe(true);
+    expect((await (await GitRoot.open(alloc.path)).identity()).dirty).toBe(false);
+    // What the agent had not committed is kept as it was, under a name of its own.
+    if (dirty) {
+      expect(refreshed.preserved_ref).toMatch(/^refs\/friday\/preserved\//);
+      expect(await taskGit.run(['show', `${refreshed.preserved_ref}:src/a.ts`])).toContain('a = 3');
+    }
+    // Asked again, nothing is left to bring: the agent's edits are not merged a second time.
+    writeFileSync(path.join(alloc.path, 'src', 'a.ts'), 'export const a = 5;\n');
+    expect(await refreshWorktree({ dir: alloc.path, goalHead, taskId })).toMatchObject({ commits: [], conflicts: [] });
+    expect(readFileSync(path.join(alloc.path, 'src', 'a.ts'), 'utf8').trim()).toBe('export const a = 5;');
+  });
+
+  it('keeps both sides where each only added lines to the same file, and asks nothing of the agent', async () => {
+    const { dir, g, wt } = await project();
+    writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n- first\n');
+    writeFileSync(path.join(dir, '.gitattributes'), '* -text\n');
+    await g.commitAll('a changelog');
+    const taskId = 'task_000000000000000000000joined';
+    const alloc = await allocateWorktree({ mainRoot: dir, worktreesDir: wt, taskId });
+    writeFileSync(path.join(alloc.path, 'CHANGELOG.md'), '# Changelog\n\n- first\n- the task\n');
+    writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n- first\n- another task\n');
+    await g.commitAll('another task adds its line');
+    const refreshed = await refreshWorktree({ dir: alloc.path, goalHead: await g.headSha(), taskId });
+    expect(refreshed).toMatchObject({ conflicts: [], joined: ['CHANGELOG.md'] });
+    expect(refreshed.marked ?? false).toBe(false);
+    expect(readFileSync(path.join(alloc.path, 'CHANGELOG.md'), 'utf8')).toBe(
+      '# Changelog\n\n- first\n- the task\n- another task\n',
+    );
   });
 });
 

@@ -15,7 +15,13 @@ export const BACKUP_PREFIX = 'refs/friday/backup/';
 export const RESTORED_PREFIX = 'refs/friday/restored/';
 export const restoredRef = (taskId: string) => `${RESTORED_PREFIX}${taskId}`;
 /** The refs a backup carries besides the uncommitted work it records. */
-export const BACKUP_REF_PREFIXES = ['refs/heads/friday/', 'refs/friday/preserved/', RESTORED_PREFIX];
+export const BACKUP_REF_PREFIXES = [
+  'refs/heads/friday/',
+  'refs/friday/preserved/',
+  // Files a person's landing set aside (2026-11-18): their only copy until put back.
+  'refs/friday/set-aside/',
+  RESTORED_PREFIX,
+];
 
 /** Whether a restore may write this ref: only Friday's own namespaces, never a branch of yours. */
 export const isFridayRef = (ref: string) => ref.startsWith('refs/heads/friday/') || ref.startsWith('refs/friday/');

@@ -1,0 +1,113 @@
+/* Friday's own confirmation (2026-11-18): the window the desktop app opens where a grey system box
+   stood. Its content is written by the app itself, never by the page that asked. */
+:root {
+  color-scheme: dark;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+body {
+  background: #0b0c10;
+  color: #e7e9ee;
+  font:
+    14px/1.5 "Segoe UI Variable Text",
+    "Segoe UI",
+    system-ui,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+.card {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+  padding: 18px 20px 16px;
+  gap: 12px;
+}
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.text {
+  overflow: auto;
+  padding-right: 4px;
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+.text p {
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+  color: #c3c8d2;
+}
+.text p.rows {
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 12.5px;
+  color: #dfe3ea;
+}
+.text p.warning {
+  color: #fbbf24;
+}
+.text p.ask {
+  margin-bottom: 0;
+  color: #f4f6fa;
+  font-weight: 600;
+}
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.btn {
+  min-width: 96px;
+  padding: 8px 14px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e7e9ee;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+.btn:focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.8);
+  outline-offset: 2px;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn.primary {
+  border-color: rgba(34, 211, 238, 0.5);
+  background: rgba(34, 211, 238, 0.18);
+  color: #a5f3fc;
+}
+.btn.primary:hover:not(:disabled) {
+  background: rgba(34, 211, 238, 0.26);
+}
+.btn.primary.danger {
+  border-color: rgba(251, 146, 60, 0.55);
+  background: rgba(251, 146, 60, 0.18);
+  color: #fed7aa;
+}
+.btn.primary.danger:hover:not(:disabled) {
+  background: rgba(251, 146, 60, 0.28);
+}

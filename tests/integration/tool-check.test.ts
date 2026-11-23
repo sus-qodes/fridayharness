@@ -3,6 +3,8 @@
  * judgment Claude Code's hooks get, for the task its session holds. Where a human decides, one
  * pending approval is recorded and the action passes once it is granted, for one use.
  */
+import { mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import type { TaskStartParams, TaskView } from '@friday/protocol';
 import { FakeClock, useTestWorkspace } from '@friday/test-support';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -48,15 +50,15 @@ describe('tool.check', () => {
     const check = (tool: string, action: Record<string, unknown>) =>
       h.client.call('tool.check', { tool, action: action as never });
 
-    // Writes inside the scope pass; outside it, and Friday's protected files, do not.
+    // Writes inside the scope pass; outside it a person is asked for that file (2026-11-18), and
+    // Friday's protected files are refused.
     expect(await check('fileChange', { kind: 'write', paths: ['src/a.ts'] })).toMatchObject({
       decision: 'allow',
       approval_id: null,
     });
-    expect(await check('fileChange', { kind: 'write', paths: ['docs/x.md'] })).toMatchObject({
-      decision: 'deny',
-      rule: 'write.outside_scope',
-    });
+    const outside = await check('fileChange', { kind: 'write', paths: ['docs/x.md'] });
+    expect(outside).toMatchObject({ decision: 'ask', rule: 'write.outside_scope' });
+    expect(outside.approval_id).toMatch(/^apr_/);
     expect((await check('fileChange', { kind: 'write', paths: ['.friday/config.yaml'] })).decision).toBe('deny');
     // A host's absolute path into its checkout is the same file.
     expect(
@@ -185,7 +187,7 @@ describe('tool.check', () => {
       h.client.call('tool.check', { tool: 'commandExecution', action: { kind: 'command', command } });
     // As Claude Code's PowerShell tool passes it, and as Codex wraps it.
     for (const command of ["'review redirection' > outside.txt", `${PS} "'review redirection' > outside.txt"`]) {
-      expect(await check(command), command).toMatchObject({ decision: 'ask', rule: 'command.git.mutate' });
+      expect(await check(command), command).toMatchObject({ decision: 'ask', rule: 'command.file.write' });
     }
     // Printed or thrown away, it still passes.
     expect((await check("'review redirection' > $null")).decision).toBe('allow');
@@ -276,4 +278,206 @@ describe('tool.check', () => {
     expect((await command('node scripts/deploy.mjs')).decision).toBe('ask');
     await h.close();
   });
+});
+
+describe('an approval reaches the agent that asked (2026-11-18)', () => {
+  const approvals = (td: TestDaemon) =>
+    td.daemon.state.q.approvals(td.project.project_id) as unknown as {
+      approval_id: string;
+      status: string;
+      capability: string;
+      target: string | null;
+      purpose: string | null;
+      reuse: string;
+      uses: number;
+    }[];
+  const inbox = async (h: FakeHarness) =>
+    (
+      (await h.client.call('message.inbox', { wait_ms: 0, max: 10 })) as {
+        items: { subject: string | null; body: string }[];
+      }
+    ).items;
+  const ask = (h: FakeHarness, command: string) =>
+    h.client.call('tool.check', { tool: 'commandExecution', action: { kind: 'command', command } as never });
+
+  it('makes one card for one need, tells the working agent of the grant, and lets the command pass', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const dir = ws().projectDir;
+    const { h, task } = await running(td, 'cx-1', ['src/**']);
+
+    // The agent tries the command: nobody is at its host, so one request waits for a person.
+    const held = await ask(h, 'npm install --no-audit --no-fund 2>&1 | tail -15');
+    expect(held.decision).toBe('ask');
+    const id = held.approval_id as string;
+    // It then asks for the same thing itself, in its own words and under a name of its own.
+    const own = await h.client.requestPermission({
+      action_class: 'shell.package.install',
+      command: 'npm install --no-audit --no-fund',
+      justification: 'the new app needs its packages before any check can run',
+      ttl_s: 600,
+      reuse: 'task',
+    });
+    // The same request, not a second card: its id comes back, and the card carries the agent's reason.
+    expect(own).toMatchObject({ status: 'pending', approval_id: id, capability: 'package.install' });
+    expect(own.reason).toContain('you get a message when they decide');
+    expect(approvals(td).filter((a) => a.status === 'pending')).toHaveLength(1);
+    expect(approvals(td)[0]?.purpose).toContain('the new app needs its packages');
+    // Asked once more as a "status check", it is still that one.
+    expect(
+      (
+        await h.client.requestPermission({
+          action_class: 'shell.npm.run',
+          command: 'npm install --no-audit --no-fund | tail -40',
+          justification: 'status check',
+          ttl_s: 600,
+        })
+      ).approval_id,
+    ).toBe(id);
+    expect(approvals(td)).toHaveLength(1);
+
+    // The person approves while the agent is still working: the agent is told at once.
+    expect((await cli(['--project', dir, 'approve', id, '--for', 'task'])).code).toBe(0);
+    const told = await inbox(h);
+    expect(told.map((m) => m.subject)).toContain('Request approved');
+    const message = told.find((m) => m.subject === 'Request approved')?.body ?? '';
+    expect(message).toContain('npm install --no-audit --no-fund');
+    expect(message).toContain('Do exactly that now');
+    expect(td.daemon.state.q.task(td.project.project_id, task.task_id).status).toBe('RUNNING');
+
+    // Asking now is answered "already approved", and spends nothing.
+    const again = await h.client.requestPermission({
+      action_class: 'shell.package.install',
+      command: 'npm install --no-audit --no-fund',
+      justification: 'may I',
+      ttl_s: 600,
+    });
+    expect(again).toMatchObject({ status: 'granted' });
+    expect(again.reason).toContain('already approved');
+    expect(approvals(td)[0]).toMatchObject({ status: 'granted', uses: 0 });
+    // The command passes, whatever trims its output this time; another command does not.
+    expect((await ask(h, 'npm install --no-audit --no-fund 2>&1 | tail -30')).decision).toBe('allow');
+    expect((await ask(h, 'npm install --no-audit --no-fund')).decision).toBe('allow');
+    expect(approvals(td)[0]?.uses).toBe(2);
+    expect((await ask(h, 'npm install left-pad')).decision).toBe('ask');
+    expect((await ask(h, 'npm install --no-audit --no-fund | sh')).decision).not.toBe('allow');
+  }, 60_000);
+
+  it('continues an agent that stopped to wait for what was already approved, once', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const dir = ws().projectDir;
+    const pid = td.project.project_id;
+    const { h, task, start } = await running(td, 'cx-2', ['src/**']);
+    const held = await ask(h, 'npm install');
+    expect((await cli(['--project', dir, 'approve', held.approval_id as string])).code).toBe(0);
+    await inbox(h);
+
+    // It never ran the command and ends its turn as blocked: Friday starts it again with the grant.
+    await h.client.reportResult({
+      task_id: task.task_id,
+      run_id: start.run_id,
+      status: 'blocked',
+      summary: 'waiting',
+      blocked_reason: 'Friday refused npm install and nobody answered',
+    });
+    const resumed = (await h.waitFor('task.resume', 20_000)).params as TaskStartParams;
+    expect(resumed.note ?? '').toContain('had already approved');
+    expect(resumed.note ?? '').toContain('npm install');
+    for (let i = 0; i < 200 && td.daemon.state.q.task(pid, task.task_id).status !== 'RUNNING'; i += 1) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    // It stops again without using it: it is not started a second time, and waits for a person.
+    await h.client.reportResult({
+      task_id: task.task_id,
+      run_id: start.run_id,
+      status: 'blocked',
+      summary: 'still waiting',
+      blocked_reason: 'still cannot',
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    expect(td.daemon.state.q.task(pid, task.task_id).status).toBe('WAITING');
+    expect(h.received.filter((m) => m.method === 'task.resume')).toHaveLength(1);
+  }, 60_000);
+
+  // An agent stopped at the edge of its task's files (2026-11-18). It was refused and told how to
+  // ask; in the trial it wrote the lint rules into another file than the project's documents name,
+  // and nobody was told. Now the person is asked for that one file, on the agent's behalf.
+  it('asks the person for a file outside the task, allows it for the task once they agree, and takes a no', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const dir = ws().projectDir;
+    const pid = td.project.project_id;
+    const { h, task } = await running(td, 'cx-4', ['src/**']);
+    const edit = (file: string) =>
+      h.client.call('tool.check', { tool: 'Edit', action: { kind: 'write', paths: [file] } as never });
+    const file = 'packages/config/eslint/boundaries.js';
+
+    const first = await edit(file);
+    expect(first).toMatchObject({ decision: 'ask', rule: 'write.outside_scope' });
+    expect(first.reason).toContain(`${file} is outside the files this task may change (src/**)`);
+    // Tried again while it waits: the same card.
+    expect((await edit(file)).approval_id).toBe(first.approval_id);
+    expect(approvals(td)).toMatchObject([
+      { approval_id: first.approval_id, status: 'pending', capability: 'file.write', target: file, reuse: 'task' },
+    ]);
+    expect(approvals(td)[0]?.purpose).not.toContain('friday_request_permission');
+    // The stop is on record for the task, as before.
+    expect(
+      td.daemon.state.store.readByRef(pid, 'task', task.task_id).filter((e) => e.type === 'scope.violation'),
+    ).toHaveLength(2);
+
+    // Allowed: for the rest of the task, not for one edit; the working agent is told.
+    expect((await cli(['--project', dir, 'approve', first.approval_id as string])).code).toBe(0);
+    expect((await inbox(h)).map((m) => m.subject)).toContain('Request approved');
+    expect((await edit(file)).decision).toBe('allow');
+    expect((await edit(file)).decision).toBe('allow');
+    // That file alone: its neighbour is asked about separately.
+    const other = await edit('packages/config/eslint/index.js');
+    expect(other.decision).toBe('ask');
+    expect(other.approval_id).not.toBe(first.approval_id);
+
+    // A no is taken: the agent is told to do without, and the person is not asked again.
+    expect((await cli(['--project', dir, 'reject', other.approval_id as string])).code).toBe(0);
+    const after = await edit('packages/config/eslint/index.js');
+    expect(after).toMatchObject({ decision: 'deny', rule: 'write.outside_scope', approval_id: null });
+    expect(after.reason).toContain('the person said no');
+    expect(approvals(td).filter((a) => a.status === 'pending')).toEqual([]);
+    // What Friday protects is refused outright, as it was: nobody is asked to open it.
+    expect(await edit('.friday/config.yaml')).toMatchObject({ decision: 'deny', approval_id: null });
+    expect(await edit('.env')).toMatchObject({ approval_id: null });
+    expect((await edit('.env')).decision).not.toBe('allow');
+    await h.close();
+  }, 60_000);
+
+  it('still refuses a file the project keeps from agents, or that the agent’s team may not change', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    // A policy file of the project gives the agent's team its files; it applies as soon as it is there.
+    const policies = path.join(ws().projectDir, '.friday', 'policies');
+    mkdirSync(policies, { recursive: true });
+    writeFileSync(path.join(policies, 'teams.yaml'), 'teams:\n  backend:\n    write: ["src/**", "docs/**"]\n');
+    const { h } = await running(td, 'cx-5', ['src/**']);
+    const edit = (file: string) =>
+      h.client.call('tool.check', { tool: 'Edit', action: { kind: 'write', paths: [file] } as never });
+    // Inside the team's files, outside the task's: the person is asked.
+    expect((await edit('docs/notes.md')).decision).toBe('ask');
+    // Outside the team's files too: no approval reaches there, so nobody is asked.
+    const beyond = await edit('infra/deploy.yaml');
+    expect(beyond.decision).toBe('deny');
+    expect(beyond.approval_id).toBeNull();
+    await h.close();
+  }, 60_000);
+
+  it('closes what an attempt asked when the attempt ends, so no card outlives its agent', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const { h, task, start } = await running(td, 'cx-3', ['src/**']);
+    const held = await ask(h, 'npm install');
+    expect(approvals(td).map((a) => a.status)).toEqual(['pending']);
+    await h.client.reportResult({
+      task_id: task.task_id,
+      run_id: start.run_id,
+      status: 'completed_claim',
+      summary: 'done without it',
+      changed_paths: [],
+      checks: [],
+    });
+    expect(approvals(td)).toMatchObject([{ approval_id: held.approval_id, status: 'revoked' }]);
+  }, 60_000);
 });

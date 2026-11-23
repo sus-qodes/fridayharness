@@ -1,9 +1,10 @@
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import {
   agentIdentity,
   changedBetween,
   commitsSince,
+  commitTree,
   GitRoot,
   listRefs,
   parentOf,
@@ -16,6 +17,7 @@ import {
   snapshotWorktree,
   taskBranch,
 } from '@friday/git';
+import { matchesAny } from '@friday/policy';
 import {
   type Actor,
   FridayError,
@@ -32,6 +34,19 @@ import { elsewhereReason, missingCodeReason, type WorkspaceManager } from './wor
 const SYSTEM: Actor = { kind: 'system', id: 'friday' };
 const ACTIVE = ['ASSIGNED', 'RUNNING', 'WAITING', 'HARNESS_LOST'];
 const TERMINAL = ['COMPLETED', 'CANCELLED', 'ABANDONED'];
+
+/** More unobserved files than this in a task's scope is a dependency folder, not an attempt's work. */
+const MAX_SWEPT = 2000;
+
+/** Whether a file was written or created at or after `since`; one that is gone was deleted, which nothing dates. */
+function writtenSince(file: string, since: number): boolean {
+  try {
+    const s = statSync(file);
+    return Math.max(s.mtimeMs, s.ctimeMs, s.birthtimeMs) >= since;
+  } catch {
+    return false;
+  }
+}
 
 /** Whether two paths name one folder: as written, else by their real paths when both exist. */
 function sameDir(a: string, b: string): boolean {
@@ -104,6 +119,63 @@ export class RecoveryManager {
 
   private get pid() {
     return this.opts.project.project_id;
+  }
+
+  /** The commit kept of what an attempt changed in the project folder, under the task's preserved refs; null: nothing. */
+  async #keepFolderWork(taskId: string, attempt: number, why: string, agentKey: string): Promise<string | null> {
+    const { state, project, logger } = this.opts;
+    const run = state.q.runs(taskId).at(-1);
+    if (!run?.execution_root || run.branch_ref || !run.base_commit || !sameDir(run.execution_root, project.root)) {
+      return null;
+    }
+    const root = run.execution_root;
+    const seen = new Set(
+      (run.observed_paths ?? [])
+        .map((p) => (path.isAbsolute(p) ? path.relative(root, p) : p))
+        .map((p) => p.split(path.sep).join('/').replaceAll('\\', '/').replace(/^\.\//, ''))
+        .filter((p) => p && !p.startsWith('..')),
+    );
+    try {
+      const git = await GitRoot.open(project.root);
+      // What the attempt changed without a hook seeing it (2026-11-18): a command that wrote
+      // files, a generator, an install. In the trial an agent left thirty-two files and its hooks
+      // had seen a handful, so the next agent began without most of the work. Taken: files the
+      // task may write that differ from the last commit and were written since the attempt began.
+      // A change the person had there before it is theirs, and is not.
+      const write = state.q.task(this.pid, taskId).scope?.write ?? [];
+      const since = Date.parse(run.accepted_at ?? run.created_at);
+      if (write.length && Number.isFinite(since)) {
+        const more = (await git.status()).entries
+          .filter((e) => e.kind !== 'ignored' && !seen.has(e.path) && matchesAny(e.path, write))
+          .map((e) => e.path)
+          .filter((p) => writtenSince(path.join(root, p), since));
+        if (more.length <= MAX_SWEPT) for (const p of more) seen.add(p);
+        else
+          logger.warn('too many unobserved files in the task scope to keep them all', {
+            task_id: taskId,
+            files: more.length,
+          });
+      }
+      const paths = [...seen];
+      if (!paths.length) return null;
+      const tree = await git.pathsTree(run.base_commit, paths);
+      const was = (await runGit(project.root, ['rev-parse', `${run.base_commit}^{tree}`])).stdout.trim();
+      if (tree === was) return null;
+      const commit = await commitTree(
+        project.root,
+        tree,
+        [run.base_commit],
+        `Preserved work of ${taskId} in the project folder, attempt ${attempt}\n\n${why}`,
+        agentIdentity(agentKey),
+      );
+      return await preserveCommit(project.root, preservedPrefix(taskId), `folder-attempt-${attempt}`, commit);
+    } catch (e) {
+      logger.warn('the work left in the project folder could not be kept', {
+        task_id: taskId,
+        message: (e as Error).message,
+      });
+      return null;
+    }
   }
 
   async assess(taskId: string): Promise<RecoveryAssessment> {
@@ -227,7 +299,7 @@ export class RecoveryManager {
               ? 'the next attempt continues in the same worktree and branch; uncommitted work is preserved first'
               : ranElsewhere
                 ? `the next attempt works in this clone as it is; changes that were only in ${ranElsewhere} are not included`
-                : 'the task goes back to READY for the next agent',
+                : 'the task goes back to READY for the next agent; what this attempt changed in the project folder is saved first, and the next attempt continues from it',
       },
       {
         action: 'restart',
@@ -386,6 +458,13 @@ export class RecoveryManager {
             commit,
           );
         }
+      }
+      // An attempt made in the project folder (a session its person runs there) that stopped
+      // part-way (2026-11-17): the files Friday's hooks saw it change are saved as a commit of
+      // their own, so the next attempt, in whatever folder, continues from them. The project
+      // folder is not touched. Before, the half-done work was known to nobody.
+      if (moving && !preserved && !a.worktree?.exists) {
+        preserved = await this.#keepFolderWork(taskId, a.run?.attempt ?? 0, why, a.harness?.agent_key ?? 'agent');
       }
       if (action === 'restart' && a.worktree?.exists && !a.worktree.elsewhere) await resetWorktree(a.worktree.path);
       const task = state.recoverTask(this.pid, actor, taskId, action, {

@@ -445,13 +445,16 @@ describe('symbolic patching (ADR-0039)', () => {
     // Later checks start from this content.
     const after2 = both;
 
-    // Outside the task's write scope: the policy's answer, not a patch. Then the refusals.
+    // Outside the task's write scope: the policy's answer, not a patch. Since 2026-11-18 that answer
+    // is a question to the person for that one file; nothing is written meanwhile. Then the refusals.
     const outside = await be.client.call('symbol.patch', {
       path: 'shared/src/api.ts',
       symbol: 'isMoney',
       body: 'export function isMoney(x: unknown): x is Money { return true; }',
     });
-    expect(outside.status).toBe('denied');
+    expect(outside.status).toBe('approval_required');
+    expect(outside.approval_id).toMatch(/^apr_/);
+    expect(outside.reason).toContain('shared/src/api.ts is outside the files this task may change');
     expect(readFileSync(path.join(dir, 'shared/src/api.ts'), 'utf8')).toContain('isMoney');
     const moved = await be.client.call('symbol.patch', { path: file, symbol: 'totalOf', line: 17, body });
     expect(moved).toMatchObject({ status: 'refused', reason: expect.stringContaining('does not start at line 17') });

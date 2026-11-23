@@ -5,12 +5,13 @@
  * says how to add project checks.
  */
 import type { RunView, TaskDiff, VerificationView } from '@friday/protocol';
-import { statusLook } from '../model/status.js';
+import { CHECK_WORDS, statusLook, wordsFor } from '../model/status.js';
 import type { AppContext, Component, ModalRequest } from '../shell/context.js';
 import { openDrawer } from '../shell/context.js';
 import { append, button, h, replace } from '../ui/dom.js';
-import { duration, humanize } from '../ui/format.js';
+import { duration } from '../ui/format.js';
 import { icon } from '../ui/svg.js';
+import { checkName, checkOutput, findingsList, ranOutOfTime, summaryIsCodes } from './check-details.js';
 import {
   agentText,
   errorOf,
@@ -25,6 +26,9 @@ import {
   Teardown,
   textarea,
 } from './common.js';
+
+/** The daemon's refusal when the folder a task worked in no longer exists (apps/daemon verify.ts). */
+const FOLDER_GONE = /worked in is gone/;
 
 export interface ClaimCheck {
   name: string;
@@ -98,14 +102,15 @@ export function checksWording(checks: readonly { name: string; required: boolean
   if (checks.length === 0) {
     return {
       button: "Run Friday's checks",
-      detail: "No project checks are configured: Friday's scope and credential checks will run.",
+      detail:
+        'Your project has no checks of its own set: Friday checks that the agent changed only the files it was given and left no passwords or keys in them.',
       configured: false,
     };
   }
   const names = checks.map((c) => (c.required ? c.name : `${c.name} (advisory)`)).join(', ');
   return {
     button: 'Run checks',
-    detail: `Runs the project's checks (${names}), then Friday's scope and credential checks.`,
+    detail: `Runs your project's checks (${names}), then Friday's own: that only the files it was given changed, with no passwords or keys in them.`,
     configured: true,
   };
 }
@@ -119,7 +124,7 @@ export const CHECKS_EXAMPLE = [
   '      args: ["test"]',
 ].join('\n');
 
-function verificationView(v: VerificationView): HTMLElement {
+function verificationView(ctx: AppContext, v: VerificationView): HTMLElement {
   const look = v.status === 'PASSED' ? 'badge-good' : v.status === 'FAILED' ? 'badge-danger' : 'badge-info';
   return h(
     'div',
@@ -127,7 +132,7 @@ function verificationView(v: VerificationView): HTMLElement {
     h(
       'div',
       { class: 'row' },
-      h('span', { class: `badge ${look}` }, humanize(v.status)),
+      h('span', { class: `badge ${look}` }, wordsFor(CHECK_WORDS, v.status)),
       h('span', null, plain(v.summary, 300)),
     ),
     v.checks.length
@@ -138,17 +143,21 @@ function verificationView(v: VerificationView): HTMLElement {
             h(
               'li',
               { class: 'pn-item' },
-              h(
-                'span',
-                {
-                  class: `badge ${c.status === 'PASSED' ? 'badge-good' : c.status === 'FAILED' ? 'badge-danger' : 'badge-muted'}`,
-                },
-                humanize(c.status),
-              ),
-              h('span', { class: 'mono' }, plain(c.name, 120)),
+              ranOutOfTime(c)
+                ? h('span', { class: 'badge badge-warn' }, 'Ran out of time')
+                : h(
+                    'span',
+                    {
+                      class: `badge ${c.status === 'PASSED' ? 'badge-good' : c.status === 'FAILED' ? 'badge-danger' : 'badge-muted'}`,
+                    },
+                    wordsFor(CHECK_WORDS, c.status),
+                  ),
+              h('span', { class: c.origin === 'friday' ? '' : 'mono', title: plain(c.name, 120) }, checkName(c.name)),
               c.required ? null : h('span', { class: 'muted' }, 'advisory'),
               h('span', { class: 'muted' }, duration(c.duration_ms)),
-              c.summary ? h('span', { class: 'muted pn-grow' }, plain(c.summary, 300)) : null,
+              c.summary && !summaryIsCodes(c) ? h('span', { class: 'muted pn-grow' }, plain(c.summary, 300)) : null,
+              findingsList(c),
+              checkOutput(ctx, c.artifact_ref),
             ),
           ),
         )
@@ -194,7 +203,7 @@ export function verifyModal(
 
   // ---- the claim
   const claimSection = section(
-    'What the agent claims',
+    'What the agent says it did',
     claim
       ? [
           h('p', { class: 'pn-claim-summary' }, plain(claim.summary, 2000) || 'No summary.'),
@@ -251,7 +260,7 @@ export function verifyModal(
               )
             : null,
         ]
-      : h('div', { class: 'muted' }, 'No completion claim is recorded for this task’s current run.'),
+      : h('div', { class: 'muted' }, 'The agent has not said it is done in this try yet.'),
   );
 
   // ---- the diff and the discrepancies
@@ -264,7 +273,7 @@ export function verifyModal(
       openDrawer(ctx, {
         kind: 'diff',
         id: taskId,
-        back: { modal: { kind: 'verify', id: taskId }, label: 'Back to verification' },
+        back: { modal: { kind: 'verify', id: taskId }, label: 'Back to the checks' },
       });
     }),
     discrepancyBox,
@@ -324,13 +333,13 @@ export function verifyModal(
     }
     const d = discrepancies(claim.changed_paths, changed);
     if (d.claimedUnchanged.length === 0 && d.changedUnclaimed.length === 0) {
-      replace(discrepancyBox, h('div', { class: 'muted' }, 'The claim matches what changed.'));
+      replace(discrepancyBox, h('div', { class: 'muted' }, 'What it says matches what changed.'));
       return;
     }
     replace(
       discrepancyBox,
-      pathList('Claimed but unchanged', d.claimedUnchanged, 'warn'),
-      pathList('Changed but not claimed', d.changedUnclaimed, 'info'),
+      pathList('It says it changed these, but they did not change', d.claimedUnchanged, 'warn'),
+      pathList('Changed, but it did not say so', d.changedUnclaimed, 'info'),
     );
   }
 
@@ -348,7 +357,7 @@ export function verifyModal(
   const failBtn = button([icon('cross', 14), 'Mark failed'], () => void manual('failed'), { class: 'btn btn-danger' });
 
   const decideSection = section(
-    'Verify',
+    'Check the work',
     h('p', null, wording.detail),
     h('div', { class: 'pn-actions pn-actions-start' }, runBtn, doneBtn),
     runState,
@@ -369,7 +378,7 @@ export function verifyModal(
     h(
       'p',
       null,
-      'Project checks are commands Friday runs in the task’s checkout, listed under verification.checks in .friday/config.yaml, for example:',
+      'Your project’s checks are commands Friday runs in the task’s own copy of the project. Add them in Settings → Checks, or under verification.checks in .friday/config.yaml, for example:',
     ),
     agentText(CHECKS_EXAMPLE, 'pre'),
     h(
@@ -384,7 +393,7 @@ export function verifyModal(
         },
       ),
     ),
-    note('Friday reads config.yaml again when it changes: new checks judge the next verification.'),
+    note('Friday reads config.yaml again when it changes: new checks are used the next time work is checked.'),
   );
 
   function updateButtons() {
@@ -397,27 +406,74 @@ export function verifyModal(
     runState.textContent = running
       ? 'Checks are running; this can take a while. You can close this window: the result shows on the board.'
       : verifying
-        ? 'A verification of this task is already running.'
+        ? 'This task’s work is being checked already.'
         : '';
   }
 
   function showResult(v: VerificationView | undefined | null) {
-    replace(resultBox, v ? verificationView(v) : null);
+    replace(resultBox, v ? verificationView(ctx, v) : null);
+  }
+
+  /**
+   * The task's folder was deleted: there is nothing to check, and the refusal named a terminal
+   * command. The dialog says so and makes the folder again from the task's branch (2026-11-17).
+   */
+  function showFolderGone() {
+    const again = button(
+      'Create the folder again',
+      () => {
+        again.disabled = true;
+        void ctx
+          .act(
+            'Create the task folder again',
+            () => ctx.api.createWorktree(taskId),
+            'The task folder is back: run the checks again',
+          )
+          .then((r) => {
+            if (td.done) return;
+            again.disabled = false;
+            if (r) replace(resultBox);
+          });
+      },
+      { class: 'btn btn-primary' },
+    );
+    replace(
+      resultBox,
+      h(
+        'div',
+        { class: 'pn-folder-gone', role: 'status' },
+        note(
+          'The task’s folder is gone, so there is nothing to check. What the agent committed is still on the task’s branch; changes it had not committed are lost.',
+        ),
+        h('div', { class: 'pn-actions pn-actions-start' }, again),
+      ),
+    );
   }
 
   async function runChecks() {
     if (running) return;
     running = true;
     updateButtons();
+    let gone = false;
     const r = await ctx.act(
-      'Verify the task',
-      () => ctx.api.verify(taskId),
-      (x) => `Verification ${humanize(x?.verification?.status ?? 'recorded')}`,
+      'Check the task',
+      async () => {
+        try {
+          return await ctx.api.verify(taskId);
+        } catch (e) {
+          // Said in the dialog, with the way out, in place of a toast that names a command.
+          if (!FOLDER_GONE.test(errorOf(e).message)) throw e;
+          gone = true;
+          return null;
+        }
+      },
+      (x) => (x ? `Checks ${wordsFor(CHECK_WORDS, x.verification?.status ?? 'PASSED').toLowerCase()}` : ''),
     );
     running = false;
     if (td.done) return;
     updateButtons();
-    if (r) {
+    if (gone) showFolderGone();
+    else if (r) {
       showResult(r.verification);
       ctx.refresh();
     }
@@ -430,7 +486,7 @@ export function verifyModal(
         title: 'Mark the task passed?',
         body: [
           'This records a pass without running any check.',
-          'Friday’s scope and credential checks are skipped too.',
+          'Friday’s own checks (the files it was given, no passwords or keys) are skipped too.',
         ],
         confirmLabel: 'Mark passed',
       });
@@ -485,7 +541,7 @@ export function verifyModal(
     decideSection,
     howSection,
   );
-  if (latest) append(resultBox, h('div', { class: 'field-label' }, 'Latest verification'), verificationView(latest));
+  if (latest) append(resultBox, h('div', { class: 'field-label' }, 'Latest checks'), verificationView(ctx, latest));
   updateButtons();
   renderDiscrepancies();
 
@@ -503,7 +559,7 @@ export function verifyModal(
   })();
 
   return {
-    title: 'Verify the task',
+    title: 'Check the task',
     size: 'md',
     el,
     destroy() {

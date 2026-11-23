@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   AttemptStops,
+  answerOf,
   classifyHostFailure,
   FINAL_SCHEMA,
   type GenericHarnessClient,
@@ -51,8 +52,12 @@ export interface ClaudeSpawnOptions {
   hook: { command: string; args: readonly string[] };
   /** Reasoning effort; the host's default otherwise. */
   effort?: string;
-  /** A spending cap for each attempt's session (`--max-budget-usd`); none otherwise. */
-  maxBudgetUsd?: number;
+  /**
+   * A spending cap for each attempt's session (`--max-budget-usd`); none otherwise. A function is
+   * asked at each attempt, so a limit a person raised applies to the next attempt without this
+   * adapter starting again.
+   */
+  maxBudgetUsd?: number | (() => number | undefined);
   /** Harness key; by default stable per project and agent, so a restart resumes its runs. */
   harnessKey?: string;
   /** Where each attempt's instructions and settings files go (default: the system temp folder). */
@@ -125,9 +130,18 @@ interface Attempt {
   verdict: { valid: true } | { valid: false; why: string } | null;
   /** The turn's first input was sent. */
   started: boolean;
+  /** The uuid of the message the turn was started with, and whether the host has taken it (its echo). */
+  openingId?: string;
+  openingTaken: boolean;
   stopping: boolean;
   done: boolean;
+  /** The spending cap this attempt's session runs with, and whether it is the agent's own. */
+  budget?: { cap_usd: number; own: boolean };
 }
+
+/** What a person reads when a session ended its turn with no answer at all. */
+const NO_ANSWER =
+  'It ended its turn without doing or saying anything, so nothing is claimed as done. Continue it, or give the task to another agent.';
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
 /** What `system/init` lists, by name: a string, or an object with a `name`. */
@@ -375,7 +389,8 @@ export class ClaudeSpawnAdapter {
         },
       }),
     );
-    const budget = sessionBudgetUsd(this.opts.maxBudgetUsd, p.budget_usd);
+    const ownCap = this.#ownCap();
+    const budget = sessionBudgetUsd(ownCap, p.budget_usd);
     const args = (resumes: boolean) => [
       ...(this.opts.host.args ?? []),
       '-p',
@@ -438,8 +453,12 @@ export class ClaudeSpawnAdapter {
       lastText: '',
       verdict: null,
       started: false,
+      openingTaken: false,
       stopping: false,
       done: false,
+      // The agent's own cap is the one that applies unless the task's is smaller: Friday ends an
+      // attempt at the task's cap itself, from the cost the host reports.
+      ...(budget === undefined ? {} : { budget: { cap_usd: budget, own: ownCap !== undefined && budget === ownCap } }),
     };
     const attempt = a;
     this.#attempts.set(p.run_id, attempt);
@@ -456,7 +475,8 @@ export class ClaudeSpawnAdapter {
             firstTaskMessage(p, instructions.contract);
     const start = () => {
       try {
-        this.#send(attempt, opening());
+        attempt.openingTaken = false;
+        attempt.openingId = this.#send(attempt, opening());
         attempt.started = true;
         return true;
       } catch (e) {
@@ -625,6 +645,11 @@ export class ClaudeSpawnAdapter {
       this.#initialised(a, m);
       return;
     }
+    if (m.type === 'user' && typeof m.uuid === 'string' && m.uuid === a.openingId) {
+      // The host took the message the turn was started with: what it answers from here is the turn's.
+      a.openingTaken = true;
+      return;
+    }
     if (m.type === 'user' && typeof m.uuid === 'string' && a.relayed.has(m.uuid)) {
       // Claude Code echoed a message it took: it reached the session.
       const id = a.relayed.get(m.uuid) as string;
@@ -643,7 +668,28 @@ export class ClaudeSpawnAdapter {
       if (text) a.lastText = text;
       return;
     }
-    if (m.type === 'result') void this.#finish(a, m);
+    if (m.type === 'result') {
+      // A resumed session first answers what it had queued itself (a background command of the
+      // process before it, reported as "didn't finish"): a turn of its own with no model call and
+      // nothing said, before it takes the message it was resumed with. That empty result was read
+      // as the task's final answer: a session a person had just continued was recorded as a
+      // completion claim "done", three seconds later, with every check still to fail (2.1.306,
+      // 2026-11-18). A result is the turn's only once the host took the turn's message; an error
+      // is never waited out.
+      if (
+        m.subtype === 'success' &&
+        m.is_error !== true &&
+        a.openingId !== undefined &&
+        !a.openingTaken &&
+        num(m.num_turns) === 0 &&
+        m.structured_output === undefined &&
+        !str(m.result)
+      ) {
+        this.#log(`${a.taskId}: an empty result before the turn's message was taken is not the turn's; waiting`);
+        return;
+      }
+      void this.#finish(a, m);
+    }
   }
 
   /**
@@ -698,6 +744,19 @@ export class ClaudeSpawnAdapter {
     if (!a.verdict.valid) void this.#lost(a, a.verdict.why, 'turn');
   }
 
+  /** The agent's own cap for the attempt that starts now; none when it cannot be read. */
+  #ownCap(): number | undefined {
+    const own = this.opts.maxBudgetUsd;
+    if (typeof own !== 'function') return own;
+    try {
+      const now = own();
+      return typeof now === 'number' && Number.isFinite(now) && now > 0 ? now : undefined;
+    } catch (e) {
+      this.#log(`the spending cap could not be read: ${(e as Error).message}`);
+      return undefined;
+    }
+  }
+
   async #finish(a: Attempt, m: Record<string, unknown>): Promise<void> {
     if (a.done || a.stopping) return;
     if (a.verdict?.valid !== true) {
@@ -720,7 +779,15 @@ export class ClaudeSpawnAdapter {
     const spent = { events: [{ event_type: 'host.usage', data: hostUsage(m) }], stop: () => stopped };
     if (m.subtype === 'success' && m.is_error !== true) {
       const final = parseFinal(m.structured_output ?? str(m.result) ?? a.lastText, a.lastText);
-      if (final.status === 'blocked') {
+      // A turn that answered nothing claims nothing: it is said to a person, never taken as "done".
+      const silent = m.structured_output === undefined && !str(m.result) && !a.lastText.trim();
+      if (silent) {
+        void reports.report(
+          'result',
+          { ...ids, status: 'blocked', summary: 'ended without an answer', blocked_reason: NO_ANSWER },
+          spent,
+        );
+      } else if (final.status === 'blocked') {
         void reports.report(
           'result',
           {
@@ -745,6 +812,9 @@ export class ClaudeSpawnAdapter {
             ...ids,
             status: 'completed_claim',
             summary: final.summary.slice(0, 2000) || 'done',
+            // A question's answer: the field it was asked for, else what the session last wrote
+            // when that says more than its summary (Friday keeps it only for a question).
+            ...answerOf(final, a.lastText),
             changed_paths: [...changed].slice(0, 200),
             // What the session says it ran: verification's evidence, bounded by what the hooks saw.
             checks: final.checks,
@@ -754,9 +824,12 @@ export class ClaudeSpawnAdapter {
       }
     } else {
       const message = `the Claude Code turn ended: ${String(m.subtype ?? 'error')}${str(m.result) ? `: ${m.result}` : ''}`;
+      // The host stopped at the spending cap of its session (`error_max_budget_usd`): said as that,
+      // with the figures, so Friday asks a human instead of running the task again at the same cap.
+      const capped = m.subtype === 'error_max_budget_usd' && a.budget?.own ? a.budget : undefined;
       // A turn the host ended because it could not serve it (not signed in, rate limited) is the
       // host's failure (ADR-0035 §3); any other error of the turn is the work's.
-      const failure = classifyHostFailure(message, 'turn');
+      const failure = capped ? null : classifyHostFailure(message, 'turn');
       void reports.report(
         'error',
         {
@@ -765,6 +838,7 @@ export class ClaudeSpawnAdapter {
           // The attempt is over (its session ends below): Friday's recovery decides what follows.
           fatal: true,
           ...(failure ? { failure } : {}),
+          ...(capped ? { spending_cap: { cap_usd: capped.cap_usd, cost_usd: num(m.total_cost_usd) } } : {}),
         },
         spent,
       );

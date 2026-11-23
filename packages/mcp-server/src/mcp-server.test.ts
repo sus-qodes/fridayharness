@@ -95,6 +95,33 @@ describe('resolveAgentKey', () => {
     expect(resolveAgentKey(ref, 'reviewer-2')).toBe('reviewer-2');
     expect(resolveAgentKey(undefined)).toBe('dev-1');
   });
+
+  it('gives a host its own name when the file has one for it, and the shared key otherwise', () => {
+    const state = mkdtempSync(path.join(os.tmpdir(), 'fri-agent-'));
+    dirs.push(state);
+    process.env.FRIDAY_STATE_DIR = state;
+    const ref = { project_key: 'proj_test-00000001' } as ProjectRef;
+    const write = (v: unknown) => writePrivateFile(privateDirFor(ref), 'agent.json', JSON.stringify(v));
+    write({ agent_key: 'dev-7', hosts: { antigravity: 'antigravity-1' } });
+    // Two hosts connected from one machine are two agents, not an agent and its shadow.
+    expect(resolveAgentKey(ref, undefined, 'antigravity')).toBe('antigravity-1');
+    expect(resolveAgentKey(ref, undefined, 'claude-code')).toBe('dev-7');
+    expect(resolveAgentKey(ref, undefined, 'cursor')).toBe('dev-7');
+    expect(resolveAgentKey(ref)).toBe('dev-7');
+    // FRIDAY_AGENT still wins for any host.
+    expect(resolveAgentKey(ref, 'reviewer-2', 'antigravity')).toBe('reviewer-2');
+    // A machine set up before the names were apart: the one key, as before, until the host is set up again.
+    write({ agent_key: 'dev-7' });
+    expect(resolveAgentKey(ref, undefined, 'antigravity')).toBe('dev-7');
+    // Only a host's own name in the file, or values of the wrong shape.
+    write({ hosts: { antigravity: 'antigravity-1' } });
+    expect(resolveAgentKey(ref, undefined, 'antigravity')).toBe('antigravity-1');
+    expect(resolveAgentKey(ref, undefined, 'claude-code')).toBe('dev-1');
+    write({ agent_key: 5, hosts: { antigravity: '' } });
+    expect(resolveAgentKey(ref, undefined, 'antigravity')).toBe('dev-1');
+    write({ agent_key: 'dev-7', hosts: 'nope' });
+    expect(resolveAgentKey(ref, undefined, 'antigravity')).toBe('dev-7');
+  });
 });
 
 describe('the host a friday server serves (plan M8b)', () => {

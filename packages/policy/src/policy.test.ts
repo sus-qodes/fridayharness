@@ -124,7 +124,7 @@ describe('command classification', () => {
     ['friday task inspect task_1', 'read.local'],
     ['ls -la', 'read.local'],
     ['Get-Content README.md', 'read.local'],
-    ['sed -i s/a/b/ x.ts', 'git.mutate'],
+    ['sed -i s/a/b/ x.ts', 'file.write'],
     ['python script.py', 'unknown'],
     ['node build.js', 'unknown'],
     ['powershell -Command "git push"', 'git.push'],
@@ -143,15 +143,15 @@ describe('command classification', () => {
   });
 
   it('treats output redirection as a write', () => {
-    expect(classifyCommand('echo hi > notes.txt').class).toBe('git.mutate');
+    expect(classifyCommand('echo hi > notes.txt').class).toBe('file.write');
     expect(classifyCommand('npm test 2>&1').class).toBe('test.local');
     // Output thrown away writes nothing; a file named like the sink still counts.
     expect(classifyCommand('Get-Content a.txt > $null').class).toBe('read.local');
     expect(classifyCommand('Get-Content a.txt *> $null').class).toBe('read.local');
     expect(classifyCommand('type a.txt >NUL').class).toBe('read.local');
     expect(classifyCommand('cat a.txt > /dev/null').class).toBe('read.local');
-    expect(classifyCommand('cat a.txt > nul.txt').class).toBe('git.mutate');
-    expect(classifyCommand('cat a.txt > /dev/null2').class).toBe('git.mutate');
+    expect(classifyCommand('cat a.txt > nul.txt').class).toBe('file.write');
+    expect(classifyCommand('cat a.txt > /dev/null2').class).toBe('file.write');
   });
 
   it('never relaxes secrets or Friday-internal commands through configuration', () => {
@@ -169,7 +169,7 @@ describe('command classification', () => {
     expect(classifyCommand(`"C:\\WINDOWS\\system32\\cmd.exe" /c 'git push origin main'`).class).toBe('git.push');
     expect(classifyCommand(`/bin/bash -lc 'git status && printenv'`).class).toBe('secrets.read');
     // Output redirected inside the wrapper is a write.
-    expect(classifyCommand(`bash -lc 'echo hi > notes.txt'`).class).toBe('git.mutate');
+    expect(classifyCommand(`bash -lc 'echo hi > notes.txt'`).class).toBe('file.write');
     expect(wrappedCommand(`${ps} -Command 'Write-Output ''hi'''`)).toBe("Write-Output 'hi'");
     expect(wrappedCommand('node --test')).toBeNull();
   });
@@ -191,14 +191,14 @@ describe('command classification', () => {
       ['$files = Get-ChildItem src; $files | Select-Object -First 3', 'read.local'],
       ['Get-ChildItem | ForEach-Object { $_.FullName }', 'read.local'],
       // What runs inside a block or an expression counts.
-      ['if (-not (Test-Path dist)) { New-Item -ItemType Directory dist }', 'git.mutate'],
-      ['Get-ChildItem -Recurse | ForEach-Object { Remove-Item $_ }', 'git.mutate'],
+      ['if (-not (Test-Path dist)) { New-Item -ItemType Directory dist }', 'file.write'],
+      ['Get-ChildItem -Recurse | ForEach-Object { Remove-Item $_ }', 'file.write'],
       ['Get-ChildItem | ForEach-Object { Remove-Item -Recurse -Force $_ }', 'fs.destructive'],
       ['$x = Remove-Item -Recurse src', 'fs.destructive'],
       ['Write-Output "$(Remove-Item -Recurse src)"', 'fs.destructive'],
       ['if ($ok) { git push origin main }', 'git.push'],
       ['(cd build && rm -rf out)', 'fs.destructive'],
-      ["Select-Object @{n='x'; e={ Remove-Item y }}", 'git.mutate'],
+      ["Select-Object @{n='x'; e={ Remove-Item y }}", 'file.write'],
       // Method calls and .NET members: no rule knows what they do.
       ['Get-ChildItem | ForEach-Object { $_.Delete() }', 'unknown'],
       ['(Get-Item x).Delete()', 'unknown'],

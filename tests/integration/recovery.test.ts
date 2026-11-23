@@ -26,9 +26,12 @@ afterEach(() => {
 
 async function project(extraConfig?: string) {
   const clock = new FakeClock(new Date().toISOString());
+  // These tests give a task back and then decide by hand who takes it: the delegation that would
+  // hand a returned task to the next free agent is left out here (it has its own tests).
   const td = await startTestDaemon(ws(), {
     git: true,
     clock,
+    brain: { autoStart: false },
     extensions: [claudeCodeHooks()],
     ...(extraConfig ? { extraConfig } : {}),
   });

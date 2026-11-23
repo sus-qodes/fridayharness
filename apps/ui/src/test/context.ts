@@ -100,7 +100,9 @@ export function makeContext(opts: { answers?: Answers; snapshot?: UiSnapshot; st
     act: async (label, call, success) => {
       try {
         const r = await call();
-        if (success) toasts.push({ kind: 'success', text: typeof success === 'function' ? success(r) : success });
+        // As `makeAct`: a success text that comes out empty says nothing.
+        const text = success === undefined ? '' : typeof success === 'function' ? success(r) : success;
+        if (text) toasts.push({ kind: 'success', text });
         return r;
       } catch (e) {
         toasts.push({ kind: 'error', text: label, detail: (e as Error).message });

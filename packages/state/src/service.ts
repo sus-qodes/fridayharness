@@ -104,7 +104,13 @@ export interface RunRouting {
     [key: string]: unknown;
   };
 }
-export type RunRouter = (args: { task: TaskView; harness: HarnessRecord; agent: AgentView }) => RunRouting | null;
+export type RunRouter = (args: {
+  task: TaskView;
+  harness: HarnessRecord;
+  agent: AgentView;
+  /** A person gave this task to this agent ("Assign to"): routing chooses the model, not whether it runs there. */
+  assigned?: boolean;
+}) => RunRouting | null;
 
 /** What installing a fresh worktree's dependencies did (plan Phase 7), carried by `run.workspace_ready`. */
 export interface WorkspaceSetupRecord {
@@ -120,6 +126,31 @@ export interface WorkspaceSetupRecord {
   /** The dependency cache's part: the tree came `from: 'cache'` (no install ran) or went into it after the `install`. */
   cache?: { key: string; from: 'cache' | 'install'; files: number; duration_ms: number } | null;
 }
+
+/** Git-only refresh metadata, stored with the run's workspace events. */
+export interface WorkspaceRefreshRecord {
+  from: string;
+  goal_head: string;
+  head: string;
+  commits: string[];
+  preserved_ref: string | null;
+  conflicts: string[];
+  artifact_ref?: string | null;
+  /** Files where both sides only added lines: both additions were kept. */
+  joined?: string[];
+  /** `conflicts` are in the folder with both versions marked, for the agent to finish. */
+  marked?: boolean;
+}
+
+/** How long delegation keeps a task for a session that waits for its person to prompt it. */
+export const TURN_RESERVATION_MS = 2 * 60 * 1000;
+
+/**
+ * What an agent is told while its request waits (2026-11-18). It said "do not retry until it is
+ * granted" and nothing ever said it was granted, so an agent waited on a decision already made.
+ */
+const PENDING_REASON = (approvalId: string): string =>
+  `the person was asked in Friday, under "Waiting for you" (${approvalId}). Go on with whatever else the task needs: you get a message when they decide, and what you asked for passes then. If nothing else is left, end your turn and say you wait for ${approvalId}`;
 
 /** What a `routing_blocked` error carries (review F01). */
 interface RoutingBlock {
@@ -668,12 +699,16 @@ export interface TokenInfo {
 
 /** Observation events that callers may record directly; they never change domain rows. */
 const OBSERVATION_TYPES = new Set([
+  // A person ran the install of a task's worktree again (2026-11-17).
+  'worktree.setup_ran',
   'policy.evaluated',
   'agent.event',
   'agent.turn_ended',
   'context.requested',
   'harness.session_started',
   'harness.session_ended',
+  // What a host passed for a slash command before its model was called (2026-11-19, `/friday`).
+  'harness.prompt_seen',
   'daemon.started',
   'daemon.stopped',
   'scope.violation',
@@ -689,6 +724,8 @@ const OBSERVATION_TYPES = new Set([
   'ui.session_ended',
   'agent.process_started',
   'agent.process_exited',
+  // A remembered agent that did not start with Friday (2026-11-17).
+  'agent.autostart_failed',
   'control.task_stopped',
   // The Master Brain began a model call, so a client can show it thinking (plan M9 §5.11).
   'brain.call_started',
@@ -704,6 +741,28 @@ const OBSERVATION_TYPES = new Set([
   'setup.progress',
   'setup.completed',
   'setup.failed',
+  // A person landed a completed goal's branch into their own branch, from the interface (2026-11-16).
+  'goal.landed',
+  // Files in the way of a landing, kept and taken out of it, and written back (2026-11-18).
+  'goal.files_set_aside',
+  'goal.set_aside_restored',
+  // A person opened the answer to a question they asked (2026-11-18).
+  'goal.answer_read',
+  // A person chose, for one goal, when its work lands; and a landing Friday tried by itself was held.
+  'goal.landing_choice',
+  'goal.landing_held',
+  // The goal's finished work was written into the project folder before a session there took a task.
+  'folder.synced',
+  // A person's choice for a file they and the goal both changed: kept, replaced (with the backup's
+  // name), and put back.
+  'folder.file_kept',
+  'folder.file_replaced',
+  'folder.file_restored',
+  // A person changed one of the settings the interface may change in config.yaml (2026-11-16).
+  'config.edited',
+  // A person chose how they plan on this machine (their own planner, kept outside config.yaml).
+  'planner.chosen',
+  'planner.spending_denied',
 ]);
 
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
@@ -717,7 +776,15 @@ const RECOVERY_QUESTIONS = new Set(['recovery_needed']);
 const ROUTING_QUESTIONS = new Set(['routing_blocked', 'routing_violated']);
 const INTEGRATION_QUESTIONS = new Set(['integration_conflict', 'integration_failed']);
 const SYSTEM_QUESTIONS = new Set([...RECOVERY_QUESTIONS, ...ROUTING_QUESTIONS, ...INTEGRATION_QUESTIONS]);
+/**
+ * The Master Brain's questions about a goal's planning itself: it cannot plan, the plan it got
+ * cannot be read, today's budget is spent, a planning action failed. A plan a person wrote or
+ * approved answers them.
+ */
+const PLANNING_QUESTIONS = new Set(['planner_unavailable', 'invalid_plan', 'budget_exceeded', 'action_failed']);
 const FAILURE_QUESTIONS = new Set([
+  'setup_failed',
+  'check_not_run',
   'planner_unavailable',
   'budget_exceeded',
   'invalid_plan',
@@ -963,6 +1030,26 @@ export class FridayState {
     }
   }
 
+  /**
+   * A goal's own pending questions (no task) from the Master Brain, answered as moot in the caller's
+   * transaction: those about planning once a person wrote or approved a plan (`kinds`), every one
+   * once the goal ended (`kinds` null). They used to stay in "Waiting for you" for ever, and
+   * answering a stale one later started a revision nobody asked for (2026-11-17). An answer marked
+   * moot starts none.
+   */
+  private settleGoalQuestions(ctx: CommandContext, goalId: string, kinds: Set<string> | null, why: string): void {
+    for (const e of this.q.escalations(ctx.project_id, 'pending', { goal_id: goalId })) {
+      if (e.task_id || e.requested_by_kind !== 'master_brain') continue;
+      if (kinds && !kinds.has(String(e.kind))) continue;
+      ctx.emit({
+        type: 'escalation.answered',
+        actor: SYSTEM,
+        payload: { escalation_id: e.escalation_id, answer: `no longer needed: ${why}`, moot: true },
+        refs: [{ kind: 'escalation', id: String(e.escalation_id) }],
+      });
+    }
+  }
+
   /** Answers a task's pending questions of these kinds as moot, in the caller's transaction. */
   private settleQuestions(ctx: CommandContext, taskId: string, kinds: Set<string>, why: string): void {
     for (const e of this.q.escalations(ctx.project_id, 'pending')) {
@@ -980,6 +1067,63 @@ export class FridayState {
    * A human performed a recovery action on a task: its recovery question is answered (plan M9 §5.7),
    * so the Master Brain no longer skips the task and the card goes away.
    */
+  /**
+   * Closes the pending questions of one kind that are about the project itself, not a task or a
+   * goal (2026-11-18): what they asked about is no longer so. Returns how many it closed.
+   */
+  settleProjectQuestions(projectId: string, kind: string, why: string): number {
+    return this.exec({ name: 'escalation.settle', project_id: projectId, actor: SYSTEM, params: { kind } }, (ctx) => {
+      let closed = 0;
+      for (const e of this.q.escalations(projectId, 'pending')) {
+        if (e.kind !== kind || e.task_id || e.goal_id) continue;
+        ctx.emit({
+          type: 'escalation.answered',
+          actor: SYSTEM,
+          payload: { escalation_id: e.escalation_id, answer: `no longer needed: ${why}`, moot: true },
+          refs: [{ kind: 'escalation', id: String(e.escalation_id) }],
+        });
+        closed += 1;
+      }
+      return closed;
+    });
+  }
+
+  /**
+   * Closes the questions of goals already cancelled (2026-11-23), at the daemon's start: a goal
+   * cancelled before Friday closed every question of it kept one in "Waiting for you" for good.
+   * Returns how many it closed.
+   */
+  settleQuestionsOfCancelledGoals(projectId: string): number {
+    const cancelled = this.q.goals(projectId, { statuses: ['CANCELLED'] });
+    if (!cancelled.length) return 0;
+    return this.exec({ name: 'escalation.settle', project_id: projectId, actor: SYSTEM, params: {} }, (ctx) => {
+      let closed = 0;
+      for (const g of cancelled) closed += this.settleCancelledGoalQuestions(ctx, projectId, g.goal_id);
+      return closed;
+    });
+  }
+
+  /**
+   * Every pending question of a cancelled goal, whoever asked: the goal's own and its tasks'
+   * (2026-11-23). "Could not be added to its goal" stayed in "Waiting for you" after its goal was
+   * cancelled: Friday asked it about a task already done, and only the planner's questions closed.
+   */
+  private settleCancelledGoalQuestions(ctx: CommandContext, projectId: string, goalId: string): number {
+    const tasks = new Set(this.q.goalTasks(projectId, goalId).map((t) => t.task_id));
+    let closed = 0;
+    for (const e of this.q.escalations(projectId, 'pending')) {
+      if (e.goal_id !== goalId && !(e.task_id && tasks.has(String(e.task_id)))) continue;
+      ctx.emit({
+        type: 'escalation.answered',
+        actor: SYSTEM,
+        payload: { escalation_id: e.escalation_id, answer: 'no longer needed: the goal was cancelled', moot: true },
+        refs: [{ kind: 'escalation', id: String(e.escalation_id) }],
+      });
+      closed += 1;
+    }
+    return closed;
+  }
+
   settleRecoveryQuestions(projectId: string, actor: Actor, taskId: string, action: string): void {
     this.exec({ name: 'escalation.settle', project_id: projectId, actor, params: { taskId, action } }, (ctx) =>
       this.settleQuestions(ctx, taskId, RECOVERY_QUESTIONS, `recovery action ${action} was performed`),
@@ -991,7 +1135,29 @@ export class FridayState {
    * work still has to reach the goal branch (ADR-0025 §2).
    */
   awaitsIntegration(task: TaskView): boolean {
-    return Boolean(task.goal_id && this.q.worktreeForTask(task.task_id));
+    return Boolean(
+      task.goal_id && (this.q.worktreeForTask(task.task_id) || this.workedInFolder(task.project_id, task.task_id)),
+    );
+  }
+
+  /**
+   * A task whose last attempt was made in the project folder itself by a session its person runs
+   * there (Antigravity, Claude Code in an editor). Since 2026-11-17 verification keeps such a
+   * task's own files as a commit, and integration brings it to the goal branch like any other
+   * task's work, so the tasks that depend on it wait for that. A run Friday started with worktrees
+   * off is not meant: nothing is kept apart for it.
+   */
+  workedInFolder(projectId: string, taskId: string): boolean {
+    const run = this.q.runs(taskId).at(-1);
+    if (!run?.execution_root || run.branch_ref) return false;
+    const root = this.q.project(projectId)?.root_path;
+    if (!root) return false;
+    const norm = (p: string) => {
+      const r = path.resolve(p);
+      return process.platform === 'win32' ? r.toLowerCase() : r;
+    };
+    if (norm(run.execution_root) !== norm(root)) return false;
+    return this.q.findHarness(run.harness_id)?.attach_mode !== 'spawn';
   }
 
   /** Ends every active file reservation a task holds, inside the caller's transaction. */
@@ -1056,6 +1222,13 @@ export class FridayState {
     // then prepares the worktree for this run (review F07). A worktree of another clone is never
     // reused (review F08): the daemon decides what the run gets.
     const owned = this.q.operationRuns(projectId, { task_id: task.task_id, status: 'running', limit: 1 }).length > 0;
+    // A goal task that already has a worktree gets the goal's newer commits before `task.start` is
+    // sent, on every new attempt (2026-11-17): after a refused claim, a restart, a reassignment.
+    // Before, a retained worktree was used as it stood, so a task restarted because an earlier
+    // task's work was missing started again without it. The daemon prepares it (`pending`).
+    if (wt && task.goal_id) {
+      return { execution_root: null, base_commit: null, branch_ref: null, workspace: 'pending' };
+    }
     if (wt && existsSync(wt.path) && !owned && this.inThisClone(wt.path)) {
       if (wt.status !== 'active') {
         ctx.emit({
@@ -1090,6 +1263,8 @@ export class FridayState {
     harnessId: string,
     agentId: string,
     ws: Workspace = { execution_root: null, base_commit: null, branch_ref: null, workspace: 'ready' },
+    /** A person assigns the task to this agent in this very command. */
+    assignedNow = false,
   ): RunView {
     // Nobody else works where an operation of an earlier attempt still runs (review F07).
     const owner = this.q.operationRuns(ctx.project_id, { task_id: task.task_id, status: 'running', limit: 1 })[0];
@@ -1137,8 +1312,24 @@ export class FridayState {
         ],
       });
     }
-    this.routeWithin(ctx, task, harness, agentId, run_id);
+    this.routeWithin(ctx, task, harness, agentId, run_id, assignedNow);
     return this.q.run(run_id);
+  }
+
+  /**
+   * Whether a person gave this task to this agent ("Assign to", 2026-11-17): they assign it in this
+   * command, the task was kept for the agent at their word, or it comes back to the same agent for
+   * rework after an attempt a person had given it. Routing then chooses the model and no longer
+   * whether the work may run there: before, a task assigned to an agent the ranking had no entry
+   * for waited for good, with no word at the moment of assigning.
+   */
+  private assignedByPerson(ctx: CommandContext, task: TaskView, agent: AgentView, assignedNow: boolean): boolean {
+    if (assignedNow) return true;
+    if (task.reserved_for_agent_key !== agent.agent_key) return false;
+    if (task.reserved_by === 'human') return true;
+    if (task.reserved_by !== 'rework') return false;
+    const [last] = this.q.routingDecisions(ctx.project_id, { task_id: task.task_id, limit: 1 });
+    return Boolean(last?.reason_codes.includes('assignment.human'));
   }
 
   /**
@@ -1147,11 +1338,24 @@ export class FridayState {
    * transaction is abandoned with `routing_blocked`, and the caller records the block. A router
    * that fails cannot show that the work may run here, so it blocks too.
    */
-  private routeWithin(ctx: CommandContext, task: TaskView, harness: HarnessRecord, agentId: string, runId: string) {
+  private routeWithin(
+    ctx: CommandContext,
+    task: TaskView,
+    harness: HarnessRecord,
+    agentId: string,
+    runId: string,
+    assignedNow = false,
+  ) {
     if (!this.router) return;
     let decision: RunRouting['decision'];
     try {
-      const r = this.router({ task, harness, agent: this.q.agent(agentId) });
+      const agent = this.q.agent(agentId);
+      const r = this.router({
+        task,
+        harness,
+        agent,
+        assigned: this.assignedByPerson(ctx, task, agent, assignedNow),
+      });
       if (!r) return;
       decision = r.decision;
     } catch (e) {
@@ -1208,6 +1412,68 @@ export class FridayState {
         { kind: 'run', id: runId },
       ],
     });
+  }
+
+  /**
+   * What the last install of a task's worktree dependencies did: when an attempt's worktree was
+   * prepared (`run.workspace_ready`), or when a person ran the install again
+   * (`worktree.setup_ran`). Null when none was ever attempted.
+   */
+  latestWorktreeSetup(projectId: string, taskId: string): { setup: WorkspaceSetupRecord; at: string } | null {
+    const events = this.store.readByRef(projectId, 'task', taskId, {
+      types: ['run.workspace_ready', 'worktree.setup_ran'],
+    });
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const e = events[i];
+      if (!e) continue;
+      const setup = (e.payload as { setup?: unknown }).setup;
+      if (setup && typeof setup === 'object') return { setup: setup as WorkspaceSetupRecord, at: e.occurred_at };
+    }
+    return null;
+  }
+
+  /**
+   * Why a task's last failed verification is likely its setup and not its work (2026-11-17): the
+   * dependencies of its folder were not installed (the install failed, or was refused), and a
+   * check of the project's own failed there. A failure of Friday's own checks alone (scope,
+   * credentials, evidence) is the work's whatever the install did. Null otherwise.
+   */
+  worktreeSetupTrouble(projectId: string, taskId: string): string | null {
+    const last = this.latestWorktreeSetup(projectId, taskId);
+    if (!last || (last.setup.status !== 'failed' && last.setup.status !== 'refused')) return null;
+    const v = this.q.latestVerification(taskId);
+    if (v?.status !== 'FAILED') return null;
+    return v.checks.some((c) => c.status === 'FAILED' && c.origin !== 'friday') ? last.setup.reason : null;
+  }
+
+  /**
+   * Why a task's last failed verification judged nothing of its work (2026-11-17): every check of
+   * the project's own that failed could not be started on this computer (the command is not
+   * installed, not on the path, or misspelt in the configuration), and none of Friday's own checks
+   * failed. Sending the task back to its agent would fail the same way. Null otherwise.
+   */
+  checksNotRun(taskId: string): string | null {
+    const v = this.q.latestVerification(taskId);
+    if (v?.status !== 'FAILED') return null;
+    const failed = v.checks.filter((c) => c.status === 'FAILED' && c.required);
+    if (!failed.length || failed.some((c) => c.origin === 'friday')) return null;
+    const unstarted = failed.filter((c) => (c.summary ?? '').startsWith('could not start'));
+    if (unstarted.length !== failed.length) return null;
+    return unstarted
+      .map((c) => `the check "${c.name}" ${(c.summary ?? '').slice(0, 300)}`)
+      .join('; ')
+      .slice(0, 900);
+  }
+
+  /** The command of the last install and the end of what it printed, as lines for a question's evidence. */
+  worktreeSetupEvidence(projectId: string, taskId: string): string[] {
+    const last = this.latestWorktreeSetup(projectId, taskId);
+    if (!last) return [];
+    const s = last.setup;
+    return [
+      ...(s.command ? [`install: ${[s.command, ...s.args].join(' ')}`.slice(0, 500)] : []),
+      ...(s.output_tail ? [`install output: ${s.output_tail.slice(-1500)}`] : []),
+    ];
   }
 
   /** Sets the daemon's router (ADR-0031 §6); without one, runs carry no model. */
@@ -1443,6 +1709,30 @@ export class FridayState {
   ) {
     if (!run || run.status === 'ENDED' || run.status === 'DECLINED') return;
     this.moveRun(ctx, run, 'ENDED', outcome, { outcome, ended_at: ctx.now, ...extra }, actor);
+    // What the attempt asked and nobody decided ends with it (2026-11-18): a card that stayed
+    // open was answered a minute after its agent had finished, and the click did nothing.
+    for (const approval_id of this.q.pendingApprovalsOfRun(ctx.project_id, run.run_id)) {
+      ctx.emit({
+        type: 'approval.revoked',
+        actor: SYSTEM,
+        payload: { approval_id, note: 'the attempt that asked has ended' },
+        refs: [
+          { kind: 'approval', id: approval_id },
+          { kind: 'task', id: run.task_id },
+        ],
+      });
+    }
+  }
+
+  /** Whether a continue that names this grant already went to the attempt (`submitResult`). */
+  private grantWasSaid(runId: string, approvalId: string): boolean {
+    return Boolean(
+      this.db
+        .prepare(
+          "SELECT 1 AS one FROM outbox_messages WHERE run_id = ? AND method = 'task.resume' AND params_json LIKE ? LIMIT 1",
+        )
+        .get<{ one: number }>(runId, `%${approvalId}%`),
+    );
   }
 
   private moveAgent(
@@ -2223,18 +2513,26 @@ export class FridayState {
         this.enforcementGap(harness) === null;
       if (!canPush || !agent || !harness) {
         // A human's choice stays until a human changes it; the Master Brain's expires (review F08).
+        // One kept for a live session that waits for its person expires sooner (2026-11-17): if
+        // nobody prompts that session within two minutes, the task is free for whoever is free.
         const byHuman = ctx.actor.kind === 'human';
+        const waitsForPerson =
+          harness !== undefined && harness.attach_mode !== 'spawn' && this.q.isHarnessLive(harness.harness_id, ctx.now);
+        const ttl = waitsForPerson
+          ? Math.min(this.config.reservationTtlMs, TURN_RESERVATION_MS)
+          : this.config.reservationTtlMs;
         return {
           mode: 'reserved' as const,
           task: this.updateTaskFields(ctx, taskId, {
             reserved_for_agent_key: agentKey,
             reserved_by: byHuman ? 'human' : 'master_brain',
-            reserved_until: byHuman ? null : addMs(ctx.now, this.config.reservationTtlMs),
+            reserved_until: byHuman ? null : addMs(ctx.now, ttl),
           }),
         };
       }
       const ws = this.workspaceFor(ctx, projectId, task, harness);
-      const run = this.createRun(ctx, task, harness.harness_id, agent.agent_id, ws);
+      // An operator's own assignment (not the Master Brain's delegation, which also passes here).
+      const run = this.createRun(ctx, task, harness.harness_id, agent.agent_id, ws, ctx.actor.kind === 'human');
       task = this.moveTask(ctx, task, 'task.assign', {
         changes: {
           assigned_agent_id: agent.agent_id,
@@ -2447,6 +2745,12 @@ export class FridayState {
     return ready[0];
   }
 
+  /** The task a claim with `next` would take for this agent now, without taking it. */
+  nextTaskFor(projectId: string, agentId: string): TaskView | undefined {
+    const agent = this.q.findAgent(agentId);
+    return agent ? this.pickNext(projectId, agent) : undefined;
+  }
+
   /** Tasks this agent could claim right now, assigned ones first. */
   claimableTasks(projectId: string, agentKey: string, limit = 10): TaskView[] {
     const agent = this.q.agentByKey(projectId, agentKey);
@@ -2556,6 +2860,24 @@ export class FridayState {
           }
           const agent = this.q.agent(caller.agent_id);
           if (agent.status === 'BUSY') this.moveAgent(ctx, agent, 'WAITING');
+          // It stopped to wait for something a person had already approved (2026-11-18): the
+          // session goes on at once with what was granted. Once for each grant, so an agent that
+          // cannot use one is not started again and again.
+          const unused = this.q
+            .unusedGrantsOfRun(projectId, run.run_id, ctx.now)
+            .filter((g) => !this.grantWasSaid(run.run_id, g.approval_id));
+          if (task.status === 'WAITING' && unused.length) {
+            const list = unused
+              .slice(0, 5)
+              .map((g) => `${g.capability}${g.target ? ` ${g.target.slice(0, 300)}` : ''} (${g.approval_id})`)
+              .join('; ');
+            this.queueContinue(
+              ctx,
+              projectId,
+              task,
+              `A human had already approved what you waited for: ${list}. Do exactly that now: it passes. Then go on with the task.`,
+            );
+          }
           return {
             task_status: task.status,
             verification_status: 'NOT_REQUESTED',
@@ -2574,9 +2896,17 @@ export class FridayState {
             .filter((o) => !claimed.includes(o))
             .map((path) => ({ path, note: 'changed but not listed in the claim' })),
         ];
+        // The answer to a person's question: kept as an artifact (an event holds no long text),
+        // with its beginning beside the claim for lists and notices.
+        const answer = task.kind === 'research' && p.answer?.trim() ? p.answer.trim() : null;
+        const answerRef =
+          answer && this.artifacts ? this.artifacts.storeText(projectId, 'answer', answer).artifact_id : null;
         this.endRun(ctx, run, 'completed_claim', {
           claim: {
             summary: p.summary,
+            ...(answer
+              ? { answer_ref: answerRef, answer_preview: answer.slice(0, 400), answer_chars: answer.length }
+              : {}),
             changed_paths: claimed,
             checks: p.checks,
             notes: p.notes,
@@ -2627,6 +2957,8 @@ export class FridayState {
       worker_stopped?: boolean | undefined;
       /** Why the host failed, when the adapter could tell (ADR-0035 §3); absent for a work failure. */
       failure?: HostFailure | undefined;
+      /** The host ended the attempt at its own session's spending cap (2026-11-17). */
+      spending_cap?: { cap_usd: number; cost_usd?: number | null | undefined } | undefined;
       idempotency_key?: string | undefined;
     },
   ): { task_status: TaskView['status'] } {
@@ -2646,6 +2978,7 @@ export class FridayState {
             fatal: p.fatal,
             ...(p.worker_stopped !== undefined ? { worker_stopped: p.worker_stopped } : {}),
             ...(p.failure ? { failure: p.failure } : {}),
+            ...(p.spending_cap ? { spending_cap: p.spending_cap } : {}),
           },
           refs: [
             { kind: 'task', id: task.task_id },
@@ -2678,6 +3011,11 @@ export class FridayState {
           // record, and the attempt ends at the cap now, for a human to decide, never for the
           // recovery sweep to retry.
           return { task_status: this.endAtCap(ctx, run, task, stop).status };
+        }
+        if (p.spending_cap && (task.status === 'RUNNING' || task.status === 'WAITING')) {
+          // The host stopped at its own session's cap: the same reasoning, with the agent's limit
+          // in place of the task's. Nobody is benched, since neither the host nor the work failed.
+          return { task_status: this.endAtAgentCap(ctx, run, task, p.spending_cap).status };
         }
         if (task.status === 'RUNNING') {
           task = this.moveTask(ctx, task, 'task.wait', {
@@ -2829,6 +3167,55 @@ export class FridayState {
         attempt: stop.attempt,
         cost_usd: stop.cost_usd,
         cap_usd: stop.cap_usd,
+      },
+    });
+    return waiting;
+  }
+
+  /**
+   * Ends an attempt its host stopped at the agent's own spending limit per attempt (Claude Code's
+   * `--max-budget-usd`, 2026-11-17). As at the task's cap, the task waits as `blocked`, never as
+   * `agent_error`: the recovery sweep would give it to an agent again, which would spend up to the
+   * same limit again and stop at the same place. A human raises the agent's limit and lets the
+   * task continue from the work the attempt left (its worktree is kept), or cancels it. The host's
+   * own error is on record already; the question says it in a person's words, with the figures.
+   */
+  private endAtAgentCap(
+    ctx: CommandContext,
+    run: RunView,
+    task: TaskView,
+    cap: { cap_usd: number; cost_usd?: number | null | undefined },
+  ): TaskView {
+    const agent = this.q.findAgent(run.agent_id);
+    const harness = this.q.findHarness(run.harness_id);
+    const who = agent?.agent_key ?? 'The agent';
+    const cost = typeof cap.cost_usd === 'number' && Number.isFinite(cap.cost_usd) ? cap.cost_usd : null;
+    const reason = `budget_exceeded: attempt ${run.attempt} reached the agent's spending limit of ${usd(cap.cap_usd)} per attempt`;
+    const waiting =
+      task.status === 'RUNNING'
+        ? this.moveTask(ctx, task, 'task.wait', { waiting_reason: 'blocked', reason: reason.slice(0, 200) })
+        : this.updateTaskFields(ctx, task.task_id, { waiting_reason: 'blocked' });
+    this.endRun(ctx, run, 'failed');
+    this.expireOutboxForRun(ctx, run.run_id);
+    this.releaseAgent(ctx, run.agent_id, task.task_id);
+    this.syncHarnessBusy(ctx, run.harness_id);
+    this.escalationWithin(ctx, {
+      kind: 'recovery_needed',
+      goal_id: task.goal_id ?? null,
+      task_id: task.task_id,
+      question: `${who} stopped at its spending limit: this attempt ${cost === null ? 'reached' : `cost ${usd(cost)}, and reached`} the limit of ${usd(cap.cap_usd)} per attempt. The work so far is kept. Raise the limit to let the task continue, or cancel it.`,
+      options: [`friday recover ${task.task_id} --action reassign`, `friday task cancel ${task.task_id}`],
+      details: {
+        reason: 'budget_exceeded',
+        // Whose limit it was: the agent's own (the task's, `routing.task_budget_usd`, has none).
+        scope: 'agent',
+        agent_key: agent?.agent_key ?? null,
+        host: harness?.vendor ?? null,
+        attach_mode: harness?.attach_mode ?? null,
+        run_id: run.run_id,
+        attempt: run.attempt,
+        cost_usd: cost,
+        cap_usd: cap.cap_usd,
       },
     });
     return waiting;
@@ -3024,6 +3411,63 @@ export class FridayState {
     );
   }
 
+  /**
+   * Cancels a task a person no longer wants and settles what waited for it (2026-11-17). A task that
+   * depends on a cancelled one never starts (a cancelled prerequisite is not a completed one), so
+   * its goal never finished and nothing said why. `cancel` cancels every unfinished task that
+   * depends on it, directly or through another; `release` takes it out of what its direct
+   * dependents wait for, and those whose other prerequisites are done become ready.
+   */
+  cancelTaskAndDependents(
+    projectId: string,
+    actor: Actor,
+    taskId: string,
+    reason: string,
+    dependents: 'cancel' | 'release',
+  ): { task: TaskView; cancelled: string[]; released: string[] } {
+    return this.exec(
+      { name: 'task.cancel', project_id: projectId, actor, params: { taskId, reason, dependents } },
+      (ctx) => {
+        const task = this.cancelWithin(ctx, projectId, taskId, reason);
+        const cancelled: string[] = [];
+        const released: string[] = [];
+        const open = (id: string) => {
+          const t = this.q.findTask(projectId, id);
+          return t && !TERMINAL_TASK.has(t.status) ? t : null;
+        };
+        if (dependents === 'cancel') {
+          const seen = new Set<string>([taskId]);
+          const queue = [...this.q.dependents(taskId)];
+          while (queue.length) {
+            const id = queue.shift() as string;
+            if (seen.has(id)) continue;
+            seen.add(id);
+            if (!open(id)) continue;
+            this.cancelWithin(ctx, projectId, id, `it depended on ${taskId}, which was cancelled: ${reason}`);
+            cancelled.push(id);
+            queue.push(...this.q.dependents(id));
+          }
+        } else {
+          for (const id of this.q.dependents(taskId)) {
+            if (!open(id)) continue;
+            ctx.emit({
+              type: 'task.dependencies_changed',
+              payload: {
+                task_id: id,
+                dependencies: this.q.dependencies(id).filter((d) => d !== taskId),
+                reason: `${taskId} was cancelled; a person kept this task without it`,
+              },
+              refs: [{ kind: 'task', id }],
+            });
+            released.push(id);
+          }
+          if (task.goal_id && released.length) this.readyWithin(ctx, projectId, task.goal_id);
+        }
+        return { task, cancelled, released };
+      },
+    );
+  }
+
   private cancelWithin(ctx: CommandContext, projectId: string, taskId: string, reason: string): TaskView {
     {
       let task = this.q.task(projectId, taskId);
@@ -3202,9 +3646,11 @@ export class FridayState {
               non_goals: req.non_goals,
               definition_of_done: req.definition_of_done,
               priority: req.priority,
+              mode: req.mode,
               created_by: actor,
             },
-            plan_requested: req.plan,
+            // A goal that is done or asked directly gets its one task from the daemon, not a planner.
+            plan_requested: req.mode === 'plan' ? req.plan : false,
           },
           refs: [{ kind: 'goal', id: goal_id }],
         });
@@ -3229,6 +3675,8 @@ export class FridayState {
         },
         refs: [{ kind: 'goal', id: goalId }],
       });
+      // Every question of it closes first, whoever asked: a task cancelled next finds none open.
+      this.settleCancelledGoalQuestions(ctx, projectId, goalId);
       for (const t of this.q.goalTasks(projectId, goalId)) {
         if (!TERMINAL_TASK.has(t.status)) this.cancelWithin(ctx, projectId, t.task_id, `goal cancelled: ${reason}`);
       }
@@ -3384,6 +3832,10 @@ export class FridayState {
         for (const v of versions.filter((x) => x.status === 'PROPOSED')) {
           this.movePlan(ctx, v, 'SUPERSEDED', `replaced by version ${version}`);
         }
+        // A person wrote the plan the Master Brain could not: its questions about that are answered.
+        if (actor.kind === 'human') {
+          this.settleGoalQuestions(ctx, goalId, PLANNING_QUESTIONS, 'a person wrote the plan');
+        }
         ctx.emit({
           type: 'plan.proposed',
           payload: {
@@ -3462,6 +3914,7 @@ export class FridayState {
       }
       const active = this.q.latestPlanVersion(planId, ['ACTIVE']);
       this.assertPlanFresh(projectId, v, active?.version ?? null);
+      this.settleGoalQuestions(ctx, goal.goal_id, PLANNING_QUESTIONS, 'a plan was approved');
       // The ceiling again (plan M12.2): the policy may have tightened since the version was proposed,
       // and a task is materialized with the scope it may hold now, or the approval is refused.
       const bounded = new Map<string, BoundedPlanTask>();
@@ -3507,7 +3960,11 @@ export class FridayState {
               risk_level: t.risk_level,
               scope,
               dependencies,
-              reserved_for_agent_key: null,
+              // The agent the plan names for it (2026-11-16): reserved from the start, so no other
+              // free agent is given it first. Only a person's plan names one (the planner model's
+              // drafts never carry it), so the reservation is a human's and does not expire.
+              reserved_for_agent_key: t.assign_to ?? null,
+              ...(t.assign_to ? { reserved_by: 'human', reserved_until: null } : {}),
               created_by: ctx.actor,
             },
           },
@@ -3663,7 +4120,7 @@ export class FridayState {
    */
   integratedWork(projectId: string, taskId: string): boolean {
     return (
-      !this.q.worktrees(projectId).some((w) => w.task_id === taskId) ||
+      (!this.q.worktrees(projectId).some((w) => w.task_id === taskId) && !this.workedInFolder(projectId, taskId)) ||
       ['integrated', 'not_needed'].includes(this.q.latestIntegration(projectId, taskId)?.status ?? '')
     );
   }
@@ -3681,6 +4138,7 @@ export class FridayState {
     if (!active || !done) return null;
     return this.exec({ name: 'goal.complete', project_id: projectId, actor, params: { goalId } }, (ctx) => {
       this.movePlan(ctx, active, 'COMPLETED', 'all tasks completed');
+      this.settleGoalQuestions(ctx, goalId, null, 'the goal was completed');
       ctx.emit({
         type: 'goal.status_changed',
         payload: {
@@ -4337,7 +4795,8 @@ export class FridayState {
         need === 'L2'
           ? 'No adapter in this version of Friday provides L2 (isolated execution); lower security.enforcement_required or wait for M6.'
           : hooked && h.attach_mode === 'attach'
-            ? `Run "friday harness config ${h.vendor}" in the project and start a new ${hooked} session, so its tool calls pass Friday's policy hook.`
+            ? // Said by the agent to its person, who may never open a terminal (2026-11-17): the app first.
+              `Tell the person: in Friday, open Agents, choose Connect ${hooked} and press Apply, trust this folder in ${hooked} if it asks, then start a new ${hooked} conversation, so that Friday's hooks check its tool calls. (From a terminal: "friday harness config ${h.vendor}".)`
             : 'Use a harness with Friday policy hooks, or lower security.enforcement_required in .friday/config.yaml.';
       return `this project requires ${need} enforcement (security.enforcement_required), but this session has ${level}: ${h.enforcement_basis ?? 'no evidence'}. ${hint}`;
     }
@@ -4923,6 +5382,10 @@ export class FridayState {
       warnings: string[];
       /** What installing the worktree's dependencies did; null when nothing was attempted. */
       setup?: WorkspaceSetupRecord | null;
+      refresh?: WorkspaceRefreshRecord | null;
+      note?: string | null;
+      /** What the worktree lacks of the files the project lists for its copies (`worktrees.files`); said with the rest. */
+      lacking?: string | null;
     },
   ): RunView {
     return this.exec({ name: 'run.workspace', project_id: projectId, actor: SYSTEM, params: { runId } }, (ctx) => {
@@ -4979,6 +5442,7 @@ export class FridayState {
           worktree_id: worktree?.worktree_id ?? null,
           warnings: alloc.warnings,
           setup: alloc.setup ?? null,
+          ...(alloc.refresh ? { refresh: alloc.refresh } : {}),
         },
         refs: [
           { kind: 'task', id: task.task_id },
@@ -4989,17 +5453,19 @@ export class FridayState {
       const agent = this.q.agent(run.agent_id);
       // An agent whose dependencies could not be installed is told so, never left to find out.
       const setup = alloc.setup;
-      const trouble =
-        setup && (setup.status === 'failed' || setup.status === 'refused')
+      const first =
+        alloc.note ??
+        (setup && (setup.status === 'failed' || setup.status === 'refused')
           ? `Friday could not install this worktree's dependencies (${setup.reason}). If the task needs them, install them yourself; that may need an approval.`
-          : null;
-      this.enqueue(
-        ctx,
-        run.harness_id,
-        'task.start',
-        this.taskStartParams(projectId, task, ready, agent.role, trouble),
-        run.run_id,
-      );
+          : null);
+      const trouble = [first, alloc.lacking].filter(Boolean).join('\n\n') || null;
+      const start = this.taskStartParams(projectId, task, ready, agent.role, trouble);
+      // A refresh conflict is the immediate work: keep its report ahead of an older continuation note.
+      if (alloc.note) {
+        const tail = alloc.lacking ? `\n\n${alloc.lacking.slice(0, 700)}` : '';
+        start.note = `${alloc.note.slice(0, 2000 - tail.length)}${tail}`;
+      }
+      this.enqueue(ctx, run.harness_id, 'task.start', start, run.run_id);
       return ready;
     });
   }
@@ -5189,11 +5655,17 @@ export class FridayState {
    * The outcome of integrating a task into its goal branch (ADR-0025 §2–§5). A conflict or a failed
    * check of the merged revision asks a human (or the Master Brain's next plan) in the same
    * transaction; whatever the outcome, the task's file reservations end with it.
+   *
+   * With `back` (2026-11-18) work that does not fit the goal's other work goes back to its agent
+   * first, with `reason` as its note: what tasks running at the same time cost now and then. The
+   * person is asked only once it went back `limit` times, or when the task cannot go back. Before,
+   * every collision was a question with git commands as its options.
    */
   recordIntegration(
     projectId: string,
     actor: Actor,
     rec: Omit<IntegrationView, 'integration_id' | 'created_at'>,
+    opts: { back?: { reason: string; limit: number } | null } = {},
   ): IntegrationView {
     return this.exec(
       { name: 'integration.record', project_id: projectId, actor, params: { task: rec.task_id, status: rec.status } },
@@ -5217,15 +5689,25 @@ export class FridayState {
         if (rec.status === 'integrated' || rec.status === 'not_needed') {
           this.settleQuestions(ctx, rec.task_id, INTEGRATION_QUESTIONS, 'the work was integrated');
         }
-        if (rec.status === 'conflicted' || rec.status === 'failed') {
+        const unfit = rec.status === 'conflicted' || rec.status === 'failed';
+        const back =
+          unfit && opts.back
+            ? this.backToAgentWithin(ctx, projectId, rec.task_id, opts.back.reason, opts.back.limit)
+            : false;
+        if (unfit && !back) {
+          // The task by its summary, not its id and the goal branch's name (2026-11-23): the card
+          // and the Notch said "task_64vq… could not be integrated into friday/goal-goal_…".
+          // The ids stay in the options, which are commands to type.
+          const title = (this.q.findTask(projectId, rec.task_id)?.summary ?? 'this task').replace(/\s+/g, ' ').trim();
+          const named = `“${title.length > 120 ? `${title.slice(0, 119)}…` : title}”`;
           this.escalationWithin(ctx, {
             kind: rec.status === 'conflicted' ? 'integration_conflict' : 'integration_failed',
             goal_id: rec.goal_id,
             task_id: rec.task_id,
             question:
               rec.status === 'conflicted'
-                ? `The verified work of ${rec.task_id} conflicts with ${rec.branch} in ${rec.conflicts.length} file(s): ${rec.conflicts.slice(0, 10).join(', ')}. How should it be resolved?`
-                : `${rec.task_id} could not be integrated into ${rec.branch ?? 'its goal branch'}: ${rec.summary ?? 'unknown reason'}. What now?`,
+                ? `The checked work of ${named} clashes with other work of its goal in ${rec.conflicts.length} file(s): ${rec.conflicts.slice(0, 10).join(', ')}. How should it be resolved?`
+                : `The checked work of ${named} could not be added to its goal: ${rec.summary ?? 'Friday recorded no reason'}. What now?`,
             options: [
               `resolve it on ${rec.branch ?? 'the goal branch'}, then run "friday integrate ${rec.task_id}"`,
               'plan a task that resolves it',
@@ -5238,6 +5720,76 @@ export class FridayState {
         return this.q.integrations(projectId, { task_id: rec.task_id }).at(-1) as IntegrationView;
       },
     );
+  }
+
+  /** How often a task's verified work went back to its agent because it did not fit the goal's other work. */
+  integrationReworks(projectId: string, taskId: string): number {
+    return this.store
+      .readByRef(projectId, 'task', taskId, { types: ['task.rework'] })
+      .filter((e) => (e.payload as { transition?: { trigger?: string } }).transition?.trigger === 'integration.rework')
+      .length;
+  }
+
+  /**
+   * COMPLETED → REWORK → READY for a task whose verified work is not in its goal: kept for the
+   * agent that did it, which continues in the same folder. False when the task cannot go back:
+   * it is not a completed task of an active goal, or it went back `limit` times already (null:
+   * a person sends it, as often as they like).
+   */
+  private backToAgentWithin(
+    ctx: CommandContext,
+    projectId: string,
+    taskId: string,
+    reason: string,
+    limit: number | null,
+  ): boolean {
+    const task = this.q.findTask(projectId, taskId);
+    if (task?.status !== 'COMPLETED' || !task.goal_id) return false;
+    if (this.q.findGoal(projectId, task.goal_id)?.status !== 'ACTIVE') return false;
+    if (limit !== null && this.integrationReworks(projectId, taskId) >= limit) return false;
+    const agentId = task.assigned_agent_id ?? this.q.runs(taskId).at(-1)?.agent_id;
+    const agent = agentId ? this.q.findAgent(agentId) : undefined;
+    const rework = this.moveTask(ctx, task, 'integration.rework', {
+      reason: reason.slice(0, 4000),
+      changes: { completed_at: null },
+    });
+    this.settleQuestions(ctx, taskId, INTEGRATION_QUESTIONS, 'the task went back to its agent');
+    const changes: Record<string, unknown> = { assigned_agent_id: null, assigned_harness_id: null };
+    if (agent) {
+      changes.reserved_for_agent_key = agent.agent_key;
+      changes.reserved_by = 'rework';
+      changes.reserved_until = addMs(ctx.now, this.config.reservationTtlMs);
+    }
+    this.moveTask(ctx, rework, 'task.ready', { changes });
+    return true;
+  }
+
+  /**
+   * A person sends a task whose work did not fit the goal's other work back to its agent: the
+   * button of the question `recordIntegration` raises, with no limit on how often.
+   */
+  sendBackUnintegrated(projectId: string, actor: Actor, taskId: string): TaskView {
+    return this.exec({ name: 'integration.rework', project_id: projectId, actor, params: { taskId } }, (ctx) => {
+      const last = this.q.latestIntegration(projectId, taskId);
+      if (last?.status !== 'conflicted' && last?.status !== 'failed') {
+        throw new FridayError(
+          'invalid_state_transition',
+          `${taskId} has no failed or conflicted integration to send back to its agent`,
+        );
+      }
+      const reason =
+        last.status === 'conflicted'
+          ? `Your verified work collides with what other tasks of the goal changed, in ${last.conflicts.length} file(s): ${last.conflicts.slice(0, 20).join(', ')}. Your folder now holds their work too. Finish the files that hold both versions, then claim done again.`
+          : `Your verified work could not be brought into the goal: ${last.summary ?? 'unknown reason'}. Your folder now holds the goal's other work too. Make it work together, then claim done again.`;
+      if (!this.backToAgentWithin(ctx, projectId, taskId, reason, null)) {
+        const task = this.q.task(projectId, taskId);
+        throw new FridayError(
+          'invalid_state_transition',
+          `${taskId} is ${task.status}; only a completed task of an active goal goes back to its agent`,
+        );
+      }
+      return this.q.task(projectId, taskId);
+    });
   }
 
   // ================================================================ operations (M6c, ADR-0029)
@@ -5540,9 +6092,13 @@ export class FridayState {
     if (!prev.session_ref || prev.agent_id !== run.agent_id || prev.harness_id !== run.harness_id) return null;
     const caps = (this.q.findHarness(run.harness_id)?.capabilities ?? {}) as { resume_session?: unknown };
     if (caps.resume_session !== true) return null;
-    // Only a claim that verification refused: a lost or cancelled session is recovery's to judge.
+    // Only a claim that verification refused, or one it passed whose work then did not fit the
+    // goal's other work (2026-11-18): a lost or cancelled session is recovery's to judge.
     const verification = this.q.latestVerificationForRun(prev.run_id);
-    if (!prev.claim || verification?.status !== 'FAILED') return null;
+    const rework = this.store.readByRef(projectId, 'task', task.task_id, { types: ['task.rework'] }).at(-1);
+    const back = rework?.payload as { transition?: { reason?: string; trigger?: string } } | undefined;
+    const unfit = verification?.status === 'PASSED' && back?.transition?.trigger === 'integration.rework';
+    if (!prev.claim || !verification || (verification.status !== 'FAILED' && !unfit)) return null;
     // The session holds the packet it was given and what it read: only under the policy that packet
     // was compiled under (review M7.1e R02). A changed policy starts a new session with a new packet.
     const now = this.policyVersion?.() ?? null;
@@ -5553,8 +6109,17 @@ export class FridayState {
       )
       .get<{ v: string | null }>(task.task_id, prev.run_id);
     if (then && (then.v ?? null) !== now) return null;
-    const rework = this.store.readByRef(projectId, 'task', task.task_id, { types: ['task.rework'] }).at(-1);
-    const why = (rework?.payload as { transition?: { reason?: string } } | undefined)?.transition?.reason;
+    const why = back?.transition?.reason;
+    if (unfit) {
+      const note = [
+        "Friday's verification passed your work, but it is not in the goal yet: it does not fit what other tasks of the goal changed meanwhile.",
+        why ? `Why: ${why}` : '',
+        'Your worktree now also holds their work. Make yours fit it there, then give your final answer again.',
+      ]
+        .filter(Boolean)
+        .join('\n');
+      return { session: prev.session_ref, note: note.slice(0, 2000) };
+    }
     // Each failed check names its raw output, so a lesson learned from it can say where it comes from (ADR-0038 §3).
     const failed = verification.checks
       .filter((c) => c.status === 'FAILED' || c.status === 'BLOCKED')
@@ -5738,6 +6303,67 @@ export class FridayState {
             risk: verdict.risk,
           };
         }
+        // One need, one card (2026-11-18). The hook asks when the agent tries a command, and the
+        // agent then asks for the same thing itself, often in slightly other words: that made two
+        // cards, and a grant of one did not cover the other. What is already granted is said so,
+        // and what already waits is the request that is answered; the agent's own reason is added
+        // to it, since it is the one a person can judge by.
+        const granted = this.q.usableApproval(projectId, {
+          capability: verdict.capability,
+          target: target ?? '',
+          task_id: p.task_id ?? null,
+          run_id: p.run_id ?? null,
+          agent_id: caller.agent_id,
+          policy_version: verdict.policy_version,
+          now: ctx.now,
+        });
+        // A grant that reaches less far than what is asked now (granted for this attempt, asked
+        // for the task) does not answer it: that is a new question for the person.
+        const reach: Record<string, number> = { once: 0, run: 1, task: 2 };
+        const grantedReach = granted ? (reach[this.q.approvalRow(projectId, granted)?.reuse ?? 'once'] ?? 0) : 0;
+        if (granted && target !== null && grantedReach >= (reach[p.reuse ?? 'once'] ?? 0)) {
+          return {
+            approval_id: granted,
+            status: 'granted' as const,
+            reason: `a human already approved exactly this (${granted}): go ahead with it now`,
+            expires_at: this.q.approvalRow(projectId, granted)?.expires_at ?? null,
+            capability: verdict.capability,
+            risk: verdict.risk,
+          };
+        }
+        const waiting = this.q.pendingApproval(
+          projectId,
+          {
+            capability: verdict.capability,
+            target: target ?? '',
+            task_id: p.task_id ?? null,
+            run_id: p.run_id ?? null,
+            agent_id: caller.agent_id,
+          },
+          ctx.now,
+        );
+        if (waiting && target !== null) {
+          const row = this.q.approvalRow(projectId, waiting.approval_id);
+          const said = p.justification.trim();
+          if (row && said && !(row.purpose ?? '').includes(said.slice(0, 200))) {
+            ctx.emit({
+              type: 'approval.reason_added',
+              payload: {
+                approval_id: waiting.approval_id,
+                purpose: `${said}${row.purpose ? ` (${row.purpose})` : ''}`.slice(0, 1000),
+              },
+              refs: [{ kind: 'approval', id: waiting.approval_id }],
+            });
+          }
+          return {
+            approval_id: waiting.approval_id,
+            status: 'pending' as const,
+            reason: PENDING_REASON(waiting.approval_id),
+            expires_at: waiting.expires_at,
+            capability: verdict.capability,
+            risk: verdict.risk,
+          };
+        }
         const approval_id = this.ids.next('apr');
         const expires_at = addMs(ctx.now, p.ttl_s * 1000);
         ctx.emit({
@@ -5765,7 +6391,7 @@ export class FridayState {
         return {
           approval_id,
           status: 'pending' as const,
-          reason: `waiting for a human: run "friday approve ${approval_id}" or "friday reject ${approval_id}"`,
+          reason: PENDING_REASON(approval_id),
           expires_at,
           capability: verdict.capability,
           risk: verdict.risk,
@@ -5864,6 +6490,34 @@ export class FridayState {
     }
     if (!a.task_id || !a.run_id) return;
     const task = this.q.findTask(projectId, a.task_id);
+    // A grant must reach the agent that asked (2026-11-18). An agent that had stopped to wait was
+    // told (below); one still at work was told nothing, and went on believing nobody had answered:
+    // three grants given within seconds, and the attempt ended "blocked" eleven minutes later.
+    if (
+      granted &&
+      a.requested_by_kind === 'agent' &&
+      task?.status === 'RUNNING' &&
+      task.current_run_id === a.run_id &&
+      this.q.findRun(a.run_id)?.status === 'ACTIVE'
+    ) {
+      const agent = this.q.findAgent(a.requested_by_id);
+      if (agent) {
+        this.sendWithin(
+          ctx,
+          projectId,
+          { kind: 'human', actor: ctx.actor },
+          {
+            to: agent.agent_key,
+            mode: 'notification',
+            subject: 'Request approved',
+            content: `A human approved your request to ${what} (${approvalId}).${note ? ` Note: ${note}` : ''} Do exactly that now: it passes. You do not need to ask again or wait.`,
+            task_id: a.task_id,
+            priority: 'high',
+          },
+        );
+      }
+      return;
+    }
     if (task?.status !== 'WAITING' || task.current_run_id !== a.run_id) return;
     const others = this.db
       .prepare(`SELECT COUNT(*) AS n FROM approvals WHERE run_id = ? AND status = 'pending' AND approval_id <> ?
@@ -6054,26 +6708,54 @@ export class FridayState {
         out.expired.push(m.message_id);
         continue;
       }
-      const to = this.q
-        .deliveriesOf(m.message_id)
+      // A question about work that is over is over with it (2026-11-18): the card came half an
+      // hour after its task had been reworked, had passed and was landed, and the reply a person
+      // then typed went to the agent in the middle of another task.
+      const about = m.task_id ? this.q.findTask(projectId, m.task_id) : undefined;
+      if (about && ['COMPLETED', 'CANCELLED', 'ABANDONED'].includes(about.status)) {
+        const open = this.q.deliveriesOf(m.message_id).filter((d) => d.state === 'queued' || d.state === 'delivered');
+        this.exec({ name: 'message.expire', project_id: projectId, actor: LEASE_MANAGER }, (ctx) => {
+          ctx.emit({
+            type: 'communication.expired',
+            payload: {
+              message_id: m.message_id,
+              delivery_ids: open.map((d) => d.delivery_id),
+              reason: 'the task it was about has ended',
+              message_expired: true,
+            },
+            refs: [{ kind: 'message', id: m.message_id }],
+          });
+        });
+        out.expired.push(m.message_id);
+        continue;
+      }
+      const deliveries = this.q.deliveriesOf(m.message_id);
+      const to = deliveries
         .map(
           (d) =>
             d.agent_key ?? (d.recipient_kind === 'agent' ? d.recipient_id : `${d.recipient_kind}:${d.recipient_id}`),
         )
         .join(', ');
       const from = m.sender_key ?? m.sender_kind;
+      // Written for the person who reads it: it named them "human:human", gave two machine
+      // timestamps, cut the quote in the middle of a word, and asked them whether to tell
+      // themselves to reply.
+      const toPerson = deliveries.length > 0 && deliveries.every((d) => d.recipient_kind !== 'agent');
+      const minutes = Math.max(1, Math.round((Date.parse(nowIso) - Date.parse(m.created_at)) / 60_000));
+      const ago =
+        minutes < 90 ? `${minutes} minute${minutes === 1 ? '' : 's'} ago` : `${Math.round(minutes / 60)} hours ago`;
+      const asked = (m.subject ?? m.body).replace(/\s+/g, ' ').trim();
+      const quote = asked.length > 160 ? `${asked.slice(0, 160).replace(/\s+\S*$/, '')}…` : asked;
       // The escalation and the request's marker commit together, so a retry cannot ask twice (R04).
       this.exec({ name: 'message.escalate', project_id: projectId, actor: LEASE_MANAGER }, (ctx) => {
         const escalation_id = this.escalationWithin(ctx, {
           kind: 'unanswered_request',
           goal_id: m.goal_id,
           task_id: m.task_id,
-          question: `${from} is waiting for an answer from ${to} to "${m.subject ?? m.body.slice(0, 120)}" (asked ${m.created_at}, deadline ${m.reply_by}). Answer it yourself, or tell ${to} to reply?`,
-          options: [
-            'answer here: the answer is sent to the waiting agent',
-            `remind the recipient: friday say <agent> "…"`,
-            `tell ${from} not to wait: friday say ${from} "…"`,
-          ],
+          question: toPerson
+            ? `${from} asked you something ${ago} and is still waiting for your answer: "${quote}"`
+            : `${from} asked ${to} something ${ago} and has had no answer: "${quote}". You can answer for ${to} here.`,
+          options: ['Answer here: your answer goes to the agent that is waiting'],
           details: {
             blocked: `${from}${m.task_id ? ` on ${m.task_id}` : ''}`,
             why: `no reply by ${m.reply_by}`,

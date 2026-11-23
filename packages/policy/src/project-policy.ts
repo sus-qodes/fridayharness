@@ -73,6 +73,8 @@ export interface PolicySource {
   execution?: { binaries?: string[]; env_passthrough?: string[] };
   /** `verification.auto_on_completion` (ADR-0029 §6). */
   auto_verification?: boolean;
+  /** `landing.mode` when it is not `ask`: verified work is landed without a person's click. */
+  auto_landing?: 'goal' | 'task';
   /** Levels for third-party MCP servers (ADR-0030 §3). */
   mcp?: Record<string, McpServerPolicy>;
   /** `approvals.elicitation`: false keeps every decision on the CLI and the status page (ADR-0030 §5). */
@@ -88,6 +90,11 @@ export interface PolicySource {
    */
   worktree_setup?: { command?: string; args?: string[]; allow_scripts?: boolean };
   /**
+   * `worktrees.files`: files outside version control that every copy of the project gets. Programs
+   * an agent runs there can read them (a settings file with keys in it), so each is a loosening.
+   */
+  worktree_files?: { from: string; to?: string | undefined }[];
+  /**
    * `sandbox`: this checkout is disposable, so every command class whose autonomy is `review`
    * runs on its own (`manual` and `never` stay). A loosening.
    */
@@ -99,6 +106,27 @@ export interface Loosening {
   setting: string;
   from: string;
   to: string;
+  /** The name of exactly this: this setting, to this value, in this file (`looseningId`). */
+  id: string;
+  /** Whether this clone trusts it, so that it applies here. */
+  trusted: boolean;
+}
+
+/**
+ * What a clone trusts (2026-11-18). Until then it was one hash over every loosening setting at
+ * once: turning one setting on asked a person to trust the whole list again, turning one off
+ * untrusted the rest, and one "Trust" approved whatever else happened to wait. Now each setting
+ * is trusted by its own id. `hash` is the list as a whole, as `friday policy trust` and older
+ * trust files record it: when it matches the present list, every setting of it is trusted.
+ */
+export interface PolicyTrust {
+  hash: string | null;
+  items?: readonly string[];
+}
+
+/** The id of one loosening setting: the same setting to another value, or in another file, is another. */
+export function looseningId(l: Pick<Loosening, 'source' | 'setting' | 'from' | 'to'>): string {
+  return hash([l.source, l.setting, l.from, l.to]);
 }
 
 export interface ProjectPolicy {
@@ -118,6 +146,8 @@ export interface ProjectPolicy {
   execution: { binaries: string[]; env_passthrough: string[] };
   /** Whether a completion claim starts verification without a human. */
   auto_verification: boolean;
+  /** When verified work is landed without a click, once trusted: per goal, per task, or never (null). */
+  auto_landing: 'goal' | 'task' | null;
   /** Each source's levels for third-party MCP servers; loosening counted only when trusted. */
   mcp: { source: string; server: string; default?: Autonomy; tools: Record<string, Autonomy> }[];
   /** Whether a human may decide low- and medium-risk approvals in the host (MCP elicitation). */
@@ -130,13 +160,17 @@ export interface ProjectPolicy {
   worktree_setup_held: { source: string; reason: string } | null;
   /** Whether a worktree install may run lifecycle scripts (trusted `allow_scripts`). */
   worktree_scripts: boolean;
+  /** The files every copy of the project gets, once trusted: `from` in the project folder, `to` in the copy. */
+  worktree_files: { source: string; from: string; to: string }[];
+  /** Files asked for and not given, because this clone has not trusted the list. */
+  worktree_files_held: { source: string; from: string; to: string }[];
   /** Whether this checkout is a trusted sandbox: reviewable command classes run on their own. */
   sandbox: boolean;
   /** What tracked files loosen, with where each comes from. */
   loosening: Loosening[];
   /** The hash `friday policy trust` records; null when nothing loosens. */
   loosening_hash: string | null;
-  /** Whether the loosening above applies (this clone trusted exactly it). */
+  /** Whether every loosening above applies here (each has its own `trusted`). */
   trusted: boolean;
   /** Identifies the effective policy: approvals granted under another version no longer count. */
   version: string;
@@ -174,8 +208,8 @@ export function describeOperation(d: OperationDefinition): string {
   return parts.join('; ');
 }
 
-export function projectPolicy(sources: readonly PolicySource[], trustedHash: string | null): ProjectPolicy {
-  const loosening: Loosening[] = [];
+export function projectPolicy(sources: readonly PolicySource[], trust: string | null | PolicyTrust): ProjectPolicy {
+  const loosening: Omit<Loosening, 'id' | 'trusted'>[] = [];
   for (const s of sources) {
     for (const [cls, v] of Object.entries(s.autonomy ?? {})) {
       const def = DEFAULT_AUTONOMY[cls as CommandClass];
@@ -214,6 +248,9 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     if (s.auto_verification) {
       loosening.push({ source: s.name, setting: 'verification.auto_on_completion', from: 'false', to: 'true' });
     }
+    if (s.auto_landing) {
+      loosening.push({ source: s.name, setting: 'landing.mode', from: 'ask', to: s.auto_landing });
+    }
     if (s.sandbox) loosening.push({ source: s.name, setting: 'sandbox', from: 'false', to: 'true' });
     if (s.daemon_port) {
       loosening.push({ source: s.name, setting: 'daemon.port', from: 'random', to: String(s.daemon_port) });
@@ -231,6 +268,15 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     if (s.worktree_setup?.allow_scripts) {
       loosening.push({ source: s.name, setting: 'worktrees.setup.allow_scripts', from: 'false', to: 'true' });
     }
+    // A file from outside version control in every copy: what an agent runs there can read it.
+    for (const f of s.worktree_files ?? []) {
+      loosening.push({
+        source: s.name,
+        setting: 'worktrees.files',
+        from: 'none',
+        to: f.to && f.to !== f.from ? `${f.from} as ${f.to}` : f.from,
+      });
+    }
     // A third-party MCP tool without review (ADR-0030 §3).
     for (const [server, m] of Object.entries(s.mcp ?? {})) {
       if (m.default === 'auto') {
@@ -244,7 +290,23 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
   }
   loosening.sort((a, b) => `${a.setting} ${a.source} ${a.to}`.localeCompare(`${b.setting} ${b.source} ${b.to}`));
   const loosening_hash = loosening.length ? hash(loosening) : null;
-  const trusted = loosening_hash === null || loosening_hash === trustedHash;
+  const given: PolicyTrust = trust !== null && typeof trust === 'object' ? trust : { hash: trust };
+  // The whole list as it was trusted at once, or each setting by its own id.
+  const whole = loosening_hash !== null && loosening_hash === given.hash;
+  const single = new Set(given.items ?? []);
+  const ids = new Map(loosening.map((l) => [`${l.source}\u0000${l.setting}\u0000${l.to}`, looseningId(l)]));
+  /** Whether this clone trusts `setting` set to `to` in `source`. */
+  const T = (source: string, setting: string, to: string): boolean => {
+    if (whole) return true;
+    const id = ids.get(`${source}\u0000${setting}\u0000${to}`);
+    return id !== undefined && single.has(id);
+  };
+  const listed: Loosening[] = loosening.map((l) => ({
+    ...l,
+    id: looseningId(l),
+    trusted: T(l.source, l.setting, l.to),
+  }));
+  const trusted = listed.every((l) => l.trusted);
 
   // Each setting: the strictest of what the sources say, loosening counted only when trusted.
   const autonomy: Partial<Record<CommandClass, Autonomy>> = {};
@@ -252,13 +314,13 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     const def = DEFAULT_AUTONOMY[cls];
     const values = sources.flatMap((s) => {
       const v = s.autonomy?.[cls];
-      return v && isAutonomy(v) && (trusted || A[v] >= A[def]) ? [v] : [];
+      return v && isAutonomy(v) && (A[v] >= A[def] || T(s.name, `autonomy.${cls}`, v)) ? [v] : [];
     });
     if (values.length) autonomy[cls] = values.reduce((a, b) => (A[b] > A[a] ? b : a));
   }
   // A trusted sandbox: what would wait for a review runs; what needs an exact approval, and what
   // is never allowed, keep their level.
-  const sandbox = trusted && sources.some((s) => s.sandbox === true);
+  const sandbox = sources.some((s) => s.sandbox === true && T(s.name, 'sandbox', 'true'));
   if (sandbox) {
     for (const cls of Object.keys(DEFAULT_AUTONOMY) as CommandClass[]) {
       if ((autonomy[cls] ?? DEFAULT_AUTONOMY[cls]) === 'review') autonomy[cls] = 'auto';
@@ -269,19 +331,25 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     const def = DEFAULT_RISK[cap];
     const values = sources.flatMap((s) => {
       const v = s.risk?.[cap];
-      return v && isRisk(v) && (trusted || R[v] >= R[def]) ? [v] : [];
+      return v && isRisk(v) && (R[v] >= R[def] || T(s.name, `risk.${cap}`, v)) ? [v] : [];
     });
     if (values.length) risk[cap] = values.reduce((a, b) => (R[b] > R[a] ? b : a));
   }
   const levels = sources.flatMap((s) =>
-    s.enforcement_required && (trusted || L[s.enforcement_required] >= L.L1) ? [s.enforcement_required] : [],
+    s.enforcement_required &&
+    (L[s.enforcement_required] >= L.L1 || T(s.name, 'security.enforcement_required', s.enforcement_required))
+      ? [s.enforcement_required]
+      : [],
   );
   const enforcement_required = levels.length
     ? levels.reduce((a, b) => (L[b] > L[a] ? b : a))
     : DEFAULTS.enforcement_required;
-  const reservations_mode: ProjectPolicy['reservations_mode'] =
-    sources.some((s) => s.reservations_mode === 'off') && trusted ? 'off' : DEFAULTS.reservations_mode;
-  const auto_approve = trusted && sources.some((s) => s.auto_approve === true);
+  const reservations_mode: ProjectPolicy['reservations_mode'] = sources.some(
+    (s) => s.reservations_mode === 'off' && T(s.name, 'reservations.mode', 'off'),
+  )
+    ? 'off'
+    : DEFAULTS.reservations_mode;
+  const auto_approve = sources.some((s) => s.auto_approve === true && T(s.name, 'master_brain.auto_approve', 'true'));
 
   const deny = {
     write: [...new Set(sources.flatMap((s) => s.deny?.write ?? []))].sort(),
@@ -316,27 +384,43 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
           reason: `declared in ${decl.map((x) => x.source).join(' and ')}; rename one`,
         });
       }
-    } else if (!trusted) {
+    } else if (!T(first.source, `operations.${name}`, describeOperation(first.def))) {
       operations_held.push({ name, source: first.source, reason: 'waits for "friday policy trust"' });
     } else {
       operations[name] = { ...first.def, name, source: first.source, risk: operationRisk(first.def) };
     }
   }
-  const added = trusted ? sources.flatMap((s) => s.execution?.binaries ?? []) : [];
+  const added = sources.flatMap((s) =>
+    (s.execution?.binaries ?? []).filter((b) => !DEFAULT_BINARIES.includes(b) && T(s.name, 'execution.binaries', b)),
+  );
   const execution = {
-    binaries: [...DEFAULT_BINARIES, ...[...new Set(added)].filter((b) => !DEFAULT_BINARIES.includes(b)).sort()],
-    env_passthrough: trusted ? [...new Set(sources.flatMap((s) => s.execution?.env_passthrough ?? []))].sort() : [],
+    binaries: [...DEFAULT_BINARIES, ...[...new Set(added)].sort()],
+    env_passthrough: [
+      ...new Set(
+        sources.flatMap((s) =>
+          (s.execution?.env_passthrough ?? []).filter((v) => T(s.name, 'execution.env_passthrough', v)),
+        ),
+      ),
+    ].sort(),
   };
-  const auto_verification = trusted && sources.some((s) => s.auto_verification === true);
-  const daemon_port = trusted ? (sources.find((s) => s.daemon_port)?.daemon_port ?? null) : null;
-  const level = (v: string | undefined): Autonomy | undefined =>
-    v && isAutonomy(v) && (trusted || A[v] >= A.review) ? v : undefined;
+  const auto_verification = sources.some(
+    (s) => s.auto_verification === true && T(s.name, 'verification.auto_on_completion', 'true'),
+  );
+  // The widest any source asks for, of those this clone trusts: `task` lands more often than `goal`.
+  const asked = sources.flatMap((s) =>
+    s.auto_landing && T(s.name, 'landing.mode', s.auto_landing) ? [s.auto_landing] : [],
+  );
+  const auto_landing: 'goal' | 'task' | null = !asked.length ? null : asked.includes('task') ? 'task' : 'goal';
+  const daemon_port =
+    sources.find((s) => s.daemon_port && T(s.name, 'daemon.port', String(s.daemon_port)))?.daemon_port ?? null;
+  const level = (v: string | undefined, source: string, setting: string): Autonomy | undefined =>
+    v && isAutonomy(v) && (A[v] >= A.review || T(source, setting, v)) ? v : undefined;
   const mcp: ProjectPolicy['mcp'] = sources.flatMap((s) =>
     Object.entries(s.mcp ?? {}).map(([server, m]) => {
-      const d = level(m.default);
+      const d = level(m.default, s.name, `mcp.${server}.default`);
       const tools: Record<string, Autonomy> = {};
       for (const [tool, v] of Object.entries(m.tools ?? {})) {
-        const t = level(v);
+        const t = level(v, s.name, `mcp.${server}.${tool}`);
         if (t) tools[tool] = t;
       }
       return { source: s.name, server, ...(d ? { default: d } : {}), tools };
@@ -349,12 +433,28 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
       ? [{ source: s.name, command: s.worktree_setup.command, args: [...(s.worktree_setup.args ?? [])] }]
       : [],
   );
-  const worktree_setup = trusted ? (declaredSetup[0] ?? null) : null;
+  const firstSetup = declaredSetup[0] ?? null;
+  const setupTrusted = firstSetup
+    ? T(firstSetup.source, 'worktrees.setup.command', [firstSetup.command, ...firstSetup.args].join(' '))
+    : false;
+  const worktree_setup = setupTrusted ? firstSetup : null;
   const worktree_setup_held =
-    !trusted && declaredSetup[0]
-      ? { source: declaredSetup[0].source, reason: 'waits for "friday policy trust"' }
-      : null;
-  const worktree_scripts = trusted && sources.some((s) => s.worktree_setup?.allow_scripts === true);
+    firstSetup && !setupTrusted ? { source: firstSetup.source, reason: 'waits for "friday policy trust"' } : null;
+  const worktree_scripts = sources.some(
+    (s) => s.worktree_setup?.allow_scripts === true && T(s.name, 'worktrees.setup.allow_scripts', 'true'),
+  );
+  // One file per name in the copy: the first source that gives a name decides what it holds.
+  const askedFiles: ProjectPolicy['worktree_files'] = [];
+  for (const s of sources) {
+    for (const f of s.worktree_files ?? []) {
+      const to = f.to ?? f.from;
+      if (!askedFiles.some((a) => a.to === to)) askedFiles.push({ source: s.name, from: f.from, to });
+    }
+  }
+  const fileTrusted = (f: (typeof askedFiles)[number]) =>
+    T(f.source, 'worktrees.files', f.to !== f.from ? `${f.from} as ${f.to}` : f.from);
+  const worktree_files = askedFiles.filter(fileTrusted);
+  const worktree_files_held = askedFiles.filter((f) => !fileTrusted(f));
 
   const effective = {
     autonomy,
@@ -367,18 +467,21 @@ export function projectPolicy(sources: readonly PolicySource[], trustedHash: str
     operations,
     execution,
     auto_verification,
+    auto_landing,
     mcp,
     elicitation,
     daemon_port,
     worktree_setup,
     worktree_scripts,
+    worktree_files,
     sandbox,
   };
   return {
     ...effective,
     operations_held,
     worktree_setup_held,
-    loosening,
+    worktree_files_held,
+    loosening: listed,
     loosening_hash,
     trusted,
     version: hash(effective),

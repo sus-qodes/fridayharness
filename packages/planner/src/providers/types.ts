@@ -102,5 +102,12 @@ export interface PlannerModel {
   readonly provider: string;
   /** True when requests leave this machine (needs `providers.<name>.allow_remote: true`, plan B28). */
   readonly remote: boolean;
+  /**
+   * True for a remote provider whose price Friday may not know (2026-11-23: Codex, which reports
+   * tokens and no price; a service reached with the person's own key, whose models Friday has no
+   * price list for). A call to a model without a price is then held to a number of requests a day
+   * (`PlannerPolicy.dailyCalls`) instead of being refused; its cost stays unknown, never 0.
+   */
+  readonly unpriced?: boolean;
   complete(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse>;
 }

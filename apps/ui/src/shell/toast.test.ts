@@ -50,10 +50,22 @@ describe('toasts (plan §7.1)', () => {
     expect(t?.querySelector('.sh-toast-detail')?.textContent).toBe('COS-2002: approval is already granted');
   });
 
-  it('stacks at most five, the oldest leaving first', () => {
+  // Three at most since 2026-11-18: in the trial's recording they stood three deep and more.
+  it('stacks at most three, the oldest leaving first', () => {
+    expect(TOAST_MAX).toBe(3);
     for (let i = 0; i < TOAST_MAX + 3; i++) host.show({ kind: 'info', text: `m${i}` });
     expect(host.count()).toBe(TOAST_MAX);
     expect(host.el.querySelector('.sh-toast-text')?.textContent).toBe('m3');
+  });
+
+  it('replaces a message said again in the same words, so it never stands twice', () => {
+    host.show({ kind: 'success', text: 'Saved' });
+    host.show({ kind: 'success', text: 'Saved' });
+    expect(host.count()).toBe(1);
+    // Other words, or the same words as another kind, are another message.
+    host.show({ kind: 'error', text: 'Saved' });
+    host.show({ kind: 'success', text: 'Saved again' });
+    expect(host.count()).toBe(3);
   });
 
   it('a newer toast with the same key replaces the older one; others stay', () => {
@@ -71,6 +83,23 @@ describe('toasts (plan §7.1)', () => {
     expect(close?.type).toBe('button');
     close?.click();
     expect(host.count()).toBe(0);
+  });
+
+  it('carries one button that does what it offers, and leaves when it is pressed (2026-11-19)', () => {
+    let pressed = 0;
+    host.show({
+      kind: 'info',
+      text: 'Friday was updated',
+      timeoutMs: 0,
+      action: { label: 'Restart now', run: () => pressed++ },
+    });
+    const action = host.el.querySelector<HTMLButtonElement>('.sh-toast-action');
+    expect(action?.textContent).toBe('Restart now');
+    action?.click();
+    expect(pressed).toBe(1);
+    expect(host.count()).toBe(0);
+    host.show({ kind: 'info', text: 'Plain' });
+    expect(host.el.querySelector('.sh-toast-action')).toBeNull();
   });
 
   it('stays while the pointer is on it and leaves a moment after', () => {

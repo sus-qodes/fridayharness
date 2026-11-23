@@ -19,7 +19,8 @@ export interface CursorCliIo {
   /** Renders doctor checks as the other hosts' doctors are rendered. */
   render?(checks: CursorCheck[]): string;
   /** Changes the command makes for every host (`.friday/.gitignore`), applied and listed with Cursor's own. */
-  extraChanges?(root: string): FileChange[];
+  /** On removal, `remove` names the host taken away: what is Friday's alone then goes too. */
+  extraChanges?(root: string, remove?: { host: string }): FileChange[];
 }
 
 export interface CursorConfigFlags {
@@ -67,7 +68,7 @@ export function cursorConfigCli(ref: ProjectRef, flags: CursorConfigFlags, io: C
     ...(flags.agent ? { agentKey: flags.agent } : {}),
     ...(flags.remove ? { remove: true } : {}),
   });
-  if (!flags.remove) changes.push(...(io.extraChanges?.(ref.root) ?? []));
+  changes.push(...(io.extraChanges?.(ref.root, flags.remove ? { host: 'cursor' } : undefined) ?? []));
   if (!flags.print) applyCursorPlan(changes, ref.root);
   const agentLine = changes.find((c) => c.display.startsWith('(private)'))?.note;
   const summary = {
