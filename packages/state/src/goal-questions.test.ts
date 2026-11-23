@@ -98,4 +98,42 @@ describe("a goal's planning questions", () => {
     );
     expect(answers()).toHaveLength(2);
   });
+
+  /**
+   * The live test of 2026-11-23: "could not be added to its goal", Friday's own question about a
+   * task already done, stayed in "Waiting for you" after the person cancelled its goal.
+   */
+  it('all go when the goal is cancelled, Friday’s own questions about its finished tasks too', () => {
+    const friday: Actor = { kind: 'system', id: 'friday' };
+    const g = state.createGoal(PROJECT, human, { request: 'Ship the discount codes', plan: false });
+    const v = state.proposePlan(PROJECT, human, g.goal_id, proposal('human'));
+    state.approvePlan(PROJECT, human, v.plan_id, v.version);
+    const taskId = state.q.goalTasks(PROJECT, g.goal_id)[0]?.task_id ?? '';
+    expect(taskId).not.toBe('');
+    // About the task only (no goal on it), as some of Friday's questions are.
+    state.raiseEscalation(PROJECT, friday, {
+      kind: 'integration_failed',
+      goal_id: null,
+      task_id: taskId,
+      question: 'could not be added?',
+      options: [],
+      details: {},
+    });
+    ask('integration_failed', g.goal_id, friday, taskId);
+    expect(pending()).toEqual(['integration_failed', 'integration_failed']);
+    state.cancelGoal(PROJECT, human, g.goal_id, 'not needed');
+    expect(pending()).toEqual([]);
+  });
+
+  it('left open by a goal cancelled before, are closed once at the start, and nothing else is', () => {
+    const g = state.createGoal(PROJECT, human, { request: 'Ship the discount codes', plan: false });
+    const other = state.createGoal(PROJECT, human, { request: 'Something else', plan: false });
+    state.cancelGoal(PROJECT, human, g.goal_id, 'not needed');
+    // As a goal cancelled by an older Friday left it.
+    ask('integration_failed', g.goal_id, { kind: 'system', id: 'friday' });
+    ask('planner_unavailable', other.goal_id);
+    expect(state.settleQuestionsOfCancelledGoals(PROJECT)).toBe(1);
+    expect(pending()).toEqual(['planner_unavailable']);
+    expect(state.settleQuestionsOfCancelledGoals(PROJECT)).toBe(0);
+  });
 });

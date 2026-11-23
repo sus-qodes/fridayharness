@@ -137,6 +137,12 @@ describe('Antigravity hook templates', () => {
     // A personal account's session is driven by its person: no loop over the queue, no waiting for work.
     expect(SKILL_MD).toContain('Do this once, for one task');
     expect(SKILL_MD).toContain('Do not start it yourself');
+    // The live test of 2026-11-23: the person could not tell which task was taken, and the agent ran
+    // the build and the types twice each for one line of README.md before Friday ran them again.
+    expect(SKILL_MD).toContain('tell the user in one line which task you took');
+    expect(SKILL_MD).toContain("Friday runs the project's checks itself after your claim");
+    expect(SKILL_MD).toContain('none for a change to documents alone');
+    expect(SKILL_MD).not.toContain('Run the checks you can');
     expect(SKILL_MD).not.toMatch(
       /until (none|no tasks?) (is|are) left|keep (taking|working)|wait for (the next|more|new)/i,
     );

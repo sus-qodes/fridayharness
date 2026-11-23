@@ -27,12 +27,21 @@ import type { Dispatcher } from './dispatcher.js';
 
 /** No stream bytes for this long → the stream is dropped and opened again. */
 export const STALL_MS = 45_000;
-/** Reconnects failing for this long → Friday is not reachable here. */
+/** Reconnects failing for this long, awake → Friday is not reachable here. */
 export const UNREACHABLE_MS = 10_000;
+/**
+ * The most that one gap between two looks counts towards `UNREACHABLE_MS` (2026-11-23). Every wait
+ * between attempts is shorter; a longer gap is time the computer slept or the window was frozen.
+ * A laptop that slept 25 minutes made the Studio count the sleep as Friday not answering and say
+ * "Friday has stopped" over a Friday that ran, while the Notch beside it was connected.
+ */
+export const AWAKE_STEP_MS = 6000;
 
 export const STOPPING_MESSAGE = 'Friday is stopping';
 export const UNREACHABLE_MESSAGE =
   'Friday is not reachable here: it stopped, or restarted on another address. Open it again from its shortcut or the desktop app';
+/** Said while the app that runs Friday says it runs, and this window cannot reach it yet. */
+export const STILL_RUNS_MESSAGE = 'Friday is running, but this window cannot reach it yet; trying again';
 export const STALE_PAGE_MESSAGE = 'This page is older than Friday; reload it';
 /** The daemon's code while it drains (plan §2). */
 export const DRAINING_CODE = 'COS-9001';
@@ -48,6 +57,12 @@ export interface SyncOptions {
   /** The wait before a failed snapshot read is tried again, by failures in a row. */
   readBackoff?: (failures: number) => number;
   now?: () => number;
+  /**
+   * Asks the app that runs Friday whether it still runs it (the desktop app knows its process).
+   * True: this window keeps trying instead of saying Friday stopped. Without it, or when it
+   * cannot answer, reconnects that fail for `unreachableMs` end the engine as before.
+   */
+  stillRuns?: () => Promise<boolean>;
 }
 
 export function defaultBackoff(attempt: number): number {
@@ -83,8 +98,12 @@ export class SyncEngine {
   readonly #backoff: (attempt: number) => number;
   readonly #readBackoff: (failures: number) => number;
   readonly #now: () => number;
+  readonly #stillRuns: (() => Promise<boolean>) | undefined;
 
   #running = false;
+  /** Time counted awake (`#awake`), and the clock when it was last looked at. */
+  #awakeMs = 0;
+  #lastLook: number | null = null;
   /**
    * The last sequence the stream delivered, or the one it was opened from: what the next event must
    * pass, and where a reconnect resumes. A snapshot's head is not a stream position: a snapshot read
@@ -127,6 +146,39 @@ export class SyncEngine {
     this.#backoff = opts.backoff ?? defaultBackoff;
     this.#readBackoff = opts.readBackoff ?? defaultReadBackoff;
     this.#now = opts.now ?? (() => Date.now());
+    this.#stillRuns = opts.stillRuns;
+  }
+
+  /** Time awake, for the unreachable rule: each gap since the last look counts `AWAKE_STEP_MS` at most. */
+  #awake(): number {
+    const t = this.#now();
+    if (this.#lastLook !== null) this.#awakeMs += Math.min(Math.max(0, t - this.#lastLook), AWAKE_STEP_MS);
+    this.#lastLook = t;
+    return this.#awakeMs;
+  }
+
+  /**
+   * Reconnects failed for `unreachableMs` of awake time: Friday is gone from this address, unless
+   * the app that runs it says it still runs it. Then this window keeps trying and says so. Returns
+   * whether the engine ended.
+   */
+  async #unreachable(): Promise<boolean> {
+    let runs = false;
+    if (this.#stillRuns) {
+      try {
+        runs = await this.#stillRuns();
+      } catch {
+        runs = false;
+      }
+    }
+    if (!this.#running) return true;
+    if (!runs) {
+      this.#end(UNREACHABLE_MESSAGE);
+      return true;
+    }
+    this.#failingSince = this.#awake();
+    this.store.patch('system', { lastError: STILL_RUNS_MESSAGE });
+    return false;
   }
 
   /** Every event after the dispatcher handled it (drawers that follow one task, sounds, tests). */
@@ -317,13 +369,20 @@ export class SyncEngine {
    */
   #firstReadFailed(failure: Failure): void {
     if (failure === 'offline') {
-      const now = this.#now();
+      const now = this.#awake();
       if (this.#failingSince === null) this.#failingSince = now;
       else if (now - this.#failingSince >= this.#unreachableMs) {
-        this.#end(UNREACHABLE_MESSAGE);
+        void this.#unreachable().then((ended) => {
+          if (!ended) this.#keepReading(failure);
+        });
         return;
       }
     } else if (failure === 'other') this.#failingSince = null;
+    this.#keepReading(failure);
+  }
+
+  /** A failed first read: said on the strip, and tried again by itself. */
+  #keepReading(failure: Failure): void {
     const attempts = failure === 'other' ? 0 : this.store.select('system').attempts + 1;
     this.store.patch('system', {
       connection: failure === 'other' ? 'live' : 'reconnecting',
@@ -368,12 +427,9 @@ export class SyncEngine {
       }
       if (!this.#running) return;
       if (failure === 'offline') {
-        const now = this.#now();
+        const now = this.#awake();
         if (this.#failingSince === null) this.#failingSince = now;
-        else if (now - this.#failingSince >= this.#unreachableMs) {
-          this.#end(UNREACHABLE_MESSAGE);
-          return;
-        }
+        else if (now - this.#failingSince >= this.#unreachableMs && (await this.#unreachable())) return;
       }
       const attempts = this.store.select('system').attempts + 1;
       this.store.patch('system', { connection: 'reconnecting', attempts });

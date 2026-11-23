@@ -116,6 +116,9 @@ export class Dispatcher {
         break;
       case 'agent.turn_ended':
         this.#log(this.#agentKeyOf(event), { at: now, sequence: event.sequence, stream: 'info', text: 'turn ended' });
+        // A call allowed but never run (its person cancelled it in Antigravity) sends no "completed":
+        // the card said "Running a command" after the turn and the task had ended (2026-11-23).
+        this.#idle(this.#agentKeyOf(event));
         // An agent its person runs stopped in the middle of a task: the board says so (2026-11-18).
         if (str(p.task_id)) return true;
         break;
@@ -425,6 +428,16 @@ export class Dispatcher {
     const tasks = board.tasks.slice();
     tasks[i] = { ...task, tool_calls: task.tool_calls + 1 };
     this.store.setState({ board: { ...board, tasks } });
+  }
+
+  /** The agent's turn ended: nothing of it is running any more. */
+  #idle(agentKey: string | null): void {
+    if (!agentKey) return;
+    this.#toolStart.delete(agentKey);
+    const a = this.store.select('activity');
+    const agent = a.agents[agentKey];
+    if (!agent?.current) return;
+    this.#setActivity({ ...a, agents: { ...a.agents, [agentKey]: { ...agent, current: null } } });
   }
 
   #startTool(agentKey: string, tool: string, now: number): void {

@@ -273,6 +273,8 @@ export function newGoalModal(
     if (td.done) return;
     update();
     if (!goal) return;
+    // The canvas moves to the new card as soon as it is on the board (2026-11-23).
+    ctx.store.patch('ui', { revealId: goal.goal_id });
     ctx.refresh();
     if (plan || mode !== 'plan') close();
     else openModal(ctx, { kind: 'plan-editor', id: goal.goal_id, mode: 'first' });

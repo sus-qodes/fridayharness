@@ -538,13 +538,16 @@ export class IntegrationManager {
             summary: 'merged into the goal: nothing else had changed there, so it went in as it was checked',
           });
         }
-        // A repair is new content: its checks run before the goal branch moves to it.
+        // A repair is new content: its checks run before the goal branch moves to it. The goal
+        // branch is the work's own base: the revision holds nothing of the goal's other tasks
+        // that the work did not start from.
         const outcome = await this.#checkRevision(
           task,
           goalId,
           taskCommit,
           candidate,
           await changedBetween(project.root, goalHead, taskCommit).catch(() => null),
+          false,
         );
         if (outcome.problem) {
           const { unfit: _unfit, ...problem } = outcome.problem;
@@ -673,6 +676,9 @@ export class IntegrationManager {
     // What the revision changes in the goal branch, when that is known: the checks fit it
     // (`checksForChange`). A merge that brings only documents has the code the branch had.
     changed: readonly string[] | null = null,
+    // Whether the revision holds other work of the goal: a summary says "once merged with the
+    // goal's other work" only then (2026-11-23: it said so of a goal that had nothing else).
+    merged = true,
   ): Promise<{
     results: Outcome['checks'];
     ran: boolean;
@@ -751,13 +757,14 @@ export class IntegrationManager {
     }
     const after = await checkout.contentTree();
     const altered = after.tree !== expected ? await changedBetween(project.root, expected, after.tree) : [];
+    const where = merged ? 'once merged with the goal’s other work' : 'in Friday’s own copy of the project';
     if (altered.length) {
       return {
         results,
         ran: true,
         problem: {
           checks: results,
-          summary: `the checks changed ${altered.slice(0, 5).join(', ')}${altered.length > 5 ? ` and ${altered.length - 5} more` : ''} once merged with the goal’s other work, so what passed is not what would land; the goal was not changed`,
+          summary: `the checks changed ${altered.slice(0, 5).join(', ')}${altered.length > 5 ? ` and ${altered.length - 5} more` : ''} ${where}, so what passed is not what would land; the goal was not changed`,
         },
       };
     }
@@ -775,8 +782,8 @@ export class IntegrationManager {
           // them: a busy computer is not the work (2026-11-19).
           summary:
             ranOut === failed
-              ? `${failed} required check(s) ran out of time once merged with the goal’s other work, also on a second try with twice the time${unprepared}; the goal was not changed. Give ${failed === 1 ? 'it' : 'them'} more time in Settings → Checks, then try again`
-              : `${failed} required check(s) failed once merged with the goal’s other work${unprepared}; the goal was not changed`,
+              ? `${failed} required check(s) ran out of time ${where}, also on a second try with twice the time${unprepared}; the goal was not changed. Give ${failed === 1 ? 'it' : 'them'} more time in Settings → Checks, then try again`
+              : `${failed} required check(s) failed ${where}${unprepared}; the goal was not changed`,
           ...(unprepared || ranOut === failed ? {} : { unfit: names.slice(0, 1200) }),
         },
       };

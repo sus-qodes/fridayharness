@@ -1088,6 +1088,42 @@ export class FridayState {
     });
   }
 
+  /**
+   * Closes the questions of goals already cancelled (2026-11-23), at the daemon's start: a goal
+   * cancelled before Friday closed every question of it kept one in "Waiting for you" for good.
+   * Returns how many it closed.
+   */
+  settleQuestionsOfCancelledGoals(projectId: string): number {
+    const cancelled = this.q.goals(projectId, { statuses: ['CANCELLED'] });
+    if (!cancelled.length) return 0;
+    return this.exec({ name: 'escalation.settle', project_id: projectId, actor: SYSTEM, params: {} }, (ctx) => {
+      let closed = 0;
+      for (const g of cancelled) closed += this.settleCancelledGoalQuestions(ctx, projectId, g.goal_id);
+      return closed;
+    });
+  }
+
+  /**
+   * Every pending question of a cancelled goal, whoever asked: the goal's own and its tasks'
+   * (2026-11-23). "Could not be added to its goal" stayed in "Waiting for you" after its goal was
+   * cancelled: Friday asked it about a task already done, and only the planner's questions closed.
+   */
+  private settleCancelledGoalQuestions(ctx: CommandContext, projectId: string, goalId: string): number {
+    const tasks = new Set(this.q.goalTasks(projectId, goalId).map((t) => t.task_id));
+    let closed = 0;
+    for (const e of this.q.escalations(projectId, 'pending')) {
+      if (e.goal_id !== goalId && !(e.task_id && tasks.has(String(e.task_id)))) continue;
+      ctx.emit({
+        type: 'escalation.answered',
+        actor: SYSTEM,
+        payload: { escalation_id: e.escalation_id, answer: 'no longer needed: the goal was cancelled', moot: true },
+        refs: [{ kind: 'escalation', id: String(e.escalation_id) }],
+      });
+      closed += 1;
+    }
+    return closed;
+  }
+
   settleRecoveryQuestions(projectId: string, actor: Actor, taskId: string, action: string): void {
     this.exec({ name: 'escalation.settle', project_id: projectId, actor, params: { taskId, action } }, (ctx) =>
       this.settleQuestions(ctx, taskId, RECOVERY_QUESTIONS, `recovery action ${action} was performed`),
@@ -3639,13 +3675,14 @@ export class FridayState {
         },
         refs: [{ kind: 'goal', id: goalId }],
       });
+      // Every question of it closes first, whoever asked: a task cancelled next finds none open.
+      this.settleCancelledGoalQuestions(ctx, projectId, goalId);
       for (const t of this.q.goalTasks(projectId, goalId)) {
         if (!TERMINAL_TASK.has(t.status)) this.cancelWithin(ctx, projectId, t.task_id, `goal cancelled: ${reason}`);
       }
       for (const v of goal.plan_id ? this.q.planVersions(goal.plan_id) : []) {
         if (v.status === 'PROPOSED') this.movePlan(ctx, v, 'REJECTED', 'goal cancelled');
       }
-      this.settleGoalQuestions(ctx, goalId, null, 'the goal was cancelled');
       return this.q.goal(projectId, goalId);
     });
   }
@@ -5658,14 +5695,19 @@ export class FridayState {
             ? this.backToAgentWithin(ctx, projectId, rec.task_id, opts.back.reason, opts.back.limit)
             : false;
         if (unfit && !back) {
+          // The task by its summary, not its id and the goal branch's name (2026-11-23): the card
+          // and the Notch said "task_64vq… could not be integrated into friday/goal-goal_…".
+          // The ids stay in the options, which are commands to type.
+          const title = (this.q.findTask(projectId, rec.task_id)?.summary ?? 'this task').replace(/\s+/g, ' ').trim();
+          const named = `“${title.length > 120 ? `${title.slice(0, 119)}…` : title}”`;
           this.escalationWithin(ctx, {
             kind: rec.status === 'conflicted' ? 'integration_conflict' : 'integration_failed',
             goal_id: rec.goal_id,
             task_id: rec.task_id,
             question:
               rec.status === 'conflicted'
-                ? `The verified work of ${rec.task_id} conflicts with ${rec.branch} in ${rec.conflicts.length} file(s): ${rec.conflicts.slice(0, 10).join(', ')}. How should it be resolved?`
-                : `${rec.task_id} could not be integrated into ${rec.branch ?? 'its goal branch'}: ${rec.summary ?? 'unknown reason'}. What now?`,
+                ? `The checked work of ${named} clashes with other work of its goal in ${rec.conflicts.length} file(s): ${rec.conflicts.slice(0, 10).join(', ')}. How should it be resolved?`
+                : `The checked work of ${named} could not be added to its goal: ${rec.summary ?? 'Friday recorded no reason'}. What now?`,
             options: [
               `resolve it on ${rec.branch ?? 'the goal branch'}, then run "friday integrate ${rec.task_id}"`,
               'plan a task that resolves it',

@@ -768,6 +768,10 @@ describe('goal card', () => {
       });
       const node = createGoalNode(ctx, { group: unplanned() });
       expect(node.el.textContent).toContain('Friday is planning');
+      // Said in the card's body too, with how long it takes (2026-11-23).
+      expect(node.el.querySelector('.nd-planning[role="status"]')?.textContent).toContain(
+        'Friday is writing the plan. It usually takes 10 to 30 seconds',
+      );
       expect(actionOf(node.el, 'brain-plan')).toBeNull();
       expect(actionOf(node.el, 'write-plan')).not.toBeNull();
     });
@@ -867,6 +871,28 @@ describe('agent pod', () => {
       id: 'task_00000000000000000000api001',
       path: target,
     });
+  });
+
+  /**
+   * The live test of 2026-11-23: Antigravity stopped to ask its person about `npm run typecheck`
+   * (its own safety check had failed), and the card said only "Running a command".
+   */
+  it('says the agent’s own window may be asking, for a call in an editor that has run 20 s', () => {
+    const ctx = makeContext();
+    const attached = pod({
+      harness: { ...(pod().harness as NonNullable<PodModel['harness']>), attach_mode: 'attach', vendor: 'antigravity' },
+    });
+    const run = activity('npm run typecheck', 'command');
+    const at = run.current?.at ?? 0;
+    const node = createAgentPod(ctx, model({ pod: attached, activity: run, now: at + 5000 }));
+    expect(node.el.querySelector('[data-role="may-ask"]')).toBeNull();
+    node.update(model({ pod: attached, activity: run, now: at + 21_000 }));
+    expect(node.el.querySelector('[data-role="may-ask"]')?.textContent).toBe(
+      'still running, or Antigravity is asking you',
+    );
+    // A session Friday started has nobody to ask: nothing is said there.
+    node.update(model({ activity: run, now: at + 60_000 }));
+    expect(node.el.querySelector('[data-role="may-ask"]')).toBeNull();
   });
 
   it('opens the live stream on click and Enter, and shows a command as text', () => {

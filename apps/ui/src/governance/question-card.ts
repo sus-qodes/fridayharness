@@ -1283,26 +1283,33 @@ function integrationBody(kit: Kit): Built {
         : integration?.summary
           ? agentText('What failed', integration.summary)
           : null,
+      // Branches and the folder are for whoever looks for them (2026-11-23): folded, as on the
+      // install question, so the card reads as what happened and what to do.
       h(
-        'dl',
-        { class: 'gv-meta' },
+        'details',
+        { class: 'gv-details' },
+        h('summary', null, 'Details'),
         h(
-          'div',
-          { class: 'gv-meta-row' },
-          h('dt', null, 'Task branch'),
-          h('dd', { class: 'mono' }, visible(run?.branch_ref ?? '—')),
-        ),
-        h(
-          'div',
-          { class: 'gv-meta-row' },
-          h('dt', null, 'Goal branch'),
-          h('dd', { class: 'mono' }, visible(integration?.branch ?? (goalId ? `friday/goal-${goalId}` : '—'))),
-        ),
-        h(
-          'div',
-          { class: 'gv-meta-row' },
-          h('dt', null, 'Task folder'),
-          h('dd', { class: 'mono' }, visible(root ?? '—')),
+          'dl',
+          { class: 'gv-meta' },
+          h(
+            'div',
+            { class: 'gv-meta-row' },
+            h('dt', null, 'Task branch'),
+            h('dd', { class: 'mono' }, visible(run?.branch_ref ?? '—')),
+          ),
+          h(
+            'div',
+            { class: 'gv-meta-row' },
+            h('dt', null, 'Goal branch'),
+            h('dd', { class: 'mono' }, visible(integration?.branch ?? (goalId ? `friday/goal-${goalId}` : '—'))),
+          ),
+          h(
+            'div',
+            { class: 'gv-meta-row' },
+            h('dt', null, 'Task folder'),
+            h('dd', { class: 'mono' }, visible(root ?? '—')),
+          ),
         ),
       ),
       h(

@@ -302,7 +302,15 @@ function makeContext(env: DesktopEnv, info: ProjectInfo, root: HTMLElement): Run
   // The project's copy too, as in a browser: one copy for the windows, the browser and every start.
   const stopPrefsSync = startPrefsSync(api, store, { win: window });
   const dispatcher = new Dispatcher(store);
-  const engine = new SyncEngine(api, store, dispatcher);
+  // A window that cannot reach Friday asks the app before it says Friday stopped (2026-11-23): the
+  // app watches Friday's process, so a Friday that runs is not shown stopped in one window while
+  // the other is connected. Starting again counts as running.
+  const engine = new SyncEngine(api, store, dispatcher, {
+    stillRuns: async () => {
+      const s = await env.core.invoke<DaemonStatus>('daemon_status');
+      return s.state === 'ready' || s.state === 'starting';
+    },
+  });
   const keys = new Keyboard(window);
   keys.attach();
   const services = createShellServices(keys, document);
@@ -520,14 +528,23 @@ export async function bootDesktopNotch(root: HTMLElement, injected?: DesktopEnv)
     },
   );
 
+  // What takes the mouse: the island, or the whole window while a confirmation is open in it.
+  let island: { x: number; y: number; w: number; h: number } | null = null;
+  let confirming = false;
+  const sendRect = () => {
+    const r = confirming ? { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight } : island;
+    if (r) void env.core.invoke('notch_rect', r).catch(() => undefined);
+  };
   const handle: NotchHandle = mountNotch(ctx, root, notchSlots, {
     mode: 'window',
     onRect: (r) => {
-      void env.core.invoke('notch_rect', { x: r.x, y: r.y, w: r.width, h: r.height }).catch(() => undefined);
+      island = { x: r.x, y: r.y, w: r.width, h: r.height };
+      sendRect();
     },
     onOpenStudio: (target) => showStudio(env, studioLink(target)),
   });
-  root.append(run.services.toasts.el, run.services.confirms.el);
+  const confirms = run.services.confirms.el;
+  root.append(run.services.toasts.el, confirms);
 
   // The keyboard belongs to the editor until the human works in the card (plan §8.2).
   let hasKeyboard = false;
@@ -536,11 +553,24 @@ export async function bootDesktopNotch(root: HTMLElement, injected?: DesktopEnv)
     hasKeyboard = take;
     void env.core.invoke('notch_keyboard', { take }).catch(() => undefined);
   };
+  const ours = (n: Node | null) => !!n && (handle.el.contains(n) || confirms.contains(n));
   handle.el.addEventListener('focusin', () => keyboard(true));
   handle.el.addEventListener('focusout', (e) => {
-    const next = (e as FocusEvent).relatedTarget as Node | null;
-    if (!next || !handle.el.contains(next)) keyboard(false);
+    if (!ours((e as FocusEvent).relatedTarget as Node | null)) keyboard(false);
   });
+  // A confirmation a card opens ("Cancel the goal?") is drawn outside the island, where the window
+  // let every click through to the editor and had no keyboard: neither its buttons nor Esc could
+  // close it (2026-11-23). While one is open, the whole window takes the mouse and the keyboard.
+  new MutationObserver(() => {
+    const open = confirms.childElementCount > 0;
+    if (open === confirming) return;
+    confirming = open;
+    sendRect();
+    if (open) {
+      keyboard(true);
+      (confirms.querySelector('.sh-confirm-cancel') as HTMLElement | null)?.focus();
+    } else if (!ours(document.activeElement)) keyboard(false);
+  }).observe(confirms, { childList: true });
 
   // What needs a larger view than the island opens in the Studio.
   store.subscribe('ui', (next) => {

@@ -310,7 +310,10 @@ export interface FittedChecks<T> {
  *  - Nothing changed: nothing to check. A verification task is the exception: running the checks
  *    is its work.
  *  - Documents only: the lint checks run (a formatter reads documents), and any check that says
- *    it reads them (`on_documents: true`); the build, the types and the tests do not.
+ *    it reads them (`on_documents: true`); the types and the tests do not. A build listed before
+ *    the first lint runs too (2026-11-23): a project's lint can read what its build makes (typed
+ *    rules that resolve its own packages through their built types), and in a copy without them
+ *    lint failed on hundreds of untouched files for one line of README.md.
  * `changed` null: not known, so every check runs.
  */
 export function checksForChange<T extends { kind?: string | undefined; on_documents?: boolean | undefined }>(
@@ -324,7 +327,10 @@ export function checksForChange<T extends { kind?: string | undefined; on_docume
     return taskKind === 'verification' ? all : { run: [], skipped: [...checks], why: 'nothing_changed' };
   }
   if (!documentsOnly(changed)) return all;
-  const run = checks.filter((c) => c.kind === 'lint' || c.on_documents === true);
+  const firstLint = checks.findIndex((c) => c.kind === 'lint');
+  const run = checks.filter(
+    (c, i) => c.kind === 'lint' || c.on_documents === true || (c.kind === 'build' && firstLint >= 0 && i < firstLint),
+  );
   const skipped = checks.filter((c) => !run.includes(c));
   return { run, skipped, why: skipped.length ? 'documents_only' : null };
 }

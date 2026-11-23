@@ -476,6 +476,83 @@ describe('SyncEngine', () => {
     engine.stop();
   });
 
+  /**
+   * The live test of 2026-11-23: a laptop slept 25 minutes between two failed reconnects, and the
+   * Studio counted the sleep as Friday not answering: "Friday has stopped", over a Friday that ran.
+   */
+  it('does not count the time the computer slept as Friday not answering', async () => {
+    vi.useFakeTimers();
+    const t = new FakeTransport();
+    t.snapshots = [snapshot(3)];
+    t.streams.push(async () => {
+      throw new OfflineError('refused');
+    });
+    t.streams.push(async () => {
+      throw new OfflineError('refused');
+    });
+    t.fallback = silent;
+    const { store, engine } = setup(t, { backoff: () => 1000 });
+    await engine.start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(store.select('system').connection).toBe('reconnecting');
+    // The computer sleeps: the clock moves 25 minutes, and no timer runs meanwhile.
+    vi.setSystemTime(Date.now() + 25 * 60_000);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(store.select('system').connection).toBe('live');
+    expect(engine.running).toBe(true);
+    engine.stop();
+  });
+
+  it('keeps trying, and says so, while the app that runs Friday says it runs; stops once it says not', async () => {
+    vi.useFakeTimers();
+    const t = new FakeTransport();
+    t.snapshots = [snapshot(3)];
+    t.fallback = async () => {
+      throw new OfflineError('connection refused');
+    };
+    let runs = true;
+    const asked: number[] = [];
+    const { store, engine } = setup(t, {
+      backoff: () => 1000,
+      stillRuns: async () => {
+        asked.push(Date.now());
+        return runs;
+      },
+    });
+    await engine.start();
+    await vi.advanceTimersByTimeAsync(UNREACHABLE_MS + 3000);
+    expect(asked.length).toBeGreaterThan(0);
+    expect(store.select('system')).toMatchObject({ connection: 'reconnecting' });
+    expect(engine.running).toBe(true);
+    const streams = t.streamPaths.length;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(t.streamPaths.length).toBeGreaterThan(streams);
+    // The app says Friday is gone: the window says so too, and stops trying.
+    runs = false;
+    await vi.advanceTimersByTimeAsync(UNREACHABLE_MS + 3000);
+    expect(store.select('system')).toMatchObject({ connection: 'stopped', lastError: UNREACHABLE_MESSAGE });
+    expect(engine.running).toBe(false);
+  });
+
+  it('says Friday stopped as before when the app cannot answer whether it runs', async () => {
+    vi.useFakeTimers();
+    const t = new FakeTransport();
+    t.snapshots = [snapshot(3)];
+    t.fallback = async () => {
+      throw new OfflineError('connection refused');
+    };
+    const { store, engine } = setup(t, {
+      backoff: () => 1000,
+      stillRuns: async () => {
+        throw new Error('the app did not answer');
+      },
+    });
+    await engine.start();
+    await vi.advanceTimersByTimeAsync(UNREACHABLE_MS + 3000);
+    expect(store.select('system')).toMatchObject({ connection: 'stopped', lastError: UNREACHABLE_MESSAGE });
+    expect(engine.running).toBe(false);
+  });
+
   it('shows "Friday is stopping" on 503 COS-9001 and stops re-reading', async () => {
     const t = new FakeTransport();
     t.snapshots = [snapshot(5)];
@@ -625,6 +702,36 @@ describe('SyncEngine', () => {
     expect(a.agents['fe-1']?.current).toMatchObject({ tool: 'Edit', kind: 'write', target: 'frontend/src/a.ts' });
     expect(a.pulses).toHaveLength(1);
     expect(a.files[TASK]?.[0]?.path).toBe('frontend/src/a.ts');
+  });
+
+  /**
+   * The live test of 2026-11-23: a command Friday allowed was cancelled by its person in Antigravity,
+   * so no "completed" came, and the card said "Running a command" after the turn and the task ended.
+   */
+  it('clears what an agent was doing once its turn ends, even when the call never completed', async () => {
+    const t = new FakeTransport();
+    t.snapshots = [snapshot(1, { agents: [makeAgent({ agent_id: 'agent_1', agent_key: 'ag-1' })] })];
+    t.streams.push(async (h) => {
+      h.onOpen?.();
+      h.onEvent(
+        event(
+          2,
+          'policy.evaluated',
+          { tool: 'Shell', kind: 'command', decision: 'allow', targets: ['npm run typecheck'], task_id: TASK },
+          AGENT,
+        ),
+      );
+      await tick(10);
+      h.onEvent(event(3, 'agent.turn_ended', { task_id: null, reason: 'USER_CANCELED' }, AGENT));
+      await tick(10);
+      return 'shutdown';
+    });
+    const { store, engine } = setup(t);
+    await engine.start();
+    await tick(60);
+    const ag = store.select('activity').agents['ag-1'];
+    expect(ag?.current).toBeNull();
+    expect(ag?.log.map((l) => l.text)).toContain('turn ended');
   });
 
   it('counts a task’s tool calls on its card as they finish, with no read of the board (review P1a)', async () => {

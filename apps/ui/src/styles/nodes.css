@@ -616,6 +616,49 @@
   white-space: nowrap;
 }
 
+/* While Friday writes a goal's plan (2026-11-23): said in the card's body, with a slow pulse. */
+.nd-planning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: var(--text-caption);
+  line-height: 1.4;
+  color: var(--status-running);
+}
+
+.nd-planning-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--status-running);
+  animation: nd-planning-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes nd-planning-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not(.motion-on) .nd-planning-dot {
+    animation: none;
+  }
+}
+
+:root.reduce-motion .nd-planning-dot {
+  animation: none;
+}
+
 .nd-goal-foot {
   display: flex;
   align-items: center;

@@ -262,7 +262,7 @@ export function createFridayMcpServer(session: FridaySession): McpServer {
           role: 'user',
           content: {
             type: 'text',
-            text: `Call friday_whoami. Then claim ${task_id ? `task ${task_id}` : 'the next ready task'} with friday_task_claim and read the context it returns before touching files. Work only inside the task's write scope. Report progress with friday_report_progress after each meaningful step. When done, run the checks you can and finish with friday_claim_done listing the exact changed paths and each check's real outcome.`,
+            text: `Call friday_whoami. Then claim ${task_id ? `task ${task_id}` : 'the next ready task'} with friday_task_claim and read the context it returns before touching files. Work only inside the task's write scope. Report progress with friday_report_progress after each meaningful step. When done, run only the checks that cover your change (Friday runs the project's checks itself after your claim) and finish with friday_claim_done listing the exact changed paths and each check's real outcome.`,
           },
         },
       ],

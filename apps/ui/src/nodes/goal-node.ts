@@ -423,6 +423,16 @@ export function createGoalNode(ctx: AppContext, initial: GoalCardModel): NodeVie
           `${pct}% (${g.progress.completed} of ${plural(g.progress.total, 'task')})`,
         ),
       ),
+      // While the plan is written, the card says so in its body (2026-11-23): a small badge at its
+      // foot was all there was, and for 10 to 30 seconds nothing seemed to happen.
+      need?.planning
+        ? h(
+            'p',
+            { class: 'nd-planning', role: 'status' },
+            h('span', { class: 'nd-planning-dot', aria: { hidden: 'true' } }),
+            'Friday is writing the plan. It usually takes 10 to 30 seconds; you review it before anything starts.',
+          )
+        : null,
       story.length ? storyList(story) : null,
       did,
     );

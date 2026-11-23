@@ -146,6 +146,8 @@ export function quickPrompt(ctx: AppContext, opts: QuickPromptOptions = {}): Com
       );
       return;
     }
+    // The canvas moves to the new card as soon as it is on the board (2026-11-23).
+    if (r.goal_id) ctx.store.patch('ui', { revealId: r.goal_id });
     ctx.refresh();
     // Without a planner nobody else writes the plan: its editor opens on the new goal.
     if (!direct && !plan && r.goal_id) openModal(ctx, { kind: 'plan-editor', id: r.goal_id, mode: 'first' });

@@ -135,10 +135,10 @@ Steps Friday's rules pass go ahead without a question. Antigravity may still ask
 If a Friday tool refuses or fails (for example the claim is not allowed), tell the user exactly what Friday said and stop. Do not try to fix, inspect or work around Friday: do not run the \`friday\` command, read or search its files, code or configuration, or write scripts to probe it. Only the user changes Friday's settings.
 
 1. Call \`friday_whoami\`. If the call itself says Friday is unreachable, ask the user to start it (its shortcut, the desktop app, or \`friday run\`) and stop without editing files.
-2. If you already hold a task, continue it. Otherwise call \`friday_task_claim\` with \`next: true\`. If nothing is ready, say so and stop.
+2. If you already hold a task, continue it. Otherwise call \`friday_task_claim\` with \`next: true\`. If nothing is ready, say so and stop. Then tell the user in one line which task you took or continue, by its summary.
 3. Read the context the claim returns before editing. Edit only inside the task's scope. If Friday declines a step you truly need, ask with \`friday_request_permission\`; never retry it another way.
 4. Call \`friday_report_progress\` after each meaningful step.
-5. Run the checks you can, then call \`friday_claim_done\` with the exact changed paths and each check's real outcome.
+5. Friday runs the project's checks itself after your claim. Run only the ones that cover what you changed, each once after your last edit, and none for a change to documents alone. Then call \`friday_claim_done\` with the exact changed paths and the outcome of each check you ran.
 6. Tell the user what you claimed and that it waits for Friday's verification. If another task is ready for you, name it and say they can type /friday again. Do not start it yourself.
 `;
 

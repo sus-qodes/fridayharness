@@ -13,7 +13,7 @@ import { visible } from '../model/text.js';
 import { type AppContext, openDrawer } from '../shell/context.js';
 import type { AgentActivity, ToolActivity } from '../store/state.js';
 import { button, h, replace, toggleClass } from '../ui/dom.js';
-import { cleanText, compact, duration, humanize, shortId, truncate, usd } from '../ui/format.js';
+import { cleanText, compact, duration, shortId, truncate, usd } from '../ui/format.js';
 import { badge, fingerprint, fromControl, type NodeView, nodeIcon } from './common.js';
 import { statText } from './task-node.js';
 
@@ -27,6 +27,27 @@ export interface PodCardModel {
   /** The file most recently written for its task (the ribbon's file when the tool is not a write). */
   recentFile: string | null;
   selected: boolean;
+  /** The canvas's clock at this model (it ticks while tasks run): for a call that has run long. */
+  now?: number;
+}
+
+/**
+ * A call Friday allowed in an editor its person runs, still not finished after this long, may be
+ * one its host stopped to ask its person about (2026-11-23): Antigravity tells no hook when it asks,
+ * and the card said only "Running a command" while Antigravity waited for an answer.
+ */
+export const HOST_MAY_ASK_MS = 20_000;
+
+/** Whether the card says the agent's own window may be asking its person. */
+export function mayBeAsking(m: Pick<PodCardModel, 'pod' | 'activity' | 'now'>): boolean {
+  const cur = m.activity?.current ?? null;
+  return (
+    !!cur &&
+    cur.decision === 'allow' &&
+    m.pod.harness?.attach_mode === 'attach' &&
+    typeof m.now === 'number' &&
+    m.now - cur.at >= HOST_MAY_ASK_MS
+  );
 }
 
 /**
@@ -179,6 +200,7 @@ export function createAgentPod(ctx: AppContext, initial: PodCardModel): NodeView
       m.stats,
       m.lastToolMs,
       m.recentFile,
+      mayBeAsking(m),
     ]);
     toggleClass(el, 'nd-selected', m.selected);
     if (!force && print === printed) return;
@@ -289,7 +311,17 @@ export function createAgentPod(ctx: AppContext, initial: PodCardModel): NodeView
         ),
         cur && (cur.decision === 'ask' || cur.decision === 'deny' || cur.decision === 'failed')
           ? h('span', { class: `nd-decision nd-decision-${cur.decision}` }, DECIDED[cur.decision])
-          : null,
+          : mayBeAsking(m)
+            ? h(
+                'span',
+                {
+                  class: 'nd-decision nd-decision-ask',
+                  dataset: { role: 'may-ask' },
+                  title: `${vendorLabel(m.pod)} tells Friday nothing when it asks you itself. If it waits for you, answer there.`,
+                },
+                `still running, or ${vendorLabel(m.pod)} is asking you`,
+              )
+            : null,
         h('span', { class: 'spacer' }),
         taskId
           ? h('span', { class: 'nd-lines mono', title: 'Lines added and removed in its task' }, statText(m.stats))

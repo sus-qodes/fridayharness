@@ -35,14 +35,21 @@ describe('the checks a change calls for (2026-11-18)', () => {
     expect(checksForChange([], [], 'implementation')).toEqual({ run: [], skipped: [], why: null });
   });
 
-  it('runs only what reads documents for a change to documents only', () => {
+  it('runs only what reads documents for a change to documents only, and the build its lint may need', () => {
     const f = checksForChange(CHECKS, ['README.md', 'docs/guide/setup.rst', 'CHANGELOG.MD'], 'docs');
-    expect(names(f.run)).toEqual(['lint']);
-    expect(names(f.skipped)).toEqual(['build', 'typecheck', 'tests']);
+    // The build listed before the lint runs (2026-11-23): typed lint rules read the project's
+    // built types, and in a copy without them lint failed on untouched files for one README line.
+    expect(names(f.run)).toEqual(['build', 'lint']);
+    expect(names(f.skipped)).toEqual(['typecheck', 'tests']);
     expect(f.why).toBe('documents_only');
+    // A build listed after the lint is not for it, and without a lint no build runs.
+    const lintFirst = [CHECKS[2], CHECKS[0], CHECKS[1], CHECKS[3]] as typeof CHECKS;
+    expect(names(checksForChange(lintFirst, ['README.md'], 'docs').run)).toEqual(['lint']);
+    const noLint = CHECKS.filter((c) => c.kind !== 'lint');
+    expect(names(checksForChange(noLint, ['README.md'], 'docs').run)).toEqual([]);
     // A check that says it reads documents runs too (tests of a project that checks its own docs).
     const own = [...CHECKS, { name: 'links', kind: 'other', on_documents: true }];
-    expect(names(checksForChange(own, ['README.md'], 'docs').run)).toEqual(['lint', 'links']);
+    expect(names(checksForChange(own, ['README.md'], 'docs').run)).toEqual(['build', 'lint', 'links']);
     // Nothing skipped, nothing to say.
     expect(checksForChange([{ name: 'lint', kind: 'lint' }], ['README.md'], 'docs').why).toBeNull();
   });

@@ -210,6 +210,41 @@ describe('the app opened another project (2026-11-17)', () => {
   });
 });
 
+/**
+ * The live test of 2026-11-23: "Cancel the goal?" opened in the Notch, outside its island, where the
+ * window let every click through to the editor and had no keyboard; it could not be closed.
+ */
+describe('a confirmation in the Notch', () => {
+  it('takes the whole window and the keyboard while it is open, and gives them back after', async () => {
+    const shell = fakeShell([{ state: 'ready' }]);
+    const root = document.createElement('div');
+    document.body.append(root);
+    await bootDesktopNotch(root, shell.env);
+    await settle();
+    const host = root.querySelector('.sh-confirm-host') as HTMLElement;
+    expect(host).not.toBeNull();
+    const rects = () => shell.calls.filter((c) => c.cmd === 'notch_rect').map((c) => c.args);
+    const keyboard = () => shell.calls.filter((c) => c.cmd === 'notch_keyboard').map((c) => c.args?.take);
+    const before = rects().length;
+    // A card asks: the confirmation's box is put in the host.
+    const box = document.createElement('div');
+    box.append(Object.assign(document.createElement('button'), { className: 'sh-confirm-cancel' }));
+    host.append(box);
+    await settle();
+    // Every report while it is open, the island's own included, is the whole window.
+    const whole = { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight };
+    expect(rects().length).toBeGreaterThan(before);
+    for (const r of rects().slice(before)) expect(r).toEqual(whole);
+    expect(keyboard().at(-1)).toBe(true);
+    expect(document.activeElement).toBe(box.querySelector('.sh-confirm-cancel'));
+    // Answered: the clicks go through again, and the editor gets its keyboard back.
+    box.remove();
+    await settle();
+    expect(keyboard().at(-1)).toBe(false);
+    expect(rects().at(-1)).not.toEqual(whole);
+  });
+});
+
 describe('a Friday that stopped while the Studio is open', () => {
   it('says so at once on the strip, and Start Friday starts it through the shell', async () => {
     const shell = fakeShell([{ state: 'ready' }, { state: 'stopped' }, { state: 'ready' }]);

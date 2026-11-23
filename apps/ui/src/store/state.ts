@@ -101,6 +101,11 @@ export interface UiState {
    */
   settingsBack?: DrawerBack | null;
   selectedTaskId: string | null;
+  /**
+   * A card the canvas moves to once it is on the board (2026-11-23): a goal just created. Its card
+   * could be off-screen, and for the 10 to 30 seconds of planning nothing seemed to happen.
+   */
+  revealId?: string | null;
   drawer: DrawerRequest | null;
   modal: ModalRequest | null;
   paletteOpen: boolean;

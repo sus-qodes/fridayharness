@@ -77,6 +77,12 @@ export function checksFor(project: ContextProject, kind: string): ProjectCheck[]
   return checks.filter((c) => !c.task_kinds?.length || c.task_kinds.includes(kind));
 }
 
+/** What an agent is told about the project's checks: Friday runs them after the claim. */
+export const CHECKS_INTRO =
+  'Friday runs these project checks itself after you claim, choosing those your change calls for:';
+export const CHECKS_ADVICE =
+  'Before you claim, run only the ones that cover what you changed, each once after your last edit; a change to documents alone needs none. Do not repeat one that already passed.';
+
 /** A check as an agent runs it: its name and its command line. */
 const checkLine = (c: ProjectCheck) =>
   `- ${c.name}: ${[c.command, ...(c.args ?? [])].map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(' ')}`;
@@ -591,10 +597,13 @@ async function compileOnce(deps: ContextDeps, input: CompileInput, actor: Actor)
       });
     }
     // The checks verification runs on a claim (plan M14.6): an agent kept to its task's files
-    // otherwise never meets a project rule that only a check enforces (LESSONS D-94).
+    // otherwise never meets a project rule that only a check enforces (LESSONS D-94). Named, but
+    // not to be run in full (2026-11-23): "run them before you claim" had an agent run the build
+    // and the types twice each and the lint for one line of README.md, every output read at the
+    // host's token cost, before Friday ran the same checks again.
     const checks = checksFor(project, task.kind);
     if (checks.length) {
-      const line = `Friday verifies a claim with these project checks; run them before you claim:\n${checks.map(checkLine).join('\n')}`;
+      const line = `${CHECKS_INTRO}\n${checks.map(checkLine).join('\n')}\n${CHECKS_ADVICE}`;
       add({
         section: 'task.acceptance',
         line,

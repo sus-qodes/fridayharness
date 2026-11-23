@@ -1070,8 +1070,13 @@ describe("the project's checks in a task packet (plan M14.6)", () => {
     // Verification's own choice for the task's kind: no task kinds, or this one; an argument with
     // a space is quoted as a shell would need it.
     expect(text).toContain(
-      'Friday verifies a claim with these project checks; run them before you claim:\n- tests: node --test **/test/*.test.ts\n- rules: node scripts/check.mjs',
+      'Friday runs these project checks itself after you claim, choosing those your change calls for:\n- tests: node --test **/test/*.test.ts\n- rules: node scripts/check.mjs\n',
     );
+    // Not "run them before you claim" (2026-11-23): an agent ran every one, some twice, for one
+    // line of README.md, and Friday ran them again.
+    expect(text).toContain('run only the ones that cover what you changed');
+    expect(text).toContain('a change to documents alone needs none');
+    expect(text).not.toContain('run them before you claim');
     expect(text).not.toContain('docs check');
   });
 

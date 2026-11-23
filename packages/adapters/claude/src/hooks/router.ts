@@ -39,6 +39,9 @@ interface HookBody {
 /** The router's answer: Friday's judgment, or the `allow` only Claude Code's spawned sessions get (ADR-0032 §11). */
 type Outcome = HookJudgment | { decision: 'allow'; reason: string };
 
+/** How long a session's hooks wait for its MCP server before `/friday` is left to the model. */
+export const TOOLS_STARTING_MS = 60_000;
+
 /**
  * Whether a prompt is the `/friday` command (2026-11-19): typed as such, or as Antigravity may pass
  * it, expanded into Friday's skill (its marker, or the sentence it opens with). Nothing else counts.
@@ -306,7 +309,22 @@ export function claudeCodeHooks(): (app: Hono, ctx: DaemonContext) => void {
               text: 'Friday: Friday is paused, so no task can be taken; the model was not called. Resume Friday in its app, then type /friday again.',
             });
           }
-          if (state.nextTaskFor(pid, agent.agent_id)) return none();
+          if (state.nextTaskFor(pid, agent.agent_id)) {
+            // Something waits, but this session's Friday tools are not connected yet (2026-11-23):
+            // its hooks registered it a moment ago and its MCP server has not taken it over. The
+            // model could not claim, and in the live session it spent about 1k tokens to say "type
+            // /friday again". A session whose server never connects is left to the model after a
+            // minute, so nobody is held at this sentence.
+            const caps = harness.capabilities;
+            const young = state.clock.nowMs() - Date.parse(harness.registered_at) < TOOLS_STARTING_MS;
+            if (caps.hooks_route === true && !caps.mcp_tools && young) {
+              return reply({
+                decision: 'halt',
+                text: "Friday: Friday's tools are still starting in this session, so the model was not called. Type /friday again in a few seconds.",
+              });
+            }
+            return none();
+          }
           return reply({
             decision: 'halt',
             text: `Friday: nothing waits for ${agent.agent_key} right now, so the model was not called and no tokens were used. Friday's app tells you when a task is given to this agent; type /friday then.`,

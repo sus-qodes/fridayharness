@@ -930,6 +930,15 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
   if (brain && !(opts.brain && opts.brain.autoStart === false)) brain.brain.start();
   // A project initialized without its graph gets it once, now, in the background.
   void setup.start().catch((e) => logger.warn('setup did not finish', { message: (e as Error).message }));
+  // Questions left open by goals cancelled before a cancelled goal closed all of its questions
+  // (2026-11-23): one stayed in "Waiting for you" for good.
+  try {
+    const closed = state.settleQuestionsOfCancelledGoals(project.project_id);
+    if (closed) logger.info('questions of cancelled goals closed', { closed });
+  } catch (e) {
+    logger.warn('questions of cancelled goals were not closed', { message: (e as Error).message });
+  }
+
   // Friday's own folders are kept out of the project's lint (2026-11-19, the trial's F18): an
   // agent in the project folder ran `eslint .`, failed on Friday's hook launcher, and changed the
   // project's eslint.config.js to get past it. Projects set up before this get it at their start,

@@ -222,10 +222,13 @@ export const antigravity: HostModule = {
     if (e === 'Stop' && j.decision === 'continue')
       return reply({ decision: 'continue', reason: `Friday: ${j.reason}` });
     // `/friday` with nothing to take: the turn ends before the model is called ("Stops execution
-    // immediately before calling the model"), with Friday's words. Which kind of step the person
-    // sees on a terminated turn is not documented; an error message is the one meant for them.
+    // immediately before calling the model"), with Friday's words shown to the person and not sent
+    // to the model. The step is `{"errorMessage": {"userMessage": "..."}}` (the hooks guide shipped
+    // with the CLI, `agy-customizations/docs/hooks.md`). Until 2026-11-23 Friday wrote its inner
+    // field as `errorMessage`: Antigravity rejected the whole reply ("unknown field") and called the
+    // model anyway, in every live session.
     if (e === 'PreInvocation' && j.decision === 'halt') {
-      return reply({ terminationBehavior: 'terminate', injectSteps: [{ errorMessage: { errorMessage: j.text } }] });
+      return reply({ terminationBehavior: 'terminate', injectSteps: [{ errorMessage: { userMessage: j.text } }] });
     }
     return { stdout: '{}', stderr: '', exit_code: 0 };
   },
