@@ -1129,6 +1129,17 @@
   color: var(--color-slate-400);
 }
 
+/* A step's own button is as wide as its words, not as the row. */
+.pn-planner-step > .btn {
+  justify-self: start;
+}
+
+/* The steps Claude Code and the Anthropic key already had, under their rows: the row is the title. */
+.pn-planner-body > .pn-quick-setup > .pn-qs-title,
+.pn-planner-body .hub-card-title {
+  display: none;
+}
+
 .pn-planner-step .row {
   display: flex;
   flex-wrap: wrap;
