@@ -632,7 +632,7 @@ export class FridayApi {
    * Takes back this machine's approval to spend on planning (the running planner's provider when
    * none is named). Giving it is the machine's own act: the desktop's dialog, or a terminal.
    */
-  denySpending(provider?: 'anthropic' | 'claude-code'): Promise<{ removed: boolean; brain: BrainStatusView }> {
+  denySpending(provider?: string): Promise<{ removed: boolean; brain: BrainStatusView }> {
     return this.post('/brain/deny-remote', provider ? { provider } : {});
   }
 
@@ -640,8 +640,10 @@ export class FridayApi {
    * How this person plans on this machine (kept outside config.yaml): through Claude Code, with an
    * Anthropic key, by writing plans themselves, or, with null, as the project's config.yaml says.
    * Answers the planner's status; while its `choice.wanted` differs from `provider`, a restart applies it.
+   * Since 2026-11-23 also through Codex (`codex`), with a key of another service (`openai`,
+   * `gemini`, `deepseek`, `openrouter`), or with a model on this machine (`local`).
    */
-  choosePlanner(provider: 'anthropic' | 'claude-code' | 'none' | null): Promise<BrainStatusView> {
+  choosePlanner(provider: string | null): Promise<BrainStatusView> {
     return this.post('/brain/planner-choice', { provider });
   }
 
@@ -649,8 +651,24 @@ export class FridayApi {
    * The model this person's planner uses on this machine, or with null Friday's default (the
    * project's `master_brain.model`). It applies from the next plan; no restart.
    */
-  choosePlannerModel(model: string | null): Promise<BrainStatusView> {
-    return this.post('/brain/planner-choice', { model });
+  choosePlannerModel(model: string | null, modelFor?: string): Promise<BrainStatusView> {
+    return this.post('/brain/planner-choice', { model, ...(modelFor ? { model_for: modelFor } : {}) });
+  }
+
+  /**
+   * The models a key service (`openai`, …) or the model server on this machine (`local`) offers, for
+   * a person to pick from: read now, with the key stored on this machine.
+   */
+  plannerModels(provider: string): Promise<{ provider: string; models: string[] }> {
+    return this.get(`/brain/models?provider=${encodeURIComponent(provider)}`, { timeoutMs: 30_000 });
+  }
+
+  /**
+   * Where the model server on this machine listens (an address of this machine only), kept on this
+   * machine; null hands it back to the project's setting. Read when Friday starts.
+   */
+  setLocalPlannerAddress(baseUrl: string | null): Promise<{ base_url: string }> {
+    return this.post('/brain/local-endpoint', { base_url: baseUrl });
   }
 
   /**

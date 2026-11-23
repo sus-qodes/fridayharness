@@ -95,6 +95,8 @@ export interface DaemonOptions {
         autoStart?: boolean;
         /** The installed Claude Code and the environment it signs in with, for `master_brain.provider: claude-code` (the CLI finds it). */
         claudeCode?: { command: string; args?: readonly string[]; env?: NodeJS.ProcessEnv };
+        /** The installed Codex and the environment it signs in with, for `master_brain.provider: codex` (the CLI finds it). */
+        codex?: { command: string; args?: readonly string[]; env?: NodeJS.ProcessEnv };
       };
   /** The interface's built bundle (`apps/ui/dist`), served at /ui/ (M9); `friday run` passes it. */
   uiDir?: string;
@@ -702,6 +704,7 @@ export async function createDaemon(opts: DaemonOptions): Promise<Daemon> {
           modelFit: (task, agentId) => routing.fitFor(task, agentId),
           ...(opts.brain && opts.brain.model !== undefined ? { model: opts.brain.model } : {}),
           ...(opts.brain && opts.brain.claudeCode ? { claudeCode: opts.brain.claudeCode } : {}),
+          ...(opts.brain?.codex ? { codex: opts.brain.codex } : {}),
         });
 
   let closing: Promise<void> | undefined;

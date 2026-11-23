@@ -50,7 +50,7 @@ describe('the planner a machine chose, and its model', () => {
     expect(existsSync(file())).toBe(false);
     choosePlannerModel(ref, 'openai/gpt-6.1-sol', env);
     expect(plannerModelChoice(ref, env)).toBe('openai/gpt-6.1-sol');
-    writeFileSync(file(), JSON.stringify({ provider: 'local', model: '--yolo' }));
+    writeFileSync(file(), JSON.stringify({ provider: 'gpt', model: '--yolo' }));
     expect(plannerChoice(ref, env)).toBeNull();
     expect(plannerModelChoice(ref, env)).toBeNull();
     writeFileSync(file(), '{ not json');
@@ -61,6 +61,42 @@ describe('the planner a machine chose, and its model', () => {
     // A choice made over a damaged file replaces it with a sound one.
     choosePlannerModel(ref, 'claude-opus-5-5', env);
     expect(stored()).toEqual({ model: 'claude-opus-5-5' });
-    expect(() => choosePlanner(ref, 'local' as never, env)).toThrow(/is not a planner this machine can choose/);
+    expect(() => choosePlanner(ref, 'fake' as never, env)).toThrow(/is not a planner this machine can choose/);
+  });
+
+  /**
+   * A person without Claude plans too (2026-11-23): through Codex, with a key of another service,
+   * or with a model on this machine. Each planner keeps its own model: a Claude model's name means
+   * nothing to the others.
+   */
+  it('takes every way to plan, and keeps each planner’s own model apart', () => {
+    for (const p of ['codex', 'openai', 'gemini', 'deepseek', 'openrouter', 'local'] as const) {
+      choosePlanner(ref, p, env);
+      expect(plannerChoice(ref, env)).toBe(p);
+    }
+    choosePlannerModel(ref, 'claude-fable-5-2', env);
+    choosePlannerModel(ref, 'gpt-6.1-sol', env, 'codex');
+    choosePlannerModel(ref, 'qwen2.5:7b', env, 'local');
+    // The Claude planners share one choice; the others have their own.
+    expect(plannerModelChoice(ref, env)).toBe('claude-fable-5-2');
+    expect(plannerModelChoice(ref, env, 'anthropic')).toBe('claude-fable-5-2');
+    expect(plannerModelChoice(ref, env, 'claude-code')).toBe('claude-fable-5-2');
+    expect(plannerModelChoice(ref, env, 'codex')).toBe('gpt-6.1-sol');
+    expect(plannerModelChoice(ref, env, 'local')).toBe('qwen2.5:7b');
+    expect(plannerModelChoice(ref, env, 'openai')).toBeNull();
+    expect(stored()).toEqual({
+      provider: 'local',
+      model: 'claude-fable-5-2',
+      models: { codex: 'gpt-6.1-sol', local: 'qwen2.5:7b' },
+    });
+    // Taken back one at a time; nothing left of them leaves no empty list behind.
+    choosePlannerModel(ref, null, env, 'codex');
+    choosePlannerModel(ref, null, env, 'local');
+    expect(stored()).toEqual({ provider: 'local', model: 'claude-fable-5-2' });
+    expect(() => choosePlannerModel(ref, '--yolo', env, 'codex')).toThrow(/is not a model name/);
+    // A damaged list reads as no choice.
+    writeFileSync(file(), JSON.stringify({ models: { codex: '--yolo', local: 5 } }));
+    expect(plannerModelChoice(ref, env, 'codex')).toBeNull();
+    expect(plannerModelChoice(ref, env, 'local')).toBeNull();
   });
 });

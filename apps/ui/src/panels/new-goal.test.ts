@@ -71,6 +71,38 @@ describe('new goal enabling rules', () => {
     );
   });
 
+  /**
+   * Nobody chose a planner on this computer and the project's own is not ready (2026-11-23): the
+   * steps of an Anthropic key were named to people who have Codex, another key, or nothing yet.
+   */
+  it('says to choose who writes the plans, where nobody chose yet', () => {
+    const fresh = goalFormState(
+      form('Add billing'),
+      brain({
+        planner_available: false,
+        key: 'missing',
+        approved_here: false,
+        allow_remote: false,
+        planners: [],
+        choice: { here: null, project: 'anthropic', wanted: 'anthropic' },
+      }),
+    );
+    expect(fresh.plannerText).toBe(
+      'Friday cannot write plans yet: choose who writes your plans (Claude Code, Codex, a key of your own, or a model on this computer).',
+    );
+    // A person who chose one is told its own next step, as before.
+    const chosen = goalFormState(
+      form('Add billing'),
+      brain({
+        planner_available: false,
+        key: 'missing',
+        planners: [],
+        choice: { here: 'anthropic', project: 'anthropic', wanted: 'anthropic' },
+      }),
+    );
+    expect(chosen.plannerText).toBe('Friday cannot write plans yet: store your API key.');
+  });
+
   it('limits constraints and outcomes and drops empty lines from the body', () => {
     expect(
       goalFormState(form('Add billing', { constraints: Array(13).fill('c') }), brain()).errors.constraints,

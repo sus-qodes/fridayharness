@@ -72,8 +72,12 @@ export function desktopPlatform(
         await call<unknown>('open_recent_project', { root });
       },
       storeKey: (name) => dialog('store_key', { name }),
-      allowSpending: (budget, provider) =>
-        dialog('allow_spending', provider && provider !== 'anthropic' ? { budget, provider } : { budget }),
+      allowSpending: (budget, provider, calls) =>
+        dialog('allow_spending', {
+          budget,
+          ...(provider && provider !== 'anthropic' ? { provider } : {}),
+          ...(calls !== undefined ? { calls } : {}),
+        }),
       autostart: async () => (await call<unknown>('get_autostart')) === true,
       setAutostart: async (enabled) => (await call<unknown>('set_autostart', { enabled })) === true,
       // `test`: from either window, now, whatever the Notch shows; the answer is whether the shell

@@ -102,7 +102,7 @@ describe('how a person plans, kept on their machine (2026-11-17)', () => {
       td.daemon.state.store.readSince(td.project.project_id, 0, { types: ['planner.chosen'], limit: 5 }),
     ).toHaveLength(1);
     // Only a planner a machine may choose, and only for the operator.
-    await expect(td.operator.post(P('/brain/planner-choice'), { provider: 'local' })).rejects.toThrow(
+    await expect(td.operator.post(P('/brain/planner-choice'), { provider: 'fake' })).rejects.toThrow(
       /provider is one of/,
     );
     await expect(
@@ -148,7 +148,7 @@ describe('how a person plans, kept on their machine (2026-11-17)', () => {
     // How the person plans was not touched by choosing a model, and the tracked file not at all.
     expect(sonnet.choice).toEqual({ here: null, project: 'anthropic', wanted: 'anthropic' });
     expect(readFileSync(file, 'utf8')).toBe(before);
-    expect(chosen()).toEqual([{ model: 'claude-sonnet-5-5', was_model: null }]);
+    expect(chosen()).toEqual([{ model: 'claude-sonnet-5-5', was_model: null, planner: 'anthropic' }]);
 
     // A model Friday has no price for is refused: it could not count a plan against the limit.
     await expect(td.operator.post(P('/brain/planner-choice'), { model: 'some-unknown-model' })).rejects.toThrow(
@@ -469,8 +469,12 @@ describe('what Settings sets besides (2026-11-17)', () => {
     expect(allowed.spending).toEqual({ provider: 'anthropic', approved: true, yours_usd: 2, project_usd: 5 });
 
     // Taking it back only tightens: the page may, and it holds at once.
-    await expect(td.operator.post(P('/brain/deny-remote'), { provider: 'openai' })).rejects.toThrow(
-      /anthropic or claude-code/,
+    await expect(td.operator.post(P('/brain/deny-remote'), { provider: 'somewhere' })).rejects.toThrow(
+      /provider is one of claude-code, codex, anthropic, openai, gemini, deepseek, openrouter/,
+    );
+    // A model on this machine sends nothing anywhere: there is no approval of it to take back.
+    await expect(td.operator.post(P('/brain/deny-remote'), { provider: 'local' })).rejects.toThrow(
+      /provider is one of/,
     );
     await expect(td.bootstrap.post(td.bootstrap.projectPath('/brain/deny-remote'), {})).rejects.toThrow();
     const off = await td.operator.post<{ removed: boolean; brain: Status }>(P('/brain/deny-remote'), {

@@ -208,6 +208,10 @@ pub static ROUTES: &[Route] = &[
     // How this person plans on this machine (kept outside config.yaml); the spending approval and
     // the restart it needs stay the shell's own dialogs.
     post("brain/planner-choice"),
+    // The models a key service or the model server on this machine offers, for a person to pick
+    // from; and where that server listens, which takes only an address of this machine.
+    get("brain/models", &["provider"]),
+    post("brain/local-endpoint"),
     // Takes this machine's spending approval back: it only tightens. Giving it is `allow_spending`.
     post("brain/deny-remote"),
     // Lifts what keeps a host out of work (a failed sign-in, a bench): "I signed in: try again".

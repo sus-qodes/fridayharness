@@ -3,9 +3,13 @@ import path from 'node:path';
 import {
   AnthropicPlannerModel,
   type BrainSettings,
+  CODEX_DEFAULT_MODEL,
   ClaudeCodePlannerModel,
+  CodexPlannerModel,
   DEFAULT_PLANNER_MODEL,
   FakePlannerModel,
+  keyRefused,
+  localEndpoint,
   MasterBrain,
   ModelError,
   type ModelRequest,
@@ -14,20 +18,25 @@ import {
   type PlannerModel,
   priceEntry,
 } from '@friday/planner';
-import { type CostClass, FridayError, type TaskView } from '@friday/protocol';
+import { type CostClass, FridayError, type PlannerOptionView, type TaskView } from '@friday/protocol';
 import {
   choosePlanner,
   choosePlannerModel,
   hasSecret,
+  KEYED_PLANNERS,
+  type KeyedPlanner,
+  keyedPlanner,
   type MasterBrainConfig,
   type PlannerChoice,
   type ProjectRef,
+  type ProviderConfig,
   plannerChoice,
   plannerModelChoice,
   providerApproval,
   providerEndpoint,
   resolveSecret,
   revokeProvider,
+  setProviderEndpoint,
   stateDir,
 } from '@friday/sdk';
 import type { FridayState } from '@friday/state';
@@ -118,6 +127,143 @@ class LocalPlannerModel implements PlannerModel {
   }
 }
 
+/** What a person does when a key service or a local server has no model named yet. */
+export const MODEL_UNSET = 'no model is chosen for it yet: choose one in Settings, under Planner';
+
+/** The address of the model server on this machine: one set on this machine, else the project's. */
+export function localBaseUrl(project: ProjectRef, env: NodeJS.ProcessEnv): string {
+  return providerEndpoint('local', env) ?? project.config.providers.local.base_url;
+}
+
+/** Where a key service is reached: an endpoint the person set on this machine, else Friday's own for it. */
+export function keyedEndpoint(k: KeyedPlanner, env: NodeJS.ProcessEnv): string {
+  return providerEndpoint(k.id, env) ?? k.endpoint;
+}
+
+/** The stored key of a service (decrypted with DPAPI on Windows), else the environment's. */
+async function keyedKey(k: KeyedPlanner, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  return (await resolveSecret(k.id, env)) ?? (env[k.key_env]?.trim() || undefined);
+}
+
+/**
+ * A service reached with the person's own key (2026-11-23: OpenAI, Gemini, DeepSeek, OpenRouter),
+ * over the OpenAI-compatible chat API. As for Anthropic: the key is looked up at call time, never
+ * logged or recorded and masked by the redactor; the address is Friday's own for the service, or
+ * one set on this machine, never one from the tracked config (review F03). No price list is known
+ * for these services, so the planner is held to requests a day (`unpriced`).
+ */
+class KeyedCompatibleModel implements PlannerModel {
+  readonly provider: string;
+  readonly remote = true;
+  readonly unpriced = true;
+  #client: OpenAICompatiblePlannerModel | undefined;
+  #key: string | undefined;
+  #endpoint: string | undefined;
+
+  constructor(
+    private readonly service: KeyedPlanner,
+    private readonly env: NodeJS.ProcessEnv,
+    private readonly onKey: (key: string) => void,
+  ) {
+    this.provider = service.id;
+  }
+
+  async complete(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+    const key = await keyedKey(this.service, this.env);
+    if (!key) throw new ModelError('auth', `no ${this.service.label} key is stored on this computer`);
+    if (request.model === 'auto') throw new ModelError('bad_request', MODEL_UNSET);
+    const endpoint = keyedEndpoint(this.service, this.env);
+    if (!this.#client || key !== this.#key || endpoint !== this.#endpoint) {
+      this.#key = key;
+      this.#endpoint = endpoint;
+      this.onKey(key);
+      this.#client = new OpenAICompatiblePlannerModel({
+        baseUrl: endpoint,
+        apiKey: key,
+        remote: true,
+        provider: this.service.id,
+        label: this.service.label,
+        tokenParam: this.service.token_param,
+      });
+    }
+    return this.#client.complete(request, signal);
+  }
+}
+
+/**
+ * The models a key service or the local server offers (`GET <endpoint>/models`), for a person to
+ * pick from instead of typing a name. Read only on the person's request, with their stored key.
+ */
+export async function listPlannerModels(
+  project: ProjectRef,
+  provider: string,
+  env: NodeJS.ProcessEnv,
+  doFetch: typeof fetch = fetch,
+): Promise<string[]> {
+  const service = keyedPlanner(provider);
+  let base: URL;
+  let key: string | undefined;
+  if (service) {
+    key = await keyedKey(service, env);
+    if (!key) throw new FridayError('invalid_request', `no ${service.label} key is stored on this computer yet`);
+    base = new URL(keyedEndpoint(service, env));
+    if (base.protocol !== 'https:') throw new FridayError('invalid_request', 'a key is only sent over https');
+  } else if (provider === 'local') {
+    const cfg = project.config.providers.local;
+    key = cfg.api_key_env ? env[cfg.api_key_env]?.trim() || undefined : undefined;
+    try {
+      base = localEndpoint(localBaseUrl(project, env));
+    } catch (e) {
+      throw new FridayError('invalid_request', (e as Error).message);
+    }
+  } else {
+    throw new FridayError('invalid_request', `Friday cannot list the models of "${provider}"`);
+  }
+  const who = service?.label ?? 'the model server on this computer';
+  let res: Response;
+  try {
+    res = await doFetch(`${base.origin}${base.pathname.replace(/\/$/, '')}/models`, {
+      redirect: 'manual',
+      headers: key ? { authorization: `Bearer ${key}` } : {},
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (e) {
+    throw new FridayError(
+      'invalid_request',
+      service
+        ? `${who} could not be reached: ${(e as Error).message}`
+        : `no model server answers at ${base.origin}: start it (Ollama, LM Studio), then look again`,
+    );
+  }
+  if (res.status === 401 || res.status === 403) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new FridayError('invalid_request', `${who} rejected the key (${res.status})`);
+  }
+  // Gemini answers 400 for a key it does not take.
+  if (res.status === 400 && service) {
+    const said = await res.text().catch(() => '');
+    if (keyRefused(said)) throw new FridayError('invalid_request', `${who} rejected the key (400)`);
+    throw new FridayError('invalid_request', `${who} did not list its models (400)`);
+  }
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new FridayError('invalid_request', `${who} did not list its models (${res.status})`);
+  }
+  const body = (await res.json().catch(() => null)) as { data?: unknown; models?: unknown } | null;
+  const rows = Array.isArray(body?.data) ? body.data : Array.isArray(body?.models) ? body.models : [];
+  const ids = rows
+    .map((r) =>
+      r && typeof r === 'object' ? ((r as { id?: unknown; name?: unknown }).id ?? (r as { name?: unknown }).name) : r,
+    )
+    .filter(
+      (id): id is string =>
+        typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/.test(id.replace(/^models\//, '')),
+    )
+    // Gemini lists its models as "models/<id>": the id is what a request names.
+    .map((id) => id.replace(/^models\//, ''));
+  return [...new Set(ids)].sort((a, b) => a.localeCompare(b)).slice(0, 500);
+}
+
 export interface BrainStatus {
   provider: string;
   model: string;
@@ -159,6 +305,10 @@ export interface BrainStatus {
    * `project_usd`, the project's own, read when Friday started. The lower of the two holds.
    */
   spending: { provider: string; approved: boolean; yours_usd: number | null; project_usd: number };
+  /** Every way to plan this machine can choose, with where each stands now (2026-11-23). */
+  planners: PlannerOptionView[];
+  /** For a running planner held to requests a day: the limit, today's count, this machine's and the project's. */
+  requests: { limit: number; today: number; yours: number | null; project: number } | null;
 }
 
 export interface BrainHandle {
@@ -171,12 +321,20 @@ export interface BrainHandle {
    * `master_brain.model`. Refused for a model Friday has no price for: a call it cannot count
    * against the spending limit is one it does not make. Applies from the next planning call.
    */
-  choosePlannerModel(model: string | null): void;
+  choosePlannerModel(model: string | null, provider?: string): void;
   /**
    * Takes back this machine's approval to spend on a provider (the running planner's when none is
    * named); answers whether there was one. Read at each planning call: it holds from the next.
    */
-  denySpending(provider?: 'anthropic' | 'claude-code'): boolean;
+  denySpending(provider?: string): boolean;
+  /** The models a key service or the model server on this machine offers, read now with the stored key. */
+  listModels(provider: string): Promise<string[]>;
+  /**
+   * Sets where the model server on this machine listens (an address of this machine only), or with
+   * null hands it back to the project's setting; answers the address now in force. The planner
+   * reads it when Friday starts.
+   */
+  setLocalEndpoint(baseUrl: string | null): string;
 }
 
 /**
@@ -194,6 +352,8 @@ export function createMasterBrain(input: {
   model?: PlannerModel | null;
   /** The installed Claude Code and the environment it signs in with (`master_brain.provider: claude-code`); the CLI finds it. */
   claudeCode?: { command: string; args?: readonly string[]; env?: NodeJS.ProcessEnv };
+  /** The installed Codex and the environment it signs in with (`master_brain.provider: codex`); the CLI finds it. */
+  codex?: { command: string; args?: readonly string[]; env?: NodeJS.ProcessEnv };
   /** The effective policy: whether plans are approved without a human comes from it (ADR-0028). */
   policy?: () => { auto_approve: boolean };
   /** The model routing would run on an agent's harness for a task (ADR-0031 §9). */
@@ -214,16 +374,21 @@ export function createMasterBrain(input: {
   /** `master_brain` as config.yaml has it now: `project.config` is replaced when the file is read again. */
   const current = () => project.config.master_brain;
   const providerName = started.provider === 'none' ? 'none' : started.provider;
-  const provider = project.config.providers[providerName] ?? {
+  const provider: ProviderConfig = project.config.providers[providerName] ?? {
     allow_remote: false,
     daily_budget_usd: 5,
-    cache_ttl: '5m' as const,
+    daily_calls: 50,
+    cache_ttl: '5m',
   };
+  const projectCalls = provider.daily_calls;
+  const service = keyedPlanner(providerName);
 
   /** Consent as it is now: the project's request and this clone's local approval (review F03). */
   const remotePolicy = () => {
     const approval = providerApproval(project, providerName === 'none' ? 'anthropic' : providerName, env);
     const budget = Math.min(provider.daily_budget_usd, approval?.daily_budget_usd ?? Number.POSITIVE_INFINITY);
+    // The requests a day of a planner without a known price: the lower of the project's and this machine's.
+    const calls = Math.min(projectCalls, approval?.daily_calls ?? Number.POSITIVE_INFINITY);
     const refusal = !provider.allow_remote
       ? `remote calls to ${providerName} are off for this project; set providers.${providerName}.allow_remote: true in .friday/config.yaml, then run "friday brain allow-remote"`
       : !approval
@@ -232,6 +397,7 @@ export function createMasterBrain(input: {
     return {
       allowRemote: provider.allow_remote && Boolean(approval),
       dailyBudgetUsd: budget,
+      dailyCalls: calls,
       ...(refusal ? { refusal } : {}),
     };
   };
@@ -263,7 +429,8 @@ export function createMasterBrain(input: {
     const apiKey = cfg.api_key_env ? env[cfg.api_key_env]?.trim() || undefined : undefined;
     if (apiKey) state.redactor.addSecret(apiKey);
     try {
-      model = new LocalPlannerModel({ baseUrl: cfg.base_url, ...(apiKey ? { apiKey } : {}) });
+      // The address this machine set (LM Studio's port, for example), else the project's.
+      model = new LocalPlannerModel({ baseUrl: localBaseUrl(project, env), ...(apiKey ? { apiKey } : {}) });
     } catch (e) {
       // The config schema already refuses a host name; this catches an https or credentialed address.
       reason = (e as Error).message;
@@ -283,6 +450,22 @@ export function createMasterBrain(input: {
         effort: () => current().effort,
       });
     }
+  } else if (started.provider === 'codex') {
+    // The installed Codex plans, signed in as it is on this machine: the CLI found it, or
+    // CODEX_BIN names it.
+    const host = input.codex ?? (env.CODEX_BIN?.trim() ? { command: env.CODEX_BIN.trim() } : null);
+    if (!host) {
+      reason = 'Codex was not found on this computer';
+    } else {
+      model = new CodexPlannerModel({
+        command: host.command,
+        ...(host.args ? { args: host.args } : {}),
+        env: host.env ?? env,
+        effort: () => current().effort,
+      });
+    }
+  } else if (service) {
+    model = new KeyedCompatibleModel(service, env, (key) => state.redactor.addSecret(key));
   } else {
     model = new KeyedAnthropicModel(env, {
       cacheTtl: provider.cache_ttl,
@@ -292,13 +475,22 @@ export function createMasterBrain(input: {
   }
   // The model this machine chose for its planner (2026-11-17), where the planner is one a person
   // pays for from their own account: through Claude Code or an Anthropic key. Read at each call.
-  const ownModelApplies = started.provider === 'anthropic' || started.provider === 'claude-code';
-  let modelHere = input.model === undefined ? plannerModelChoice(project, env) : null;
+  const claudeFamily = started.provider === 'anthropic' || started.provider === 'claude-code';
+  // Codex, a key service and a local server each keep their own model on this machine too
+  // (2026-11-23): a Claude model's name means nothing to them.
+  const ownChoice = started.provider === 'codex' || Boolean(service) || local;
+  const ownModelApplies = claudeFamily || ownChoice;
+  let modelHere = input.model === undefined ? plannerModelChoice(project, env, started.provider) : null;
   const modelId = () => {
     if (modelHere && ownModelApplies) return modelHere;
     const m = current().model;
-    // A local server has no default model: `auto` stays as written, and the status says what to set.
-    return m !== 'auto' || local ? m : started.provider === 'fake' ? 'fake-planner' : DEFAULT_PLANNER_MODEL;
+    if (ownChoice) {
+      // The project's model belongs to the project's own planner: a planner this machine chose
+      // instead does not take it. `auto` stays as written: Codex then uses its own default, and a
+      // key service or a local server has none, which the status says.
+      return chosenAtStart === null || local ? m : CODEX_DEFAULT_MODEL;
+    }
+    return m !== 'auto' ? m : started.provider === 'fake' ? 'fake-planner' : DEFAULT_PLANNER_MODEL;
   };
   // Read on every pass: a changed config.yaml, and a trusted (or no longer trusted) policy, apply
   // without a restart. The provider's consent and budget are restart-only, like `providers`.
@@ -325,15 +517,13 @@ export function createMasterBrain(input: {
   // Through Claude Code the login is Claude Code's own (a key or a subscription): no key of Friday's.
   const viaClaudeCode = started.provider === 'claude-code';
   /** The key a remote planner of Friday's own needs, and where it is. */
+  const keyOf = (name: string, envName: string): BrainStatus['key'] =>
+    hasSecret(name, env) ? 'stored' : env[envName]?.trim() ? 'environment' : 'missing';
   const keyState = (): BrainStatus['key'] => {
     const remote = model?.remote ?? false;
-    return !remote || viaClaudeCode
-      ? 'not needed'
-      : hasSecret('anthropic', env)
-        ? 'stored'
-        : env.ANTHROPIC_API_KEY?.trim()
-          ? 'environment'
-          : 'missing';
+    // Claude Code and Codex sign in themselves: no key of Friday's.
+    if (!remote || viaClaudeCode || started.provider === 'codex') return 'not needed';
+    return service ? keyOf(service.id, service.key_env) : keyOf('anthropic', 'ANTHROPIC_API_KEY');
   };
   /**
    * Why the planner cannot plan now, or null: no model, no consent for remote calls, no key, a
@@ -348,10 +538,14 @@ export function createMasterBrain(input: {
       (remote && !consent.allowRemote
         ? (consent.refusal ?? 'remote calls are off')
         : keyState() === 'missing'
-          ? 'no Anthropic API key: run "friday secrets set anthropic"'
-          : local && model && current().model === 'auto'
+          ? service
+            ? `no ${service.label} key is stored on this computer`
+            : 'no Anthropic API key: run "friday secrets set anthropic"'
+          : local && model && modelId() === 'auto'
             ? LOCAL_MODEL_UNSET
-            : null)
+            : service && model && modelId() === 'auto'
+              ? MODEL_UNSET
+              : null)
     );
   };
   const brain = new MasterBrain({
@@ -382,17 +576,34 @@ export function createMasterBrain(input: {
   return {
     brain,
     choosePlanner: (provider) => choosePlanner(project, provider, env),
+    listModels: (name) => listPlannerModels(project, name, env),
+    setLocalEndpoint: (baseUrl) => {
+      if (baseUrl !== null) {
+        try {
+          localEndpoint(baseUrl);
+        } catch (e) {
+          throw new FridayError('invalid_request', (e as Error).message);
+        }
+      }
+      setProviderEndpoint('local', baseUrl, env);
+      return localBaseUrl(project, env);
+    },
     denySpending: (name) =>
-      revokeProvider(project, name ?? (providerName === 'claude-code' ? 'claude-code' : 'anthropic'), env),
-    choosePlannerModel: (chosen) => {
-      if (chosen !== null && !priceEntry(chosen, provider.prices)) {
+      revokeProvider(project, name ?? (providerName === 'none' ? 'anthropic' : providerName), env),
+    choosePlannerModel: (chosen, forProvider) => {
+      const target = forProvider ?? started.provider;
+      const claude = target === 'anthropic' || target === 'claude-code';
+      // A Claude planner is held to dollars: a model without a price could not be counted. The
+      // others are held to requests a day, whatever the model.
+      if (claude && chosen !== null && !priceEntry(chosen, provider.prices)) {
         throw new FridayError(
           'invalid_request',
-          `Friday has no price for ${chosen}, so it could not count a plan against the spending limit; choose a model it knows, or add its price under providers.${providerName}.prices`,
+          `Friday has no price for ${chosen}, so it could not count a plan against the spending limit; choose a model it knows, or add its price under providers.${target}.prices`,
         );
       }
-      choosePlannerModel(project, chosen, env);
-      modelHere = chosen;
+      choosePlannerModel(project, chosen, env, target);
+      // Read at each call when it is the running planner's (the Claude planners share one choice).
+      if (target === started.provider || (claude && claudeFamily)) modelHere = chosen;
     },
     status: () => {
       const pid = project.project_id;
@@ -404,12 +615,25 @@ export function createMasterBrain(input: {
       return {
         provider: model?.provider ?? started.provider,
         model: modelId(),
-        model_choice: { here: modelHere, project: current().model, applies: ownModelApplies },
+        // The choice the Claude planners share, and whether it is the one used: Codex, a key
+        // service and a local server keep their own (`planners[].model`).
+        model_choice: {
+          here: claudeFamily ? modelHere : plannerModelChoice(project, env),
+          project: current().model,
+          applies: claudeFamily,
+        },
         remote,
         allow_remote: provider.allow_remote,
         approved_here: Boolean(providerApproval(project, providerName === 'none' ? 'anthropic' : providerName, env)),
-        endpoint:
-          remote && !viaClaudeCode ? anthropicEndpoint(env) : local ? project.config.providers.local.base_url : null,
+        // Where requests go: a key service's address, the address of the model server on this
+        // machine (one set here, else the project's); a program that signs in itself names none.
+        endpoint: service
+          ? keyedEndpoint(service, env)
+          : local
+            ? localBaseUrl(project, env)
+            : remote && !viaClaudeCode && started.provider !== 'codex'
+              ? anthropicEndpoint(env)
+              : null,
         ignored_base_url: local ? null : (provider.base_url ?? null),
         key,
         planner_available: !unavailable,
@@ -419,7 +643,8 @@ export function createMasterBrain(input: {
         escalate_after_failures: current().escalate_after_failures,
         max_replans: current().max_replans,
         // No budget holds a model that costs nothing: only remote calls have one (ADR-0015 §4).
-        daily_budget_usd: remote ? consent.dailyBudgetUsd : null,
+        // Dollars are counted only where a price is known: not for a planner held to requests a day.
+        daily_budget_usd: remote && !requestsLimited() ? consent.dailyBudgetUsd : null,
         spent_today_usd: model ? state.q.modelSpend(pid, model.provider, dayStart) : 0,
         cursor: state.q.brainCursor(pid),
         head: state.store.head(pid),
@@ -436,7 +661,8 @@ export function createMasterBrain(input: {
         },
         auto_approve_requested: current().auto_approve === true,
         spending: (() => {
-          const name = providerName === 'claude-code' ? 'claude-code' : 'anthropic';
+          const name =
+            providerName === 'none' || providerName === 'local' || providerName === 'fake' ? 'anthropic' : providerName;
           const approval = providerApproval(project, name, env);
           return {
             provider: name,
@@ -445,7 +671,102 @@ export function createMasterBrain(input: {
             project_usd: provider.daily_budget_usd,
           };
         })(),
+        planners: plannerOptions(),
+        requests: requestsLimited()
+          ? {
+              limit: consent.dailyCalls,
+              today: model ? state.q.modelCallsSince(pid, model.provider, dayStart) : 0,
+              yours: providerApproval(project, providerName, env)?.daily_calls ?? null,
+              project: projectCalls,
+            }
+          : null,
       };
     },
   };
+
+  /** Whether the running planner is held to requests a day: a remote one whose model has no price. */
+  function requestsLimited(): boolean {
+    return Boolean(model?.remote && model.unpriced && !priceEntry(modelId(), provider.prices));
+  }
+
+  /** Every way to plan, with where each stands on this machine now. */
+  function plannerOptions(): PlannerOptionView[] {
+    const cfg = (name: string) =>
+      (
+        project.config.providers as Record<
+          string,
+          { allow_remote?: boolean; daily_budget_usd?: number; daily_calls?: number } | undefined
+        >
+      )[name];
+    const remote = (
+      id: string,
+      kind: 'program' | 'key',
+      label: string,
+      found: boolean | null,
+      key: BrainStatus['key'],
+      unpriced: boolean,
+      needsModel: boolean,
+    ): PlannerOptionView => ({
+      id,
+      kind,
+      label,
+      found,
+      remote: true,
+      allowed: cfg(id)?.allow_remote === true,
+      approved: Boolean(providerApproval(project, id, env)),
+      key,
+      model: plannerModelChoice(project, env, id),
+      needs_model: needsModel,
+      unpriced,
+      project_budget_usd: unpriced ? null : (cfg(id)?.daily_budget_usd ?? 5),
+      project_calls: unpriced ? (cfg(id)?.daily_calls ?? 50) : null,
+      endpoint: keyedPlanner(id) ? keyedEndpoint(keyedPlanner(id) as KeyedPlanner, env) : null,
+    });
+    return [
+      remote(
+        'claude-code',
+        'program',
+        'Claude Code',
+        Boolean(input.claudeCode ?? env.CLAUDE_CODE_BIN?.trim()),
+        'not needed',
+        false,
+        false,
+      ),
+      remote('codex', 'program', 'Codex', Boolean(input.codex ?? env.CODEX_BIN?.trim()), 'not needed', true, false),
+      remote('anthropic', 'key', 'Anthropic', null, keyOf('anthropic', 'ANTHROPIC_API_KEY'), false, false),
+      ...KEYED_PLANNERS.map((k) => remote(k.id, 'key', k.label, null, keyOf(k.id, k.key_env), true, true)),
+      {
+        id: 'local',
+        kind: 'local' as const,
+        label: 'A model on this computer',
+        found: null,
+        remote: false,
+        allowed: true,
+        approved: true,
+        key: 'not needed' as const,
+        model: plannerModelChoice(project, env, 'local'),
+        needs_model: true,
+        unpriced: false,
+        project_budget_usd: null,
+        project_calls: null,
+        endpoint: localBaseUrl(project, env),
+      },
+      {
+        id: 'none',
+        kind: 'none' as const,
+        label: 'I write the plans myself',
+        found: null,
+        remote: false,
+        allowed: true,
+        approved: true,
+        key: 'not needed' as const,
+        model: null,
+        needs_model: false,
+        unpriced: false,
+        project_budget_usd: null,
+        project_calls: null,
+        endpoint: null,
+      },
+    ];
+  }
 }

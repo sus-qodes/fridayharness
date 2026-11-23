@@ -2,6 +2,21 @@
 
 All notable changes, one section per milestone tag. Format: what changed for someone using or building Friday.
 
+## Unreleased — every agent, part 1: plans for people without Claude
+
+Only Claude could write a plan: through Claude Code, or with an Anthropic key. A person with Codex, with a key of another service, or with a model on their own computer had to write every plan by hand, and the app offered them nothing else.
+
+- **Settings → Planner asks "Who writes your plans"**, with one row for each way: Claude Code, **Codex**, an Anthropic key, a key of **OpenAI, Google Gemini, DeepSeek or OpenRouter**, **a model on this computer** (Ollama, LM Studio), or writing them yourself. Each row says where it stands (in use, not found, restart needed) and offers the next step it still needs.
+- **Codex plans through the Codex installed here, signed in as it already is.** One quiet run per plan that can only answer: its command tools, apps, plugins and browser are off, it loads none of the person's or the project's settings, its sandbox is read-only, it keeps no session and runs in an empty folder of its own. Leave the model empty for the one the account uses by default, or name one.
+- **A key of another service goes into Windows' own password box** and is sent only to that service's own address, which is Friday's, never one a project file names. The model is picked from the list the service itself gives.
+- **A model on this computer is chosen in the app**: its address (Ollama's, or LM Studio's), and a model from the server's own list. It was a line to write into the settings file. Only an address of this computer is taken.
+- **The rules stand.** Whether a project lets planning send its text somewhere is the project's own, shared setting, asked first; allowing it on a computer is that computer's own step, in the app's own dialog.
+- **Requests a day where no price is known.** Friday knows no price for Codex or for the key services, and guesses none: such a planner is held to a number of requests a day (50 unless changed; a plan is usually one or two), today's count is shown, and its cost is recorded as not known, never as $0. Reaching the limit asks the person, in those words.
+- **Each planner keeps its own model.** A Claude model's name was passed on to whichever planner ran.
+- **The planner reads the project's rules wherever they are kept**: `AGENTS.md` and `GEMINI.md` as well as `CLAUDE.md`, without the block Friday itself wrote into them. A project worked on with Codex or Antigravity had its plans written without its rules.
+- **A person who chose nothing yet is told to choose**, not to store an Anthropic key.
+- Not checked against the real services: the tests use stand-ins for Codex and for the four key services, since a real request spends the person's own account.
+
 ## Unreleased — the Antigravity test, part 2: a screen that tells the truth
 
 - **"Friday has stopped" only when it has.** After the laptop slept 25 minutes, the Studio counted the sleep as Friday not answering and said it had stopped, while Friday ran and the Notch beside it was connected; it then never tried again by itself. Now only time awake counts (one gap between two tries counts 6 seconds at most), and before saying Friday stopped, a window of the desktop app asks the app, which watches Friday's process: while the app says Friday runs, the window keeps trying and says "Friday is running, but this window cannot reach it yet; trying again".

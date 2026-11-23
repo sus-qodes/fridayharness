@@ -917,6 +917,66 @@ describe('runPlanner', () => {
     expect(called).toBe(0);
   });
 
+  /**
+   * A planner whose price Friday does not know (2026-11-23: Codex, a service reached with the
+   * person's own key) is held to requests a day. Its cost is recorded as not known, never as 0.
+   */
+  it('holds a planner without a known price to a number of requests a day, and never calls its cost 0', async () => {
+    const answers: unknown[] = [];
+    const codex = {
+      provider: 'codex',
+      remote: true,
+      unpriced: true,
+      complete: async (r: ModelRequest): Promise<ModelResponse> => {
+        const output = answers.shift() ?? STRIPE_PLAN;
+        return {
+          output,
+          model: r.model,
+          usage: { input_tokens: 4000, output_tokens: 600, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+          stop_reason: 'stop',
+          request_id: null,
+        };
+      },
+    };
+    const allowed = { ...policy, allowRemote: true };
+    const go = (p: typeof allowed & { dailyCalls?: number; callsToday?: number }) =>
+      runPlanner(codex, request({ model: 'auto' }), parsePlanDraft, p, { promptVersion: 'plan-1' });
+
+    // Consent is asked as of every remote planner.
+    expect(await go({ ...policy, allowRemote: false })).toMatchObject({ ok: false, reason: 'refused' });
+    // Within the day's requests: planned, the tokens recorded, the cost not known.
+    const ok = await go({ ...allowed, dailyCalls: 3, callsToday: 2 });
+    expect(ok.ok).toBe(true);
+    expect(ok.calls[0]).toMatchObject({ status: 'ok', cost_usd: null, cost_estimate_usd: null });
+    expect(ok.calls[0]?.usage.input_tokens).toBe(4000);
+    // The day's requests are used up: refused before anything is sent.
+    const full = await go({ ...allowed, dailyCalls: 3, callsToday: 3 });
+    expect(full).toMatchObject({ ok: false, reason: 'budget' });
+    if (!full.ok)
+      expect(full.message).toBe(
+        "today's limit of 3 requests to the planner is reached (3 made); it starts again tomorrow",
+      );
+    expect(full.calls).toMatchObject([{ status: 'refused', error_code: 'budget' }]);
+    // A repair attempt is a request too: the last one of the day is not followed by another.
+    answers.push({ ...STRIPE_PLAN, tasks: [task('a', ['x/**'], ['missing'])] });
+    const noRepair = await go({ ...allowed, dailyCalls: 3, callsToday: 2 });
+    expect(noRepair).toMatchObject({ ok: false, reason: 'budget' });
+    expect(noRepair.calls.map((c) => c.status)).toEqual(['invalid', 'refused']);
+    // Nobody set a number: 50 a day.
+    expect((await go({ ...allowed, callsToday: 49 })).ok).toBe(true);
+    expect(await go({ ...allowed, callsToday: 50 })).toMatchObject({ ok: false, reason: 'budget' });
+    // A model Friday does know the price of is held to dollars, whoever serves it.
+    const priced = await runPlanner(
+      codex,
+      request({ model: 'claude-opus-5-5' }),
+      parsePlanDraft,
+      { ...allowed, spentTodayUsd: 5, callsToday: 0, dailyCalls: 3 },
+      { promptVersion: 'plan-1' },
+    );
+    expect(priced).toMatchObject({ ok: false, reason: 'budget' });
+    if (!priced.ok) expect(priced.message).toContain("today's model budget of $5.00");
+  });
+
   /** A remote stand-in model whose answers the test scripts. */
   const remoteModel = (answers: Array<() => Promise<ModelResponse>>) => {
     const seen: ModelRequest[] = [];

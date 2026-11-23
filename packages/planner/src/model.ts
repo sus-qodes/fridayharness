@@ -33,7 +33,16 @@ export interface PlannerPolicy {
   spentTodayUsd: number;
   dailyBudgetUsd: number;
   prices?: PriceTable;
+  /**
+   * For a provider whose price is not known (`PlannerModel.unpriced`): the most requests it may be
+   * sent in a day, and how many it was sent today. Dollars cannot be counted there, so requests are.
+   */
+  dailyCalls?: number;
+  callsToday?: number;
 }
+
+/** The requests a day an unpriced planner is held to when nobody set a number. */
+export const DEFAULT_DAILY_CALLS = 50;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; errors: string[] };
 
@@ -130,13 +139,26 @@ export async function runPlanner<T>(
     let estimate: number | null = null;
     if (model.remote) {
       estimate = worstCaseCost(current.model, requestChars(current), current.maxTokens, policy.prices);
-      if (estimate === null) {
+      if (estimate === null && model.unpriced) {
+        // No price to count dollars with: the requests of the day are counted instead, this
+        // run's own included. A request that was refused before it was sent is not one.
+        const limit = policy.dailyCalls ?? DEFAULT_DAILY_CALLS;
+        const made = (policy.callsToday ?? 0) + calls.filter((c) => c.status !== 'refused').length;
+        if (made + 1 > limit) {
+          const message =
+            attempt === 1
+              ? `today's limit of ${limit} requests to the planner is reached (${made} made); it starts again tomorrow`
+              : `the first answer was invalid, and a second attempt would exceed today's limit of ${limit} requests to the planner`;
+          calls.push(refusal(attempt, 'budget', message));
+          return { ok: false, reason: 'budget', message, errors: lastErrors, calls };
+        }
+      } else if (estimate === null) {
         const message = `no price is known for model ${current.model}, so the daily budget cannot be kept; add it under providers.${model.provider}.prices in .friday/config.yaml`;
         calls.push(refusal(attempt, 'budget', message));
         return { ok: false, reason: 'budget', message, errors: lastErrors, calls };
       }
       const spent = policy.spentTodayUsd + calls.reduce((sum, c) => sum + budgetedCost(c), 0);
-      if (spent + estimate > policy.dailyBudgetUsd) {
+      if (estimate !== null && spent + estimate > policy.dailyBudgetUsd) {
         const message =
           attempt === 1
             ? `today's model budget of $${policy.dailyBudgetUsd.toFixed(2)} does not cover this call ($${spent.toFixed(2)} spent, up to $${estimate.toFixed(2)} needed)`

@@ -274,6 +274,11 @@ const Provider = z
     allow_remote: z.boolean().default(false),
     /** Spend per UTC day before Friday stops calling the provider and asks a human. */
     daily_budget_usd: z.number().min(0).default(5),
+    /**
+     * Requests per UTC day for a planner whose price Friday does not know (2026-11-23: Codex, a
+     * service reached with the person's own key): dollars cannot be counted there, so requests are.
+     */
+    daily_calls: z.number().int().min(0).max(10_000).default(50),
     /** Prompt-cache lifetime of the project context. */
     cache_ttl: z.enum(['5m', '1h']).default('5m'),
     /**
@@ -318,7 +323,24 @@ const MasterBrainConfig = z
      * `claude-code`: the installed Claude Code, headless, signed in as it is on this machine (an API
      * key or a subscription): for a subscription, which cannot call the API directly.
      */
-    provider: z.enum(['anthropic', 'claude-code', 'local', 'fake', 'none']).default('anthropic'),
+    /**
+     * `codex`: the installed Codex, headless, signed in as it is on this machine. `openai`,
+     * `gemini`, `deepseek`, `openrouter`: that service, with the person's own key (2026-11-23).
+     */
+    provider: z
+      .enum([
+        'anthropic',
+        'claude-code',
+        'codex',
+        'openai',
+        'gemini',
+        'deepseek',
+        'openrouter',
+        'local',
+        'fake',
+        'none',
+      ])
+      .default('anthropic'),
     /** `auto` is the default planning model, claude-opus-5-5. Provider `local` needs the model's name on the server. */
     model: z.string().min(1).default('auto'),
     effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
@@ -695,7 +717,17 @@ export const EDITABLE_SETTINGS = {
   'verification.auto_on_completion': z.boolean(),
   // Landing without a click: a loosening, in force once this clone trusts it.
   'landing.mode': z.enum(['ask', 'goal', 'task']),
-  'master_brain.provider': z.enum(['anthropic', 'claude-code', 'none']),
+  'master_brain.provider': z.enum([
+    'anthropic',
+    'claude-code',
+    'codex',
+    'openai',
+    'gemini',
+    'deepseek',
+    'openrouter',
+    'local',
+    'none',
+  ]),
   // Plans start without a person's approval: a loosening, in force once this clone trusts it.
   'master_brain.auto_approve': z.boolean(),
   'providers.claude-code.allow_remote': z.boolean(),
@@ -703,6 +735,18 @@ export const EDITABLE_SETTINGS = {
   // The same two for planning with an Anthropic key (2026-11-17): they were a line to write by hand.
   'providers.anthropic.allow_remote': z.boolean(),
   'providers.anthropic.daily_budget_usd': z.number().min(0).max(100_000),
+  // Planning through Codex, or with a key of another service (2026-11-23): whether the project
+  // allows it, and its requests a day (no price is known there, so no dollars are counted).
+  'providers.codex.allow_remote': z.boolean(),
+  'providers.codex.daily_calls': z.number().int().min(0).max(10_000),
+  'providers.openai.allow_remote': z.boolean(),
+  'providers.openai.daily_calls': z.number().int().min(0).max(10_000),
+  'providers.gemini.allow_remote': z.boolean(),
+  'providers.gemini.daily_calls': z.number().int().min(0).max(10_000),
+  'providers.deepseek.allow_remote': z.boolean(),
+  'providers.deepseek.daily_calls': z.number().int().min(0).max(10_000),
+  'providers.openrouter.allow_remote': z.boolean(),
+  'providers.openrouter.daily_calls': z.number().int().min(0).max(10_000),
   // What agents may run without asking (below): `auto` is a loosening this clone trusts first.
   'autonomy.file.write': z.enum(['auto', 'review']),
   'autonomy.git.mutate': z.enum(['auto', 'review']),
@@ -1041,7 +1085,7 @@ setup:
 # project allows remote calls here AND you allowed it on your machine ("friday brain allow-remote");
 # store the key with "friday secrets set anthropic".
 master_brain:
-  provider: anthropic   # anthropic | claude-code | local | fake | none (none: you write plans with "friday plan propose")
+  provider: anthropic   # anthropic | claude-code | codex | openai | gemini | deepseek | openrouter | local | fake | none (none: you write the plans)
                         # claude-code: the installed Claude Code plans, signed in as on this machine (a subscription works)
   model: auto           # claude-opus-5-5; for provider local, the model's name on your server (qwen2.5:7b)
   auto_approve: false   # a human approves each plan version with "friday plan approve"

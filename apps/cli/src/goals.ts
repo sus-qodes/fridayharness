@@ -593,14 +593,28 @@ export function registerGoalCommands(program: Command, g: () => GlobalOptions): 
     .description("let this clone use your provider key (the project's config must ask for it too)")
     .option('--provider <name>', 'provider', 'anthropic')
     .option('--budget <usd>', "a daily budget below the project's", Number.parseFloat)
-    .action((o: { provider: string; budget?: number }) => {
+    .option(
+      '--calls <n>',
+      "requests a day below the project's, for a planner without a known price (codex, openai, gemini, deepseek, openrouter)",
+      (v) => Number.parseInt(v, 10),
+    )
+    .action((o: { provider: string; budget?: number; calls?: number }) => {
       const ref = project(g());
       if (o.budget !== undefined && !(o.budget >= 0)) throw new UsageError('--budget must be a number of dollars');
-      const a = approveProvider(ref, o.provider, { daily_budget_usd: o.budget ?? null });
+      if (o.calls !== undefined && !(Number.isInteger(o.calls) && o.calls >= 0)) {
+        throw new UsageError('--calls must be a whole number of requests');
+      }
+      const a = approveProvider(ref, o.provider, { daily_budget_usd: o.budget ?? null, daily_calls: o.calls ?? null });
       const asked = ref.config.providers[o.provider]?.allow_remote ?? false;
+      const limit =
+        o.calls !== undefined
+          ? ` (at most ${o.calls} requests a day)`
+          : o.budget !== undefined
+            ? ` (at most ${usd(o.budget)} a day)`
+            : '';
       out(g(), { provider: o.provider, project: ref.project_id, ...a, project_allows: asked }, () =>
         [
-          `This clone of ${ref.name} may now use your ${o.provider} key${o.budget !== undefined ? ` (at most ${usd(o.budget)} a day)` : ''}.`,
+          `This clone of ${ref.name} may now plan with ${o.provider}${limit}.`,
           asked
             ? 'The project allows remote calls too, so the Master Brain can plan.'
             : `The project does not ask for remote calls yet: set providers.${o.provider}.allow_remote: true in .friday/config.yaml.`,

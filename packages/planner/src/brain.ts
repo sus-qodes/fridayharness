@@ -64,6 +64,8 @@ export interface BrainSettings {
 export interface RemotePolicy {
   allowRemote: boolean;
   dailyBudgetUsd: number;
+  /** The requests a day a planner without a known price is held to (`PlannerPolicy.dailyCalls`). */
+  dailyCalls?: number;
   /** Why remote calls are off, for the human. */
   refusal?: string;
 }
@@ -741,6 +743,13 @@ export class MasterBrain {
       ...(live.refusal ? { remoteRefusal: live.refusal } : {}),
       spentTodayUsd: model.remote ? state.q.modelSpend(projectId, model.provider, dayStart) : 0,
       dailyBudgetUsd: live.dailyBudgetUsd,
+      // A planner without a known price is held to requests a day, counted from the same records.
+      ...(model.remote && model.unpriced
+        ? {
+            callsToday: state.q.modelCallsSince(projectId, model.provider, dayStart),
+            ...(live.dailyCalls !== undefined ? { dailyCalls: live.dailyCalls } : {}),
+          }
+        : {}),
       ...(settings.prices ? { prices: settings.prices } : {}),
     };
   }

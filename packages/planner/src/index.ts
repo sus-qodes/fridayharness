@@ -40,6 +40,7 @@ export {
 } from './intent-drafter.js';
 export {
   budgetedCost,
+  DEFAULT_DAILY_CALLS,
   formatIssues,
   type ParseResult,
   type PlannerCall,
@@ -76,14 +77,28 @@ export {
   type ClaudeCodePlannerOptions,
   usageFromClaude,
 } from './providers/claude-code.js';
+export {
+  CODEX_DEFAULT_MODEL,
+  CODEX_PLANNER_OFF,
+  CODEX_UNNAMED_MODEL,
+  CodexPlannerModel,
+  type CodexPlannerOptions,
+  classifyCodexFailure,
+  dropNullOptionals,
+  strictOutputSchema,
+  usageFromCodex,
+} from './providers/codex.js';
 export { FakePlannerModel, type FakeResponse } from './providers/fake.js';
 export {
   DEFAULT_LOCAL_BASE_URL,
   jsonModeInstructions,
+  keyRefused,
   localEndpoint,
   localOutputSchema,
   type OpenAICompatibleOptions,
   OpenAICompatiblePlannerModel,
+  remoteEndpoint,
+  type TokenParam,
   usageFrom,
 } from './providers/openai-compatible.js';
 export {

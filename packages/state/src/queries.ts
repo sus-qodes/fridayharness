@@ -1425,6 +1425,21 @@ export class Queries {
     );
   }
 
+  /**
+   * The requests sent to a provider since a moment: every recorded call but the ones refused
+   * before they were sent. What a planner without a known price is held to a day (2026-11-23).
+   */
+  modelCallsSince(projectId: string, provider: string, sinceIso: string): number {
+    return (
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM model_calls
+           WHERE project_id = ? AND provider = ? AND created_at >= ? AND status <> 'refused'`,
+        )
+        .get<{ n: number }>(projectId, provider, sinceIso)?.n ?? 0
+    );
+  }
+
   assignments(taskId: string): AssignmentView[] {
     return this.db
       .prepare('SELECT * FROM agent_assignments WHERE task_id = ? ORDER BY created_at')

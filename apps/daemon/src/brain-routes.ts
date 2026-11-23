@@ -386,12 +386,23 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
     if (hasModel && body.model !== null && (typeof body.model !== 'string' || !body.model.trim())) {
       throw new FridayError('invalid_request', 'model is a model name, or null');
     }
+    // The planner a model is for (2026-11-23): each keeps its own. Left out: the running planner.
+    const forPlanner = body.model_for;
+    if (forPlanner !== undefined && !(PLANNER_CHOICES as readonly unknown[]).includes(forPlanner)) {
+      throw new FridayError('invalid_request', `model_for is one of ${PLANNER_CHOICES.join(', ')}`);
+    }
     // The model first: a model Friday cannot price is refused before anything is written.
     if (hasModel) {
       const model = body.model === null ? null : (body.model as string).trim();
-      const was = brain().status().model_choice.here;
-      brain().choosePlannerModel(model);
-      if (was !== model) state.recordObservation(pid, human, 'planner.chosen', { model, was_model: was }, []);
+      const target = (forPlanner as string | undefined) ?? brain().status().provider;
+      const was =
+        brain()
+          .status()
+          .planners.find((p) => p.id === target)?.model ?? null;
+      brain().choosePlannerModel(model, forPlanner as string | undefined);
+      if (was !== model) {
+        state.recordObservation(pid, human, 'planner.chosen', { model, was_model: was, planner: target }, []);
+      }
     }
     if (hasProvider) {
       const provider = body.provider as PlannerChoice | null;
@@ -409,12 +420,37 @@ export function mountBrainRoutes(d: BrainRouteDeps): void {
   // taking it back only tightens, so the interface may. It holds from the next planning call.
   app.post(`${P}/brain/deny-remote`, op, async (c) => {
     const raw = (await json(c)).provider;
-    if (raw !== undefined && raw !== 'anthropic' && raw !== 'claude-code') {
-      throw new FridayError('invalid_request', 'provider is anthropic or claude-code, or left out');
+    const known = brain()
+      .status()
+      .planners.filter((p) => p.remote)
+      .map((p) => p.id);
+    if (raw !== undefined && !known.includes(raw as string)) {
+      throw new FridayError('invalid_request', `provider is one of ${known.join(', ')}, or left out`);
     }
-    const removed = brain().denySpending(raw);
+    const removed = brain().denySpending(raw as string | undefined);
     if (removed) state.recordObservation(pid, human, 'planner.spending_denied', { provider: raw ?? null }, []);
     return c.json({ removed, brain: brain().status() });
+  });
+
+  // The models a key service or the model server on this machine offers (2026-11-23), for a
+  // person to pick from: read on their request, with the key stored on this machine.
+  app.get(`${P}/brain/models`, op, async (c) => {
+    const provider = c.req.query('provider') ?? '';
+    return c.json({ provider, models: await brain().listModels(provider) });
+  });
+
+  // Where the model server on this machine listens (2026-11-23: LM Studio's port, another of
+  // Ollama's), kept on this machine. Only an address of this machine is taken, so no key and no
+  // request can be sent elsewhere by it; null hands it back to the project's setting. The planner
+  // reads it when Friday starts.
+  app.post(`${P}/brain/local-endpoint`, op, async (c) => {
+    const raw = (await json(c)).base_url;
+    if (raw !== null && typeof raw !== 'string') {
+      throw new FridayError('invalid_request', 'base_url is an address of this computer, or null');
+    }
+    const base_url = brain().setLocalEndpoint(raw);
+    state.recordObservation(pid, human, 'planner.chosen', { local_endpoint: raw }, []);
+    return c.json({ base_url });
   });
 
   app.get(`${P}/model-calls`, op, (c) => {

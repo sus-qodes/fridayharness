@@ -19,10 +19,10 @@ export const PLANNER_FAILURES: readonly string[] = [
 export type PlannerTrouble = 'sign_in' | 'limit' | 'not_set_up' | 'budget' | 'unreadable' | 'other';
 
 const SIGN_IN =
-  /not (signed|logged) in|sign[- ]?in|log ?in|oauth|authenticat|unauthori[sz]ed|\b401\b|invalid (api )?key|expired/i;
+  /not (signed|logged) in|sign[- ]?in|log ?in|oauth|authenticat|unauthori[sz]ed|\b401\b|invalid (api )?key|rejected the key|expired/i;
 const LIMIT = /usage limit|rate limit|limit reached|hit your limit|too many requests|\b429\b|overloaded|resets?\b/i;
 const NOT_SET_UP =
-  /no planner|not configured|no (api )?key|key is (missing|not stored)|not approved|not allowed|allow_remote|was not found|not installed|no model/i;
+  /no planner|not configured|no (api )?key|no [\w ]{0,30}key is stored|key is (missing|not stored)|not approved|not allowed|allow_remote|was not found|not installed|no model/i;
 
 /** What went wrong, from the question's kind and the provider's own words. */
 export function plannerTrouble(kind: string | null, why: string | null | undefined): PlannerTrouble {
@@ -40,13 +40,16 @@ export function plannerTrouble(kind: string | null, why: string | null | undefin
 export function plannerTroubleWords(trouble: PlannerTrouble, why: string | null | undefined): string {
   switch (trouble) {
     case 'sign_in':
-      return 'The planner is not signed in. Sign in to it (for Claude Code: open Claude Code once and sign in), then try again.';
+      return 'The planner is not signed in, or its key was refused. Sign in to it (for Claude Code or Codex: open it once and sign in; for a key: store it again in Settings → Planner), then try again.';
     case 'limit':
       return 'The planner reached a usage limit. It can be asked again once the limit resets.';
     case 'not_set_up':
       return 'No planner is ready on this computer. Set one up in Settings → Planner, or write the plan yourself.';
     case 'budget':
-      return 'Today’s spending limit for planning is used up. Raise it in Settings → Planner, wait until tomorrow, or write the plan yourself.';
+      // A planner without a known price is held to requests a day: said as that, not as spending.
+      return /requests to the planner/.test(why ?? '')
+        ? 'Today’s limit of requests to the planner is reached. Raise it in Settings → Planner, wait until tomorrow, or write the plan yourself.'
+        : 'Today’s spending limit for planning is used up. Raise it in Settings → Planner, wait until tomorrow, or write the plan yourself.';
     case 'unreadable':
       return 'The planner answered, but not with a plan Friday could use. Ask again, with a note on what you want if that helps, or write the plan yourself.';
     default: {
@@ -73,6 +76,17 @@ export function plannerWords(brain: { provider: string; model: string }): string
       return `${model}, with your Anthropic API key`;
     case 'claude-code':
       return `${model}, through your Claude Code sign-in`;
+    case 'codex':
+      // No model named: the one the person's account uses by default, which Codex does not say.
+      return brain.model === 'auto' ? 'Codex, through your Codex sign-in' : `${model}, through your Codex sign-in`;
+    case 'openai':
+      return `${model}, with your OpenAI API key`;
+    case 'gemini':
+      return `${model}, with your Google Gemini API key`;
+    case 'deepseek':
+      return `${model}, with your DeepSeek API key`;
+    case 'openrouter':
+      return `${model}, with your OpenRouter key`;
     case 'local':
       return `${model}, a model on this computer`;
     case 'none':

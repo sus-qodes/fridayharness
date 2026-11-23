@@ -1017,7 +1017,7 @@ describe('question cards by kind (plan FD-21)', () => {
         const card = mount(failed('planner_unavailable', 'Claude Code said: Not logged in · Please run /login'));
         expect(card.el.querySelector('.gv-question-text')?.textContent).toBe('Friday could not plan this goal.');
         expect(card.el.querySelector('.gv-why')?.textContent).toBe(
-          'The planner is not signed in. Sign in to it (for Claude Code: open Claude Code once and sign in), then try again.',
+          'The planner is not signed in, or its key was refused. Sign in to it (for Claude Code or Codex: open it once and sign in; for a key: store it again in Settings → Planner), then try again.',
         );
         // The daemon's own sentence, with its ids and terminal commands, is one step away.
         const details = card.el.querySelector('details.gv-details') as HTMLDetailsElement;

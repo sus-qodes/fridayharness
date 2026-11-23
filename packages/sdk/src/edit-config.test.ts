@@ -68,7 +68,9 @@ describe('editConfigText', () => {
     expect(text).toContain('  port: 0            # 0 = pick a free port each start');
     // And a value that had a comment after it keeps the comment.
     const provider = editConfigText(before, { 'master_brain.provider': 'none' }).text;
-    expect(provider).toContain('  provider: none   # anthropic | claude-code | local | fake | none');
+    expect(provider).toContain(
+      '  provider: none   # anthropic | claude-code | codex | openai | gemini | deepseek | openrouter | local | fake | none',
+    );
     expect(provider.split('\n')).toHaveLength(was.length);
   });
 
@@ -152,9 +154,32 @@ describe('editConfigText', () => {
         'providers.claude-code.daily_budget_usd',
         'providers.anthropic.allow_remote',
         'providers.anthropic.daily_budget_usd',
+        // Planning without Claude (2026-11-23): whether the project allows it, and its requests a day.
+        ...['codex', 'openai', 'gemini', 'deepseek', 'openrouter'].flatMap((p) => [
+          `providers.${p}.allow_remote`,
+          `providers.${p}.daily_calls`,
+        ]),
         'worktrees.files',
         ...ASKABLE_COMMAND_CLASSES.map((c) => `autonomy.${c}`),
       ].sort(),
+    );
+  });
+
+  it('lets a project allow planning through Codex, with its requests a day, as new lines (2026-11-23)', () => {
+    const before = fresh();
+    const on = editConfigText(before, { 'providers.codex.allow_remote': true, 'providers.codex.daily_calls': 30 });
+    expect(on.changed).toEqual(['providers.codex.allow_remote', 'providers.codex.daily_calls']);
+    const codex = parseConfig(on.text).providers.codex;
+    expect([codex?.allow_remote, codex?.daily_calls]).toEqual([true, 30]);
+    // Nothing a project did not set is switched on with it, and a project that sets nothing gets 50.
+    expect(parseConfig(on.text).providers.openai?.allow_remote ?? false).toBe(false);
+    expect(
+      parseConfig(editConfigText(before, { 'providers.openai.allow_remote': true }).text).providers.openai?.daily_calls,
+    ).toBe(50);
+    expect(() => editConfigText(before, { 'providers.codex.daily_calls': 1.5 })).toThrow(/daily_calls/);
+    expect(() => editConfigText(before, { 'providers.codex.daily_calls': -1 })).toThrow(/daily_calls/);
+    expect(parseConfig(editConfigText(before, { 'master_brain.provider': 'codex' }).text).master_brain.provider).toBe(
+      'codex',
     );
   });
 

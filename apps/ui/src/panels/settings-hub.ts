@@ -44,6 +44,7 @@ import {
 } from './common.js';
 import { copyFilesCard } from './copy-files.js';
 import { plannerModelRow } from './planner-model.js';
+import { plannerChoices, plannerRequestsCard } from './planner-choices.js';
 import { plannerSpendingCard } from './planner-spending.js';
 import { projectChecksCard } from './project-checks.js';
 import { autoApproveSwitch, autoVerifySwitch, landingChoice, plannerQuickSetup } from './quick-setup.js';
@@ -651,13 +652,22 @@ export function mountSettingsHub(ctx: AppContext): Component {
         h('dd', { title: `${plain(brain.provider, 40)} · ${plain(brain.model, 80)}` }, plannerWords(brain)),
         h('dt', null, 'API key'),
         h('dd', null, keyWords(brain.key)),
-        // Through Claude Code the figure is what the planning would cost at list prices, not a bill.
-        h('dt', null, brain.provider === 'claude-code' ? 'Used today (estimate)' : 'Spent today'),
-        h(
-          'dd',
-          null,
-          `${usd(brain.spent_today_usd)} of ${Number.isFinite(brain.daily_budget_usd) ? usd(brain.daily_budget_usd) : 'no limit'}`,
-        ),
+        // A planner Friday knows no price for (Codex, a key service) is counted in requests, and
+        // nothing is said in dollars. Through Claude Code the figure is what the planning would
+        // cost at list prices, not a bill.
+        ...(brain.requests
+          ? [
+              h('dt', null, 'Requests today'),
+              h('dd', { dataset: { role: 'requests' } }, `${brain.requests.today} of ${brain.requests.limit}`),
+            ]
+          : [
+              h('dt', null, brain.provider === 'claude-code' ? 'Used today (estimate)' : 'Spent today'),
+              h(
+                'dd',
+                null,
+                `${usd(brain.spent_today_usd)} of ${Number.isFinite(brain.daily_budget_usd) ? usd(brain.daily_budget_usd) : 'no limit'}`,
+              ),
+            ]),
       );
       cardStatus.append(h('div', { class: 'hub-divider' }), kv);
       const modelRow = plannerModelRow(ctx, brain);
@@ -803,6 +813,24 @@ export function mountSettingsHub(ctx: AppContext): Component {
     const cardSpending = spending ? h('div', { class: 'hub-card' }, spending) : null;
     // Whether a proposed plan waits for a person: asked wherever there is a planner at all.
     const cardApprove = brain ? h('div', { class: 'hub-card' }, autoApproveSwitch(ctx, tabTd)) : null;
+    // Every way to plan in one list (2026-11-23): Codex, a key of another service and a model on
+    // this computer beside Claude's two, whose own steps are shown under their rows.
+    const choices = plannerChoices(ctx, tabTd, {
+      'claude-code': cardQuick.firstElementChild as HTMLElement,
+      anthropic: cardActions,
+    });
+    if (choices) {
+      cardActions.classList.remove('hub-card');
+      const requests = plannerRequestsCard(ctx, tabTd, brain);
+      const listed: (HTMLElement | null)[] = [
+        cardStatus,
+        cardSpending,
+        requests ? h('div', { class: 'hub-card' }, requests) : null,
+        h('div', { class: 'hub-card' }, choices),
+        cardApprove,
+      ];
+      return listed.filter((x): x is HTMLElement => x !== null);
+    }
     // The switch stays once planning works through it: it is where a person turns it off again.
     const setup = st.ready
       ? viaClaudeCode

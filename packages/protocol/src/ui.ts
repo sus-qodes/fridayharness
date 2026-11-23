@@ -200,6 +200,54 @@ export interface BrainStatusView {
    * `project_usd`: the project's own. The lower of the two holds (`daily_budget_usd`).
    */
   spending?: { provider: string; approved: boolean; yours_usd: number | null; project_usd: number };
+  /**
+   * Every way to plan this machine can choose, with where each stands now (2026-11-23); absent
+   * from an older daemon. Until then the interface offered Claude only.
+   */
+  planners?: PlannerOptionView[];
+  /**
+   * For a running planner held to requests a day (no price is known for it): the limit in force,
+   * how many requests were sent today, this machine's own limit (null: the project's) and the
+   * project's. Null for a planner held to dollars, or to nothing.
+   */
+  requests?: { limit: number; today: number; yours: number | null; project: number } | null;
+}
+
+/** One way to plan, as the interface offers it (`BrainStatusView.planners`). */
+export interface PlannerOptionView {
+  /** `claude-code`, `codex`, `anthropic`, `openai`, `gemini`, `deepseek`, `openrouter`, `local`, `none`. */
+  id: string;
+  /**
+   * `program`: a coding app installed here, signed in as it already is; `key`: a service reached
+   * with the person's own key; `local`: a model on this machine; `none`: the person writes plans.
+   */
+  kind: 'program' | 'key' | 'local' | 'none';
+  /** Its name for a person: "Codex", "OpenAI". */
+  label: string;
+  /** For `program`: whether Friday found it when it started. Null otherwise. */
+  found: boolean | null;
+  /** Requests leave this machine, so the project must allow it and this machine approve it. */
+  remote: boolean;
+  /** The project allows it (`providers.<id>.allow_remote`); true where nothing leaves the machine. */
+  allowed: boolean;
+  /** This machine approved it; true where nothing leaves the machine. */
+  approved: boolean;
+  /** Whether a key is stored; never the key. */
+  key: 'stored' | 'environment' | 'missing' | 'not needed';
+  /** The model this machine chose for it; null: its own default, or none chosen yet. */
+  model: string | null;
+  /** It cannot plan until a model is named (a key service, a model on this machine). */
+  needs_model: boolean;
+  /** No price is known for it: held to requests a day (`project_calls`), not dollars. */
+  unpriced: boolean;
+  /** The project's own daily limits; null where none applies. */
+  project_budget_usd: number | null;
+  project_calls: number | null;
+  /**
+   * Where its requests go, when Friday names the address: a key service's own, or the model
+   * server's on this machine (one set here, else the project's). Null otherwise.
+   */
+  endpoint: string | null;
 }
 
 /** An open Master Brain job; `calling` while a model request is in flight (the mascot thinks). */

@@ -813,49 +813,83 @@ async fn store_key(app: AppHandle, name: String) -> Result<Value, CmdError> {
     .await
 }
 
-/// Lets this clone use the provider key, after a native confirmation:
-/// `friday brain allow-remote --budget <n> --json` (FD-26).
-/// `provider` is the planner the approval is for: `anthropic` (the default, a stored key) or
-/// `claude-code` (the installed Claude Code, signed in as on this machine).
+/// What planning with a provider uses, in words for the approval dialog, and whether Friday knows
+/// a price for it. `None`: not a planner this dialog approves.
+///
+/// Claude's two are held to dollars. For the others (2026-11-23: Codex, and a service reached with
+/// the person's own key) Friday knows no price, so they are held to requests a day.
+fn planner_account(provider: &str) -> Option<(&'static str, bool)> {
+    Some(match provider {
+        "anthropic" => ("your Anthropic API key", true),
+        "claude-code" => ("your Claude Code sign-in (your subscription or key, as Claude Code uses it)", true),
+        "codex" => ("your Codex sign-in (your ChatGPT plan or key, as Codex uses it)", false),
+        "openai" => ("your OpenAI API key", false),
+        "gemini" => ("your Google Gemini API key", false),
+        "deepseek" => ("your DeepSeek API key", false),
+        "openrouter" => ("your OpenRouter API key", false),
+        _ => return None,
+    })
+}
+
+/// The approval dialog's text and the limit's arguments for `friday brain allow-remote`: dollars a
+/// day where Friday knows a price, requests a day where it does not.
+fn spending_words(project: &str, provider: &str, budget: f64, calls: Option<u32>) -> Result<(String, Vec<String>), CmdError> {
+    let (whose, priced) =
+        planner_account(provider).ok_or_else(|| CmdError::bad_request("this is not a planner Friday can approve here"))?;
+    let tail = "The project's own limit still applies; the lower of the two holds.";
+    if priced {
+        if !budget.is_finite() || !(0.0..=100_000.0).contains(&budget) {
+            return Err(CmdError::bad_request("the budget is a number of dollars from 0 to 100000"));
+        }
+        let amount = format!("{}", (budget * 100.0).round() / 100.0);
+        let text = format!(
+            "Let Friday write plans for {} with {} on this computer, spending at most ${} a day?\n\n{}",
+            visible(project),
+            whose,
+            amount,
+            tail
+        );
+        return Ok((text, vec!["--budget".into(), amount]));
+    }
+    let n = calls.ok_or_else(|| CmdError::bad_request("say how many requests a day planning may make"))?;
+    if !(1..=10_000).contains(&n) {
+        return Err(CmdError::bad_request("the requests a day are a whole number from 1 to 10000"));
+    }
+    let text = format!(
+        "Let Friday write plans for {} with {} on this computer, with at most {} requests a day?\n\nTo plan, Friday sends the goal and a summary of the project there. Friday knows no price for it, so it counts requests instead of dollars: a plan is usually one or two.\n\n{}",
+        visible(project),
+        whose,
+        n,
+        tail
+    );
+    Ok((text, vec!["--calls".into(), n.to_string()]))
+}
+
+/// Lets this clone plan with a provider, after a native confirmation:
+/// `friday brain allow-remote --provider <p> --budget <n> | --calls <n> --json` (FD-26).
+/// `provider` is the planner the approval is for: `anthropic` (the default, a stored key),
+/// `claude-code` or `codex` (the installed program, signed in as on this machine), or a service
+/// reached with a stored key (`openai`, `gemini`, `deepseek`, `openrouter`).
 #[tauri::command]
-async fn allow_spending(app: AppHandle, budget: f64, provider: Option<String>) -> Result<Value, CmdError> {
-    if !budget.is_finite() || !(0.0..=100_000.0).contains(&budget) {
-        return Err(CmdError::bad_request("the budget is a number of dollars from 0 to 100000"));
-    }
+async fn allow_spending(
+    app: AppHandle,
+    budget: f64,
+    provider: Option<String>,
+    calls: Option<u32>,
+) -> Result<Value, CmdError> {
     let provider = provider.unwrap_or_else(|| "anthropic".into());
-    if provider != "anthropic" && provider != "claude-code" {
-        return Err(CmdError::bad_request("the provider is anthropic or claude-code"));
-    }
     let install = current_install(&app)?;
     let project = current_project(&app)?;
+    let (text, limit) = spending_words(&project.name, &provider, budget, calls)?;
     blocking(move || {
-        let amount = format!("{}", (budget * 100.0).round() / 100.0);
-        let whose = if provider == "claude-code" {
-            "your Claude Code sign-in (your subscription or key, as Claude Code uses it)"
-        } else {
-            "your Anthropic API key"
-        };
-        let d = Dialog {
-            title: "Friday: allow planning to spend?".into(),
-            text: format!(
-                "Let Friday write plans for {} with {} on this computer, spending at most ${} a day?\n\nThe project's own limit still applies; the lower of the two holds.",
-                visible(&project.name),
-                whose,
-                amount
-            ),
-            confirm: "Allow".into(),
-            danger: true,
-        };
+        let d = Dialog { title: "Friday: allow planning?".into(), text, confirm: "Allow".into(), danger: true };
         if !ask(&app, &d) {
             return Err(confirm::cancelled_error());
         }
-        let out = daemon::run_cli(
-            &install,
-            Some(&project.root),
-            &["brain", "allow-remote", "--provider", &provider, "--budget", &amount, "--json"],
-            None,
-            Duration::from_secs(60),
-        )
+        let mut args: Vec<&str> = vec!["brain", "allow-remote", "--provider", &provider];
+        args.extend(limit.iter().map(String::as_str));
+        args.push("--json");
+        let out = daemon::run_cli(&install, Some(&project.root), &args, None, Duration::from_secs(60))
         .map_err(|e| CmdError::shell(500, "DESKTOP-2006", "cli_failed", e))?;
         if out.code != Some(0) {
             let first = out.stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("the command failed");
@@ -1776,6 +1810,41 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Planning without Claude (2026-11-23): Codex and a service reached with a key are approved
+    // here too, held to requests a day because Friday knows no price for them.
+    #[test]
+    fn approving_a_planner_says_whose_account_and_which_limit() {
+        let (text, args) = spending_words("shop", "claude-code", 2.0, None).unwrap();
+        assert!(text.contains("with your Claude Code sign-in"));
+        assert!(text.contains("spending at most $2 a day"));
+        assert_eq!(args, vec!["--budget".to_string(), "2".to_string()]);
+        // Dollars are not asked of a planner Friday knows no price for: requests are.
+        let (text, args) = spending_words("shop", "codex", 0.0, Some(50)).unwrap();
+        assert!(text.contains("with your Codex sign-in (your ChatGPT plan or key, as Codex uses it)"));
+        assert!(text.contains("with at most 50 requests a day"));
+        assert!(text.contains("Friday knows no price for it, so it counts requests instead of dollars"));
+        assert!(text.contains("sends the goal and a summary of the project there"));
+        assert!(!text.contains('$'));
+        assert_eq!(args, vec!["--calls".to_string(), "50".to_string()]);
+        for (provider, whose) in [
+            ("openai", "your OpenAI API key"),
+            ("gemini", "your Google Gemini API key"),
+            ("deepseek", "your DeepSeek API key"),
+            ("openrouter", "your OpenRouter API key"),
+        ] {
+            let (text, _) = spending_words("shop", provider, 0.0, Some(10)).unwrap();
+            assert!(text.contains(whose), "{provider}");
+        }
+        // No number of requests, one out of range, an unknown planner, a budget out of range: refused.
+        assert!(spending_words("shop", "codex", 0.0, None).is_err());
+        assert!(spending_words("shop", "codex", 0.0, Some(0)).is_err());
+        assert!(spending_words("shop", "openai", 0.0, Some(10_001)).is_err());
+        assert!(spending_words("shop", "local", 1.0, None).is_err());
+        assert!(spending_words("shop", "evil --flag", 1.0, Some(5)).is_err());
+        assert!(spending_words("shop", "anthropic", -1.0, None).is_err());
+        assert!(spending_words("shop", "anthropic", f64::NAN, None).is_err());
+    }
 
     // A folder with no saved version in git (2026-11-19, G2): what Friday did, in words.
     #[test]

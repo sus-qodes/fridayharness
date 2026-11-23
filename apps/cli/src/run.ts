@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claudeEnvironment, detectClaudeCode } from '@friday/adapter-claude';
+import { findCodex, hostEnvironment } from '@friday/adapter-codex';
 import type { Daemon, DaemonOptions } from '@friday/daemon';
 
 /** The interface's built bundle, next to the CLI in the repository (plan M9 FD-04). */
@@ -29,13 +30,21 @@ export async function runDaemon(opts: RunOptions): Promise<void> {
   // claude-code`): found as the spawn adapter finds it, run with the environment a spawned
   // session gets (the user's login, nothing of a parent session).
   const claude = detectClaudeCode();
+  // The installed Codex, for a Master Brain that plans through it (`master_brain.provider: codex`,
+  // 2026-11-23): found as the spawn adapter finds it, run with Codex's own login and none of
+  // Friday's variables.
+  const codex = findCodex().binary;
+  const planners = {
+    ...(claude ? { claudeCode: { command: claude.binary, env: claudeEnvironment() } } : {}),
+    ...(codex ? { codex: { command: codex, env: hostEnvironment() } } : {}),
+  };
   let daemon: Daemon;
   daemon = await createDaemon({
     projectRoot: opts.project ?? process.cwd(),
     logToConsole: true,
     ...(opts.port !== undefined ? { port: opts.port } : {}),
     ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
-    ...(claude ? { brain: { claudeCode: { command: claude.binary, env: claudeEnvironment() } } } : {}),
+    ...(Object.keys(planners).length ? { brain: planners } : {}),
     extensions: daemonPlugins.extensions,
     ...(uiBundleDir() ? { uiDir: uiBundleDir() as string } : {}),
     ...(daemonPlugins.verify ? { verify: daemonPlugins.verify } : {}),

@@ -351,6 +351,13 @@ export function plannerState(brain: BrainStatusView | null | undefined): Planner
   if (brain.provider === 'none') {
     return { ready: false, text: 'No planner is chosen: you write the plans yourself.', fixes: [] };
   }
+  // Nobody chose a planner on this computer, and the project's own is not ready (2026-11-23): the
+  // steps of that one (an Anthropic key) were named to people who have Codex, another key, or
+  // nothing yet. What they do first is choose.
+  if (brain.planners && !brain.choice?.here) {
+    const choose = 'choose who writes your plans (Claude Code, Codex, a key of your own, or a model on this computer)';
+    return { ready: false, text: `Friday cannot write plans yet: ${choose}.`, fixes: [choose] };
+  }
   const fixes: string[] = [];
   if (brain.remote && brain.key === 'missing') fixes.push('store your API key');
   if (brain.remote && !brain.approved_here) fixes.push('allow planning to spend on this computer');

@@ -1063,6 +1063,85 @@
   white-space: normal;
 }
 
+/* ---- "Who writes your plans": one row for each way to plan (2026-11-23) ------------------------ */
+
+.pn-planners {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pn-planner {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.pn-planner.is-on {
+  border-color: rgba(48, 209, 88, 0.45);
+}
+
+.pn-planner-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 2px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+}
+
+.pn-planner-name {
+  grid-column: 1;
+  font-weight: var(--weight-medium, 500);
+  color: var(--ink);
+}
+
+.pn-planner-what {
+  grid-column: 1;
+  font-size: var(--text-caption);
+  font-weight: var(--weight-regular, 400);
+  white-space: normal;
+}
+
+.pn-planner-head .badge {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.pn-planner-body {
+  display: grid;
+  gap: 10px;
+  padding: 4px 12px 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pn-planner-step {
+  display: grid;
+  gap: 6px;
+}
+
+.pn-planner-step-what {
+  font-size: var(--text-caption);
+  color: var(--color-slate-400);
+}
+
+.pn-planner-step .row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.pn-planner-address,
+.pn-planner-model-name {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
 /* ---- An on/off switch that says where it stands (2026-11-18) ----------------------------------- */
 
 .pn-switch-row {

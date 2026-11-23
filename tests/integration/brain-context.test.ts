@@ -33,6 +33,39 @@ describe("the planner's context and the revision (plan M14.8)", () => {
   });
 });
 
+/**
+ * A project worked on with Codex or Antigravity keeps its rules for agents in AGENTS.md (Gemini CLI
+ * in GEMINI.md). Only CLAUDE.md was read, so its plans were written without them (2026-11-23).
+ */
+describe("the project's rules for agents, whichever agent they were written for", () => {
+  it('reads AGENTS.md and GEMINI.md as it reads CLAUDE.md, without the block Friday itself wrote there', async () => {
+    const td = await startTestDaemon(ws(), { git: true, brain: false });
+    const { state, project } = { state: td.daemon.state, project: td.project };
+    const root = project.root;
+    const skipped: { path: string; included: boolean }[] = [];
+    const build = () =>
+      buildBrainContext(state, project, { redactor: state.redactor, onSources: (s) => skipped.push(...s) });
+    expect(await build()).not.toContain('## AGENTS.md');
+
+    const fridays =
+      '<!-- friday:begin -->\nFriday coordinates the work here: call friday_whoami first.\n<!-- friday:end -->';
+    writeFileSync(path.join(root, 'AGENTS.md'), `# Rules\nEvery endpoint needs a test in tests/api.\n\n${fridays}\n`);
+    writeFileSync(path.join(root, 'GEMINI.md'), 'Money is stored in paise, never as a float.\n');
+    writeFileSync(path.join(root, 'CLAUDE.md'), `${fridays}\n`);
+    const text = await build();
+    expect(text).toContain('## AGENTS.md\n# Rules\nEvery endpoint needs a test in tests/api.');
+    expect(text).toContain('## GEMINI.md\nMoney is stored in paise, never as a float.');
+    // Friday's own guidance for an agent at work is not the project's rules.
+    expect(text).not.toContain('friday_whoami');
+    expect(text).not.toContain('friday:begin');
+    // A file that holds nothing but Friday's block is not sent as an empty section.
+    expect(text).not.toContain('## CLAUDE.md');
+    expect(skipped.filter((s) => s.included).map((s) => s.path)).toEqual(
+      expect.arrayContaining(['AGENTS.md', 'GEMINI.md']),
+    );
+  });
+});
+
 describe('the documents a project-intent draft may draw on (ADR-0034 §2)', () => {
   it('sends the README, outlines of at most eight docs and the manifest description, redacted', async () => {
     const td = await startTestDaemon(ws(), { git: true, brain: false });
